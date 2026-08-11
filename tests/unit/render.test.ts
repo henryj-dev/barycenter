@@ -145,11 +145,11 @@ describe('R6 / R7 — source_ip_hash 는 서브시스템별로 다르다 (E1, E3
 });
 
 describe('R8 / R9 — SNI 패스스루 (E21, E26)', () => {
-  const passthrough = (onNoSni: 'reject' | { pool: string }): Model => ({
+  const passthrough = (onUnmatchedSni: 'reject' | { pool: string }): Model => ({
     ...empty,
     listeners: [
       { key: 'tls', protocol: 'tls_passthrough', bind: '0.0.0.0', port: 443, enabled: true,
-        onNoSni, onNoMatch: { pool: 'fallback' }, prereadTimeoutS: 5 },
+        onUnmatchedSni, prereadTimeoutS: 5 },
     ],
     pools: [
       { key: 'mail', protocolClass: 'tcp', algorithm: 'round_robin' },
@@ -179,18 +179,27 @@ describe('R8 / R9 — SNI 패스스루 (E21, E26)', () => {
     expect(conf).not.toMatch(/(^|\s)~\^/m);
   });
 
-  it('on_no_match 폴백을 default 로 렌더한다', () => {
+  it('와일드카드는 한 라벨만 매치한다 — X.509 와 맞춘다 (E22.2)', () => {
+    expect(render(passthrough('reject')).conf).toContain('[^.]+');
+  });
+
+  it('on_unmatched_sni 폴백을 default 로 렌더한다', () => {
     expect(render(passthrough({ pool: 'fallback' })).conf).toMatch(/default\s+pool_fallback;/);
   });
 
-  it('on_no_sni=reject 는 $ssl_preread_protocol 분기를 만든다 (E26.1)', () => {
-    const conf = render(passthrough('reject')).conf;
-    expect(conf).toContain('$ssl_preread_protocol');
+  // §4.1 — SNI 부재와 파싱 실패는 설정할 수 없다. 언제나 reject.
+  it('SNI 가 비면 폴백 풀이 아니라 빈 값으로 간다 — reject 고정', () => {
+    const conf = render(passthrough({ pool: 'fallback' })).conf;
+    expect(conf).toMatch(/^\s*"" "";$/m);
   });
 
-  it('on_no_sni 가 폴백 풀이면 분기는 여전히 존재하되 목적지가 다르다', () => {
-    const conf = render(passthrough({ pool: 'fallback' })).conf;
-    expect(conf).toContain('$ssl_preread_protocol');
+  it('reject 는 빈 값으로 렌더된다 — proxy_pass 가 실패하고 연결이 끊긴다', () => {
+    expect(render(passthrough('reject')).conf).toMatch(/default "";/);
+  });
+
+  it('v0 은 $ssl_preread_protocol 분기를 만들지 않는다 — 두 경우의 동작이 같다', () => {
+    // E26.1 로 구분은 가능하지만, 동작이 같은 동안 쓰지 않는 분기를 미리 만들지 않는다.
+    expect(render(passthrough('reject')).conf).not.toContain('$ssl_preread_protocol');
   });
 });
 

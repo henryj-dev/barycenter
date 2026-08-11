@@ -13,7 +13,14 @@ export type ListenerProtocol = 'http' | 'https' | 'tls_passthrough' | 'tcp' | 'u
 
 export type UdpPreset = 'dns' | 'wireguard' | 'game_generic' | 'custom';
 
-/** SNI 결과 분기. §4.1 — no-SNI 와 no-match 는 합치지 않는다. */
+/**
+ * 유효한 SNI 인데 매칭이 없을 때의 동작. §4.1
+ *
+ * SNI 부재와 파싱 실패(비-TLS 포함)는 **설정 대상이 아니다** — 언제나 reject 다.
+ * 설정 가능한 폴백 풀로 보내면, SNI 를 안 보내는 클라이언트가 조용히 임의 백엔드에
+ * 도달한다. $ssl_preread_protocol 로 구분은 가능하지만(E26.1) v0 은 동작이 같으므로
+ * 분기를 만들지 않는다.
+ */
 export type SniOutcome = 'reject' | { pool: string };
 
 export type Listener = {
@@ -32,12 +39,16 @@ export type Listener = {
   acceptProxyProtocol?: boolean;
   udp?: { preset: UdpPreset };
   /** tls_passthrough 전용 */
-  onNoSni?: SniOutcome;
-  onNoMatch?: SniOutcome;
+  onUnmatchedSni?: SniOutcome;
   prereadTimeoutS?: number;
 };
 
-export type Algorithm = 'round_robin' | 'least_conn' | 'source_ip_hash' | 'hash';
+/**
+ * `least_conn` 은 v0 에 없다. stream/http OSS 에 네이티브로 있지만, S1 이 통과해 Lua
+ * 밸런서 경로가 확정된 이상 그 경로에서는 워커별 근사가 된다. 정확한 것처럼 보이는
+ * 이름으로 근사를 파느니 빼는 편이 낫다. S6 이 오차를 재고 나서 되살릴지 정한다.
+ */
+export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash';
 
 export type Pool = {
   key: string;

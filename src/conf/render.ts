@@ -82,8 +82,6 @@ function algorithmDirectives(pool: Pool, sourceIpVar: string): ConfNode[] {
   switch (pool.algorithm) {
     case 'round_robin':
       return [];
-    case 'least_conn':
-      return [directive('least_conn', [])];
     case 'source_ip_hash':
       // E1 — stream 에는 ip_hash 디렉티브가 없다.
       return pool.protocolClass === 'http'
@@ -212,7 +210,6 @@ function passthroughNodes(
   poolsWithBackends: Set<string>,
 ): ConfNode[] {
   const sniVar = `bary_sni_${ident(listener.key)}`;
-  const noSniVar = `bary_nosni_${ident(listener.key)}`;
 
   // SNI 하나하나를 독립 매치로 펼친 뒤 컴파일 순서를 따른다.
   const inputs: RouteInput[] = [];
@@ -237,25 +234,19 @@ function passthroughNodes(
       c.pattern.kind === 'exact'
         ? lit(c.pattern.host)
         : // E21 — SNI 는 대소문자를 구분하지 않으므로 ~* 여야 한다.
-          // 한 라벨만 매치한다: nginx 와일드카드는 다중 라벨을 삼키지만(E22.2)
-          // X.509 와일드카드는 한 라벨만 보장한다.
+          // [^.]+ 로 한 라벨만 매치한다: nginx 와일드카드는 다중 라벨을 삼키지만(E22.2)
+          // X.509 와일드카드는 한 라벨만 보장한다. 넓게 잡으면 인증서 오선택이 된다.
           regex(`~*^[^.]+\\.${c.pattern.suffix.replace(/\./g, '\\.')}$`);
     entries.push(entry(match, target));
   }
 
-  // SNI 가 비어 있으면 no-SNI 경로로 넘긴다.
-  entries.push(entry(lit(''), variable(noSniVar)));
-  entries.push(entry(lit('default'), outcomeValue(listener.onNoMatch, poolsWithBackends)));
+  // SNI 가 없으면(비-TLS·파싱 실패 포함) 빈 값 → proxy_pass 실패 → 연결 종료.
+  // §4.1 — 이건 설정 대상이 아니다. 설정 가능한 폴백으로 보내면 SNI 를 안 보내는
+  // 클라이언트가 조용히 임의 백엔드에 닿는다.
+  entries.push(entry(lit(''), lit('')));
+  entries.push(entry(lit('default'), outcomeValue(listener.onUnmatchedSni, poolsWithBackends)));
 
   const sniMap = block('map', [variable('ssl_preread_server_name'), variable(sniVar)], entries);
-
-  // E26 — $ssl_preread_protocol 이 비면 애초에 TLS 가 아니다. 그러면 on_no_match 로 보내고,
-  // TLS 인데 SNI 만 없는 경우에만 on_no_sni 를 적용한다. 둘을 합치면 SNI 를 안 보내는
-  // 클라이언트가 조용히 임의 백엔드로 가게 된다.
-  const noSniMap = block('map', [variable('ssl_preread_protocol'), variable(noSniVar)], [
-    entry(lit(''), outcomeValue(listener.onNoMatch, poolsWithBackends)),
-    entry(lit('default'), outcomeValue(listener.onNoSni, poolsWithBackends)),
-  ]);
 
   const server = block('server', [], [
     directive('listen', listenArgs(listener)),
@@ -266,7 +257,7 @@ function passthroughNodes(
     directive('proxy_pass', [variable(sniVar)]),
   ]);
 
-  return [sniMap, noSniMap, server];
+  return [sniMap, server];
 }
 
 function streamServerBlock(listener: Listener, pool: Pool | undefined): ConfNode {
@@ -389,10 +380,9 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
             usedPools.add(r.action.pool);
           }
         }
-        for (const o of [l.onNoMatch, l.onNoSni]) {
-          if (o !== undefined && o !== 'reject' && poolsWithBackends.has(o.pool)) {
-            usedPools.add(o.pool);
-          }
+        const o = l.onUnmatchedSni;
+        if (o !== undefined && o !== 'reject' && poolsWithBackends.has(o.pool)) {
+          usedPools.add(o.pool);
         }
       } else if (l.defaultPool !== undefined && poolsWithBackends.has(l.defaultPool)) {
         usedPools.add(l.defaultPool);

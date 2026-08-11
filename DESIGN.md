@@ -5,15 +5,16 @@
 >
 > 작명 — 무게중심(barycenter): 두 천체가 서로를 도는 **공통 질량중심**. 다체 시스템이 실제로 공전하는 균형점이 로드밸런싱의 은유. CLI 는 `bary`.
 
-> **개정 이력.** v0 초안 → 외부 검수 1차(Critical 4 / High 15 / Medium 6 / Low 3) 반영 → v1 →
-> 검수 2차(반박 재판정 + Critical 2 / High 9 / Medium 5 / Low 2 신규) 반영 → **현재 v2**.
-> 판정 근거와 철회한 반박은 **§15**.
+> **개정 이력.** v0 초안 → 검수 1차(C4/H15/M6/L3) → v1 → 검수 2차(반박 재판정 + C2/H9/M5/L2)
+> → v2 → 검수 3차(blocking 9건 + High/Medium) 반영 → **현재 v3**. 근거와 철회한 반박은 **§15**.
 >
 > **현재 판정**
-> - **v0.0 아키텍처 스파이크: Go** (§ 12.0). 버릴 코드로 미해결 구조를 실증한다.
-> - **v0.1 타입·API·DB 스키마 freeze: No-Go.** 스파이크 결과 전까지 고정하지 않는다.
-> - v2 의 편집 방향은 "더 넣기"가 아니라 **"안전 구조는 굳히고, 엔진이 보증 못 하는 약속은
->   빼기"** 다. §15.3 에 축소 목록이 있다.
+> - **S1 통과 (2026-08-11).** `balancer_by_lua` 로 HTTP·TCP·UDP 전부 reload 없이 백엔드가
+>   바뀐다 (`./spike/s1-s5/run.sh`). **OpenResty 멤버십 평면 경로가 확정됐고, §7.3 대안 B 는
+>   폴백으로만 남는다.**
+> - **v0.1 타입·API·DB 스키마 freeze: 여전히 No-Go.** 남은 block 은 S5(평면 부분 전환) ·
+>   S7(활성화 판정) · S8 · S11(epoch 경합) · S12(크래시 저널) · S13(GC).
+> - v3 의 편집 방향: **v2 에서 문구로만 축소했던 것을 스키마와 코드에서 실제로 뺐다** (§15.5).
 
 ---
 
@@ -23,7 +24,7 @@
 - 도메인 기반 HTTP(S) 라우팅과 TLS 수명주기를 GUI 에서 관리한다.
 - **TCP / UDP 를 단순 포워딩이 아니라 업스트림 풀 기반 로드밸런싱으로** 관리한다.
 - 인바운드 포트와 백엔드 포트를 자유롭게 분리한다 (`:999 → A:11`, `:888 → B:11`).
-- GUI · API · CLI 가 **동일한 능력**을 갖는다.
+- GUI · API · CLI 가 **동일한 능력**을 갖는다 (**v1.0 기준**. 단계별로는 GUI 가 뒤따른다 — §10).
 - OSS 코어 + 비공개 드라이버로 사내 사정을 코어 밖에서 흡수한다.
 
 ### 비목적 (v1 범위 밖 — 명시적으로 안 한다)
@@ -171,52 +172,96 @@ UID, 마운트 네임스페이스, 파일 권한이 전부 다를 수 있다.
 | 멤버십 스냅샷/델타 주입 (http·stream 각각) | **DP Agent** |
 | 백엔드 헬스 프로브 | 컨트롤 플레인 (프로버) |
 
-### 3.3 상태 — 4-way + epoch 결박
+### 3.3 상태 좌표 — `topology_version` 과 `activation_epoch` 를 분리한다
 
-| 상태 | 저장 위치 | 의미 |
-|---|---|---|
-| `desired_revision` | PG | 사용자가 커밋한 모델의 전역 리비전 |
-| `published_revision` | PG + DP 디스크 | 게시되고 `nginx -t` 를 통과한 리비전 |
-| `runtime`: `accepting_generation` | nginx | **새 연결을 받는** 세대 |
-| `runtime`: `serving_generations[]` | nginx | `{generation, pids, connections}` — 옛 워커 포함 |
-| `topology_epoch` | PG + DP + shared dict | **풀/백엔드 식별 공간을 정의하는 세대** |
-| `membership_revision` | shared dict (http·stream 각각) | 해당 epoch 안에서의 멤버십·헬스 리비전 |
+v2 는 `topology_epoch` 하나로 "무엇이 활성인가"와 "어떤 식별 공간인가"를 동시에 표현했다.
+**그게 ABA 구멍이었다.** v2 의 규칙 5 는 "롤백은 이전 epoch 로 되돌린다"였는데:
 
-**`topology_epoch` 가 이 문서에서 가장 중요한 추가다.** `admin_state`·weight·백엔드 CRUD 는
-모델 변경(= 설정 경로)인데 드레인·헬스는 멤버십 경로다. 결박이 없으면:
+```
+E10 → E11 → rollback to E10
+              ↑ 이 순간, E10 시절에 떠난 지연 델타 (E10, m91) 가 다시 "유효한 epoch" 가 된다
+```
 
-- apply/HUP 중 들어온 delta 를 새 워커가 읽어 **이미 삭제된 풀의 옛 멤버십**을 적용한다.
-- 롤백 시 `membership_revision` 이 이미 높아서 이전 topology 스냅샷 복원이 거부된다.
-- 롤백 중 헬스가 바뀌면 "옛 헬스를 되돌릴지 최신을 유지할지" 답이 없다.
+`membership_revision` 을 계속 올려도 소용없다 — **직전 E10 활성화의 늦은 RPC 와 현재 E10 을
+구분할 방법이 없기 때문**이다. epoch 를 재사용하는 순간 그건 fencing token 이 아니라 라벨이다.
 
-규칙:
-1. 모든 스냅샷·델타·ACK 는 `(topology_epoch, membership_revision)` 쌍을 갖는다.
-2. **epoch 불일치 델타는 버린다.** 리비전만 비교하지 않는다.
-3. apply `prepare` 시작 시 DP Agent 는 델타를 **버퍼링**한다.
-4. `activated` 직후 새 epoch 의 **풀 스냅샷을 원자 전환**한다 (델타 재생 아님).
-5. 롤백은 이전 epoch 로 되돌리고, **그 epoch 에 여전히 유효한 최신 헬스만 재투영**한다
-   (사라진 백엔드의 헬스는 버린다).
+그래서 좌표를 나눈다.
 
-`GET /api/v1/status` 는 위 전부를 노출한다. `nginx -t` 가 통과해도 HUP 시 새 리스너 bind 나
-파일 open 에 실패하면 nginx 는 **이전 설정으로 계속 서비스한다** — 마스터 생존과 소켓 존재는
-새 세대 활성화의 증거가 아니다 (§ 6.3).
+| 좌표 | 저장 위치 | 성질 | 의미 |
+|---|---|---|---|
+| `desired_revision` | PG | 단조 | 사용자가 커밋한 모델 |
+| `published_revision` | PG + DP 디스크 | 단조 | 게시되고 `nginx -t` 를 통과 |
+| `accepting_generation` | nginx 런타임 | — | **새 연결을 받는** 세대 |
+| `serving_generations[]` | nginx 런타임 | — | `{generation, pids, connections}` — 옛 워커 포함 |
+| `topology_version` + `topology_digest` | PG | **내용 식별** | 풀·백엔드 식별 공간. 같은 내용이면 같은 값 |
+| **`activation_epoch`** | PG + DP + shared dict | **엄격 단조. 재사용 없음** | 이 활성화 사건의 고유 번호 |
+| `membership_revision[plane]` | shared dict (http·stream 각각) | 단조 | 해당 epoch 안의 멤버십·헬스 리비전 |
+| `leader_token` | PG advisory lock + DP | 엄격 단조 | § 3.5 |
+
+**핵심 규칙 — 롤백도 새 값을 쓴다.**
+
+1. 모든 스냅샷·델타·ACK·DP RPC 는 `(activation_epoch, membership_revision, payload_digest)` 를 갖는다.
+2. **`activation_epoch` 는 절대 재사용하지 않는다.** 롤백은 "E10 으로 되돌아가는" 것이 아니라
+   **옛 topology 를 새 `E12` 로 활성화하는 것**이다. `topology_version` 은 E10 시절 값으로
+   돌아가지만 epoch 는 앞으로만 간다. 지연된 `(E10, …)` RPC 는 자동으로 무효가 된다.
+3. `activation_epoch` 보다 낮은 값을 실은 요청은 **거부한다** (`EpochMismatch`). 카운터를 남긴다.
+4. `topology_version` 이 같으면 멤버십 식별 공간이 같다는 뜻이므로, **헬스를 재투영할 수 있다.**
+   epoch 가 달라도 상관없다. 이게 "롤백 후 최신 헬스 유지"를 안전하게 만드는 근거다.
+5. 백엔드 UUID 는 **영구 재사용 금지.** 헬스 재투영은
+   `{backend_id, endpoint_fingerprint(host:port), probe_spec_digest}` 가 **전부** 일치할 때만 한다.
+   host/port 나 프로브 설정이 바뀌면 옛 엔드포인트의 지연 프로브 결과가 새 엔드포인트에
+   투영될 수 있다.
+
+`GET /api/v1/status` 는 위 전부를 노출한다.
 
 ### 3.4 http 와 stream 은 별개 상태 평면이다
 
-**OpenResty 의 `lua_shared_dict` 는 http 블록과 stream 블록에 각각 선언되고, 서로의 zone 을
-참조할 수 없다.** 같은 이름을 양쪽에 선언하는 것도 안전하지 않다. 또한
-`lua-resty-balancer` 인스턴스는 **worker-local** 이라 shared dict 를 갱신해도 자동으로
-재구성되지 않는다.
+**OpenResty 의 `lua_shared_dict` 는 http 블록과 stream 블록에 각각 선언되고 서로의 zone 을
+참조할 수 없다.** 실측으로 확정됐다 — 같은 이름은 `already declared for a different use` 로
+거부되고(E14), 이름이 달라도 양방향으로 보이지 않는다(E25, S5.zones).
 
-따라서 멤버십 평면은 **이중 구조**다.
+#### 평면별 리비전 벡터
 
-- http 용 zone + http admin 엔드포인트, stream 용 zone + stream admin 엔드포인트.
-- DP Agent 는 양쪽에 각각 밀고 **둘 다 ACK 된 뒤에야** 전역 `membership_revision` 을 커밋한다.
-- 각 워커는 dict 의 리비전 변화를 감지해 **로컬 밸런서를 더블버퍼로 교체**한다.
-  워커 수렴 시간은 관측 대상이고 상한을 정의한다.
+"양쪽 ACK 후 전역 커밋"은 **원자 전환이 아니다.** http 가 E21 을 활성화하고 ACK 한 뒤 stream 이
+timeout 나면 전역 revision 만 E20 인데 런타임은 이미 갈라져 있다. http 를 되돌린 뒤 늦은
+stream E21 RPC 가 완료되면 이번엔 stream 만 E21 이 된다.
 
-> 이 구조는 **S5 에서 실증해야 하는 가설이다.** 공식 문서가 명시적으로 서술하지 않으므로,
-> 스파이크 전까지 확정된 사실로 취급하지 않는다.
+교차 평면 동시 전환은 **보장할 수 없다.** 그러니 보장하는 척하지 않는다.
+
+| 필드 | 의미 |
+|---|---|
+| `plane_state[http]` / `plane_state[stream]` | `{activation_epoch, membership_revision, digest, prepared_workers, active_workers}` |
+| `affected_planes` | 이 전환이 건드리는 평면 (한쪽만일 수 있다) |
+| `transition_id` | 이 전환의 고유 ID. 모든 평면 RPC 가 실어 나른다 |
+| `partial_transition` | 평면 간 좌표가 갈린 상태. **status 에 노출한다** |
+| `max_convergence_ms` | 이 상태를 허용하는 상한. 초과하면 경보 |
+
+프로토콜은 `stage → 전 워커 prepared ACK → fenced commit pointer` 다. commit 포인터를 옮기기
+전까지 새 스냅샷은 **비활성 상태로 적재만** 되어 있다.
+
+#### 워커 수렴 — 실측이 좁혀 준 것
+
+S5 에서 확인했다: `balancer_by_lua` 는 **연결마다** shared dict 를 읽으므로, 리비전 검사를
+곁들이면 워커 로컬 캐시가 스테일 창을 만들지 않는다 (전환 직후 30/30 정확). 워커 4개 채택
+지연은 15–23ms(동기화 주기 20ms)였다.
+
+→ **워커 수렴은 *트래픽*의 문제가 아니라 *관측*의 문제다.** 다만 리비전 검사 없이 캐시하면
+그때 위험이 생기므로, 밸런서는 `(epoch, revision)` 을 확인하고 다르면 로컬 뷰를 **통째로
+교체**한다(더블버퍼). 부분 갱신을 금지한다.
+
+### 3.5 리더 펜싱 — DP Agent 가 최종 심판이다
+
+PG advisory lock 은 리더 세션이 죽으면 풀린다. 그런데 **옛 리더가 이미 보낸 rollback/abort
+RPC 는 네트워크나 DP 큐에 남아 있을 수 있다.** 새 리더가 apply 를 시작한 뒤 그 RPC 가 도착하면
+`previous_revision` CAS 와 `abort(opId)` 만으로는 막지 못한다.
+
+- 리더는 선출될 때 **엄격 단조 증가하는 `leader_token`** 을 받는다 (PG 시퀀스).
+- 모든 DP RPC 는 `leader_token` 을 싣는다.
+- **DP Agent 는 지금까지 본 최대 토큰을 durable 하게 보관한다.** 더 높은 토큰을 본 뒤에는
+  더 낮은 토큰의 `prepare`/`commit`/`abort`/`rollback` 을 **전부 거부**한다.
+- DP Agent 는 진행 중 오퍼레이션도 durable 하게 들고 있어, 재시작 후에도 이 판정을 유지한다.
+
+컨트롤 플레인은 자기가 리더라고 *믿을* 수 있을 뿐이다. 실제 심판은 DP Agent 다.
 
 ---
 
@@ -299,19 +344,28 @@ type Listener =
 
 | 필드 | 비고 |
 |---|---|
-| `on_no_sni` | `reject` \| `pool(pool_id)` — **필수** |
-| `on_no_match` | `reject` \| `pool(pool_id)` — **필수.** 파싱 실패·비-TLS 도 여기로 흡수 |
+| `on_unmatched_sni` | `reject` \| `pool(pool_id)` — **유효한 SNI 인데 매칭이 없다.** 설정 가능 |
 | `preread_timeout` | ClientHello 대기 |
 
-> **v1 에서 3분할 → 2분할로 축소했다.** `parse_error` 를 별도로 두려면 malformed TLS ·
-> 비-TLS · preread timeout 을 stock nginx 에서 안정적으로 구분할 수 있어야 하는데 미검증이다.
-> 반면 **no-SNI 와 no-match 를 합치는 것은 받아들이지 않는다** — SNI 를 안 보내는 클라이언트가
-> 조용히 임의 백엔드로 가는 게 정상 동작이 되면 안 된다. 관측 가능성은 **S9** 에서 검증하고,
-> 분리 불가로 판명되면 `on_no_sni` 를 `reject` 고정으로 축소한다.
+**SNI 가 없거나 파싱할 수 없으면 v0 은 무조건 `reject` 다. 설정할 수 없다.**
 
-> **ECH 주의.** ECH 가 확산되면 inner SNI 는 보이지 않지만 **ClientHelloOuter 의
-> `public_name` 은 남는다.** 따라서 SNI 패스스루가 원리적으로 무력화되는 게 아니라,
-> **inner-origin 별 세밀 라우팅이 불가능해지고 outer public_name 단위로 축소된다.**
+v2 는 `on_no_sni` 를 설정 가능하게 두고 "합치면 보안 결함"이라고 주장했는데, 정확히는
+**합치는 것 자체가 문제가 아니라 SNI 부재·파싱 실패를 설정 가능한 폴백 풀로 보내는 것**이
+문제다. 그리고 v2 의 렌더 예시는 자기가 주장한 정책을 구현하지도 못했다 — map 에 빈 문자열
+분기가 없어 no-SNI 와 unmatched 가 같은 `default` 로 갔다.
+
+세 경우를 이렇게 가른다.
+
+| 상황 | v0 동작 | 근거 |
+|---|---|---|
+| 유효한 SNI, 매칭 있음 | 해당 풀 | |
+| 유효한 SNI, 매칭 없음 | `on_unmatched_sni` (설정 가능) | 우리가 모르는 도메인 — 폴백 풀이 합리적일 수 있다 |
+| **SNI 없음 (TLS 이지만)** | **reject 고정** | S9 통과 시 설정 가능으로 승격 검토 |
+| **비-TLS / 파싱 실패** | **reject 고정** | TLS 패스스루 포트에 온 비-TLS 바이트를 어디로도 보내지 않는다 |
+
+> `$ssl_preread_protocol` 로 비-TLS 를 구분할 수 있음은 실측으로 확인했다(E26.1). 그래서
+> 나중에 분기를 되살릴 수 있다. **다만 v0 은 두 경우의 동작이 같으므로 map 도 하나만 렌더한다** —
+> 쓰지 않는 분기를 미리 만들지 않는다.
 
 #### TcpStreamProfile / UdpStreamProfile
 
@@ -356,8 +410,10 @@ type TlsPassthroughRoute = ResourceMeta & {
 };
 ```
 
-`HttpProxyOptions`: `request_headers`(§4.9 문법 계약), `timeouts`(connect/read/send),
-`websocket`, `redirect_http_to_https`.
+`HttpProxyOptions`: `request_headers`(§4.9 문법 계약), `timeouts`(connect/read/send), `websocket`.
+
+> `redirect_http_to_https` 는 뺐다. `redirect` 액션이 이미 있는데 proxy 옵션에도 두면
+> "프록시하면서 리다이렉트한다"는 모순 조합이 다시 표현 가능해진다.
 
 **인증서는 여기 없다.** → §4.6.
 
@@ -366,7 +422,7 @@ type TlsPassthroughRoute = ResourceMeta & {
 | 필드 | 타입 | 비고 |
 |---|---|---|
 | `protocol_class` | enum | **`http` \| `tcp` \| `udp` — 불변.** 복합 FK 의 일부 |
-| `algorithm` | enum | `round_robin` \| `source_ip_hash` \| `hash` \| `least_conn`* |
+| `algorithm` | enum | `round_robin` \| `source_ip_hash` \| `hash` — **`least_conn` 없음** |
 | `hash_key` | enum+params? | **자유 문자열 금지** (§ 4.9). 클래스별 화이트리스트 |
 | `health` | object | §4.3.1 — **프로브 대상과 데이터 경로를 분리한다** |
 | `passive` | object? | `max_fails`, `fail_timeout_s` |
@@ -375,9 +431,10 @@ type TlsPassthroughRoute = ResourceMeta & {
 | `dns` | object? | `resolver_ref`, `valid_s`, `on_nxdomain`, `on_timeout`, `resolve_mode` |
 | `sticky` | object? | HTTP: 쿠키 / L4: `source_ip_hash` |
 
-\* `least_conn` 은 **조건부다.** 대안 B(순수 nginx)에서는 stream/http OSS 네이티브로 정확하지만,
-Lua 밸런서 경로에서는 워커별 근사다. **S6 통과 전까지 v0 기본 알고리즘에서 제외**하고,
-근사임이 확정되면 UI 에 명시 표기한다 (§15.3 축소 항목).
+**`least_conn` 은 v0 enum 에 아예 넣지 않는다.** stream/http OSS 에 네이티브로 있지만, S1 이
+통과해 Lua 밸런서 경로가 확정된 이상 그 경로에서는 **워커별 근사**가 된다. 정확한 것처럼
+보이는 이름으로 근사를 파는 것이 가장 나쁘다. S6 이 오차를 재고 나서 되살릴지 정한다.
+v2 는 이걸 "축소했다"고 써놓고 enum 에는 남겨 뒀다 — 문구만의 축소는 축소가 아니다.
 
 #### 4.3.1 헬스 프로브 — 데이터 경로와 분리
 
@@ -402,6 +459,7 @@ v1 은 `health.type` 을 `protocol_class` 에 묶었는데, **TCP/UDP 서비스�
 | `protocol_class=udp` → `send_proxy_protocol=none` | 엔진 미지원 |
 | `protocol_class=tcp` → `send_proxy_protocol ∈ {none, v1}` | 버전 선택 디렉티브 없음 |
 | `protocol_class=udp` → `upstream_tls` 금지 | |
+| `tls_passthrough` 라우트가 참조하는 풀 → `upstream_tls` 금지 | 클라이언트 TLS 바이트를 다시 TLS 로 감싸면 TLS-over-TLS 가 된다 |
 | `hash_key` 화이트리스트 | http: `remote_addr`/`request_uri`/`header(n)`/`cookie(n)` · stream: `remote_addr` 만 |
 | `algorithm ∈ {hash, source_ip_hash}` → `is_backup` 백엔드 금지 | 해시 링과 backup 의미가 충돌 |
 | `sticky.kind=cookie` → `protocol_class=http` | |
@@ -472,7 +530,8 @@ type TlsPolicy = ResourceMeta & {
   default_certificate_id: uuid;      // SNI 미매칭 시 제시
   min_version: '1.2' | '1.3';
   max_version?: '1.2' | '1.3';
-  cipher_preset: 'modern' | 'intermediate' | 'custom';
+  /** 버전된 정책 참조. 자유 문자열이 아니다. TLS1.2 이하와 TLS1.3 산출물을 분리한다. */
+  cipher_policy: CipherPolicyRef;
   hsts?: { max_age: number; include_subdomains: boolean; preload: boolean };
   ocsp_stapling: boolean;
 };
@@ -481,7 +540,7 @@ type SniCertificateBinding = ResourceMeta & {
   tls_policy_id: uuid;
   hosts: string[];                   // handshake 단계 선택 키
   certificate_id: uuid;
-  override?: { min_version?: '1.2'|'1.3'; cipher_preset?: string };
+  override?: { min_version?: '1.2' | '1.3'; cipher_policy?: CipherPolicyRef };
 };
 ```
 
@@ -595,40 +654,42 @@ GET    /api/v1/events                   # SSE
 GET    /api/v1/audit
 ```
 
-### 5.3 plan / commit / apply — sealing 과 단회 소비
+### 5.3 plan → commit → apply — 단회 lifecycle
 
-v1 은 changeset 을 도입했지만 **plan 을 봉인하지 않았고**, `apply {revision}` 직접 경로가
-남아 "plan 없는 적용 경로 없음"과 모순이었다.
+v2 는 plan 을 봉인했지만 세 구멍이 남았다. plan 시점에는 `target_revision`/`activation_epoch`
+할당 규칙이 없는데 세대 manifest 에는 둘이 들어간다. `plan_id` 가 commit 에서 소비된 뒤
+apply 에서 또 쓰인다. 보존된 옛 plan 을 일반 `/apply` 로 재생할 수 있다.
+
+**plan 은 상태를 갖는다.**
 
 ```
-1. POST /changesets {base_revision: R0}      → cs(state=open)
-2. PATCH /changesets/{cs}   (n 회)           → 변경 누적
-3. POST  /changesets/{cs}/plan               → cs.state = sealed  (이후 PATCH 는 409)
-                                               plan {
-                                                 plan_id, changeset_version,
-                                                 base_revision R0,
-                                                 dependency_versions {...},
-                                                 render_digest,
-                                                 artifact_ref (immutable, TTL),
-                                                 engine_capability_digest,
-                                                 impact (§5.4)
-                                               }
-4. POST  /changesets/{cs}/commit {plan_id}   → plan_id 단회 소비
-                                               base_revision ≠ head 면 409 PLAN_STALE
-                                               성공 시 committed_revision R1 과 artifact 결박
-5. POST  /apply {plan_id}                    → operation_id
-                                               plan 이 결박한 artifact 를 그대로 적용
+planned ──commit──→ committed ──apply──→ operation_bound ──→ applied
+   │                    │                      │
+   └── expired          └── superseded         └── failed / rolled_back
 ```
 
+| 전이 | 규칙 |
+|---|---|
+| `planned` | changeset 을 seal 한다. 이후 PATCH 는 409 |
+| → `committed` | `base_revision == head` 여야 한다. **이 순간 `target_revision` 과 `activation_epoch` 를 예약**하고 artifact 에 결박한다. `plan_id` 는 여기서 단회 소비된다 |
+| → `operation_bound` | `(plan_id → operation_id)` 가 **unique**. 같은 `plan_id` 로 다시 apply 하면 새 오퍼레이션이 아니라 **같은 operation 을 반환**한다 (멱등) |
+| → `applied` | 이 artifact 가 실제로 활성화됐다 |
+| `superseded` | 더 최근 리비전이 적용됐다. **이 plan 은 일반 apply 로 재생할 수 없다** |
+
+- **과거 리비전 적용은 명시적 rollback 으로만.** `R1` 커밋 → `R2` 적용 뒤에 `R1` plan 을
+  `/apply` 로 되돌리는 경로는 없다. `POST /operations/{id}/rollback` 또는
+  `POST /apply {rollback_to: revision}` 이 별도 의도로 존재하고, 감사에도 그렇게 남는다.
+- **committed artifact 는 pin 된다.** TTL 은 `planned` 상태에만 적용된다. 커밋된 artifact 는
+  적용·롤백 보존 기간이 끝날 때까지 지우지 않는다 — 24시간 뒤 만료돼 되돌릴 수단이
+  사라지는 상황을 만들지 않는다 (§ 8.4 GC root).
 - **모든 쓰기는 changeset 경유.** 직접 CRUD 는 없다. 단일 리소스 편집도 서버가 암묵
-  changeset 을 만들어 처리하고, 그 사실을 감사에 남긴다.
-- **plan artifact 는 불변이고 저장된다.** `R1` 커밋 후 head 가 `R2` 로 가도 `R1` 의 plan
-  artifact 로 정확히 적용할 수 있다. 보존 정책: 최근 N 개 + TTL(기본 24h).
-- **`PLAN_STALE(reason)`** 을 명시적으로 반환한다: `head_moved` \| `dependency_changed` \|
-  `renderer_version_changed` \| `engine_capability_changed` \| `expired`.
-  GUI 는 **rebase → replan** 을 한 번의 동작으로 제공한다.
-- **커밋됐지만 미적용 상태**는 `status` 에 `pending_apply` 로 노출한다. 숨기지 않는다.
-- **부분 적용은 없다.** 커밋은 전부 아니면 전무.
+  changeset 을 만들어 처리하고 감사에 남긴다.
+- **`PLAN_STALE(reason)`**: `head_moved` \| `dependency_changed` \| `renderer_version_changed`
+  \| `engine_capability_changed` \| `expired` \| `superseded`.
+  GUI 는 **rebase → replan** 을 한 동작으로 제공한다. 커밋 후 capability 가 바뀐 경우도
+  같은 경로로 빠져나온다 — 막다른 골목을 만들지 않는다.
+- **커밋됐지만 미적용**은 `status.pending_apply` 로 노출한다. 숨기지 않는다.
+- **부분 적용은 없다.**
 
 ### 5.4 impact — plan 이 보여주는 것
 
@@ -716,42 +777,56 @@ weight·admin_state 변경                       (그 외 없음)
 ### 6.2 ApplyOperation 상태기계 (durable)
 
 ```
- rendered → validated → published → reload_signaled → activated → verified
-     │          │           │             │              │
-     └──────────┴───────────┴─────────────┴──────────────┴──→ failed
-                                                               │
-                                                       rolling_back → rolled_back
-                                                                   └→ rollback_failed ⚠
+ rendered → validated → publish_intent → published → reload_intent
+                                                          │
+                                          reload_observed → activated → verified
+     │          │            │              │                 │
+     └──────────┴────────────┴──────────────┴─────────────────┴──→ failed
+                                                                     │
+     cancelled ←── (rendered/validated 단계에서만)          rolling_back → rolled_back
+                                                                       └→ rollback_failed ⚠
 ```
 
-`reload_signaled` 와 `activated` 를 나눈 이유: **HUP 신호 전달과 nginx 의 새 cycle 수용은
-다르다.** 마커/프로브 이전에는 acceptance 를 알 수 없다 (v1 의 `reload_accepted` 는 관측
-불가능한 상태명이었다).
+**`*_intent` 와 결과 상태를 나눈 이유**: v2 의 7행 표는 "단계 진입 전 fsync" 라고 해놓고
+`published` 를 이미 symlink 가 바뀐 상태로 가정했다. 저널을 side-effect **전**에 쓰면
+"기록했지만 안 했을" 수 있고, **후**에 쓰면 "했지만 기록 못 했을" 수 있다. 둘 다 덮으려면
+의도와 관측을 별도 상태로 둬야 한다.
 
 | 필드 | 비고 |
 |---|---|
-| `operation_id` | 멱등 재시도 키 |
-| `plan_id` / `target_revision` / `previous_revision` / `target_epoch` | |
+| `operation_id` | 멱등 재시도 키. `(plan_id → operation_id)` unique (§ 5.3) |
+| `plan_id` / `target_revision` / `previous_revision` | |
+| `activation_epoch` | commit 시점에 예약된 값 (§ 3.3) |
+| `leader_token` | § 3.5 — DP Agent 가 이걸로 옛 리더를 걸러낸다 |
 | `render_digest` | plan artifact 와 대조 |
+| `plane_progress` | 평면별 `{epoch, revision, prepared, active}` (§ 3.4) |
 | `state` / `attempts` / `last_error{kind, detail}` | |
-| `lease` | **동시 apply 차단.** 단일 리더 보유 |
 
-**크래시 결정표** — "재개하거나 봉인한다"만으로는 부족하다.
+**크래시 결정표 — side-effect 직전/직후 전부**
 
-| 크래시 시점 | DP 디스크 상태 | 복구 |
-|---|---|---|
-| `rendered` 이전 | 변화 없음 | 오퍼레이션 폐기 |
-| `validated` 이전 | 임시 세대만 존재 | 임시 세대 삭제 후 재시도 |
-| `published` 직전 (fsync 완료, symlink 미교체) | 세대 완비 | symlink 교체부터 재개 (멱등) |
-| `published` 후 `reload_signaled` 전 | symlink 새 세대 | HUP 재전송 (멱등) |
-| `reload_signaled` 후 ACK 유실 | 불명 | **마커 조회로 판정** → `activated` 또는 롤백 |
-| `activated` 후 epoch 스냅샷 전 | 새 세대 활성 | 멤버십 풀 스냅샷 재전송 |
-| 롤백 중 | 혼재 | 이전 세대로 재게시 후 동일 판정 절차 |
+| # | 크래시 지점 | 관측으로 판정 | 복구 |
+|---|---|---|---|
+| 1 | `rendered` 기록 전 | — | 폐기 |
+| 2 | 렌더 후, `validated` 기록 전 | 임시 세대 존재 | 삭제 후 재시도 |
+| 3 | `publish_intent` 기록 후, symlink 교체 전 | symlink = 옛 세대 | 교체부터 재개 (멱등) |
+| 4 | symlink 교체 후, `published` 기록 전 | **symlink 가 정본** | `published` 로 보정 |
+| 5 | `reload_intent` 기록 후, HUP 전 | 마스터 cycle 불변 | HUP 전송 |
+| 6 | HUP 후, `reload_observed` 기록 전 | 마스터 cycle 증가 | 워커 레지스트리로 판정 |
+| 7 | `activated` 후, 평면 스냅샷 전송 전 | `plane_progress` 비어 있음 | 풀 스냅샷 재전송 |
+| 8 | http 평면 ACK 후, stream 전송 전 | 평면 좌표 불일치 | `partial_transition` → 재시도 |
+| 9 | 시크릿 materialize 후, 검증 전 | 다이제스트 대조 | 재검증, 불일치면 `failed` |
+| 10 | GC 디스크 삭제 후, refcount 감소 전 | release ledger | § 8.4 |
+| 11 | 롤백 중 | 혼재 | 이전 세대를 **새 epoch 로** 재게시 후 동일 절차 |
 
-- **단일 리더** — PG advisory lock. 동시에 두 apply 가 뜨지 않는다.
+> **HUP 재전송은 운영적으로 멱등이 아니다.** 신호를 두 번 보내면 워커 cycle 이 하나 더 생겨
+> 옛 워커 세대가 쌓인다. 그래서 #5·#6 은 재전송이 아니라 **마스터 cycle 관측**으로 먼저
+> 갈라야 한다.
+
+- **단일 리더** — PG advisory lock + `leader_token`. 최종 판정은 DP Agent (§ 3.5).
 - **CAS** — DP Agent 는 `previous_revision` 이 자신의 `published_revision` 과 일치할 때만 진행.
-- 각 단계 진입 전 저널을 **fsync** 한다. ACK 유실은 `operation_id` 로 멱등 재시도.
-- 연속 롤백 N 회 → 자동 적용 중단(서킷 브레이커) + 알림.
+- **취소** — `rendered`/`validated` 에서만 `cancelled` 로 갈 수 있다. `publish_intent` 이후의
+  `/cancel` 은 거부하거나 롤백으로 전환한다. 조용한 중단은 없다.
+- 연속 롤백 N 회 → 서킷 브레이커 + 알림.
 
 ### 6.3 활성화를 어떻게 증명하는가
 
@@ -792,20 +867,65 @@ open 에 실패하면 nginx 는 이전 설정으로 계속 서비스한다.
     백엔드가 잠시 되살아난다.
   - 블록 해제는 명시적 `force-reconcile`(브레이크글라스, 감사 기록)만.
 
-### 6.5 멤버십 경로의 실패 모드
+### 6.5 멤버십 전환 — staging · cut · replay
+
+v2 는 "`activated` 직후 새 epoch 의 풀 스냅샷을 원자 전환한다 (델타 재생 아님)" 이라고 썼다.
+두 군데가 틀렸다.
+
+**틀린 것 1 — 순서.** 새 워커가 accept 를 시작한 *뒤에* 스냅샷을 전환하면, 그 사이 새 워커는
+옛 공유 상태나 부트스트랩으로 peer 를 고른다. 게다가 옛 HTTP 워커는 기존 keepalive/HTTP/2
+연결에서 **새 요청을 계속 처리**하므로 E-old 멤버십도 살아 있어야 한다. 단일 활성 epoch 로는
+두 세대를 동시에 못 버틴다.
+
+**틀린 것 2 — 델타 유실.** 스냅샷이 `healthy` 를 읽은 뒤 `activated` 전에 `unhealthy` 델타가
+버퍼에 들어오면, "재생 안 함" 규칙 때문에 **죽은 백엔드가 다음 프로브까지 되살아난다.**
+
+수정한 절차:
+
+```
+1. stage    HUP **전에** E-new 스냅샷을 비활성 슬롯에 적재한다.
+            세대별 렌더 리터럴이 자기 epoch 의 슬롯만 보게 한다.
+2. cut      스냅샷을 뜬 시점의 헬스 이벤트 시퀀스 번호를 high-water mark 로 기록한다.
+3. HUP      새 워커는 자기 epoch 슬롯이 준비되지 않았으면 **ready 가 되지 않는다.**
+4. replay   활성화 직후, high-water mark **이후**의 헬스 이벤트를 순서대로 적용한다.
+            (버리지 않는다. 합쳐서 적용한다.)
+5. retain   E-old 슬롯은 그 세대를 서빙하는 워커가 **전부 사라질 때까지** 유지한다.
+6. abort    prepare 가 실패하면 E-new 슬롯을 버리고, 버퍼는 **기존 epoch 로 되돌린다.**
+            prepare 동안에도 활성 epoch 는 헬스 갱신을 계속 받는다.
+```
+
+헬스 이벤트에는 **durable sequence** 를 붙인다. 그래야 high-water mark 가 의미를 갖는다.
+
+### 6.6 멤버십 리듀서 — 소유자가 달라도 경합은 남는다
+
+v2 는 "`admin_state`/weight 는 사용자 소유, 헬스는 프로버 소유라 경합하지 않는다"고 했다.
+**소유가 다른 것과 경합이 없는 것은 다르다.** 둘 다 최종적으로 같은 peer eligibility 를
+갱신하므로, 늦게 도착한 whole-peer 헬스 델타가 방금 내린 `disabled` 를 되돌릴 수 있다.
+
+- **단일 리듀서**가 `{spec revision, raw health}` 를 합성해 eligibility 를 만들고 시퀀스를 발급한다.
+- 헬스 프로듀서는 **헬스 필드만** 쓴다. peer 전체를 덮어쓰지 않는다.
+- **`admin_state` 가 항상 우선한다.** `disabled`/`draining` 은 어떤 헬스 값으로도 뒤집히지 않는다.
+
+### 6.7 멤버십 경로의 실패 모드
 
 | 상황 | 정책 |
 |---|---|
 | nginx 인스턴스 전체 재시작 | shared dict 소멸 → Agent 가 durable 스냅샷으로 **재시딩**. 시딩 전에는 렌더된 부트스트랩 사용 |
-| HUP | shared dict 유지. epoch 가 바뀌면 §3.3-4 원자 전환 |
-| CP ↔ DP 단절 | **값 자체에 TTL 을 걸지 않는다.** `observed_at`/`expires_at` 만 저장하고 stale 판정은 읽는 쪽에서. fail-open(기본)은 기존 값 유지, `fail_closed` 만 명시적으로 비운다 |
-| shared dict 메모리 압박 | `safe_set` 사용. eviction/OOM 은 경보 대상. zero-peer 상태는 fail-open 으로 처리 |
+| HUP | shared dict 유지. epoch 전환은 § 6.5 절차 |
+| CP ↔ DP 단절 | **값 자체에 TTL 을 걸지 않는다.** 만료된 키는 `get` 에서 사라지고 메모리 압박 시 LRU eviction 도 된다. `observed_at`/`expires_at` 만 저장하고 stale 판정은 읽는 쪽에서 한다 |
+| stale 판정 후 | fail-open(기본)은 **기존 값 유지**, `fail_closed` 만 명시적으로 비운다 |
+| shared dict OOM / 부분 쓰기 | `safe_set` 사용. **이전 완전 스냅샷을 유지한다.** eviction/OOM 은 경보 |
+| **의도적 zero-peer** | 모든 백엔드를 `disabled` 로 만든 상태는 **실제로 빈 멤버십**이다. 요청을 실패시킨다. 갱신 실패의 fail-open 과 **구분해야 한다** — 안 그러면 전부 내렸는데 옛 peer 가 계속 트래픽을 받는다 |
 | 프로버 장애 | 헬스 판정 동결, `unknown` 표시, 멤버십 유지 |
-| 델타 유실 / epoch 갭 | 리비전 갭 또는 epoch 불일치 감지 시 풀 스냅샷 재요청 |
-| http/stream 한쪽만 ACK | 전역 revision 커밋하지 않음. 재시도 후 실패 시 경보 |
+| 델타 유실 / epoch 갭 | 갭 또는 `EpochMismatch` 감지 시 풀 스냅샷 재요청 |
+| 한 평면만 ACK | 전역 커밋 안 함. `partial_transition` 노출 + `max_convergence_ms` 초과 시 경보 (§ 3.4) |
 
-> **shared dict 수명 정정.** HUP reload 에는 유지되고, **nginx 인스턴스 전체가 종료된 뒤
-> 재시작**하면 사라진다. v1 의 "마스터 종료 시 소멸"은 부정확했다.
+> **shared dict 수명.** HUP reload 에는 유지되고, **nginx 인스턴스 전체가 종료된 뒤 재시작**하면
+> 사라진다 (E24 로 실측). 마스터만 비정상 종료하고 워커가 남은 순간과 동일시하면 안 된다.
+
+**DP Agent 의 durable 스냅샷**은 `last-known.json` 하나가 아니다. 어느 평면·어느 epoch·어느
+topology digest 에 호환되는 스냅샷인지 표현할 수 없기 때문이다.
+→ `membership/{plane}/{topology_digest}.json` 으로 콘텐츠 주소 지정하고 atomic fsync+rename.
 
 ---
 
@@ -1059,7 +1179,10 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
 - CA 레이트 리밋 인지 + 지수 백오프. 실패 누적 시 중단 + 알림.
 - dns-01 TXT 는 성공/실패와 무관하게 cleanup 보장 + 주기적 고아 스캔.
 
-> ACME 계약의 세부는 **v0.0 스파이크 결과 이후 ADR 로 확정**한다 (§15.3).
+> **위 §8.2 는 규범이 아니라 후보다.** v2 는 "스파이크 후 ADR 로 미룬다"고 써놓고 상태기계를
+> 규범적으로 남겨 뒀다 — 그건 미룬 게 아니다. v3 에서 명시한다: **§8.2 의 엔티티·상태·정책은
+> ADR-ACME 가 확정하기 전까지 구속력이 없고, v0.1 타입 freeze 범위에 들어가지 않는다.**
+> 대응 게이트는 S18(ACME 상태기계 실증)이며 v0.6 전에 실행한다.
 
 ### 8.3 시크릿 버저닝
 
@@ -1071,23 +1194,43 @@ material_ref = "store://prod/api-cert@7"  +  sha256:abc...
 - 갱신은 새 버전을 만들 뿐 기존 버전을 덮지 않는다.
 - 세대 manifest 가 버전+다이제스트를 결박한다 → 롤백이 정확히 그 시점 자료를 복원한다.
 
-### 8.4 세대·시크릿 GC — 순환 제거
+### 8.4 세대·시크릿 GC — root 와 release ledger
 
-v1 은 "시크릿 참조 카운트 0 이면 삭제, 카운트는 보존 중인 세대 수"라고 썼는데 **순환한다.**
-세대 GC 가 카운트 0 을 기다리면 마지막 참조 세대를 영원히 못 지운다. 또 SecretStore 삭제
-실패가 세대 GC 를 막으면 원격 장애가 디스크 누적으로 전파된다.
+v1 의 "refcount 0 이면 삭제, refcount 는 보존 세대 수" 는 **순환**이었다 (세대 GC 가 카운트 0 을
+기다리면 마지막 참조 세대를 영원히 못 지운다). v2 는 순서를 뒤집어 순환은 없앴지만
+**crash-safe 하지 않았다**:
 
-순서를 뒤집는다.
+- 디스크 삭제 후 refcount 감소 전에 죽으면 → **영구 누수**
+- refcount 감소 후 완료 표시 전에 죽고 재시도하면 → **이중 감소 → 조기 삭제**
+
+#### GC root — 지워지면 안 되는 것
+
+| root | 이유 |
+|---|---|
+| `current` symlink 가 가리키는 세대 | 지금 서비스 중 |
+| `published_revision` 의 세대 | 게시된 정본 |
+| `serving_generations[]` 에 있는 모든 세대 | 옛 워커가 아직 쓴다 |
+| 진행 중 오퍼레이션의 `target` 과 `rollback` 세대 | 아직 결과가 안 났다 |
+| **committed-but-unapplied artifact** | § 5.3 — 적용 전에 사라지면 되돌릴 수단이 없다 |
+| 롤백 보존 기간 안의 세대 | 되돌릴 대상 |
+
+#### release ledger — 이중 감소를 구조로 막는다
 
 ```
-1. 세대가 GC 후보가 되는 조건
-   · 보존 개수 초과   AND
-   · serving_generations 에 없음 (옛 워커 종료 확인)  AND
-   · 롤백 보존 기간 경과
-2. 조건 충족 → 세대 tombstone → 디스크 삭제 → 시크릿 refcount 감소
-3. refcount 0 + 유예(기본 7일) → 시크릿 삭제를 비동기 큐에 넣는다
-4. 시크릿 삭제 실패 → 재시도 + "시크릿 누수" 경보. 세대 GC 는 절대 막지 않는다
+1. GC 후보 = 위 root 어디에도 없음 AND 보존 개수 초과 AND 롤백 보존 경과
+2. tombstone 을 **먼저 durable 하게** 쓴다.
+   tombstone = { generation, secret_refs[], phase: 'pending' }
+3. 디스크 삭제 → tombstone.phase = 'disk_released'
+4. secret_refs 각각에 대해 release ledger 에 삽입한다.
+     UNIQUE (generation, secret_version)
+   → 재시도해도 두 번 감소하지 않는다. 삽입 성공한 것만 refcount 를 줄인다.
+5. tombstone.phase = 'released'
+6. refcount 0 + 유예(기본 7일) 경과 → 시크릿 삭제를 비동기 큐에 넣는다.
+   **삭제 직전에 zero-ref 를 다시 확인한다** (그 사이 새 세대가 같은 버전을 참조했을 수 있다)
+7. 시크릿 삭제 실패 → 재시도 + "시크릿 누수" 경보. **세대 GC 는 절대 막지 않는다**
 ```
+
+각 단계의 크래시는 phase 를 읽어 그 지점부터 재개한다 (§ 6.2 표 #10).
 
 ---
 
@@ -1231,8 +1374,9 @@ k8s 네이티브 배포는 별도 과제.
 | 백업/복구 | `bary export` + PG 덤프 + SecretStore 백업 3종 + **분기별 복구 리허설** |
 | 리소스 알람 | `serving_generations` 수, FD, 메모리, UDP 세션, conntrack |
 
-> 위 수치는 **초기 목표치**이고, 페일오버/복구 리허설 합격 조건과 함께 v1.0 전 운영 ADR 에서
-> 확정한다.
+> **위 표는 규범이 아니라 목표 후보다.** ADR-SPOF 가 확정하기 전까지 구속력이 없다.
+> 근거 없는 숫자를 계약처럼 적어 두면 검증되지 않은 채 굳는다. 페일오버·복구 리허설의
+> 합격 조건과 함께 v1.0 전에 확정한다.
 
 ---
 
@@ -1249,20 +1393,24 @@ k8s 네이티브 배포는 별도 과제.
 | S2 | 드레인 관측 | HTTP/1·HTTP/2·TCP·UDP 각각에서 peer 별 inflight·세션 관측 가능 | 기능 축소: `no_new_traffic` 만 |
 | S3 | 인스턴스 재시작 부트스트랩 | 재시딩까지 공백 < 1s, 오래된 헬스 되살아남 없음 | 기능 축소: 부팅 시 전 백엔드 `unknown` |
 | S4 | CP 단절 | fail-open 유지, eviction 시 zero-peer 없음 | fail_closed 기본화 |
-| S5 ~ | **http/stream 이중 zone + 워커 수렴** | 양쪽 ACK 후 전 워커 수렴 < 500ms | → 대안 B (구조 불성립) |
+| S5 ~ | **이중 zone + 워커 수렴 + 평면 부분 전환** | 양쪽 ACK 후 전 워커 수렴 < 500ms **AND** 한쪽 평면 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존에서 잘못된 peer 선택 0회 | → 대안 B (구조 불성립) |
 | S6 | `least_conn` 근사 오차 | 균등 부하에서 편차 < 10% | v0 알고리즘에서 제외 |
 | S7 | reload 실패 판정 | 포트 점유 상태 HUP 재현 + 오탐/미탐 0, 판정 시간 < 3s | 판정 절차 재설계 (프로젝트 block 아님) |
 | S8 | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | 설계 재작업 (block) |
-| S9 | SNI 결과 3분기 관측성 | no-SNI / no-match / 비-TLS 구분 가능 여부 | `on_no_sni` = `reject` 고정 |
+| S9 | SNI 결과 3분기 관측성 | TLS-no-SNI / malformed / preread timeout 구분 가능 여부 (**비-TLS 는 E26.1 로 이미 확인**) | 현행 유지 — 부재·파싱실패는 계속 `reject` 고정 |
 | S10 | 라우트 컴파일러 | exact/wildcard/path 우선순위 + 라우트 500개 p99 영향 < 5% | `strict_priority` 모드 미제공 |
-| S11 | **epoch 경합** | apply/HUP/롤백 중 델타 유입 시 잘못된 peer 선택 0회 | 설계 재작업 (block) |
-| S12 | 크래시 저널 | §6.2 표의 7개 지점 전부에서 복구 정확 | 설계 재작업 (block) |
-| S13 | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 세대/시크릿 GC 오삭제 0회 | GC 보수화 |
+| S11 | **activation_epoch 경합** | ① 롤백 후 옛 epoch RPC 거부 ② 스냅샷 cut 이후 델타 미유실 ③ staging 전 accept 시작 없음 ④ 다중 serving epoch 공존 ⑤ 옛 리더 토큰 거부 — 전부 잘못된 peer 선택 0회 | 설계 재작업 (block) |
+| S12 | 크래시 저널 | §6.2 표의 **11개 지점** 전부(모든 durable write·외부 side-effect 직전/직후)에서 복구 정확. HUP 재전송이 워커 세대를 늘리지 않는지 포함 | 설계 재작업 (block) |
+| S13 | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 오삭제 0회 + §8.4 GC 각 단계 크래시에서 **누수·이중감소 0회** + GC root 누락 0회 | GC 보수화 |
 | S14 | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL/NXDOMAIN/timeout, 기존 세션 거동 | 폴백 자체가 없음 → 요구 재조정 |
-| S15 | 밸런서 품질 | RR/hash 공정성, 재시도·failure penalty, CPU/p99 | 알고리즘 축소 |
+| S15 | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
+| S16 | SNI 별 TLS policy 렌더 | 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 | `override` 제거 |
+| S17 | TLS 인증서 선택 렌더 | exact / 1라벨 와일드카드 / `default_server` 조합에서 SAN 미커버 인증서 제시 0회 | v0 은 exact host 만 |
+| S18 | ACME 상태기계 | 오더·챌린지·재시도·고아 TXT 정리 (v0.6 전) | ACME 범위 축소 |
 
 **S8·S11·S12 실패는 프로젝트 block 이다** (설계를 다시 해야 한다). 나머지는 기능 축소 또는
-대안 B 로 흡수된다.
+대안 B 로 흡수된다. **S7 은 프로젝트 block 은 아니지만 ApplyOperation 스키마 freeze 에는
+block 이다** — 활성화를 판정하지 못하면 상태기계를 고정할 수 없다.
 
 **실행 결과 (2026-08-11).** `./spike/s1-s5/run.sh` → 8 PASS / 0 FAIL.
 
@@ -1384,14 +1532,51 @@ slice 로 v0.5 에서 검증한다.
 **반대로 축소하지 않은 것** (2차 검수도 "안전성의 최소 구조"로 인정): immutable generation,
 DP 단일 writer, graph changeset, config↔membership epoch fencing.
 
-### 15.4 v2 의 반박 (2차 지적 중 수용하지 않은 것)
+### 15.4 3차 검수 blocking 9건 — v3 처리
 
-**R8. "no-SNI / no-match / parse-error 3분할을 엔진 관측성 검증 전에 고정한 것은 과설계"**
-3분할 고정은 철회하고 2분할로 줄였다. **그러나 `on_no_sni` 를 `on_no_match` 에 합치는 것은
-받아들이지 않는다.** SNI 를 보내지 않는 클라이언트가 조용히 임의 백엔드로 가는 것은
-설정 실수가 아니라 **보안 결함**이다. 두 경우의 올바른 기본값도 다르다 —
-no-match 는 폴백 풀이 합리적이지만 no-SNI 는 `reject` 가 합리적이다. 관측성이 부족하다면
-분기를 없애는 게 아니라 **`on_no_sni` 를 `reject` 로 고정**하는 것이 맞다 (S9).
+S1 이 통과해 OpenResty 멤버십 평면이 확정됐으므로, "대안 B 로 가면 사라질 항목"은 없다.
+전부 설계 대상이다.
+
+| # | 지적 | v3 처리 |
+|---|---|---|
+| 1 | 롤백에도 새 값을 쓰는 monotonic fencing + DP leader token | **§3.3** `topology_version`(내용) 과 `activation_epoch`(활성화 사건, 엄격 단조) 분리. 롤백은 옛 topology 를 **새 epoch 로** 활성화한다 → ABA 소멸. **§3.5** DP Agent 가 leader token 을 durable 보관하고 낮은 토큰을 전부 거부 |
+| 2 | desired/published/accepting/serving 좌표 분리, 다중 serving epoch | **§3.3** 좌표표 · **§3.4** 평면별 리비전 벡터 · **§6.5-5** E-old 슬롯을 서빙 워커가 사라질 때까지 유지 |
+| 3 | E-new 스냅샷 staging / cut / abort·replay | **§6.5** HUP **전** staging, high-water mark 로 cut, 활성화 직후 그 이후 이벤트 **replay**(버리지 않는다), abort 시 기존 epoch 복귀 |
+| 4 | http/stream partial-transition + stale RPC 차단 | **§3.4** `plane_state` · `transition_id` · `partial_transition` · `max_convergence_ms`. 교차 평면 동시 전환을 **보장하지 않는다고 명시** |
+| 5 | plan→commit→apply 단회 lifecycle, revision/epoch 예약, artifact pinning | **§5.3** plan 상태기계. commit 에서 revision·epoch 예약, `(plan_id → operation_id)` unique, committed artifact 는 TTL 면제, `superseded` 도입 |
+| 6 | 모든 side-effect 직전/직후 크래시 저널 + cancel | **§6.2** `*_intent`/결과 분리, 11행 표, HUP 재전송이 멱등이 아님을 명시, `cancelled` 상태 |
+| 7 | crash-safe GC root / release ledger | **§8.4** GC root 표(committed-but-unapplied 포함) + `UNIQUE(generation, secret_version)` release ledger + 삭제 직전 zero-ref 재확인 |
+| 8 | TLS 렌더 스파이크 | **S16 · S17** 신설. `CipherPolicyRef` 도입, `cipher_preset: custom` 제거 |
+| 9 | S1/S5 실패 시 제품 결정 | **S1 통과로 해소.** 대안 B 는 폴백. §7.3 범위표 유지 |
+
+**함께 반영한 3차 High/Medium**: 멤버십 리듀서 단일화(§6.6) · 의도적 zero-peer 와 갱신 실패
+구분(§6.7) · 평면·epoch 별 durable 스냅샷(§6.7) · `tls_passthrough` 풀의 `upstream_tls` 금지 ·
+`redirect_http_to_https` 제거 · `sniOutcomeModel` enum · GUI 동등성을 v1.0 한정.
+
+### 15.5 v3 에서 **문구가 아니라 코드까지** 축소한 것
+
+v2 의 §15.3 은 축소를 선언했지만 스키마와 본문에는 그대로 남아 있었다. 3차 검수가 "축소가
+문구에만 머물렀다"고 지적한 부분이다. v3 은 실제로 뺐다.
+
+| 항목 | v2 (선언) | v3 (실제) |
+|---|---|---|
+| `least_conn` | "v0 기본에서 제외" 라고 쓰고 enum 에 남김 | **enum 에서 제거.** `src/model/provisional.ts` 의 `Algorithm` 에 없다 |
+| ACME 상태기계 | "ADR 로 미룸" 이라 쓰고 §8.2 를 규범으로 남김 | **구속력 없음을 명시**, v0.1 freeze 범위에서 제외, S18 신설 |
+| RTO/RPO | "ADR 에서 확정" 이라 쓰고 수치를 표로 남김 | **목표 후보임을 명시.** ADR-SPOF 전까지 구속력 없음 |
+| SNI 분기 | 2분할이되 `on_no_sni` 를 설정 가능하게 둠 | **`on_unmatched_sni` 하나만 설정 가능.** 부재·파싱실패는 `reject` 고정. 렌더도 map 하나 |
+
+### 15.6 3차 검수가 옳았던 것 — R8 재판정 수용
+
+v2 의 §15.4 는 "`on_no_sni` 를 합치면 보안 결함" 이라고 주장했다. 3차 재판정이 정확히 갈랐다:
+**합치는 것 자체가 문제가 아니라, SNI 부재·파싱 실패를 설정 가능한 폴백 풀로 보내는 것이
+문제다.** 합친 동작이 `reject` 고정이면 결함이 아니다.
+
+더 아픈 지적은 이것이다 — **v2 의 렌더 예시는 자기가 주장한 정책을 구현하지도 못했다.**
+map 에 빈 문자열 분기가 없어 no-SNI 와 unmatched 가 같은 `default` 로 갔다. 주장과 산출물이
+반대였다.
+
+v3 은 계약을 `on_unmatched_sni` 하나로 좁히고, **렌더와 테스트로 강제**한다
+(`tests/unit/render.test.ts` R8/R9, 골든 R17).
 
 ---
 

@@ -65,7 +65,7 @@ const fixtures: Array<{ name: string; model: Model }> = [
         { key: 'alt', protocol: 'tcp', bind: '0.0.0.0', port: 888, enabled: true, defaultPool: 'b' },
       ],
       pools: [
-        { key: 'a', protocolClass: 'tcp', algorithm: 'least_conn', sendProxyProtocol: 'v1' },
+        { key: 'a', protocolClass: 'tcp', algorithm: 'round_robin', sendProxyProtocol: 'v1' },
         { key: 'b', protocolClass: 'tcp', algorithm: 'source_ip_hash' },
       ],
       backends: [
@@ -112,12 +112,12 @@ const fixtures: Array<{ name: string; model: Model }> = [
     },
   },
   {
-    name: 'R8/R9 SNI 패스스루 + on_no_sni=reject',
+    name: 'R8/R9 SNI 패스스루 + 부재 SNI reject 고정',
     model: {
       ...base,
       listeners: [
         { key: 'tls', protocol: 'tls_passthrough', bind: '0.0.0.0', port: 8443, enabled: true,
-          onNoSni: 'reject', onNoMatch: { pool: 'fb' }, prereadTimeoutS: 5 },
+          onUnmatchedSni: { pool: 'fb' }, prereadTimeoutS: 5 },
       ],
       pools: [
         { key: 'mail', protocolClass: 'tcp', algorithm: 'round_robin' },

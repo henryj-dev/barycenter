@@ -126,15 +126,16 @@ PASS=43  FAIL=0  SKIP=1
 | **S6** | `least_conn` 근사 오차 | native(zone 유·무) 대비 편차 < 10%. **워크로드·하드웨어·베이스라인을 먼저 정의** | v0 알고리즘에서 제외 |
 | **S7** | reload 실패 판정 | 오탐/미탐 0, 판정 시간 < 3s. E23 을 자동화 | ApplyOperation 스키마 freeze **block** |
 | **S8** | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | **block** |
-| **S9** | SNI 결과 분기 관측성 | 비-TLS(E26.1 완료) / TLS-no-SNI / malformed / preread timeout 구분 가능 여부 | `on_no_sni` = `reject` 고정 |
+| **S9** | SNI 결과 분기 관측성 | TLS-no-SNI / malformed / preread timeout 구분 (**비-TLS 는 E26.1 로 확인 완료**) | 현행 유지 — 부재·파싱실패는 계속 `reject` 고정 |
 | **S10** | 라우트 컴파일러 | exact/wildcard/path 우선순위 정확 + 라우트 500개에서 p99 영향 < 5% | `strict_priority` 미제공 |
 | **S11** | **epoch 경합** | 아래 P1~P8 시나리오 전부에서 잘못된 peer 선택 **0회** | **block** |
-| **S12** | 크래시 저널 | A5 의 모든 side-effect 직전/직후 주입에서 복구 정확 | **block** |
+| **S12** | 크래시 저널 | A5 의 **11개 지점** 전부에서 복구 정확 + HUP 재전송이 워커 세대를 늘리지 않음 | **block** |
 | **S13** | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 세대/시크릿 오삭제 0회. GC 각 단계 크래시 포함 | GC 보수화 |
 | **S14** | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL 만료/NXDOMAIN/timeout/SERVFAIL. 각 경우의 **허용 동작·수렴 시간·기존 세션 보존**을 수치로 | 폴백 없음 → 요구 재조정 |
 | **S15** | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
 | **S16** | **SNI 별 TLS policy 렌더** | 동일 `listen` 의 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 (E27 은 문법만 확인) | `override` 제거, TlsPolicy 는 리스너 단위 |
 | **S17** | **TLS 인증서 선택 렌더** | exact / 1-라벨 와일드카드 / `default_server` 조합에서 **SAN 이 커버하지 않는 인증서가 제시되는 일 0** (E22.2 위험) | v0 은 exact host 만 허용 |
+| **S18** | **ACME 상태기계** | 오더·챌린지·재시도·고아 TXT 정리. v0.6 전 실행 | ACME 범위 축소 |
 
 ### S1 / S5 실행 결과 — `./spike/s1-s5/run.sh`
 
@@ -181,6 +182,7 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 | M1.2 | `protocol=http` + `http2=true` | 422 — `http2` 는 `HttpsProfile` 에만 |
 | M1.3 | `protocol=tcp`, `default_pool_id` 누락 | 422 |
 | M1.4 | `protocol=tls_passthrough` + `tls_policy_id` | 422 — 패스스루는 인증서를 제시하지 않는다 |
+| M1.8 | `tls_passthrough` + `on_no_sni` 설정 시도 | **표현 불가** — 부재·파싱실패는 `reject` 고정. `on_unmatched_sni` 만 설정 가능 (§4.1) |
 | M1.5 | `inbound_proxy_protocol.enabled=true`, `trusted_proxy_cidrs=[]` | 422 — **비어 있으면 source IP 스푸핑** |
 | M1.6 | `udp.expected_responses` 를 `tcp` 리스너에 | 422 |
 | M1.7 | `bind_address` 비정규 표기(`::ffff:0.0.0.0`, 대문자 hex) | 정규화 후 저장, 이후 겹침 판정에 사용 |
@@ -193,7 +195,7 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 | M2.2 | `TlsPassthroughRoute` 에 `redirect` 액션 | 422 — 타입에 없음 |
 | M2.3 | `TlsPassthroughRoute.action.reject` 에 HTTP status | 422 |
 | M2.4 | `HttpRoute` 에 `sni` 매치 | 422 |
-| M2.5 | `proxy` 액션 + `redirect_http_to_https` 동시 | 422 — **3차 지적. 중복 표현 제거 대상** |
+| M2.5 | `proxy` 액션 + `redirect_http_to_https` | **표현 불가** — 필드를 제거했다. `redirect` 액션만 존재 |
 | M2.6 | `host` 에 `*.a.*.b.com` (다중 와일드카드) | 422 |
 | M2.7 | `host` 대문자·trailing dot·유니코드 | IDNA 정규화 후 저장, 중복이면 409 |
 | M2.8 | 같은 리스너·같은 매치·같은 priority 2개 | 409 — tie-break 가 결정적이어야 하므로 |
@@ -213,7 +215,7 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 | M3.9 | `protocol_class≠http` + `sticky.kind=cookie` | 422 |
 | M3.10 | `protocol_class=udp` + `probe.protocol=http` | **허용** — 별도 헬스 포트는 정당 (§4.3.1) |
 | M3.11 | `probe.mode=active`, `probe.protocol` 누락 | 422 |
-| M3.12 | `least_conn` 을 S6 미통과 상태에서 지정 | 422 `capability` — **§15.3 축소가 enum 에 반영됐는지 확인** |
+| M3.12 | `least_conn` 지정 | **표현 불가** — `Algorithm` enum 에 없다. S6 이후 되살릴지 결정 |
 | M3.13 | `http` 리스너가 `protocol_class=tcp` 풀 참조 | 422 — 복합 FK |
 
 ### M4 백엔드
@@ -233,7 +235,7 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 | M5.1 | `SniCertificateBinding.hosts` 에 다중 라벨 와일드카드 | 422 — **E22.2 위험. v0 은 exact + 1라벨만** |
 | M5.2 | binding host 가 인증서 SAN 에 없음 | 422 |
 | M5.3 | 같은 TlsPolicy 에 동일 host binding 2개 | 409 |
-| M5.4 | `cipher_preset=custom` 인데 참조 값 없음 | 422 — **3차 지적. `CipherPolicyRef` 필요** |
+| M5.4 | cipher 정책 | 자유 문자열 불가. 버전된 `CipherPolicyRef` 만. TLS1.2 이하와 1.3 산출물 분리 |
 | M5.5 | `override.min_version` 을 S16 미통과 엔진에서 | 422 `capability` |
 | M5.6 | 와일드카드 도메인 + `acme.challenge=http-01` | 422 — dns-01 만 가능 |
 | M5.7 | `material_ref` 에 `@latest` | 422 — 버전 고정 참조만 |
@@ -277,8 +279,8 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 | R5 | websocket 라우트 0개 | map 미생성 |
 | R6 | `source_ip_hash`, `protocol_class=http` | `ip_hash;` |
 | R7 | `source_ip_hash`, `protocol_class=tcp` | `hash $remote_addr consistent;` |
-| R8 | SNI 라우트 + `on_no_match=pool` | map 에 `~*` 정규식(대소문자 무시) + `default` |
-| R9 | SNI 라우트 + `on_no_sni=reject` | `$ssl_preread_protocol` 분기가 렌더됨 — **E26.1 이 가능함을 확인** |
+| R8 | SNI 라우트 + `on_unmatched_sni=pool` | map 에 `~*` 정규식(대소문자 무시) + `[^.]+`(1라벨) + `default` |
+| R9 | SNI 라우트, 부재 SNI | map 에 `"" "";` 가 렌더되어 폴백 풀이 아니라 reject 로 간다. **v0 은 `$ssl_preread_protocol` 분기를 만들지 않는다** (두 경우 동작이 같다) |
 | R10 | 겹치는 exact/wildcard host, priority 역전 | 컴파일 결과가 §7.5 클래스 순서를 따르고 **plan 이 경고** |
 | R11 | UDP 리스너 + `preset=dns` | `proxy_responses 1; proxy_timeout 5s; listen ... udp reuseport;` |
 | R12 | `send_proxy_protocol=v1`, tcp | `proxy_protocol on;` |
@@ -346,7 +348,8 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 | A5.7 | http 평면 ACK 후 stream 평면 전송 전 | `partial_transition` 상태로 진입, 재시도 |
 | A5.8 | 롤백 중 | 이전 세대 재게시 후 동일 판정 절차 |
 | A5.9 | 시크릿 materialize 후 검증 전 | 재검증, 불일치면 `failed` |
-| A5.10 | GC 디스크 삭제 후 refcount 감소 전 | **누수 없이 복구** (§8.4 / G 참조) |
+| A5.10 | GC 디스크 삭제 후 refcount 감소 전 | **누수 없이 복구** (§8.4 release ledger) |
+| A5.11 | `reload_intent` 후 HUP 전 / HUP 후 `reload_observed` 전 | **마스터 cycle 관측으로 갈라야 한다.** HUP 재전송은 워커 세대를 늘리므로 멱등이 아니다 |
 
 ### A6 취소
 
@@ -364,17 +367,20 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 
 | ID | 시나리오 | 기대 |
 |---|---|---|
-| **P1** | `E10 → E11 → E10 으로 롤백` 후, E10 시절의 지연 델타 `(E10, m91)` 도착 | **거부되어야 한다.** 현재 설계(`이전 epoch 로 되돌린다`)로는 **통과해 버린다** → *ABA. 3차 Critical. 롤백도 새 `activation_epoch` 를 써야 함* |
-| **P2** | apply `prepare` 중 헬스 델타 유입 | 버퍼링. epoch 전환 후 유실 없이 반영 |
-| **P3** | 스냅샷이 `healthy` 를 읽은 뒤 `activated` 전에 `unhealthy` 델타 도착 | **죽은 백엔드가 되살아나면 안 된다** — 현재 "델타 재생 아님" 규칙으로는 유실됨 (3차 Critical) |
-| **P4** | `prepare` 실패로 abort | 버퍼가 기존 epoch 로 되돌아가고, 그 동안의 헬스 변화가 적용됨 |
-| **P5** | http 는 E21 활성화·ACK, stream 은 timeout | 전역 revision 커밋 금지. `partial_transition` 노출 + 최대 수렴 시간 |
-| **P6** | P5 상태에서 http 를 E20 으로 롤백, 이후 늦은 stream E21 RPC 완료 | **거부되어야 한다** — 평면별 fencing |
-| **P7** | 새 워커가 accept 시작했는데 E-new 스냅샷 미전환 | **peer 선택 0건이어야 한다** — 스냅샷을 HUP *전에* stage |
-| **P8** | 옛 HTTP 워커가 keepalive/HTTP2 연결에서 새 요청 처리 중 | **E-old 멤버십이 살아 있어야 한다** — 다중 serving epoch |
-| P9 | 백엔드 host/port 변경 후 옛 endpoint 의 지연 프로브 결과 도착 | 거부 — `{backend_id, endpoint_fingerprint, probe_spec_digest}` 전부 일치할 때만 투영 |
-| P10 | `admin_state=disabled` 와 늦은 `healthy` 델타 경합 | **admin_state 가 항상 우선** |
-| P11 | 모든 백엔드를 의도적으로 disabled | **실제로 빈 멤버십이 되어 요청이 실패해야 한다.** fail-open 으로 옛 peer 를 계속 쓰면 안 됨 (3차 지적) |
+| **P1** | `E10 → E11 → 롤백` 후, E10 시절의 지연 델타 `(E10, m91)` 도착 | **거부.** 롤백은 옛 topology 를 **새 `E12`** 로 활성화하므로 `E10` 은 다시 유효해지지 않는다 (§3.3-2). *v2 설계는 이걸 통과시켰다 — ABA* |
+| **P2** | apply `prepare` 중 헬스 델타 유입 | 버퍼링 후 유실 없이 반영 |
+| **P3** | 스냅샷이 `healthy` 를 읽은 뒤 `activated` 전에 `unhealthy` 델타 도착 | **죽은 백엔드가 되살아나지 않는다.** high-water mark 이후 이벤트를 순서대로 **replay** 한다 (§6.5-4) |
+| **P4** | `prepare` 실패로 abort | E-new 슬롯 폐기, 버퍼는 기존 epoch 로 복귀. abort 동안에도 활성 epoch 는 헬스를 계속 받는다 |
+| **P5** | http 는 E21 활성화·ACK, stream 은 timeout | 전역 커밋 금지. `partial_transition` 노출 + `max_convergence_ms` 초과 시 경보 |
+| **P6** | P5 상태에서 http 롤백, 이후 늦은 stream E21 RPC 완료 | **거부** — 평면별 fencing + 새 epoch |
+| **P7** | 새 워커가 accept 시작했는데 E-new 슬롯 미준비 | **일어나지 않아야 한다.** 슬롯이 준비되지 않은 워커는 ready 가 되지 않는다 (§6.5-3) |
+| **P8** | 옛 HTTP 워커가 keepalive/HTTP2 연결에서 새 요청 처리 중 | **E-old 슬롯이 살아 있다.** 서빙 워커가 전부 사라질 때까지 유지 (§6.5-5) |
+| **P15** | 옛 리더가 보낸 rollback RPC 가 새 리더 apply 뒤에 도착 | **DP Agent 가 거부** — 더 높은 `leader_token` 을 본 뒤에는 낮은 토큰의 요청을 전부 거부 (§3.5) |
+| **P16** | DP Agent 재시작 후 옛 토큰 RPC 도착 | 거부 — 최대 토큰은 durable |
+| **P17** | 같은 `topology_version` 인데 `activation_epoch` 만 다름 | 헬스 **재투영 가능** — 멤버십 식별 공간이 같다 (§3.3-4) |
+| P9 | 백엔드 host/port 변경 후 옛 endpoint 의 지연 프로브 결과 도착 | 거부 — `{backend_id, endpoint_fingerprint, probe_spec_digest}` 전부 일치할 때만 투영 (§3.3-5) |
+| P10 | `admin_state=disabled` 와 늦은 `healthy` 델타 경합 | **admin_state 가 항상 우선.** 단일 리듀서가 합성하고 헬스 프로듀서는 헬스 필드만 쓴다 (§6.6) |
+| P11 | 모든 백엔드를 의도적으로 disabled | **실제로 빈 멤버십.** 요청이 실패해야 한다. 갱신 실패의 fail-open 과 **구분**된다 (§6.7) |
 | P12 | shared dict OOM / 부분 쓰기 | 이전 완전 스냅샷 유지 (이건 fail-open) |
 | P13 | 리비전 갭 감지 | 풀 스냅샷 재요청 |
 | P14 | epoch 불일치 델타 | `EpochMismatch` 로 거부, 카운터 증가 |
@@ -488,11 +494,11 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 | 2차 H | 워커 레지스트리 | A4.1–A4.3, S7 |
 | 2차 H | GC 순환 | G3–G7 |
 | 2차 H | 드레인 계층 오류 | S2, M4 |
-| 3차 C | epoch ABA | **P1** |
+| 3차 C | epoch ABA | **P1** — v3 §3.3 에서 해소 |
 | 3차 C | 스냅샷 전환 순서 | **P7, P8** |
 | 3차 C | 스냅샷 cut 델타 유실 | **P3** |
 | 3차 C | 평면 부분 전환 | **P5, P6** |
-| 3차 C | 리더 fencing | **A3.3** |
+| 3차 C | 리더 fencing | **A3.3, P15, P16** |
 | 3차 H | plan 단회성 | C2.3, C2.9, C2.11 |
 | 3차 H | 크래시 표 부족 | **A5.1–A5.10** |
 | 3차 H | 와일드카드 인증서 | **E22.2**, M5.1, M5.2, S17 |
