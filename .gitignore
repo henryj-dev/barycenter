@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+
+# build output
+dist/
+build/
+.svelte-kit/
+*.tsbuildinfo
+
+# test / coverage
+coverage/
+.nyc_output/
+
+# env & secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+certs/
+
+# runtime artifacts
+generations/
+*.log
+logs/
+tmp/
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
