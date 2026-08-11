@@ -38,6 +38,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 |---|---|---|
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS / 0 FAIL** — §2 참조 |
 | 스파이크 S11 | `./spike/s11/run.sh` | **14 PASS / 0 FAIL** — §2 참조 |
+| 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS / 0 FAIL** — §2 참조 |
 | 엔진 사실 (E) | `npm run test:engine` | **43 PASS / 0 FAIL / 1 SKIP** |
 | 단위 (M7·X1, M6, §7.5, R, capability) | `npm test` | **114 PASS** |
 | 골든 (R17·R18) | `npm run test:golden` | **8 PASS** — 실제 nginx -t |
@@ -125,7 +126,7 @@ PASS=43  FAIL=0  SKIP=1
 | **S4** | CP 단절 | `expires_at` 경과 후 fail-open 이 마지막 값을 유지. eviction 으로 zero-peer 되는 일 0 | `fail_closed` 기본화 |
 | **S5** ~ | **http/stream 이중 zone + 워커 수렴** | 양쪽 ACK 후 **전 워커** 수렴 < 500ms. 한쪽 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존 시나리오 포함 | → 대안 B |
 | **S6** | `least_conn` 근사 오차 | native(zone 유·무) 대비 편차 < 10%. **워크로드·하드웨어·베이스라인을 먼저 정의** | v0 알고리즘에서 제외 |
-| **S7** | reload 실패 판정 | 오탐/미탐 0, 판정 시간 < 3s. E23 을 자동화 | ApplyOperation 스키마 freeze **block** |
+| **S7** ✅ | reload 실패 판정 | 오탐/미탐 0, 판정 시간 < 3s. E23 을 자동화 | ApplyOperation 스키마 freeze **block** |
 | **S8** | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | **block** |
 | **S9** | SNI 결과 분기 관측성 | TLS-no-SNI / malformed / preread timeout 구분 (**비-TLS 는 E26.1 로 확인 완료**) | 현행 유지 — 부재·파싱실패는 계속 `reject` 고정 |
 | **S10** | 라우트 컴파일러 | exact/wildcard/path 우선순위 정확 + 라우트 500개에서 p99 영향 < 5% | `strict_priority` 미제공 |
@@ -197,6 +198,31 @@ PASS=14  FAIL=0     openresty/1.31.1.1, worker_processes 2
 
 **엔진 스파이크로 덮이지 않는 것**: 평면 부분 전환(P5·P6), 스냅샷 cut→replay(P3),
 버퍼링/abort(P2·P4)는 컨트롤 플레인 프로토콜 로직이다. 프로토콜 구현 단계에서 검증한다.
+
+### S7 실행 결과 — `./spike/s7/run.sh`
+
+```
+PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
+```
+
+| ID | 결과 |
+|---|---|
+| S7.baseline | 기동 직후 전 워커가 gen1 보고 |
+| A4.3 | in-flight 요청을 **gen1 워커**가 처리하는데 shared 마커는 `2` — 마커는 세대별 렌더 리터럴이어야 한다 |
+| S7.success | 정상 HUP → **74ms** 에 활성화 판정 (미탐 0) |
+| S7.test_passes | 포트 점유 중에도 `nginx -t` 통과 (E23 자동화) |
+| S7.fail_detect | 실패한 HUP → **71ms** 에 실패 판정 (오탐 0) |
+| S7.stays_old | `accepting` 이 옛 세대로 유지 |
+| S7.traffic | 실패한 HUP 뒤에도 옛 설정으로 트래픽 유지 |
+| S7.errlog | 워터마크 이후 bind 실패 기록 |
+| S7.recover | 점유 해제 후 **8ms** 에 활성화 |
+
+**판정에는 음성 신호가 반드시 필요하다.** 워커 레지스트리만으로는 실패 판정이 타임아웃
+전체를 소모한다 — "새 워커가 안 보인다"는 아무리 기다려도 계속 참이기 때문이다. 처음 돌렸을
+때 **4,027ms** 가 걸렸다. error log 워터마크를 함께 보면 **71ms**. §6.3 이 이미 워터마크를
+판정 3단계로 적어 뒀는데, 그게 왜 필요한지는 이 실측 전까지 근거가 없었다.
+
+→ **ApplyOperation 스키마를 고정할 수 있다.**
 
 ---
 
