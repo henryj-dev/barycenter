@@ -1,0 +1,124 @@
+# S11 — activation_epoch 경합 스파이크 (DESIGN.md §12.0, §3.3, §3.5, §6.5)
+#
+# ⚠️ 버릴 코드다. 검증할 불변식만 최소로 재현한다.
+#
+# 재현하는 구조
+#   · 멤버십은 **epoch 별 슬롯**에 산다: slot:<epoch>
+#   · balancer 는 **세대에 구워진 epoch 리터럴**로 자기 슬롯만 본다 (§6.5-1)
+#     → 옛 워커는 HUP 뒤에도 E-old 슬롯을 계속 쓴다 (§6.5-5, P8)
+#   · admin 은 두 가지를 편성한다
+#       - leader_token 이 더 낮으면 전부 거부 (§3.5, P15)
+#       - activate 는 **엄격 단조**. 롤백도 새 epoch 를 쓴다 (§3.3-2, P1)
+#
+# __EPOCH__ 는 러너가 세대마다 다른 값으로 치환한다. 실제 구현에서는 세대 manifest 의
+# activation_epoch 가 렌더에 구워진다.
+
+worker_processes 2;
+daemon off;
+error_log logs/error.log warn;
+events { worker_connections 256; }
+
+http {
+    access_log off;
+    lua_shared_dict bary 1m;
+
+    # 이 세대가 속한 활성화 epoch. 렌더 시점에 고정된다.
+    init_worker_by_lua_block { _G.GEN_EPOCH = __EPOCH__ }
+
+    # ── 백엔드 ─────────────────────────────────────────────────────────
+    # 응답 문자열이 길어야 헤더(Date 의 "Aug" 등)와 섞이지 않고 골라낼 수 있다.
+    server { listen 127.0.0.1:9001; location / { return 200 "BACKEND_A"; } }
+    server { listen 127.0.0.1:9002; location / { return 200 "BACKEND_B"; } }
+    server { listen 127.0.0.1:9003; location / { return 200 "EVIL_PEER"; } }
+    # HUP 를 가로지르는 in-flight 요청을 만들기 위한 느린 백엔드
+    server { listen 127.0.0.1:9004;
+             location / { content_by_lua_block { ngx.sleep(3); ngx.print("BACKEND_SLOW") } } }
+
+    # ── admin ──────────────────────────────────────────────────────────
+    server {
+        listen 127.0.0.1:8081;
+
+        # /stage?token=T&epoch=E   body=peers
+        #   토큰이 낮으면 거부. 활성 epoch 보다 과거면 거부(미래 staging 은 허용).
+        location /stage {
+            content_by_lua_block {
+                local d = ngx.shared.bary
+                local token = tonumber(ngx.var.arg_token) or 0
+                local epoch = tonumber(ngx.var.arg_epoch) or 0
+                local seen = d:get("token") or 0
+                if token < seen then
+                    d:incr("rejected_token", 1, 0)
+                    ngx.status = 409; ngx.say("STALE_LEADER seen=", seen); return
+                end
+                d:set("token", token)
+                local active = d:get("active_epoch") or 0
+                if epoch < active then
+                    d:incr("rejected_epoch", 1, 0)
+                    ngx.status = 409; ngx.say("EPOCH_MISMATCH active=", active); return
+                end
+                ngx.req.read_body()
+                d:set("slot:" .. epoch, ngx.req.get_body_data() or "")
+                ngx.say("STAGED epoch=", epoch)
+            }
+        }
+
+        # /activate?token=T&epoch=E — 엄격 단조. 미staging 은 활성화 불가(P7).
+        location /activate {
+            content_by_lua_block {
+                local d = ngx.shared.bary
+                local token = tonumber(ngx.var.arg_token) or 0
+                local epoch = tonumber(ngx.var.arg_epoch) or 0
+                local seen = d:get("token") or 0
+                if token < seen then
+                    d:incr("rejected_token", 1, 0)
+                    ngx.status = 409; ngx.say("STALE_LEADER seen=", seen); return
+                end
+                d:set("token", token)
+                local active = d:get("active_epoch") or 0
+                if epoch <= active then
+                    d:incr("rejected_epoch", 1, 0)
+                    ngx.status = 409; ngx.say("NOT_MONOTONIC active=", active); return
+                end
+                if not d:get("slot:" .. epoch) then
+                    ngx.status = 409; ngx.say("NOT_STAGED epoch=", epoch); return
+                end
+                d:set("active_epoch", epoch)
+                ngx.say("ACTIVE epoch=", epoch)
+            }
+        }
+
+        location /state {
+            content_by_lua_block {
+                local d = ngx.shared.bary
+                ngx.say("token=", d:get("token") or 0,
+                        " active=", d:get("active_epoch") or 0,
+                        " gen_epoch=", _G.GEN_EPOCH,
+                        " rejected_token=", d:get("rejected_token") or 0,
+                        " rejected_epoch=", d:get("rejected_epoch") or 0)
+            }
+        }
+    }
+
+    # ── 대상 ───────────────────────────────────────────────────────────
+    upstream app {
+        server 0.0.0.1:1;
+        balancer_by_lua_block {
+            local balancer = require "ngx.balancer"
+            -- **자기 세대의 epoch 슬롯만** 본다. active_epoch 를 보지 않는다.
+            -- 그래서 HUP 뒤에도 옛 워커는 E-old 를 계속 쓴다 (§6.5-5).
+            local peers = ngx.shared.bary:get("slot:" .. _G.GEN_EPOCH)
+            if not peers or peers == "" then
+                -- staging 되지 않은 세대는 조용히 옛 peer 로 흘러가지 않고 실패한다 (§6.5-3).
+                return ngx.exit(503)
+            end
+            local h, p = peers:match("^([^,]+):(%d+)")
+            assert(balancer.set_current_peer(h, tonumber(p)))
+        }
+    }
+
+    server {
+        listen 127.0.0.1:8080;
+        keepalive_timeout 30s;
+        location / { proxy_pass http://app; }
+    }
+}

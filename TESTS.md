@@ -37,6 +37,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | 묶음 | 명령 | 결과 |
 |---|---|---|
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS / 0 FAIL** — §2 참조 |
+| 스파이크 S11 | `./spike/s11/run.sh` | **14 PASS / 0 FAIL** — §2 참조 |
 | 엔진 사실 (E) | `npm run test:engine` | **43 PASS / 0 FAIL / 1 SKIP** |
 | 단위 (M7·X1, M6, §7.5, R, capability) | `npm test` | **114 PASS** |
 | 골든 (R17·R18) | `npm run test:golden` | **8 PASS** — 실제 nginx -t |
@@ -166,6 +167,36 @@ PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
 > (4개 중 3개만 관측돼 거짓 실패). ② busybox `date` 는 `%N` 을 지원하지 않아 `0ms` 라는
 > 가짜 숫자가 나왔다. 둘 다 워커 자가보고 + `ngx.now()` 로 고쳤다. **S5 는 아직 부분
 > 통과다** — 한쪽 평면 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존은 미검증.
+
+### S11 실행 결과 — `./spike/s11/run.sh`
+
+```
+PASS=14  FAIL=0     openresty/1.31.1.1, worker_processes 2
+```
+
+| ID | 결과 |
+|---|---|
+| P1.rollback | 롤백이 옛 topology 를 **새 epoch(E7)** 로 활성화 |
+| P1.stale_stage | 지연된 `(E1)` 델타 거부 (409) |
+| P1.not_monotonic | `activate E1` 거부 — 엄격 단조 (409) |
+| P1.traffic | 지연 RPC 이후에도 트래픽 오염 없음 |
+| P7.admin | 미staging epoch 활성화 거부 |
+| P7.dataplane | 슬롯 없는 세대로 HUP → **503**. 옛 peer 로 조용히 흘러가지 않음 |
+| P8.control | HUP 없으면 keepalive 응답 2개 (대조군) |
+| P8.keepalive_closed | **HUP 이 유휴 keepalive 연결을 닫는다** |
+| P8.inflight | HUP 을 가로지른 in-flight 요청이 옛 세대에서 완료 |
+| P8.new | 새 연결은 새 epoch 로 |
+| P15.lower / higher / demoted / traffic | 리더 토큰 펜싱 |
+
+**P1 이 핵심이다.** v3 §3.3 이 `activation_epoch` 를 엄격 단조로 만들고 롤백도 새 값을 쓰게
+바꾼 것이 실제로 ABA 를 막는다. **v2 설계였다면 롤백이 E1 을 재활성화하므로 지연 델타가 먹었다.**
+
+**P8 은 3차 검수의 전제를 교정했다.** "옛 HTTP 워커가 keepalive 연결에서 새 요청을 계속
+처리한다"는 사실이 아니다 — HUP 이 그 연결을 닫는다. E-old 가 필요한 진짜 이유는
+**HUP 을 가로지르는 in-flight 요청과 그 재시도**다. 창이 좁아졌지 사라진 건 아니다.
+
+**엔진 스파이크로 덮이지 않는 것**: 평면 부분 전환(P5·P6), 스냅샷 cut→replay(P3),
+버퍼링/abort(P2·P4)는 컨트롤 플레인 프로토콜 로직이다. 프로토콜 구현 단계에서 검증한다.
 
 ---
 
