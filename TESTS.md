@@ -1,0 +1,493 @@
+# barycenter — 테스트 케이스
+
+> [`DESIGN.md`](./DESIGN.md) v2 와 3라운드 외부 검수에서 나온 주장·불변식을 **검증 가능한
+> 형태로 옮긴 것**이다. 설계 문서가 "이렇게 동작한다"고 말한 모든 것에 대응하는 케이스가
+> 있어야 하고, 대응이 없는 주장은 근거 없는 주장이다.
+
+## 상태 범례
+
+| 상태 | 뜻 |
+|---|---|
+| **RUNNABLE** | 지금 실행된다 |
+| **SPIKE** | v0.0 아키텍처 스파이크(§12.0)에서 실행. 버릴 코드로 검증 |
+| **v0.1+** | 미확정 계약에 의존한다. 지금은 명세이고 스텁을 만들지 않는다 |
+
+> **스텁을 만들지 않는 이유.** 구현이 없는 상태에서 `skip` 처리된 테스트 파일은 통과 신호를
+> 위조한다. 실행 가능한 것만 실행 가능한 형태로 두고, 나머지는 명세로 둔다.
+
+> **왜 일부만 RUNNABLE 인가.** DESIGN.md §12.0 이 "v0.1 타입·API·DB 스키마 freeze 는 No-Go"
+> 라고 못박았다. 그래서 지금 TDD 로 짤 수 있는 것은 **엔진이 계약을 정해 준 영역**뿐이다 —
+> 렌더러 · 문자열 문법 계약 · 소켓 겹침 · 라우트 컴파일러. 이들은 `topology_epoch` ·
+> changeset · ApplyOperation 에 전혀 의존하지 않는 순수 함수라서 스파이크 결과가 뒤집혀도
+> 살아남는다. M · C · A · P · G 는 아직 확정되지 않은 계약을 대상으로 하므로 명세로 둔다.
+
+## 실행
+
+```bash
+npm test                # 단위 — 렌더러 · 문자열 · 소켓 · 라우트 컴파일러
+npm run test:golden     # 렌더 산출물을 실제 엔진 nginx -t 로 검증 (도커 필요)
+npm run test:engine     # 엔진 사실 검증 (도커 필요)
+npm run typecheck
+
+BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
+```
+
+### 현재 상태
+
+| 묶음 | 명령 | 결과 |
+|---|---|---|
+| 엔진 사실 (E) | `npm run test:engine` | **43 PASS / 0 FAIL / 1 SKIP** |
+| 단위 (M7·X1, M6, §7.5, R, capability) | `npm test` | **114 PASS** |
+| 골든 (R17·R18) | `npm run test:golden` | **8 PASS** — 실제 nginx -t |
+
+---
+
+## 1. E — 엔진 사실 검증 (RUNNABLE)
+
+**목적**: DESIGN.md 가 사실로 전제한 nginx/OpenResty 동작을 *우리가 pin 할 실제 이미지에서*
+확인한다. 검수 3라운드 동안 "맞다/틀리다"로 뒤집힌 항목이 전부 여기 있다.
+
+### 최근 실행 결과 — `openresty/openresty:alpine` (openresty/1.31.1.1)
+
+```
+PASS=43  FAIL=0  SKIP=1
+```
+
+### 케이스 목록
+
+| ID | 검증 대상 | 기대 | 근거 |
+|---|---|---|---|
+| E0.* | 빌드 capability — **필수**(`stream`, `stream_ssl_preread`, `stream_ssl`, `http_v2`, `http_realip`, `http_ssl`, `ngx_stream_lua`)와 **선택**(`stream_realip`)을 나눠 보고 | 필수는 전부 존재, 선택은 결과를 기록 | §7.6 |
+| E1 | stream 에 `ip_hash` | **거부** — stream 엔 없는 디렉티브 | §4.3 · 1차 |
+| E2 | stream 에 `least_conn` | 수용 — OSS 네이티브 | §7.3 · 2차 |
+| E3 | stream `hash $remote_addr consistent` | 수용 — `source_ip_hash` 의 실제 렌더 | §7.1 |
+| E4 | http location 에 `proxy_protocol on` | **거부** — HTTP 업스트림엔 송신 디렉티브가 없다 | §4.7 · 3차 |
+| E5 | stream `proxy_protocol on` | 수용 (v1 송신) | §4.7 |
+| E6 | UDP 리스너 + `proxy_protocol on` | **수용된다** → 엔진이 안 막으므로 **모델이 막아야 한다** | §4.7 · 1차 |
+| E7 | map 없이 `$connection_upgrade` | **거부** — 내장 변수 아님 | §7.1 · 1차 |
+| E8 | map 을 함께 렌더 | 수용 | §7.1 |
+| E9 | `http2 on;` | 수용 (core 1.25.1+) | §7.6 |
+| E10 | `server ... resolve` (zone 없음) | **거부** | §7.3 대안 B |
+| E11 | `zone` + `resolver` + `resolve` | 수용 — 1.27.3+ OSS | §7.3 · 2차 |
+| E12 | 같은 포트에 TCP + UDP | 수용 — 공존 가능 | §4.5 |
+| E13 | `ssl_preread on` + `preread_timeout` | 수용 | §7.1 |
+| E14 | http/stream 에 동명 `lua_shared_dict` | **거부** — `already declared for a different use` | §3.4 · 3차 |
+| E20.1 | map: exact vs wildcard | **exact 가 항상 우선** (등장 순서 무관) | §7.5 |
+| E20.2 | map: wildcard 매칭 | 매칭 | §7.5 |
+| E20.3 | map: 정규식 2개 중 앞의 것 | **등장 순서대로 평가** | §7.5 `strict_priority` 의 전제 |
+| E20.4 | map: 뒤 정규식 폴백 | 매칭 | §7.5 |
+| E20.5 | map: `default` | 폴백 | §7.5 |
+| E21.1 | `~^UP\.example\.org$` 에 소문자 요청 | **미매칭** — `~` 는 대소문자 구분 | §7.1 · 3차 |
+| E21.2 | `~*` 동일 조건 | 매칭 | §7.1 |
+| E22.1 | `server_name *.example.org` ← `www.example.org` | 매칭 | §4.6 |
+| E22.2 | 동일 ← `www.sub.example.org` | **매칭된다** — nginx 와일드카드는 다중 라벨. **X.509 와일드카드(1라벨)와 불일치** | §4.6 · 3차 |
+| E22.3 | 미매칭 호스트 | `default_server` 로 — `server_name` 으로는 지정 불가 | §4.6 · 3차 |
+| E23.1 | 포트 점유 상태에서 `nginx -t` | **통과한다** | §6.3 |
+| E23.2 | 그 상태로 HUP | **마스터 생존 + 옛 세대로 계속 서비스** | §6.3 · 1차 |
+| E23.3 | HUP 후 error log | `bind()` 실패 기록 → 판정 신호로 사용 가능 | §6.3 |
+| E24.1 | shared dict, HUP 후 | **유지** | §6.5 |
+| E24.2 | shared dict, 인스턴스 종료 후 재시작 | **소실** → 부트스트랩 필수 | §6.5 · 3차 |
+| E25.1 | http Lua ↔ stream Lua zone 상호 참조 | **양방향 불가시** → §3.4 이중 평면 확정 | §3.4 · 3차 |
+| E26.1 | 비-TLS 트래픽에서 `$ssl_preread_protocol` | **빈 문자열** → 비-TLS 를 구분할 수 있다 | §4.1 |
+| E26.2 | TLS-no-SNI | *SKIP* — TLS 백엔드 필요. **S9 로 이관** | §4.1 |
+| E27 | 동일 `listen` 의 server 별 `ssl_protocols` 설정 | 문법 수용 (실제 적용 여부는 **S16**) | §4.6 · 3차 |
+| E28.1 | `stream_realip` 없이 `$proxy_protocol_addr` | **실 클라이언트 IP 를 준다** → 소스IP 해시 대체 경로 | §7.6 |
+| E28.2 | 같은 조건의 `$remote_addr` | 앞단 프록시 주소로 남는다 | §7.6 |
+| E29.1 | PROXY 수신 + 송신 체인 | **실 클라이언트 IP 를 잃는다** → 모델이 조합을 막는 근거 | §7.6 |
+
+### E 가 확정한 설계 결론
+
+1. **§7.6 필수 모듈 목록은 기본 이미지로 충족되지 않는다** (E0) — 커스텀 이미지 or 요구 축소.
+2. **`on_no_sni` 분기는 구현 가능하다** (E26.1). `$ssl_preread_protocol` 이 비-TLS 를 가른다.
+   → S9 의 남은 질문은 "TLS-no-SNI 와 malformed TLS 의 구분"으로 좁혀졌다.
+3. **§3.4 이중 평면은 가설이 아니라 사실이다** (E14, E25.1). 단순화 여지가 없다.
+4. **§6.3 은 실제 위험이다** (E23.1–3). `-t` 통과 + 마스터 생존 상태로 옛 설정이 서비스된다.
+5. **§4.6 와일드카드는 실제 인증서 오선택 경로다** (E22.2).
+6. **§7.5 축소 계약이 옳다** (E20.1) — 클래스 우선순위가 등장 순서를 이긴다.
+7. **필수 모듈 목록은 성립할 수 없다** (E0) — `stream_realip` 과 `ngx_stream_lua` 가 서로 다른
+   이미지 계열에 있다. capability 로 다루고, 잃는 것은 **PROXY 체인 하나뿐**임이 실측됐다
+   (E28·E29). → §7.6 개정, `src/validate/engine-constraints.ts` 가 강제.
+
+---
+
+## 2. S — 스파이크 게이트 (SPIKE, v0.0)
+
+각 항목은 **수치 합격 기준**과 **실패 시 결정**을 함께 갖는다. 결정이 없는 실험은 게이트가
+아니다. `block` 은 설계를 다시 해야 한다는 뜻이다.
+
+| ID | 검증 | 합격 기준 | 실패 시 |
+|---|---|---|---|
+| **S1** | `balancer_by_lua` 동적 peer 변경 | HTTP·TCP·**UDP** 세 서브시스템 전부 reload 없이 전환. 전환 후 첫 요청부터 반영 | → 대안 B |
+| **S2** | 드레인 관측 | HTTP/1·HTTP/2·TCP·UDP 각각에서 **peer 별** upstream inflight·세션 수를 오차 0 으로 관측 | 기능 축소: `no_new_traffic` 만 |
+| **S3** | 인스턴스 재시작 부트스트랩 | 재시딩까지 공백 < 1s. **이 구간에 disabled/unhealthy 백엔드로 나가는 요청 0** | 기능 축소: 부팅 시 전 백엔드 `unknown` |
+| **S4** | CP 단절 | `expires_at` 경과 후 fail-open 이 마지막 값을 유지. eviction 으로 zero-peer 되는 일 0 | `fail_closed` 기본화 |
+| **S5** | **http/stream 이중 zone + 워커 수렴** | 양쪽 ACK 후 **전 워커** 수렴 < 500ms. 한쪽 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존 시나리오 포함 | → 대안 B |
+| **S6** | `least_conn` 근사 오차 | native(zone 유·무) 대비 편차 < 10%. **워크로드·하드웨어·베이스라인을 먼저 정의** | v0 알고리즘에서 제외 |
+| **S7** | reload 실패 판정 | 오탐/미탐 0, 판정 시간 < 3s. E23 을 자동화 | ApplyOperation 스키마 freeze **block** |
+| **S8** | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | **block** |
+| **S9** | SNI 결과 분기 관측성 | 비-TLS(E26.1 완료) / TLS-no-SNI / malformed / preread timeout 구분 가능 여부 | `on_no_sni` = `reject` 고정 |
+| **S10** | 라우트 컴파일러 | exact/wildcard/path 우선순위 정확 + 라우트 500개에서 p99 영향 < 5% | `strict_priority` 미제공 |
+| **S11** | **epoch 경합** | 아래 P1~P8 시나리오 전부에서 잘못된 peer 선택 **0회** | **block** |
+| **S12** | 크래시 저널 | A5 의 모든 side-effect 직전/직후 주입에서 복구 정확 | **block** |
+| **S13** | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 세대/시크릿 오삭제 0회. GC 각 단계 크래시 포함 | GC 보수화 |
+| **S14** | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL 만료/NXDOMAIN/timeout/SERVFAIL. 각 경우의 **허용 동작·수렴 시간·기존 세션 보존**을 수치로 | 폴백 없음 → 요구 재조정 |
+| **S15** | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
+| **S16** | **SNI 별 TLS policy 렌더** | 동일 `listen` 의 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 (E27 은 문법만 확인) | `override` 제거, TlsPolicy 는 리스너 단위 |
+| **S17** | **TLS 인증서 선택 렌더** | exact / 1-라벨 와일드카드 / `default_server` 조합에서 **SAN 이 커버하지 않는 인증서가 제시되는 일 0** (E22.2 위험) | v0 은 exact host 만 허용 |
+
+---
+
+## 3. M — 모델 불변식: 저장이 거부되어야 하는 것 (v0.1+)
+
+**계약**: 아래는 전부 `plan` 이전, **저장 시점에** 거부된다. 코드 `422`(의미적 불가) 또는
+`409`(현재 상태와 충돌)로 갈린다 (§5.1).
+
+### M1 리스너
+
+| ID | 입력 | 기대 |
+|---|---|---|
+| M1.1 | `protocol=udp` + `inbound_proxy_protocol` | 422 — 타입 수준에서 `never` |
+| M1.2 | `protocol=http` + `http2=true` | 422 — `http2` 는 `HttpsProfile` 에만 |
+| M1.3 | `protocol=tcp`, `default_pool_id` 누락 | 422 |
+| M1.4 | `protocol=tls_passthrough` + `tls_policy_id` | 422 — 패스스루는 인증서를 제시하지 않는다 |
+| M1.5 | `inbound_proxy_protocol.enabled=true`, `trusted_proxy_cidrs=[]` | 422 — **비어 있으면 source IP 스푸핑** |
+| M1.6 | `udp.expected_responses` 를 `tcp` 리스너에 | 422 |
+| M1.7 | `bind_address` 비정규 표기(`::ffff:0.0.0.0`, 대문자 hex) | 정규화 후 저장, 이후 겹침 판정에 사용 |
+
+### M2 라우트
+
+| ID | 입력 | 기대 |
+|---|---|---|
+| M2.1 | `HttpRoute.listener_id` → `tls_passthrough` 리스너 | 422 — 복합 FK 위반 |
+| M2.2 | `TlsPassthroughRoute` 에 `redirect` 액션 | 422 — 타입에 없음 |
+| M2.3 | `TlsPassthroughRoute.action.reject` 에 HTTP status | 422 |
+| M2.4 | `HttpRoute` 에 `sni` 매치 | 422 |
+| M2.5 | `proxy` 액션 + `redirect_http_to_https` 동시 | 422 — **3차 지적. 중복 표현 제거 대상** |
+| M2.6 | `host` 에 `*.a.*.b.com` (다중 와일드카드) | 422 |
+| M2.7 | `host` 대문자·trailing dot·유니코드 | IDNA 정규화 후 저장, 중복이면 409 |
+| M2.8 | 같은 리스너·같은 매치·같은 priority 2개 | 409 — tie-break 가 결정적이어야 하므로 |
+
+### M3 풀
+
+| ID | 입력 | 기대 |
+|---|---|---|
+| M3.1 | `protocol_class=http` + `send_proxy_protocol=v1` | 422 — **E4 로 확정된 엔진 제약** |
+| M3.2 | `protocol_class=udp` + `send_proxy_protocol=v1` | 422 |
+| M3.3 | `protocol_class=tcp` + `send_proxy_protocol=v2` | 422 (driver capability 보고 시에만 허용) |
+| M3.4 | `protocol_class=udp` + `upstream_tls.enabled` | 422 |
+| M3.5 | `tls_passthrough` 라우트가 참조하는 풀에 `upstream_tls.enabled` | 422 — **TLS-over-TLS. 3차 지적** |
+| M3.6 | stream 풀에 `hash_key=request_uri` | 422 — 클래스별 화이트리스트 |
+| M3.7 | `algorithm=hash`, `hash_key` 누락 | 422 |
+| M3.8 | `algorithm=source_ip_hash` + `is_backup=true` 백엔드 | 422 — 해시 링과 backup 충돌 |
+| M3.9 | `protocol_class≠http` + `sticky.kind=cookie` | 422 |
+| M3.10 | `protocol_class=udp` + `probe.protocol=http` | **허용** — 별도 헬스 포트는 정당 (§4.3.1) |
+| M3.11 | `probe.mode=active`, `probe.protocol` 누락 | 422 |
+| M3.12 | `least_conn` 을 S6 미통과 상태에서 지정 | 422 `capability` — **§15.3 축소가 enum 에 반영됐는지 확인** |
+| M3.13 | `http` 리스너가 `protocol_class=tcp` 풀 참조 | 422 — 복합 FK |
+
+### M4 백엔드
+
+| ID | 입력 | 기대 |
+|---|---|---|
+| M4.1 | `admin_state=draining` + `drain.deadline_s` 누락 | 허용 (기한 없는 관측 드레인) |
+| M4.2 | `health_state` 를 PATCH 로 변경 시도 | 422 — Status 는 읽기 전용 |
+| M4.3 | BackendStatus 갱신이 BackendSpec `version` 을 올림 | **금지** — 별도 리비전 |
+| M4.4 | 삭제된 백엔드 UUID 재사용 | 422 — **영구 재사용 금지 (3차 지적)** |
+| M4.5 | `host` 가 링크로컬/메타데이터 주소(`169.254.169.254`) | 422 — §14-6 |
+
+### M5 TLS
+
+| ID | 입력 | 기대 |
+|---|---|---|
+| M5.1 | `SniCertificateBinding.hosts` 에 다중 라벨 와일드카드 | 422 — **E22.2 위험. v0 은 exact + 1라벨만** |
+| M5.2 | binding host 가 인증서 SAN 에 없음 | 422 |
+| M5.3 | 같은 TlsPolicy 에 동일 host binding 2개 | 409 |
+| M5.4 | `cipher_preset=custom` 인데 참조 값 없음 | 422 — **3차 지적. `CipherPolicyRef` 필요** |
+| M5.5 | `override.min_version` 을 S16 미통과 엔진에서 | 422 `capability` |
+| M5.6 | 와일드카드 도메인 + `acme.challenge=http-01` | 422 — dns-01 만 가능 |
+| M5.7 | `material_ref` 에 `@latest` | 422 — 버전 고정 참조만 |
+
+### M6 소켓 겹침 (§4.5) — **RUNNABLE** `tests/unit/sockets.test.ts`
+
+| ID | 입력 | 기대 |
+|---|---|---|
+| M6.1 | `https :443` + `tls_passthrough :443` | 409 — **둘 다 transport=tcp** |
+| M6.2 | `tcp :9999` + `udp :9999` | **허용** — E12 로 확정 |
+| M6.3 | `0.0.0.0:8080` + `10.0.0.5:8080` | 409 — 동등이 아니라 겹침 |
+| M6.4 | `[::]:8080` + `0.0.0.0:8080` (ipv6only=off) | 409 |
+| M6.5 | 두 changeset 이 동시에 같은 소켓 커밋 | 하나만 성공, 나머지 409 — advisory lock |
+
+### M7 문자열 문법 계약 (§4.9) — **RUNNABLE** `tests/unit/strings.test.ts` (M7.6 퍼즈 제외)
+
+| ID | 입력 | 기대 |
+|---|---|---|
+| M7.1 | 헤더 값에 `\r\n` | 422 |
+| M7.2 | 헤더 값에 `$` 로 시작하는 비화이트리스트 변수 | 422 |
+| M7.3 | `hash_key` 에 임의 문자열 | 422 |
+| M7.4 | host 에 `"; } server { listen 80; #` | 422 — 인젝션 |
+| M7.5 | 리다이렉트 대상에 `javascript:` | 422 |
+| M7.6 | 위 전부에 대한 **퍼즈** (10만 케이스) | 렌더 산출물이 항상 `nginx -t` 통과 or 저장 거부. **중간 상태 없음** — *미구현* |
+
+---
+
+## 4. R — 렌더러 골든 테스트 — **RUNNABLE**
+
+`tests/unit/render.test.ts` (문자열) · `tests/golden/nginx-t.test.ts` (실제 엔진)
+
+**계약**: 모델 → conf 는 결정적이다. 같은 모델은 항상 같은 바이트를 만든다.
+모든 골든 산출물은 **E 와 같은 방식으로 실제 엔진 `nginx -t` 를 통과**해야 한다.
+
+| ID | 모델 | 기대 산출물 |
+|---|---|---|
+| R1 | TCP 리스너 999 → 풀 A(백엔드 :11) | `stream{ upstream ... server{ listen 999; proxy_pass ...} }`, `nginx -t` 통과 |
+| R2 | 같은 모델 재렌더 | **바이트 동일** (다이제스트 동일) |
+| R3 | 백엔드 순서만 다른 동일 집합 | **바이트 동일** — 정렬 정규화 |
+| R4 | websocket 라우트 1개 이상 | `$connection_upgrade` map 이 http 컨텍스트에 **정확히 1회** |
+| R5 | websocket 라우트 0개 | map 미생성 |
+| R6 | `source_ip_hash`, `protocol_class=http` | `ip_hash;` |
+| R7 | `source_ip_hash`, `protocol_class=tcp` | `hash $remote_addr consistent;` |
+| R8 | SNI 라우트 + `on_no_match=pool` | map 에 `~*` 정규식(대소문자 무시) + `default` |
+| R9 | SNI 라우트 + `on_no_sni=reject` | `$ssl_preread_protocol` 분기가 렌더됨 — **E26.1 이 가능함을 확인** |
+| R10 | 겹치는 exact/wildcard host, priority 역전 | 컴파일 결과가 §7.5 클래스 순서를 따르고 **plan 이 경고** |
+| R11 | UDP 리스너 + `preset=dns` | `proxy_responses 1; proxy_timeout 5s; listen ... udp reuseport;` |
+| R12 | `send_proxy_protocol=v1`, tcp | `proxy_protocol on;` |
+| R13 | `send_proxy_protocol` 이 http 풀 | 렌더 자체가 불가 — M3.1 에서 이미 차단 |
+| R14 | 인증서 3개 + default | server 블록 3개 + `listen ... default_server` 1개 |
+| R15 | `enabled=false` 리스너 | 산출물에서 제외되되 소켓 예약은 해제 |
+| R16 | 전 리소스 삭제 | 유효한 최소 conf (nginx 가 기동 가능) |
+| R17 | 골든 전량 | 실제 pin 이미지에서 `nginx -t` 통과 |
+
+---
+
+## 5. A — Apply 상태기계와 크래시 주입 (SPIKE + v0.1+)
+
+### A1 정상 경로
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| A1.1 | 유효 plan → apply | `rendered→validated→published→reload_signaled→activated→verified` |
+| A1.2 | 각 전이 | 저널에 fsync 후 진행 |
+| A1.3 | `verified` 후 status | `published_revision == accepting_generation` |
+
+### A2 실패와 롤백
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| A2.1 | 렌더 산출물이 `nginx -t` 실패 | `failed`. **게시 안 함.** 트래픽 무영향 |
+| A2.2 | 새 리스너 포트를 외부가 점유 → HUP | **E23 재현.** `activated` 판정 실패 → 롤백 |
+| A2.3 | 롤백 후 | 옛 세대가 `accepting_generation` 으로 복귀, 합성 프로브 통과 |
+| A2.4 | 롤백 자체가 실패 | `rollback_failed` — **자동 복구 금지, 즉시 알림** |
+| A2.5 | 연속 롤백 N회 | 서킷 브레이커 작동, 자동 apply 중단 |
+| A2.6 | `nginx -t` 후 HUP 전에 인증서 파일 삭제 | 감지 후 롤백 |
+
+### A3 동시성
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| A3.1 | 동시 apply 2건 | 하나만 진행, 나머지 409 — advisory lock |
+| A3.2 | 리더가 apply 중 죽음 | 새 리더가 저널로 재개 또는 봉인 |
+| A3.3 | **옛 리더의 지연 RPC 가 새 리더 apply 후 도착** | **DP Agent 가 leader fencing token 으로 거부** (3차 Critical) |
+| A3.4 | 같은 `operation_id` 재전송 | 멱등 — 같은 결과 반환, 부작용 1회 |
+
+### A4 활성화 판정 (§6.3)
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| A4.1 | 워커 1개만 새 세대 등록 | **아직 `activated` 아님** — 기대 워커 수 대조 |
+| A4.2 | 옛 워커가 기존 연결 처리 중 | `serving_generations` 에 두 세대가 함께 노출 |
+| A4.3 | 마커를 shared dict 로 구현 | **실패해야 정상** — 옛 워커도 새 값을 읽는다. 세대별 렌더 리터럴이어야 함 |
+| A4.4 | HUP 후 error log 에 `emerg` | 워터마크 이후만 수집. 이전 것은 무시 |
+| A4.5 | 합성 프로브: TCP connect / TLS handshake(SNI) / UDP | 리스너별 전부 통과해야 `verified` |
+
+### A5 크래시 주입 매트릭스 (S12)
+
+**모든 durable write 와 외부 side-effect 의 직전/직후**에 프로세스를 죽인다. 3차 검수가
+"7행으로는 부족하다"고 지적한 부분이다.
+
+| ID | 주입 지점 | 기대 복구 |
+|---|---|---|
+| A5.1 | `publish_intent` 기록 **전** | 오퍼레이션 폐기, 디스크 무변화 |
+| A5.2 | `publish_intent` 기록 **후**, symlink 교체 전 | symlink 상태를 읽어 재개 (멱등) |
+| A5.3 | symlink 교체 **후**, `published` 기록 전 | symlink 가 정본. `published` 로 보정 |
+| A5.4 | `reload_intent` 기록 후, HUP 전 | HUP 재전송 — 단 **재전송이 워커 cycle 을 추가로 만들지 않는지 확인** |
+| A5.5 | HUP 후, `reload_observed` 기록 전 | 워커 레지스트리로 판정 |
+| A5.6 | `activated` 후 epoch 스냅샷 전송 전 | 멤버십 풀 스냅샷 재전송 |
+| A5.7 | http 평면 ACK 후 stream 평면 전송 전 | `partial_transition` 상태로 진입, 재시도 |
+| A5.8 | 롤백 중 | 이전 세대 재게시 후 동일 판정 절차 |
+| A5.9 | 시크릿 materialize 후 검증 전 | 재검증, 불일치면 `failed` |
+| A5.10 | GC 디스크 삭제 후 refcount 감소 전 | **누수 없이 복구** (§8.4 / G 참조) |
+
+### A6 취소
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| A6.1 | `rendered`/`validated` 에서 `/cancel` | `cancelled` — 부작용 없음 |
+| A6.2 | `published` 이후 `/cancel` | **거부** 또는 롤백으로 전환. 조용한 중단 금지 |
+
+---
+
+## 6. P — epoch / 멤버십 펜싱 (SPIKE S11 + v0.1+)
+
+**여기가 가장 위험하다.** 틀리면 죽은 백엔드로 트래픽이 간다. 3차 검수가 구성한 시나리오를
+그대로 케이스화한다.
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| **P1** | `E10 → E11 → E10 으로 롤백` 후, E10 시절의 지연 델타 `(E10, m91)` 도착 | **거부되어야 한다.** 현재 설계(`이전 epoch 로 되돌린다`)로는 **통과해 버린다** → *ABA. 3차 Critical. 롤백도 새 `activation_epoch` 를 써야 함* |
+| **P2** | apply `prepare` 중 헬스 델타 유입 | 버퍼링. epoch 전환 후 유실 없이 반영 |
+| **P3** | 스냅샷이 `healthy` 를 읽은 뒤 `activated` 전에 `unhealthy` 델타 도착 | **죽은 백엔드가 되살아나면 안 된다** — 현재 "델타 재생 아님" 규칙으로는 유실됨 (3차 Critical) |
+| **P4** | `prepare` 실패로 abort | 버퍼가 기존 epoch 로 되돌아가고, 그 동안의 헬스 변화가 적용됨 |
+| **P5** | http 는 E21 활성화·ACK, stream 은 timeout | 전역 revision 커밋 금지. `partial_transition` 노출 + 최대 수렴 시간 |
+| **P6** | P5 상태에서 http 를 E20 으로 롤백, 이후 늦은 stream E21 RPC 완료 | **거부되어야 한다** — 평면별 fencing |
+| **P7** | 새 워커가 accept 시작했는데 E-new 스냅샷 미전환 | **peer 선택 0건이어야 한다** — 스냅샷을 HUP *전에* stage |
+| **P8** | 옛 HTTP 워커가 keepalive/HTTP2 연결에서 새 요청 처리 중 | **E-old 멤버십이 살아 있어야 한다** — 다중 serving epoch |
+| P9 | 백엔드 host/port 변경 후 옛 endpoint 의 지연 프로브 결과 도착 | 거부 — `{backend_id, endpoint_fingerprint, probe_spec_digest}` 전부 일치할 때만 투영 |
+| P10 | `admin_state=disabled` 와 늦은 `healthy` 델타 경합 | **admin_state 가 항상 우선** |
+| P11 | 모든 백엔드를 의도적으로 disabled | **실제로 빈 멤버십이 되어 요청이 실패해야 한다.** fail-open 으로 옛 peer 를 계속 쓰면 안 됨 (3차 지적) |
+| P12 | shared dict OOM / 부분 쓰기 | 이전 완전 스냅샷 유지 (이건 fail-open) |
+| P13 | 리비전 갭 감지 | 풀 스냅샷 재요청 |
+| P14 | epoch 불일치 델타 | `EpochMismatch` 로 거부, 카운터 증가 |
+
+---
+
+## 7. C — API 계약 (v0.1+)
+
+### C1 상태 코드 (§5.1)
+
+| ID | 상황 | 기대 |
+|---|---|---|
+| C1.1 | `If-Match` 불일치 | **412** |
+| C1.2 | `If-Match` 누락 | **428** |
+| C1.3 | 소켓 이미 점유 | **409** |
+| C1.4 | UDP + upstream_tls | **422** |
+| C1.5 | 타입 오류 | **400** |
+| C1.6 | 412 와 409 가 동시 성립 | **412 우선** |
+
+### C2 changeset / plan 수명주기 (§5.3)
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| C2.1 | `plan` 후 `PATCH` | **409** — sealed |
+| C2.2 | `reopen` 후 `PATCH` | 허용, 기존 plan 무효 |
+| C2.3 | 같은 `plan_id` 로 commit 2회 | 두 번째는 409 — 단회 소비 |
+| C2.4 | base_revision ≠ head 인 상태로 commit | 409 `PLAN_STALE(head_moved)` |
+| C2.5 | 의존 리소스가 바뀐 뒤 commit | 409 `PLAN_STALE(dependency_changed)` |
+| C2.6 | 렌더러 버전 변경 후 apply | 409 `PLAN_STALE(renderer_version_changed)` |
+| C2.7 | 엔진 capability digest 변경 후 apply | 409 `PLAN_STALE(engine_capability_changed)` |
+| C2.8 | plan TTL 경과 | 409 `PLAN_STALE(expired)` + **재-plan 경로 제공** |
+| C2.9 | R1 커밋 → R2 커밋 → R1 plan 으로 apply | **거부.** 과거 리비전 적용은 명시적 rollback 으로만 (3차 지적) |
+| C2.10 | commit 은 됐는데 apply 안 함 | `status.pending_apply` 로 노출 |
+| C2.11 | 같은 `plan_id` 로 apply 2회 | 같은 `operation_id` 반환 (멱등) |
+| C2.12 | commit 중 일부 리소스 실패 | **전부 롤백.** 부분 적용 없음 |
+| C2.13 | 직접 CRUD 엔드포인트 호출 | 존재하지 않음 — 모든 쓰기는 changeset 경유 |
+
+### C3 impact (§5.4)
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| C3.1 | 헬스만 변화 | `requires_reload=false` |
+| C3.2 | 백엔드 추가 | `topology_epoch_change=true` |
+| C3.3 | 새 포트 리스너 추가 | `socket_changes` 에 새 bind 표시 (**A2.2 위험 예고**) |
+| C3.4 | 라우트 우선순위 변경 | `route_order_changes` 에 컴파일된 순서 + 그림자 경고 |
+| C3.5 | 엔진 미지원 조합 | `capability_warnings` |
+
+### C4 export / import (§5.5)
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| C4.1 | export → import (동일 인스턴스) | 리소스 수·내용 불변 |
+| C4.2 | 같은 매니페스트 2회 import | **결과 동일** (멱등) |
+| C4.3 | export 산출물에 `id`/`version`/status | **없어야 함** |
+| C4.4 | export 산출물에 개인키·시크릿 값 | **없어야 함.** 별칭만 |
+| C4.5 | 대상에 없는 `materialAlias` | **plan 단계에서 실패** |
+| C4.6 | 중간이 깨진 매니페스트 | 전체 거부. 부분 적용 없음 |
+| C4.7 | `--mode replace --prune` | 명시된 것만 삭제 |
+
+---
+
+## 8. G — GC / 보존 (SPIKE S13 + v0.1+)
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| G1 | 세대가 `serving_generations` 에 남아 있음 | **GC 금지** |
+| G2 | 옛 워커 종료 + 보존 개수 초과 + 롤백 보존 경과 | tombstone → 삭제 → refcount 감소 |
+| G3 | 디스크 삭제 후 refcount 감소 전 크래시 | **영구 누수 없음** — release ledger 로 복구 (3차 지적) |
+| G4 | refcount 감소 후 완료 표시 전 크래시 → 재시도 | **이중 감소 없음** — `(generation, secret_version)` unique |
+| G5 | SecretStore 삭제 실패 | 재시도 + 누수 경보. **세대 GC 는 진행** |
+| G6 | 시크릿 삭제 직전 새 세대가 같은 버전 참조 | 삭제 취소 — 직전 zero-ref 재확인 |
+| G7 | GC root 누락 검사 | `current`, `published`, 진행 중 오퍼레이션의 target·rollback, **committed-but-unapplied artifact** 가 전부 pin |
+| G8 | plan artifact TTL 경과했으나 그 세대가 활성 | **삭제 금지** |
+
+---
+
+## 9. X — 보안 (v0.1+)
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| X1 | M7 전 항목 | 저장 거부. 렌더까지 도달 금지 |
+| X2 | 백엔드 host = 클라우드 메타데이터 엔드포인트 | 목적지 정책 위반으로 거부 |
+| X3 | 백엔드 DNS 가 프로브 시점에 내부 IP 로 재해석 | **재검증 후 차단** (DNS rebinding) |
+| X4 | 액티브 프로브를 임의 내부 포트로 유도 | egress 정책으로 차단 |
+| X5 | allowlist 에 없는 드라이버 패키지명 | 로드 거부 |
+| X6 | integrity(sha512) 불일치 드라이버 | 로드 거부 |
+| X7 | `apiVersion` 불일치 드라이버 | **기동 실패** (조용한 degrade 금지) |
+| X8 | 개인키 조회 API | 존재하지 않음. 쓰기 전용 |
+| X9 | materialize 된 키 파일 권한 | `0400`, DP uid 소유 |
+| X10 | 감사 로그 | 모든 변경에 who/what/before/after/revision |
+| X11 | 스코프 없는 토큰으로 apply | 403 |
+
+---
+
+## 10. 추적 매트릭스 — 검수 지적 → 케이스
+
+| 검수 | 지적 | 케이스 |
+|---|---|---|
+| 1차 C1 | OpenResty 시점 | S1, S5, S6, S15 |
+| 1차 C2 | apply 상태기계 부재 | A1–A6, S12 |
+| 1차 C3 | changeset 부재 | C2 |
+| 1차 C4 | 인증서 세대 롤백 불가 | S8, G1–G8 |
+| 1차 H1 | PROXY v2 | E4, E5, E6, M3.1–M3.3 |
+| 1차 H2 | `nginx -t` 는 증거가 아님 | **E23**, A2.2, A4 |
+| 1차 H5 | SNI 폴백·우선순위 | E20, E26, S9, S10, R8–R10, M2 |
+| 1차 H8 | 렌더 예시 오류 | E7, E8, E1, E3, R4–R7 |
+| 1차 H11 | 로드맵 의존성 | (문서) |
+| 2차 C1 | epoch fencing | **P1–P14**, S11 |
+| 2차 C2 | 인증서 handshake 분리 | E22, M5, R14, S16, S17 |
+| 2차 H | http/stream 이중 평면 | **E14, E25**, S5, P5, P6 |
+| 2차 H | 워커 레지스트리 | A4.1–A4.3, S7 |
+| 2차 H | GC 순환 | G3–G7 |
+| 2차 H | 드레인 계층 오류 | S2, M4 |
+| 3차 C | epoch ABA | **P1** |
+| 3차 C | 스냅샷 전환 순서 | **P7, P8** |
+| 3차 C | 스냅샷 cut 델타 유실 | **P3** |
+| 3차 C | 평면 부분 전환 | **P5, P6** |
+| 3차 C | 리더 fencing | **A3.3** |
+| 3차 H | plan 단회성 | C2.3, C2.9, C2.11 |
+| 3차 H | 크래시 표 부족 | **A5.1–A5.10** |
+| 3차 H | 와일드카드 인증서 | **E22.2**, M5.1, M5.2, S17 |
+| 3차 H | SNI 별 ssl_protocols | E27, M5.5, **S16** |
+| 3차 H | zero-peer fail-open | **P11** |
+| 3차 M | redirect 중복 | M2.5 |
+| 3차 M | cipher preset | M5.4 |
+
+---
+
+## 11. 열린 결정
+
+### 닫힌 것
+
+| # | 사안 | 어떻게 닫았나 |
+|---|---|---|
+| 1 | `stream_realip` 이 기본 이미지에 없다 | **capability 로 전환.** 필수/선택을 나누고(§7.6), 잃는 기능을 실측으로 특정한 뒤(E28·E29) PROXY 체인만 저장 단계에서 막고 소스IP 해시는 `$proxy_protocol_addr` 로 자동 대체한다. 커스텀 이미지를 빌드하든 대안 B 로 가든 **코드는 그대로**다. |
+
+근거가 되는 실행 테스트: `E0`, `E28.1/.2`, `E29.1`,
+`tests/unit/capabilities.test.ts`, `tests/unit/engine-constraints.test.ts`,
+`tests/unit/render.test.ts` R18, `tests/golden` R18.
+
+### 남은 것 — 스파이크에 종속
+
+| # | 사안 | 언제 결정되나 |
+|---|---|---|
+| 2 | 커스텀 OpenResty 이미지(`--with-stream_realip_module`)를 빌드할 것인가 | **S1/S5 이후.** 대안 B 로 가면 공식 nginx 이미지가 `stream_realip` 을 갖고 `stream_lua` 는 불필요해져 질문 자체가 사라진다 |
+| 3 | S9 — TLS-no-SNI 와 malformed TLS 의 구분 | 비-TLS 구분은 **이미 확인됨**(E26.1). 남은 건 이 둘 |
+| 4 | S16 — SNI 별 `ssl_protocols` 가 handshake 에 실제 적용되는가 | E27 은 문법만 확인했다 |
