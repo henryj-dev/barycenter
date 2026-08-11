@@ -36,6 +36,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
+| 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS / 0 FAIL** — §2 참조 |
 | 엔진 사실 (E) | `npm run test:engine` | **43 PASS / 0 FAIL / 1 SKIP** |
 | 단위 (M7·X1, M6, §7.5, R, capability) | `npm test` | **114 PASS** |
 | 골든 (R17·R18) | `npm run test:golden` | **8 PASS** — 실제 nginx -t |
@@ -117,11 +118,11 @@ PASS=43  FAIL=0  SKIP=1
 
 | ID | 검증 | 합격 기준 | 실패 시 |
 |---|---|---|---|
-| **S1** | `balancer_by_lua` 동적 peer 변경 | HTTP·TCP·**UDP** 세 서브시스템 전부 reload 없이 전환. 전환 후 첫 요청부터 반영 | → 대안 B |
+| **S1** ✅ | `balancer_by_lua` 동적 peer 변경 | HTTP·TCP·**UDP** 세 서브시스템 전부 reload 없이 전환. 전환 후 첫 요청부터 반영 | → 대안 B |
 | **S2** | 드레인 관측 | HTTP/1·HTTP/2·TCP·UDP 각각에서 **peer 별** upstream inflight·세션 수를 오차 0 으로 관측 | 기능 축소: `no_new_traffic` 만 |
 | **S3** | 인스턴스 재시작 부트스트랩 | 재시딩까지 공백 < 1s. **이 구간에 disabled/unhealthy 백엔드로 나가는 요청 0** | 기능 축소: 부팅 시 전 백엔드 `unknown` |
 | **S4** | CP 단절 | `expires_at` 경과 후 fail-open 이 마지막 값을 유지. eviction 으로 zero-peer 되는 일 0 | `fail_closed` 기본화 |
-| **S5** | **http/stream 이중 zone + 워커 수렴** | 양쪽 ACK 후 **전 워커** 수렴 < 500ms. 한쪽 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존 시나리오 포함 | → 대안 B |
+| **S5** ~ | **http/stream 이중 zone + 워커 수렴** | 양쪽 ACK 후 **전 워커** 수렴 < 500ms. 한쪽 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존 시나리오 포함 | → 대안 B |
 | **S6** | `least_conn` 근사 오차 | native(zone 유·무) 대비 편차 < 10%. **워크로드·하드웨어·베이스라인을 먼저 정의** | v0 알고리즘에서 제외 |
 | **S7** | reload 실패 판정 | 오탐/미탐 0, 판정 시간 < 3s. E23 을 자동화 | ApplyOperation 스키마 freeze **block** |
 | **S8** | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | **block** |
@@ -134,6 +135,36 @@ PASS=43  FAIL=0  SKIP=1
 | **S15** | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
 | **S16** | **SNI 별 TLS policy 렌더** | 동일 `listen` 의 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 (E27 은 문법만 확인) | `override` 제거, TlsPolicy 는 리스너 단위 |
 | **S17** | **TLS 인증서 선택 렌더** | exact / 1-라벨 와일드카드 / `default_server` 조합에서 **SAN 이 커버하지 않는 인증서가 제시되는 일 0** (E22.2 위험) | v0 은 exact host 만 허용 |
+
+### S1 / S5 실행 결과 — `./spike/s1-s5/run.sh`
+
+```
+PASS=8  FAIL=0     openresty/1.31.1.1, worker_processes 4
+```
+
+| ID | 결과 |
+|---|---|
+| S1.http | HTTP — 전환 후 **첫 요청**부터 새 peer (A→B) |
+| S1.tcp | TCP — 전환 후 **첫 연결**부터 (A→B) |
+| S1.udp | UDP — 전환 후 **첫 세션**부터 (A→B) |
+| S1.noreload | 전 과정에서 reload 0회 (error.log 기준) |
+| S1.samemaster | 마스터 PID 불변 |
+| S5.zones | http Lua 에서 stream zone 이 보이지 않는다 — 이중 평면 확정 |
+| S5.converge | 워커 4개 전부 새 리비전 채택, 가장 늦은 워커 **15–23ms** (동기화 주기 20ms) |
+| S5.perworker | 전환 직후 30요청 전부 새 peer — 스테일 창 없음 |
+
+**S1 은 통과. OpenResty 멤버십 평면 경로가 성립한다.** 따라서 §7.3 대안 B 는 폴백으로
+남고, 3차 검수의 멤버십 관련 blocking 항목(2·3·4)은 **버릴 수 없다. 설계해야 한다.**
+
+**측정에서 배운 것 — 3차 검수 "워커 수렴" 지적에 대한 답.**
+`balancer_by_lua` 는 **연결마다** shared dict 를 읽으므로, 리비전 검사를 곁들이면
+워커 로컬 캐시가 스테일 창을 만들지 않는다(S5.perworker 30/30). 즉 워커 수렴은
+*트래픽*의 문제가 아니라 *관측*의 문제다. 위험은 리비전 검사 없이 캐시할 때만 생긴다.
+
+> 측정 함정 둘을 겪었다. ① 요청을 때려서 워커를 세면 커널 accept 분배 운에 좌우된다
+> (4개 중 3개만 관측돼 거짓 실패). ② busybox `date` 는 `%N` 을 지원하지 않아 `0ms` 라는
+> 가짜 숫자가 나왔다. 둘 다 워커 자가보고 + `ngx.now()` 로 고쳤다. **S5 는 아직 부분
+> 통과다** — 한쪽 평면 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존은 미검증.
 
 ---
 
