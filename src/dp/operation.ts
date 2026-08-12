@@ -154,6 +154,26 @@ export type ApplyPhase =
   | 'failed'
   | 'no_operation';
 
+/**
+ * 모든 apply 단계. **DESIGN §6.2 의 표와 일치해야 한다.**
+ *
+ * 문서와 코드가 갈라지면 어느 쪽이 계약인지 아무도 모른다. 6차 검수가 그걸 지적했고,
+ * 한 번 고치는 것으로는 또 갈라진다 — `tests/conformance/review6-design-abi.test.ts`
+ * 가 이 배열과 DESIGN 의 표를 대조한다.
+ */
+export const ALL_APPLY_PHASES: readonly ApplyPhase[] = [
+  'preflight',
+  'publish_intent',
+  'published',
+  'membership_staged',
+  'reload_intent',
+  'reload_observed',
+  'activated',
+  'partially_activated',
+  'failed',
+  'no_operation',
+];
+
 /** 종단 단계 — 여기 들어가면 러너는 더 진행하지 않는다. */
 export const TERMINAL_PHASES: readonly ApplyPhase[] = [
   'activated',

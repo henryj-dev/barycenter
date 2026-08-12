@@ -124,7 +124,8 @@ cat <<'GATES'
       .tmp-<이름>-<nonce>/ 에 쓰고 통째로 rename, manifest 를 마지막에.
       preflight 단계가 **게시 앞에서** 디스크를 다시 읽어 대조한다. 뮤턴트 7종 잡힘.
    · OpenAPI · DDL · changeset · auth/audit 스키마가 없다
-   · DESIGN §6.2 · §6.3 · §9.2 와 실제 ABI 불일치
+   ✅ DESIGN §6.2 · §6.3 · §9.2 — 해소. 실제 v0.1 ABI 로 다시 썼고 옛 계약은
+      비규범 부록(6.2.1 · 9.2.1)으로 내렸다. **갈라지면 깨지는 테스트**를 달았다.
    · fsync 순서 · 락 생성 원자성 미검증 (fault injection 필요)
 
  → v0.1 타입·API·DB 스키마 freeze: **No-Go**

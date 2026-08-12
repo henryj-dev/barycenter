@@ -874,6 +874,66 @@ weight·admin_state 변경                       (그 외 없음)
 
 ### 6.2 ApplyOperation 상태기계 (durable)
 
+> **이 절은 v0.1 의 정본이다.** 6차 검수가 "§6.2 와 실제 상태기계가 서로 다른 스키마"
+> 라고 지적했다. 문서와 코드가 다르면 어느 쪽이 계약인지 아무도 모른다. 아래는
+> `src/dp/operation.ts` · `src/dp/apply.ts` 가 실제로 하는 것이고, 설계가 원래 그리던
+> 더 넓은 상태기계는 §6.2.1 에 **비규범**으로 남겼다.
+
+```
+ preflight → publish_intent → published → membership_staged → reload_intent
+                                                                    │
+                                                    reload_observed ┘
+                                                          │
+                              ┌───────────────────────────┼──────────────────┐
+                              ▼                           ▼                  ▼
+                         activated            partially_activated         failed
+                                                    (비종단 — 유한 재시도)
+```
+
+`no_operation` 은 저널이 없는 상태를 부르는 이름이다.
+
+| 단계 | 뜻 | 다음으로 가는 조건 |
+|---|---|---|
+| `preflight` | 게시 전 검사 | manifest digest 대조 + `nginx -t` 통과 |
+| `publish_intent` | 게시하겠다고 기록함 | `current` 가 목표 세대를 가리킴 (관측) |
+| `published` | 게시됨 | — |
+| `membership_staged` | **전 평면** 슬롯이 올라감 | — |
+| `reload_intent` | HUP 을 보내겠다고 기록함 | 증거가 활성화를 증명 |
+| `reload_observed` | 활성화가 증명됨 | 전 평면 commit |
+| `activated` | 전 평면이 목표 좌표 | 종단 |
+| `partially_activated` | 일부 평면만 넘어감 | **비종단** — 유한 재시도 후 종단 |
+| `failed` | reload 상한 초과 또는 preflight 실패 | 종단 |
+
+**저널 항목** (`JournalEntry`)
+
+| 필드 | 비고 |
+|---|---|
+| `op` | `ApplyOperation` 통째로 — 복구가 같은 오퍼레이션을 재개한다 |
+| `phase` | 위 표 |
+| `reloadAttempts` | 재전송 상한 (§6.4) |
+| `seq` | 단계 전이 CAS. 한 명만 이긴다 (6차 반례 ③) |
+| `progress` | 평면별 `pending`/`reserved`/`staged`/`committed`/`aborted`/`failed` |
+| `evidence` | 마지막으로 관측한 `ActivationEvidence` (§6.3) |
+
+**`ApplyOperation`**
+
+| 필드 | 비고 |
+|---|---|
+| `leaderToken` | §3.5 — DP Agent 가 이걸로 옛 리더를 걸러낸다 |
+| `operationId` / `transitionId` | 멱등 재시도 키 |
+| `affectedPlanes` | 이 오퍼레이션이 건드리는 평면. **비어 있으면 거부** |
+| `planes[plane]` | `{expectedCurrent, target, payloadDigest}` — 평면별 좌표 CAS |
+| `targetGeneration` | 활성화할 세대 이름 |
+| `generationDigest` | 그 세대의 **내용** digest (§7.2). 이름은 내용을 말하지 못한다 |
+
+**아직 없는 필드.** `plan_id` · `target_revision` · `previous_revision` · `render_digest` ·
+`last_error` 는 CP 쪽 개념이라 v0.1 DP 계약에 없다. §5.3 의 plan 이 생길 때 붙는다.
+
+#### 6.2.1 원래 그리던 상태기계 (비규범 — v0.3+)
+
+아래는 멤버십·롤백·GC 까지 포함한 전체 그림이다. **v0.1 은 이걸 구현하지 않는다** (§9.1.1).
+여기 있는 상태를 지금 고정하면 구현할 때 호환성을 깨야 한다.
+
 ```
  rendered → validated → publish_intent → published → reload_intent
                                                           │
@@ -902,16 +962,21 @@ weight·admin_state 변경                       (그 외 없음)
 
 **크래시 결정표 — side-effect 직전/직후 전부**
 
+> ✅ 는 **v0.1 이 덮고 계측하는** 행이다. 지점 이름과 이 표의 대응은
+> `tests/conformance/review5-crash-points.test.ts` 가 집합 일치로 검사한다.
+> 9·10 행은 TLS·GC 라 v0.6, 11 행(롤백)은 §3.3 에 따라 3~8 행과 같은 경로다.
+> 1 행은 CP 가 세대를 만드는 단계라 DP 의 크래시 표면이 아니다.
+
 | # | 크래시 지점 | 관측으로 판정 | 복구 |
 |---|---|---|---|
 | 1 | `rendered` 기록 전 | — | 폐기 |
-| 2 | 렌더 후, `validated` 기록 전 | 임시 세대 존재 | 삭제 후 재시도 |
-| 3 | `publish_intent` 기록 후, symlink 교체 전 | symlink = 옛 세대 | 교체부터 재개 (멱등) |
-| 4 | symlink 교체 후, `published` 기록 전 | **symlink 가 정본** | `published` 로 보정 |
-| 5 | `reload_intent` 기록 후, HUP 전 | 마스터 cycle 불변 | HUP 전송 |
-| 6 | HUP 후, `reload_observed` 기록 전 | 마스터 cycle 증가 | 워커 레지스트리로 판정 |
-| 7 | `activated` 후, 평면 스냅샷 전송 전 | `plane_progress` 비어 있음 | 풀 스냅샷 재전송 |
-| 8 | http 평면 ACK 후, stream 전송 전 | 평면 좌표 불일치 | `partial_transition` → 재시도 |
+| 2 ✅ | 렌더 후, `validated` 기록 전 | 임시 세대 존재 | 삭제 후 재시도 |
+| 3 ✅ | `publish_intent` 기록 후, symlink 교체 전 | symlink = 옛 세대 | 교체부터 재개 (멱등) |
+| 4 ✅ | symlink 교체 후, `published` 기록 전 | **symlink 가 정본** | `published` 로 보정 |
+| 5 ✅ | `reload_intent` 기록 후, HUP 전 | 마스터 cycle 불변 | HUP 전송 |
+| 6 ✅ | HUP 후, `reload_observed` 기록 전 | 마스터 cycle 증가 | 워커 레지스트리로 판정 |
+| 7 ✅ | `activated` 후, 평면 스냅샷 전송 전 | `plane_progress` 비어 있음 | 풀 스냅샷 재전송 |
+| 8 ✅ | http 평면 ACK 후, stream 전송 전 | 평면 좌표 불일치 | `partial_transition` → 재시도 |
 | 9 | 시크릿 materialize 후, 검증 전 | 다이제스트 대조 | 재검증, 불일치면 `failed` |
 | 10 | GC 디스크 삭제 후, refcount 감소 전 | release ledger | § 8.4 |
 | 11 | 롤백 중 | 혼재 | 이전 세대를 **새 epoch 로** 재게시 후 동일 절차 |
@@ -940,6 +1005,26 @@ open 에 실패하면 nginx 는 이전 설정으로 계속 서비스한다.
 그리고 **유닉스 소켓 마커를 한 번 조회하는 것으로도 부족하다** — HUP 후에는 새 워커 여럿과
 기존 연결을 처리하는 옛 워커가 공존하므로, 커넥션 하나가 새 세대를 반환해도 **워커 하나만**
 증명한다.
+
+> **v0.1 이 실제로 하는 것.** 아래 7 단계는 원래 설계다. 구현된 것과 아닌 것을 갈라 둔다 —
+> 문서가 요구하고 코드가 안 하는 것을 그대로 두면 그게 §6.3 을 못 믿게 만든다.
+>
+> | 단계 | v0.1 | 어디 |
+> |---|---|---|
+> | 1 프리플라이트 (`nginx -t`) | ✅ | `preflight` 단계 · `FsEffects.configTest` (주입) |
+> | 2 새 소켓 사전 bind 확인 | ❌ | — |
+> | 3 error log 워터마크 | ✅ | `ActivationEvidence.errorLogGrowth` |
+> | 4 워커 레지스트리 | ❌ | 타입에는 있고(`workersReported`) 수집기는 없다 |
+> | 5 기대 워커 수 | ❌ | 위와 같다 |
+> | 6 리스너별 합성 프로브 | ▲ | 세대 리터럴 HTTP 프로브 하나뿐 |
+> | 7 실패 시 롤백 | ▲ | 좌표를 안 옮기고 `failed`. 자동 재게시는 없다 |
+>
+> 판정 규칙은 `provesActivation` 하나다. **세대가 맞는 것은 필요조건일 뿐이고**, 관측된
+> 음성 신호가 하나라도 있으면 활성화가 아니다. 관측하지 못한 것(`undefined`)은 반증이
+> 아니다 — 관측 못 한 것과 나쁜 것은 다르다.
+>
+> `masterPid` 는 타입에만 있고 판정에 쓰지 않는다. 6차 검수 지적이다. 쓰지 않을 필드를
+> 계약에 두면 "본다" 는 착각을 만든다 — v0.1 계약에서 뺄지 수집기를 만들지 정해야 한다.
 
 판정 절차:
 1. **프리플라이트** — DP Agent 가 실제 DP 환경에서 `nginx -t -p <generation_prefix> -c nginx.conf`.
@@ -1769,7 +1854,67 @@ freeze 판정을 위해 **다음 검수가 확인해야 할 것**을 적어 둔�
 **순서.** 위 넷을 스키마로 먼저 정의하고, 재현된 반례를 conformance test 로 고정한 뒤,
 구현이 그걸 통과하게 만들었다. 넷은 닫혔고 5번이 남았다.
 
-### 9.2 계약
+### 9.2 계약 — v0.1 (설정 평면)
+
+> **이 절은 정본이다.** 6차 검수가 "§9.2 와 실제 `DataplaneDriver` 가 전혀 다른 ABI"
+> 라고 지적했다. 문서는 `capabilities/render/prepare/commit/abort/status` 와 멤버십
+> 메서드를 말하는데 코드는 다른 것을 한다. 아래는 `src/dp/driver.ts` 다.
+> 원래 그리던 넓은 계약은 §9.2.1 에 **비규범**으로 남겼다.
+
+```ts
+/** 모든 변이가 지나는 봉투. 설정이든 멤버십이든 같다 (§3.6). */
+export type MutationEnvelope = {
+  leaderToken: string;
+  operationId: string;
+  transitionId: string;
+  affectedPlanes: Plane[];        // 비어 있으면 거부
+};
+
+export type ApplyOperation = MutationEnvelope & {
+  planes: Partial<Record<Plane, PlaneTarget>>;   // { expectedCurrent, target, payloadDigest }
+  targetGeneration: string;
+  generationDigest: string;       // §7.2 manifest — 이름이 아니라 내용
+};
+
+export type ApplyResult = {
+  phase: ApplyPhase;                                  // §6.2
+  progress: Record<Plane, PlaneProgress | undefined>; // 평면별로 어디까지 갔나
+  partialTransition: boolean;                         // §3.4
+  evidence?: ActivationEvidence;                      // 좌표를 옮긴 근거 (§6.3)
+};
+
+export interface DataplaneDriver {
+  /** §3.5 — 신임 리더는 어떤 operation 보다 먼저 이걸 끝낸다. */
+  fence(leaderToken: string): Promise<{ maxToken: string }>;
+
+  /** 게시 → staging → HUP → 활성화 판정 → 좌표 이동. **재진입 가능**하다 (§6.2). */
+  applyConfig(op: ApplyOperation): Promise<ApplyResult>;
+
+  /** 진행 중이던 것을 이어받는다. 무엇을 하던 중이었는지도 저널이 안다. */
+  recoverConfig(): Promise<ApplyResult>;
+
+  /**
+   * 전환을 포기한다. **오퍼레이션을 통째로 받는다** — 봉투와 epoch 만으로 튜플을
+   * 재구성하면 정본이 달라져 슬롯의 주인으로 인정받지 못한다.
+   */
+  abortConfig(op: ApplyOperation): Promise<void>;
+
+  status(): Promise<DriverStatus>;
+}
+```
+
+**여기 없는 것.** `capabilities()` · `render()` · `prepare()` 는 v0.1 에 없다. 렌더는
+컨트롤 플레인이 하고 그 결과를 세대로 materialize 한 뒤(§7.2) 이름과 digest 로 넘긴다.
+멤버십 메서드는 §6.5 커서와 함께 **v0.3** 이다 (§9.1).
+
+**참조 구현이 함께 선다.** `LocalDataplaneDriver`. 인터페이스만 두고 구현을 미루면 §9.1 의
+멤버십과 같은 일이 난다 — 쓰이지 않는 계약은 깨진 채로 통과한다. 실제로 처음 쓴
+`abortConfig(봉투+epoch)` 는 구현해 보고서야 튜플이 안 맞는다는 걸 알았다.
+
+#### 9.2.1 원래 그리던 계약 (비규범 — v0.3+ / v0.6+)
+
+아래는 멤버십·TLS·시크릿·capability 까지 포함한 전체 그림이다. **v0.1 은 이걸 구현하지
+않는다.** 지금 고정하면 구현할 때 호환성을 깨야 한다.
 
 ```ts
 export interface ConfigSnapshot {
