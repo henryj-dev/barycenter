@@ -416,7 +416,8 @@ if start_ng "$P"; then
   from_stream=$(SPROBE 19251 '' | tr -d '\r\n')
   from_http=$(body 19250 /peek x)
   log "        stream→http zone: '${from_stream}'  |  http→stream zone: '${from_http}'"
-  if [ "$from_stream" = ZONE_NOT_VISIBLE ] || [ "$from_http" = ZONE_NOT_VISIBLE ]; then
+  # **AND 다.** 한 방향만 안 보이는 것으로 양방향 비가시성을 주장할 수 없다.
+  if [ "$from_stream" = ZONE_NOT_VISIBLE ] && [ "$from_http" = ZONE_NOT_VISIBLE ]; then
     ok E25.1 "http/stream shared dict 는 서로 보이지 않는다 — §3.4 이중 평면 확정"
   elif [ "$from_stream" = from_http ] && [ "$from_http" = from_http ]; then
     bad E25.1 "서로 보인다 — §3.4 이중 구조 전제가 틀렸다 (단순화 가능)"

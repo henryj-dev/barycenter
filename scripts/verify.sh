@@ -77,10 +77,10 @@ cat <<'GATES'
  ─── 착수 게이트는 별개다 (DESIGN.md §12.0) ───────────────────────────
 
  ~  S11  operation tuple 과 경합
-         DP Agent 상태기계(src/dp)로 재구현. P18~P22 가 통과하고, 직렬화를
-         제거하면 실패하는 것을 뮤테이션으로 확인했다.
-         남은 것: 실제 nginx 와 물린 end-to-end, plane 부분 전환(P5/P6),
-         cut→replay(P3), 취소/재시작 조합.
+         DP Agent 상태기계(src/dp)로 재구현. P18~P21 이 통과하고(P22 는 리듀서
+         이후 — 미구현), 직렬화를 제거하면 실패하는 것을 뮤테이션으로 확인했다.
+         남은 것: plane 부분 전환(P5/P6), cut→replay(P3), 취소/재시작 조합.
+         ❗ 5차 검수가 **녹색 상태에서 반례 7건을 재현**했다 (§9.1.1).
 
  ~  S1   멤버십 평면        primitive 만 확인. 가중치·재시도·drain·DNS 없음
  ~  S5   이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증
@@ -96,7 +96,24 @@ cat <<'GATES'
  ❌ S13  GC ledger          미착수
  ❌ S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18
 
+ ─── 범위를 줄여도 남는 v0.1 blocker (§9.1.1) ─────────────────────────
+
+ 1. 소유권과 원자성    active-operation 예약 없음. 낮은 리더 토큰이 거부되기
+                       전에 게시한다(§3.5 위반). 같은 좌표를 둘이 잡는다.
+ 2. ApplyOperation     평면별 진행 · partial_transition · ActivationEvidence ·
+                       failure/rollback 종단 상태가 durable 스키마에 없다.
+ 3. 변이 envelope      §9.2 config 경로에 leader token · operation tuple 없음.
+ 4. fail-closed 타입   잘못된 조합 4종이 검증 issue 0 건으로 통과한다.
+
  → v0.1 타입·API·DB 스키마 freeze: **No-Go**
 GATES
+
+# 스위트 통과와 freeze 가능은 다르다. CI 가 exit code 만 보고 오해하지 않게
+# 게이트를 물으려면 명시적으로 물어야 한다.
+if [ "${1:-}" = --freeze-gate ]; then
+  echo ""
+  echo " --freeze-gate: 미해소 blocker 4건 → non-zero 로 끝낸다."
+  exit 2
+fi
 
 exit $FAILED

@@ -1,4 +1,4 @@
-# barycenter — 설계 문서 (v2 초안)
+# barycenter — 설계 문서 (v5)
 
 > nginx 를 실행 엔진으로 쓰는 **HTTP / TCP / UDP 리버스프록시·로드밸런서 컨트롤 플레인**.
 > GUI · API · CLI 어디서든 같은 일을 할 수 있고, 설정은 파일이 아니라 **모델**이다.
@@ -6,7 +6,8 @@
 > 작명 — 무게중심(barycenter): 두 천체가 서로를 도는 **공통 질량중심**. 다체 시스템이 실제로 공전하는 균형점이 로드밸런싱의 은유. CLI 는 `bary`.
 
 > **개정 이력.** v0 초안 → 검수 1차(C4/H15/M6/L3) → v1 → 검수 2차(반박 재판정 + C2/H9/M5/L2)
-> → v2 → 검수 3차(blocking 9건 + High/Medium) 반영 → **현재 v3**. 근거와 철회한 반박은 **§15**.
+> → v2 → 검수 3차(blocking 9건 + High/Medium) → v3 → 검수 4차(거짓 신호 제거 + 좌표 분리)
+> → v4 → **검수 5차(반례 7건 재현 → v0.1 surface 축소, §9.1.1)** → **현재 v5**. 근거와 철회한 반박은 **§15**.
 >
 > **v4 (2026-08-12) — 4차 검수의 설계 Critical 4건을 확정했다.**
 > ① **§3.6 operation tuple** — epoch 하나로는 "허가된 operation" 을 증명하지 못한다.
@@ -1466,12 +1467,79 @@ generation_secret_ref (generation, secret_version)  PRIMARY KEY (generation, sec
 
 | 인터페이스 | 확정 시점 |
 |---|---|
-| `DataplaneDriver` (멤버십 포함) | v0.1 이전 |
+| `DataplaneDriver` — **설정 평면만** | v0.1 이전 |
 | `AuditSink` / `Notifier` / `AuthProvider` | v0.1 이전 |
+| `DataplaneDriver` — **멤버십 평면** | v0.3 이전 (§6.5 커서와 **같이**) |
 | `SecretStore` / `DNSProvider` | v0.6 이전 |
 | `BackendDiscovery` | v0.7 |
 
 v0.7 은 **참조 구현 + 로딩 하드닝 + 호환성 테스트 키트**다.
+
+#### 멤버십 계약을 v0.1 에서 뺀다 — v4 결정의 철회
+
+v1 부터 v4 까지 §15 R4 는 **"계약 v0.1 / 구현 v0.3"** 이었다. 이걸 철회한다.
+
+5차 검수가 그 결정을 실증으로 무너뜨렸다. 멤버십 계약(`stage`/`commit`/`abort`/`applyHealth`)을
+구현 없이 먼저 고정했더니, **정상적인 헬스 진행만으로 전환이 깨졌다.** `stage` 시점의
+`membership_revision` 까지 exact CAS 하는 계약이었는데, 활성 epoch 안에서 헬스가 R1→R2 로
+가면 `commit` 이 `coordinate_mismatch` 로 거부된다. nginx 는 새 세대를 서빙하는데 DP 좌표는
+옛 epoch 에 남는다. 재현했다.
+
+이건 계약의 버그가 아니라 **§6.5 의 cut/HWM/replay 없이는 계약을 쓸 수 없다**는 뜻이다.
+topology epoch CAS 와 가변 membership 커서를 분리해야 하는데, 그 분리는 커서 스키마와
+트랜잭션 프로토콜이 있어야 정의된다. 그건 v0.3 의 일이다.
+
+**구현하지 않은 계약은 고정할 수 없다.** 고정한 것처럼 보였을 뿐이고, 그래서 5차까지
+아무도 못 봤다. 멤버십은 §6.5 커서와 **같은 버전에서 같이** 고정한다.
+
+### 9.1.1 v0.1 이 고정하는 것 — surface 확정
+
+freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스키마에 등장하지 않는다.**
+"나중에 쓸지 모르니 필드만 미리" 는 금지다 — 표현 가능한 것은 언젠가 들어온다.
+
+| | v0.1 에 **넣는다** | 근거 |
+|---|---|---|
+| 모델 | 리스너·풀·백엔드·라우트, **프로토콜별 판별 유니온** | 렌더러가 이미 셋을 구분해 렌더한다 |
+| 프로토콜 | `http` · `tcp` · `udp` **평문** | E 계열 61건이 엔진 동작을 고정했다 |
+| 알고리즘 | `round_robin` · `hash` | S6·S15 없이 정직하게 낼 수 있는 것 |
+| 백엔드 반영 | **`nginx.conf` 에 렌더 → 세대 전환** | reload 로 바뀐다. 무중단 격리는 v0.3 |
+| 활성화 | 세대 게시 · HUP · **`ActivationEvidence`** | S7 이 판정 절차를 실증했다 |
+| apply | `ApplyOperation` — 소유권 예약 · 평면별 진행 · 종단 상태 | S11·S12 가 여기 걸려 있다 |
+| 드라이버 | `DataplaneDriver` **설정 평면만** | 위 |
+| 그 외 | 최소 auth/audit, `AuditSink`/`Notifier`/`AuthProvider` | API 가 요구한다 |
+
+| | v0.1 에서 **뺀다** | 옮기는 곳 |
+|---|---|---|
+| 멤버십 드라이버 · 이중 zone · 헬스 프로버 | §6.5 커서와 함께 | **v0.3** |
+| 드레인 관측 (S2) · `least_conn` (S6) | 기능 | v0.3 · 미정 |
+| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6** |
+| SNI 패스스루 3분기 (S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |
+| GC 원장 (S13) | 세대 보존은 **수동 상한**으로 대체 | v0.6 |
+| 백엔드 디스커버리 (S14 대안 B) | | v0.7 |
+
+이 절단으로 **v0.1 freeze blocker 에서 빠지는 것**: S2 · S6 · S8 · S9 · S10 · S13 · S14 ·
+S15 · S16 · S17 · S18 · S19. 남는 것은 **S7(완료) · S11 · S12** 와 S5 의 평면 부분 전환뿐이다.
+
+#### 그래도 남는 v0.1 blocker
+
+범위를 줄여도 사라지지 않는 것이 넷이다. 전부 5차 검수에서 **녹색 테스트 상태로 재현됐다.**
+
+1. **소유권과 원자성.** durable active-operation 예약이 없다. `(plane, target_activation_epoch)`
+   를 단일 CAS 슬롯으로 예약하지 않아서, 서로 다른 operation 이 같은 좌표를 동시에 잡고
+   서로의 슬롯을 덮고 지운다. 낮은 리더 토큰이 **거부되기 전에 게시한다** — §3.5 위반이다.
+   `serial()` 은 인스턴스 안에서만 직렬화하므로 프로세스 간에는 lost update 가 난다.
+2. **`ApplyOperation` 스키마.** 평면별 진행, `partial_transition`, `ActivationEvidence`,
+   failure/rollback 종단 상태가 durable 스키마에 없다. 지금은 세대 문자열 하나로 활성화를
+   증명한다. reload 상한 초과 시 롤백 없이 `failed` 만 적어서, **지연 commit 이 뒤늦게
+   좌표를 옮긴다.**
+3. **모든 변이에 같은 envelope.** `§9.2` 의 config prepare/commit/abort 에는 leader token 도
+   operation tuple 도 없다. 설정 경로가 멤버십 튜플 **밖에서** 부작용을 낼 수 있다.
+4. **fail-closed 타입.** provisional 모델은 잘못된 조합을 표현 가능하게 두고 검증기가
+   승인한다 — TCP 리스너에 기본 풀 없음, HTTP 라우트가 TCP 리스너 참조, 고아 백엔드,
+   UDP 에 `proxy_protocol`. 넷 다 issue 0 건이다. 이 타입은 v0.1 계약의 근거가 못 된다.
+
+**순서.** 위 넷을 스키마로 먼저 정의하고, 재현된 반례를 conformance test 로 고정한 뒤,
+구현이 그걸 통과하게 만든다. 테스트를 더 늘리는 것이 다음 게이트가 아니다.
 
 ### 9.2 계약
 
@@ -1713,9 +1781,9 @@ block 이다** — 활성화를 판정하지 못하면 상태기계를 고정할
 
 | 단계 | 내용 | 완료 판정 |
 |---|---|---|
-| **v0.1** 골격 | 타입 모델(판별 유니온) + PG + `ConfigRevision`/`topology_epoch`/changeset sealing + ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` 계약 확정 | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다 |
+| **v0.1** 골격 | 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
 | **v0.2** L4 | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
-| **v0.3** 멤버십 | 이중 zone 멤버십 평면 + epoch 결박 + 헬스 프로버 + 드레인 관측 | 백엔드 down 시 reload 없이 격리되고, apply 중 헬스 변화가 경합하지 않는다 (S11 시나리오 회귀 테스트) |
+| **v0.3** 멤버십 | 이중 zone 멤버십 평면 + epoch 결박 + 헬스 프로버 + 드레인 관측 + **§6.5 커서·cut·replay 와 멤버십 드라이버 계약 확정** (§9.1) | 백엔드 down 시 reload 없이 격리되고, apply 중 헬스 변화가 경합하지 않는다 (S11 시나리오 회귀 테스트). **활성 epoch 안의 헬스 진행이 전환 중인 commit 을 깨지 않는다** |
 | **v0.4** CLI | `bary` 전 리소스 + changeset/plan/commit/apply + 트랜잭셔널 export/import | GUI 없이 전부 가능. 같은 매니페스트를 두 번 import 해도 결과가 같다 |
 | **v0.5** GUI slice | Listeners / Pools·Backends / Plan·Impact 3화면 + SSE | 클릭만으로 v0.3 시나리오 재현 |
 | **v0.6** TLS | `SecretStore`/`DNSProvider` 확정 → ACME 상태기계, 업로드, 자동 갱신, 세대 결박 롤백 + GUI 잔여 화면 | 무중단 갱신 관측 + 갱신 후 롤백 시 옛 인증서 복원 |

@@ -67,7 +67,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 
 | | 항목 | 상태 |
 |---|---|---|
-| ~ | **S11 operation tuple 과 경합** | DP Agent 상태기계(`src/dp`)로 재구현. **P18~P22 통과**하고 직렬화를 제거하면 실패하는 것을 뮤테이션으로 확인. 남은 것: 실제 nginx 와 물린 end-to-end, P3·P5·P6 |
+| ~ | **S11 operation tuple 과 경합** | DP Agent 상태기계(`src/dp`)로 재구현. **P18~P21 통과**하고 (P22 는 리듀서 이후 — 미구현) 직렬화를 제거하면 실패하는 것을 뮤테이션으로 확인. 남은 것: 실제 nginx 와 물린 end-to-end, P3·P5·P6 |
 | ~ | S1 | reload 없는 peer 선택 **primitive** 만. 가중치·재시도·drain·DNS 없음 |
 | ~ | S5 | 이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증 |
 | ~ | S7 | 로그 행 수를 정본 신호로 씀 → 진단용으로 강등하고 판정 계약 재작성 필요 |

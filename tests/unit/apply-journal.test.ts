@@ -268,7 +268,18 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
     expect(state.planes.http.activationEpoch).toBe('1');
   });
 
-  it('낮은 리더 토큰의 apply 는 **부작용 전에** 막힌다', async () => {
+  /**
+   * ⚠️ **이 테스트의 제목은 한때 거짓말이었다.**
+   *
+   * "부작용 전에 막힌다" 라고 써 놓고 `publish` 가 한 번 일어나는 것을 주석으로
+   * 정당화하고 있었다. §3.5 는 "DP Agent 는 토큰을 side effect **전에** fsync 하고
+   * ACK 한다" 이므로 이건 설계 위반이고, 5차 검수가 `fence(99)` 뒤 토큰 10 으로
+   * 재현했다 — 최종 판정은 `stale_leader` 인데 `current` 심볼릭 링크는 이미 넘어갔다.
+   *
+   * 제목을 사실에 맞췄다. 진짜 계약은 §9.1.1 blocker 1 (소유권 예약) 이 들어올 때
+   * conformance test 로 고정한다. 그때 `publishCalls === 0` 이 들어간다.
+   */
+  it('낮은 리더 토큰은 좌표를 옮기지 못한다 — 게시는 아직 막지 못한다(§9.1.1 blocker 1)', async () => {
     const store = new MemoryStore();
     const agent = agentOn(store);
     await agent.fence('99');
@@ -276,8 +287,9 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
     await expect(
       new ApplyRunner(agent, effects, FAST).run({ ...OP, leaderToken: '10' }, TARGET),
     ).rejects.toThrow();
-    // publish 는 저널 기록 뒤·staging 앞이라 한 번 일어난다. 중요한 건 좌표가 안 움직이는 것.
     expect(agent.coordinate('http').activationEpoch).toBe('0');
+    // **아직 못 막는 것을 기록해 둔다.** 0 이 되어야 맞지만 지금은 1 이다.
+    expect(effects.publishCalls, '§3.5 위반 — 예약이 들어오면 0 이 된다').toBe(1);
     expect(effects.reloadSignals, '토큰이 낮은데 reload 를 보냈다').toBe(0);
   });
 });
