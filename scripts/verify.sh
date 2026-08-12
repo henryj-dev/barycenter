@@ -108,8 +108,14 @@ cat <<'GATES'
                        참조 구현(LocalDataplaneDriver)까지 함께 세웠다.
  4. fail-closed 타입   ✅ 해소. RawModel(입력) / Model(검증 통과) 두 층으로 나누고
                        리스너를 프로토콜 판별 유니온으로 만들었다. 뮤턴트 6종 전부 잡힘.
- 5. durable store      ❌ 남음. 구현체가 MemoryStore 뿐이다. 파일 저장의 부분 쓰기·
-                       fsync·손상 탐지·프로세스 간 단일 writer 가 없다.
+ 5. durable store      ✅ 해소. FileStore — 원자적 교체 · 손상 탐지 · 버전 CAS ·
+                       프로세스 간 락. 별도 프로세스로 배제를 확인. 뮤턴트 6종 잡힘.
+
+ ─── 다음 검수가 확인해야 할 것 ───────────────────────────────────────
+
+   · fsync 의 **순서**는 검증되지 않았다 (전원 차단 주입 필요)
+   · S12 크래시 지점이 §6.2 표 11 행에 매핑되지 않았다 (개수 검사 ≠ 집합 일치)
+   · e2e 가 http 평면만 실물로 확인한다 (stream · FsEffects 미확인)
 
  → v0.1 타입·API·DB 스키마 freeze: **No-Go**
 GATES
@@ -118,7 +124,7 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 미해소 blocker 1건(durable store) → non-zero 로 끝낸다."
+  echo " --freeze-gate: 지목된 blocker 5건은 닫혔으나 위 3건이 미확인 → non-zero."
   exit 2
 fi
 

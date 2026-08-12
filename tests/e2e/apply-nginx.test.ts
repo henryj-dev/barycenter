@@ -26,7 +26,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
+import { DpAgent } from '../../src/dp/agent.js';
+import { FileStore } from '../../src/dp/store-fs.js';
 import { ApplyRunner, CrashInjected, type Effects } from '../../src/dp/apply.js';
 import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
 
@@ -139,6 +140,19 @@ const OP = (n: string, generation: string): ApplyOperation => ({
   },
 });
 
+/**
+ * **실제 파일 저장소를 쓴다.** 5차 검수가 "e2e 도 MemoryStore 만 쓴다" 를 지적했다.
+ * 원자적 교체·체크섬·버전 CAS 가 실물 경로에서도 도는지는 여기서만 드러난다.
+ */
+let storeSeq = 0;
+const openStores: FileStore[] = [];
+function newStore(): FileStore {
+  storeSeq += 1;
+  const s = FileStore.open(join(prefix, 'state', `agent-${storeSeq}.json`));
+  openStores.push(s);
+  return s;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -201,6 +215,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
   }, 120_000);
 
   afterEach(() => {
+    for (const s of openStores.splice(0)) s.release();
     try {
       docker('rm', '-f', container);
     } catch {
@@ -216,13 +231,13 @@ describe('S12 end-to-end — 실제 nginx', () => {
 
   it('저널이 실제 nginx 를 gen-2 로 옮긴다', async () => {
     const fx = effects();
-    const phase = await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-1', 'gen-2'));
+    const phase = await new ApplyRunner(new DpAgent(newStore()), fx).run(OP('e2e-1', 'gen-2'));
     expect(phase.phase).toBe('activated');
     expect(await waitAccepting('gen-2')).toBe('gen-2');
   });
 
   it('게시 직후 죽어도 복구가 이어받는다', async () => {
-    const store = new MemoryStore();
+    const store = newStore();
 
     // publish 는 성공하되 reload 직전에 죽는 부작용을 끼운다.
     const fx = effects();
@@ -249,7 +264,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
   });
 
   it('이미 반영된 뒤 복구를 다시 돌려도 reload 를 더 보내지 않는다', async () => {
-    const store = new MemoryStore();
+    const store = newStore();
     let reloads = 0;
     const fx = effects();
     const counted = {
@@ -274,17 +289,17 @@ describe('S12 end-to-end — 실제 nginx', () => {
   // §3.3 — 롤백은 옛 세대를 되돌리는 게 아니라 **새 활성화 사건**이다.
   it('롤백도 새 오퍼레이션으로 수렴한다', async () => {
     const fx = effects();
-    await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-fwd', 'gen-2'));
+    await new ApplyRunner(new DpAgent(newStore()), fx).run(OP('e2e-fwd', 'gen-2'));
     expect(await waitAccepting('gen-2')).toBe('gen-2');
 
     // gen-3 는 gen-1 과 같은 내용이라고 가정한 clone 이다 (§3.3 — 옛 topology, 새 세대).
-    const back = await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-back', 'gen-3'));
+    const back = await new ApplyRunner(new DpAgent(newStore()), fx).run(OP('e2e-back', 'gen-3'));
     expect(back.phase).toBe('activated');
     expect(await waitAccepting('gen-3')).toBe('gen-3');
   });
 
   it('없는 세대는 게시하지 않는다 — 실행 중인 nginx 를 건드리지 않는다', async () => {
-    const store = new MemoryStore();
+    const store = newStore();
     await expect(
       new ApplyRunner(new DpAgent(store), effects()).run(OP('e2e-4', 'gen-없음')),
     ).rejects.toThrow();
