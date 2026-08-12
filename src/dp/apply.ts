@@ -22,13 +22,15 @@ import {
   type Plane,
   type PlaneProgress,
 } from './operation.js';
-import { DpRejection } from './agent.js';
-import { tupleFor } from './agent.js';
+import { DpRejection, tupleFor } from './agent.js';
 
 export type Phase = ApplyPhase;
 
 /** reload 재전송 상한. 넘으면 실패로 확정한다 (§6.2). */
 export const RELOAD_ATTEMPT_LIMIT = 2;
+
+/** partial 에서 남은 평면을 다시 밀어 보는 횟수. 무한 재시도는 알림을 늦출 뿐이다. */
+export const PARTIAL_RETRY_LIMIT = 2;
 
 /** DP Agent 가 소유하는 외부 부작용. **전부 관측 가능해야 한다.** */
 export interface Effects {
@@ -109,24 +111,29 @@ export class ApplyRunner {
   async run(op: ApplyOperation): Promise<ApplyResult> {
     assertEnvelope(op);
 
-    // §3.5 · §9.1.1 blocker 1 — 리더 토큰과 좌표 CAS 가 게시보다 먼저다.
-    // 두 평면 중 하나라도 막히면 **이미 잡은 예약을 반납하고** 아무것도 하지 않는다.
-    const reserved: Plane[] = [];
-    try {
-      for (const plane of planesOf(op)) {
-        await this.agent.reserve(tupleFor(op, plane));
-        reserved.push(plane);
-      }
-    } catch (e) {
-      // **종단으로 닫지 않는다.** 아직 아무 부작용도 내지 않았으므로 같은
-      // operationId 로 다시 시도할 수 있어야 한다 (§6.2 — 없던 일이지 실패가 아니다).
-      for (const plane of reserved) {
-        await ignoreRejection(this.agent.release(tupleFor(op, plane)));
-      }
-      throw e;
-    }
+    // §3.5 · 6차 반례 ③ — 리더 토큰 · 좌표 CAS · **apply 실행권**이 게시보다 먼저다.
+    // 전 평면을 한 임계구역에서 잡으므로 부분 예약이 남는 경우가 없다.
+    await this.agent.reserveAll(op);
 
-    await this.write({ op, phase: 'publish_intent', reloadAttempts: 0, progress: progressOf(op, 'reserved') });
+    // 저널은 하나뿐이라 **앞선 오퍼레이션의 종단 기록이 남아 있다.** 그걸 그대로 두고
+    // drive 하면 남의 저널을 읽고 `operation_in_flight` 로 스스로 막힌다.
+    //   · 같은 오퍼레이션의 기록이면 이어받는다 (동시 호출·복구).
+    //   · 아니면 내 것으로 연다. seq 는 이어서 올린다.
+    const existing = this.agent.readJournal();
+    const mine = existing !== undefined
+      && existing.op.operationId === op.operationId
+      && existing.op.transitionId === op.transitionId;
+    if (!mine) {
+      await ignoreConflict(
+        this.write({
+          op,
+          phase: 'publish_intent',
+          reloadAttempts: 0,
+          seq: (existing?.seq ?? 0) + 1,
+          progress: progressOf(op, 'reserved'),
+        }),
+      );
+    }
     return this.drive();
   }
 
@@ -137,7 +144,14 @@ export class ApplyRunner {
     const j = this.agent.readJournal();
     // §6.2 #1 — 첫 저널 쓰기 전에 죽었으면 부작용도 없다. "실패" 가 아니라 "없던 일" 이다.
     if (j === undefined) return emptyResult();
-    if (isTerminalPhase(j.phase)) return resultOf(j);
+    if (isTerminalPhase(j.phase)) {
+      // 종단 기록 뒤 반납 전에 죽었을 수 있다. 여기서 마저 놓는다 (멱등).
+      await this.agent.finishOperation(
+        j.op,
+        planesOf(j.op).filter((p) => j.progress?.[p] !== 'committed'),
+      );
+      return resultOf(j);
+    }
     return this.drive();
   }
 
@@ -161,12 +175,20 @@ export class ApplyRunner {
     }
   }
 
-  private async drive(): Promise<ApplyResult> {
+  /** 상태기계는 한 번에 하나만 돈다 (6차 반례 ③). 뒤에 온 호출은 끝난 결과를 읽는다. */
+  private drive(): Promise<ApplyResult> {
+    return this.agent.exclusiveApply(() => this.driveInner());
+  }
+
+  private async driveInner(): Promise<ApplyResult> {
     // 절대 상한. 논리 오류가 프로세스를 매달면 안 된다.
     const HARD_LIMIT = 64;
     for (let guard = 0; ; guard += 1) {
       const j = this.agent.readJournal();
       if (j === undefined) return emptyResult();
+      // **부작용 앞에서 매번 확인한다** (6차 반례 ⑥). 예약은 과거의 승인일 뿐이고,
+      // 그 사이 새 리더가 fence 했을 수 있다.
+      this.agent.assertOwnership(j.op);
       if (guard > HARD_LIMIT) {
         throw new Error(
           `apply 상태기계가 ${HARD_LIMIT} 회 안에 끝나지 않았다 (phase=${j.phase}). ` +
@@ -181,7 +203,7 @@ export class ApplyRunner {
           if ((await this.effects.observePublished()) !== gen) {
             await this.effects.publish(gen);
           }
-          await this.write({ ...j, phase: 'published' });
+          await ignoreConflict(this.write(next(j, { phase: 'published' })));
           break;
         }
         case 'published': {
@@ -190,18 +212,20 @@ export class ApplyRunner {
           for (const plane of planesOf(j.op)) {
             await this.agent.stage(tupleFor(j.op, plane), gen);
           }
-          await this.write({ ...j, phase: 'membership_staged', progress: progressOf(j.op, 'staged') });
+          await ignoreConflict(this.write(next(j, { phase: 'membership_staged', progress: progressOf(j.op, 'staged') })));
           break;
         }
         case 'membership_staged': {
-          await this.write({ ...j, phase: 'reload_intent' });
+          await ignoreConflict(this.write(next(j, { phase: 'reload_intent' })));
           break;
         }
         case 'reload_intent': {
           // 신호를 보냈는지 모른다 → **먼저 관측한다.** 이미 반영됐으면 재전송하지 않는다.
           const seen = await this.observe();
           if (provesActivation(seen, gen)) {
-            await this.write({ ...j, phase: 'reload_observed', ...(seen ? { evidence: seen } : {}) });
+            await ignoreConflict(
+              this.write(next(j, { phase: 'reload_observed', ...(seen ? { evidence: seen } : {}) })),
+            );
             break;
           }
           if (j.reloadAttempts >= RELOAD_ATTEMPT_LIMIT) {
@@ -210,11 +234,18 @@ export class ApplyRunner {
             await this.failAll(j);
             break;
           }
-          await this.write({ ...j, reloadAttempts: j.reloadAttempts + 1 });
+          // **이 쓰기를 이긴 러너만 HUP 을 보낸다** (6차 반례 ③). 진 쪽은 다시 읽는다.
+          try {
+            await this.write(next(j, { reloadAttempts: j.reloadAttempts + 1 }));
+          } catch (e) {
+            if (e instanceof DpRejection && e.kind === 'journal_conflict') break;
+            throw e;
+          }
           await this.effects.signalReload();
           const after = await this.awaitActivation(gen);
           if (after !== undefined) {
-            await this.write({ ...this.agent.readJournal()!, evidence: after });
+            const now = this.agent.readJournal();
+            if (now !== undefined) await ignoreConflict(this.write(next(now, { evidence: after })));
           }
           break;
         }
@@ -222,7 +253,7 @@ export class ApplyRunner {
           // 다시 관측한다. 저널을 쓴 사이에 세대가 또 바뀌었을 수 있다.
           const evidence = await this.observe();
           if (!provesActivation(evidence, gen)) {
-            await this.write({ ...j, phase: 'reload_intent' });
+            await ignoreConflict(this.write(next(j, { phase: 'reload_intent' })));
             break;
           }
           // 활성화가 증명됐다. 이제 좌표를 옮긴다 (§6.5-4).
@@ -248,11 +279,38 @@ export class ApplyRunner {
               : committed.length === 0
                 ? 'failed'
                 : 'partially_activated';
-          await this.write({ ...j, phase, progress, evidence: evidence! });
+          // 종단이면 소유권과 못 넘어간 평면의 예약을 반납한다 (6차 반례 ④).
+          // **기록이 먼저, 반납이 나중이다.** 반대로 하면 자기 종단 기록이 소유권
+          // 검사에 막힌다. 그 사이 죽어도 `recover()` 가 종단을 보고 반납한다.
+          await ignoreConflict(this.write(next(j, { phase, progress, evidence: evidence! })));
+          if (phase !== 'partially_activated') {
+            const stuck = planesOf(j.op).filter((p) => progress[p] !== 'committed');
+            await this.agent.finishOperation(j.op, stuck);
+          }
+          break;
+        }
+        case 'partially_activated': {
+          // §6.2 #8 — partial 은 "재시도" 다. 다만 유한해야 한다.
+          if (j.reloadAttempts >= RELOAD_ATTEMPT_LIMIT + PARTIAL_RETRY_LIMIT) {
+            // 더는 못 민다. **소유권과 남은 예약을 반납하고** 끝낸다 — 안 그러면 그
+            // 좌표가 영구히 잠긴다 (6차 반례 ④).
+            await this.agent.finishOperation(
+              j.op,
+              planesOf(j.op).filter((p) => j.progress?.[p] !== 'committed'),
+            );
+            return resultOf(j);
+          }
+          const stuck = planesOf(j.op).filter((p) => j.progress?.[p] !== 'committed');
+          if (stuck.length === 0) {
+            await ignoreConflict(this.write(next(j, { phase: 'activated' })));
+            break;
+          }
+          await ignoreConflict(
+            this.write(next(j, { phase: 'reload_observed', reloadAttempts: j.reloadAttempts + 1 })),
+          );
           break;
         }
         case 'activated':
-        case 'partially_activated':
         case 'failed':
         case 'no_operation':
           return resultOf(j);
@@ -265,7 +323,8 @@ export class ApplyRunner {
     for (const plane of planesOf(j.op)) {
       await ignoreRejection(this.agent.fail(tupleFor(j.op, plane)));
     }
-    await this.write({ ...j, phase: 'failed', progress: progressOf(j.op, 'failed') });
+    await ignoreConflict(this.write(next(j, { phase: 'failed', progress: progressOf(j.op, 'failed') })));
+    await this.agent.finishOperation(j.op);
   }
 
   /** 저널 쓰기도 Agent 의 직렬 구간을 지난다 — §6.2 표의 "intent fsync" 지점이다. */
@@ -298,6 +357,25 @@ function assertEnvelope(op: ApplyOperation): void {
     if (!declared.has(p)) {
       throw new DpRejection('envelope_mismatch', `평면 '${p}' 의 목표가 실렸는데 봉투에 없다`);
     }
+  }
+}
+
+/** 다음 저널 항목. `seq` 를 항상 하나 올린다 — 단계 전이 CAS 의 근거다. */
+const next = (j: JournalEntry, over: Partial<JournalEntry>): JournalEntry => ({
+  ...j,
+  ...over,
+  seq: j.seq + 1,
+});
+
+/**
+ * 저널 전이 경쟁에서 진 것은 오류가 아니다. 남이 이미 앞으로 밀었다는 뜻이므로
+ * 다시 읽고 따라가면 된다.
+ */
+async function ignoreConflict(p: Promise<unknown>): Promise<void> {
+  try {
+    await p;
+  } catch (e) {
+    if (!(e instanceof DpRejection) || e.kind !== 'journal_conflict') throw e;
   }
 }
 
@@ -381,26 +459,31 @@ export function classifyWrite(before: AgentState | undefined, next: AgentState):
     terminal: {},
     activationEvidence: {},
   };
+  // **한 쓰기가 여러 평면을 바꿀 수 있다** — `reserveAll` 이 그렇다. 처음 찾은 것 하나만
+  // 돌려주면 나머지 평면이 계측에서 통째로 사라진다. 일어난 변화를 전부 모은다.
+  const changes: string[] = [];
   for (const plane of ['http', 'stream'] as const) {
-    const before = prev.planes[plane];
-    const after = next.planes[plane];
-    if (before.activationEpoch !== after.activationEpoch) return `commit:${plane}`;
+    const moved = prev.planes[plane].activationEpoch !== next.planes[plane].activationEpoch;
+    if (moved) changes.push(`commit:${plane}`);
 
     const prevSlots = prev.reservations[plane];
     const nextSlots = next.reservations[plane];
     for (const epoch of Object.keys(nextSlots)) {
       const p = prevSlots[epoch];
       const n = nextSlots[epoch]!;
-      if (p === undefined) return `reserve:${plane}`;
-      if (p.stagedDigest === undefined && n.stagedDigest !== undefined) return `stage:${plane}`;
+      if (p === undefined) changes.push(`reserve:${plane}`);
+      else if (p.stagedDigest === undefined && n.stagedDigest !== undefined) changes.push(`stage:${plane}`);
     }
     for (const epoch of Object.keys(prevSlots)) {
-      if (nextSlots[epoch] === undefined) {
+      // commit 도 슬롯을 지운다. 그건 위에서 이미 `commit:` 으로 셌으므로 빼야
+      // 한 쓰기가 두 이름을 갖지 않는다.
+      if (nextSlots[epoch] === undefined && !moved) {
         const how = Object.values(next.terminal).at(-1) ?? 'release';
-        return `${how}:${plane}`;
+        changes.push(`${how}:${plane}`);
       }
     }
   }
+  if (changes.length > 0) return [...new Set(changes)].join('+');
 
   // 토큰 상승은 `admit` 의 부수효과라 거의 모든 쓰기에 딸려 온다. **맨 뒤에서** 본다 —
   // 앞에 두면 첫 예약이 `fence` 로 잘못 분류된다.
@@ -409,6 +492,9 @@ export function classifyWrite(before: AgentState | undefined, next: AgentState):
   if (JSON.stringify(prev.journal) !== JSON.stringify(next.journal)) {
     return `journal:${next.journal?.phase ?? 'none'}:update`;
   }
+  // apply 경로를 놓는 쓰기 (6차 반례 ④). 이것도 이름이 있어야 계측에서 안 사라진다.
+  if (prev.activeOperation !== undefined && next.activeOperation === undefined) return 'finish';
+  if (prev.activeOperation === undefined && next.activeOperation !== undefined) return 'claim';
   return 'noop';
 }
 

@@ -104,18 +104,19 @@ cat <<'GATES'
  ① 런타임 타입 검증        ✅ 해소. src/model/decode.ts — 경계에서 unknown 을 해독한다.
                             모르는 enum · 모르는 키 · 강제 변환을 전부 거부.
                             뮤턴트 7종 잡힘.
- ② 증거를 검증하지 않음     commit() 이 provesActivation 을 부르지 않는다.
-                            엉뚱한 세대 · config test 실패 · 워커 0/4 로도 좌표가 움직인다.
- ③ 동시 멱등성 없음         같은 오퍼레이션 6개 동시 → 전부 activated, **HUP 6회**.
-                            reload 상한이 우회된다.
- ④ partial 이 종단 상태     partially_activated 에서 recover 가 재시도하지 않는다.
-                            못 넘어간 평면의 예약이 남는다.
+ ② 증거 판정              ✅ 해소. commit() 이 provesActivation 을 직접 부른다.
+                            §3.5 — Agent 가 최종 심판이다.
+ ③ 동시 멱등성            ✅ 해소. 전역 activeOperation + reserveAll + 저널 seq CAS
+                            + apply 실행 큐. 6개 동시 → publish 1회 · HUP 1회.
+ ④ partial 복구           ✅ 해소. partially_activated 가 비종단이다. 유한 재시도 뒤
+                            소유권과 남은 예약을 반납한다.
  ⑤ FileStore 락 우회        openUnlocked().save() 로 덮어쓴다. 놓은 handle 도 쓴다.
                             새 주인이 죽은 락을 회수한 뒤 옛 handle 의 release 가
                             그 락을 지워 제3 writer 가 열린다.
- ⑥ 복구 경로에 펜싱 없음    drive() 가 리더 토큰을 재검사하지 않는다. 새 리더가 fence 한
-                            뒤 복구를 돌리면 판정은 stale_leader 인데 **publish = 1**.
- ⑦ epoch 정규화 없음        '1' 과 '01' 이 서로 다른 슬롯을 잡는다.
+ ⑥ 복구 경로 펜싱         ✅ 해소. drive() 가 **매 단계 부작용 앞에서** 토큰과
+                            소유권을 재확인한다.
+ ⑦ 좌표 정규화            ✅ 해소. tupleFor 가 BigInt 정규형으로 만든다.
+                            10진 정수가 아니면 거부한다.
 
  그 외 미해소: 세대 materializer(§7.2) · 게시 전 nginx -t · OpenAPI/DDL ·
                DESIGN §6.2·§6.3·§9.2 와 실제 ABI 불일치 · fsync 순서 미검증
@@ -127,7 +128,7 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 6차 반례 6건 미해소 → non-zero 로 끝낸다."
+  echo " --freeze-gate: 6차 반례 ⑤(FileStore 락) 외 그 밖의 항목 미해소 → non-zero."
   exit 2
 fi
 

@@ -53,6 +53,7 @@ const OP = (o: Partial<OperationTuple> = {}): OperationTuple => ({
   expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
   target: { activationEpoch: '1', membershipRevision: '1' },
   payloadDigest: 'sha256:a',
+  targetGeneration: 'gen-1',
   ...o,
 });
 
@@ -110,7 +111,7 @@ describe('② 남의 오퍼레이션이 내 저널을 덮지 못한다 (§6.2)',
     const opA = OP({ operationId: 'A', transitionId: 'A' });
     expect(
       await kindOf(
-        agent.writeJournal({ op: APPLY(opA, 'gen-A'), phase: 'published', reloadAttempts: 0 }),
+        agent.writeJournal({ op: APPLY(opA, 'gen-A'), phase: 'published', reloadAttempts: 0, seq: 1 }),
       ),
     ).toBe('not_reserved');
 

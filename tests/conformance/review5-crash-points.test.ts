@@ -59,8 +59,8 @@ function sweep(crashAt: number | undefined) {
 
 /** 정상 경로가 지나는 **모든** 지점. 이름이 하나라도 바뀌면 여기가 깨진다. */
 const NORMAL_PATH = [
-  'reserve:http',
-  'reserve:stream',
+  // **한 쓰기다.** `reserveAll` 이 두 평면을 한 임계구역에서 잡는다 (6차 반례 ③).
+  'reserve:http+reserve:stream',
   'journal:publish_intent',
   'publish',
   'journal:published',
@@ -74,6 +74,8 @@ const NORMAL_PATH = [
   'commit:http',
   'commit:stream',
   'journal:activated',
+  // apply 경로를 놓는 쓰기. 이게 빠지면 좌표가 영구히 잠긴다 (6차 반례 ④).
+  'finish',
 ] as const;
 
 async function observedPoints(): Promise<string[]> {

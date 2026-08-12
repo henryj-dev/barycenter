@@ -25,7 +25,7 @@ import type {
   Plane,
   PlaneProgress,
 } from './operation.js';
-import { isTerminalPhase, planesOf } from './operation.js';
+import { isTerminalPhase, planesOf, provesActivation } from './operation.js';
 export type { ActivationEvidence, Coordinate, Plane };
 
 export type PlaneState = Coordinate & { payloadDigest: string };
@@ -40,6 +40,8 @@ export type OperationTuple = {
   expectedCurrent: Coordinate;
   target: Coordinate;
   payloadDigest: string;
+  /** 활성화할 세대. **증거 판정에 쓴다** — 이게 없으면 commit 이 증거를 검사할 수 없다. */
+  targetGeneration: string;
 };
 
 export type PlaneAck = PlaneState & {
@@ -64,6 +66,12 @@ export type RejectionKind =
   | 'digest_mismatch'
   | 'epoch_not_monotonic'
   | 'not_staged'
+  /** 다른 오퍼레이션이 apply 경로를 쥐고 있다 (§3.6). */
+  | 'operation_in_flight'
+  /** 저널이 그 사이 앞으로 갔다. 다시 읽고 따라가야 한다. */
+  | 'journal_conflict'
+  /** 좌표가 10진 정수 문자열이 아니다. */
+  | 'invalid_coordinate'
   /** 봉투가 어떤 평면도 말하지 않았다 (§9.1.1 blocker 3). */
   | 'empty_envelope'
   /** 봉투의 `affectedPlanes` 와 실린 목표가 어긋난다. */
@@ -110,6 +118,13 @@ export type Reservation = {
 /** 좌표를 옮긴 근거 (§6.3). `plane:epoch` 로 색인한다. */
 export type EvidenceRecord = { evidence: ActivationEvidence };
 
+/** apply 경로의 주인. **한 번에 하나다** — 저널도 current 도 HUP 도 전역이기 때문이다. */
+export type ActiveOperation = {
+  operationId: string;
+  transitionId: string;
+  leaderToken: string;
+};
+
 export type AgentState = {
   /**
    * durable CAS 용 단조 버전. `save` 는 `version === 직전 + 1` 일 때만 성공한다.
@@ -135,6 +150,13 @@ export type AgentState = {
    */
   activationEvidence: Record<string, ActivationEvidence>;
   /**
+   * 지금 apply 경로를 쥔 오퍼레이션 (6차 반례 ③).
+   *
+   * 예약은 `(plane, epoch)` 슬롯만 독점한다. 그런데 저널·`current` 심볼릭 링크·HUP 은
+   * **전역**이라, 서로 다른 슬롯을 잡은 두 오퍼레이션이 같은 nginx 를 동시에 흔들 수 있다.
+   */
+  activeOperation?: ActiveOperation;
+  /**
    * 진행 중인 apply 오퍼레이션의 저널 (§6.2).
    *
    * **여기 있어야 한다.** 저널과 멤버십 좌표가 서로 다른 소유자를 가지면 같은 store 를
@@ -153,6 +175,14 @@ export type JournalEntry = {
   op: ApplyOperation;
   phase: ApplyPhase;
   reloadAttempts: number;
+  /**
+   * 단계 전이 CAS (6차 반례 ③).
+   *
+   * 러너 여럿이 같은 저널을 읽고 각자 다음 단계로 밀면 HUP 이 그 수만큼 나간다.
+   * 쓰기가 `seq === 직전 + 1` 일 때만 성공하면 **한 명만 이긴다.** 진 쪽은 다시 읽고
+   * 이미 앞으로 간 상태에서 따라간다.
+   */
+  seq: number;
   /** 평면별로 어디까지 갔는가. */
   progress?: Partial<Record<Plane, PlaneProgress>>;
   /** 마지막으로 관측한 활성화 증거 (§6.3). */
@@ -171,13 +201,15 @@ export function tupleFor(op: ApplyOperation, plane: Plane): OperationTuple {
     throw new DpRejection('envelope_mismatch', `오퍼레이션에 평면 '${plane}' 의 목표가 없다`);
   }
   return {
-    leaderToken: op.leaderToken,
+    leaderToken: normalizeNumeric(op.leaderToken, 'leaderToken'),
     operationId: op.operationId,
     transitionId: op.transitionId,
     plane,
-    expectedCurrent: t.expectedCurrent,
-    target: t.target,
+    // **여기서 정규화한다.** 슬롯 키도 정본 튜플도 저장값도 전부 이걸 쓴다.
+    expectedCurrent: normalizeCoordinate(t.expectedCurrent, 'expectedCurrent'),
+    target: normalizeCoordinate(t.target, 'target'),
     payloadDigest: t.payloadDigest,
+    targetGeneration: op.targetGeneration,
   };
 }
 
@@ -223,6 +255,24 @@ const initial = (): AgentState => ({
   activationEvidence: {},
 });
 
+/**
+ * 좌표를 **정규형**으로 만든다 (6차 반례 ⑦).
+ *
+ * `'1'` 과 `'01'` 은 같은 epoch 인데 문자열로는 다르다. 슬롯 키·정본 튜플·저장값이 전부
+ * 문자열이므로, 정규화하지 않으면 같은 좌표를 두 오퍼레이션이 각자 잡는다.
+ */
+export function normalizeNumeric(v: string, what: string): string {
+  if (!/^[0-9]+$/.test(v)) {
+    throw new DpRejection('invalid_coordinate', `${what} 는 10진 정수 문자열이어야 한다: ${JSON.stringify(v)}`);
+  }
+  return BigInt(v).toString();
+}
+
+const normalizeCoordinate = (c: Coordinate, what: string): Coordinate => ({
+  activationEpoch: normalizeNumeric(c.activationEpoch, `${what}.activationEpoch`),
+  membershipRevision: normalizeNumeric(c.membershipRevision, `${what}.membershipRevision`),
+});
+
 const sameCoordinate = (a: Coordinate, b: Coordinate): boolean =>
   BigInt(a.activationEpoch) === BigInt(b.activationEpoch) &&
   BigInt(a.membershipRevision) === BigInt(b.membershipRevision);
@@ -232,6 +282,25 @@ const sameCoordinate = (a: Coordinate, b: Coordinate): boolean =>
 export class DpAgent {
   /** 직렬화 큐. 임계구역이 하나씩만 돌게 만든다. */
   private tail: Promise<unknown> = Promise.resolve();
+
+  /**
+   * apply **실행** 큐 (6차 반례 ③).
+   *
+   * 저널 `seq` CAS 는 *쓰기* 를 직렬화하지만 실행까지 막지는 못한다. 진 러너가 다시 읽고
+   * 따라가는 사이 아직 신호가 반영되지 않았으면 "재전송할 차례" 로 보이고, 그래서 HUP 이
+   * 하나 더 나간다. 실측으로 2회가 나왔다.
+   *
+   * 상태기계는 **한 번에 하나만** 돌아야 한다. 프로세스 간 배제는 `FileStore` 의 락이
+   * 맡고, 프로세스 안은 이 큐가 맡는다.
+   */
+  private applyTail: Promise<unknown> = Promise.resolve();
+
+  /** apply 상태기계를 한 번에 하나만 돌린다. */
+  exclusiveApply<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.applyTail.then(fn);
+    this.applyTail = run.catch(() => undefined);
+    return run;
+  }
 
   constructor(private readonly store: DurableStore) {}
 
@@ -273,24 +342,129 @@ export class DpAgent {
    * 저널 쓰기도 **같은 직렬 구간**을 지난다. 멤버십 좌표와 저널이 한 소유자 아래 있어야
    * 서로 덮어쓰지 않는다 (5차 반례 ③④).
    */
+  /** 지금 apply 경로를 쥔 오퍼레이션. 없으면 undefined. */
+  activeOperation(): ActiveOperation | undefined {
+    return (this.store.load() ?? initial()).activeOperation;
+  }
+
+  /**
+   * **전 평면을 한 임계구역에서** 예약하고 apply 경로를 잡는다 (6차 반례 ③).
+   *
+   * 평면마다 따로 예약하면 그 사이에 남이 끼어든다. 그리고 슬롯을 다 잡아도 저널·
+   * `current`·HUP 은 전역이라 실행권까지 잡아야 한다.
+   *
+   * 같은 오퍼레이션의 재요청은 멱등이다 — 이미 자기가 쥐고 있으면 그대로 통과한다.
+   */
+  reserveAll(op: ApplyOperation): Promise<PlaneAck[]> {
+    return this.serial((s) => {
+      const tuples = planesOf(op).map((plane) => tupleFor(op, plane));
+      const first = tuples[0];
+      if (first === undefined) {
+        throw new DpRejection('empty_envelope', '봉투가 어떤 평면도 말하지 않았다');
+      }
+      assertLeader(s, first.leaderToken);
+
+      const holder = s.activeOperation;
+      const mine = holder === undefined
+        || (holder.operationId === op.operationId && holder.transitionId === op.transitionId);
+      if (!mine) {
+        throw new DpRejection(
+          'operation_in_flight',
+          `${holder!.operationId}:${holder!.transitionId} 가 apply 경로를 쥐고 있다`,
+        );
+      }
+
+      // 전부 잡거나 하나도 안 잡는다. `acquire` 가 던지면 이 임계구역의 변경은
+      // 저장되지 않으므로 롤백이 따로 필요 없다.
+      const acks = tuples.map((t) => {
+        const replay = admit(s, t, 'reserve');
+        if (replay !== undefined) return replay;
+        acquire(s, t);
+        return record(s, t, 'reserve', { ...t.target, payloadDigest: t.payloadDigest });
+      });
+
+      s.activeOperation = {
+        operationId: op.operationId,
+        transitionId: op.transitionId,
+        leaderToken: first.leaderToken,
+      };
+      return acks;
+    });
+  }
+
+  /**
+   * apply 경로를 놓는다. 예약이 남아 있으면 함께 반납한다 (6차 반례 ④).
+   *
+   * 종단에 도달했는데 소유권이나 예약이 남으면 그 좌표는 영구히 잠긴다.
+   */
+  finishOperation(op: ApplyOperation, releasePlanes: Plane[] = []): Promise<void> {
+    return this.serial((s) => {
+      for (const plane of releasePlanes) {
+        const t = tupleFor(op, plane);
+        if (ownsSlot(s, t)) delete s.reservations[plane][t.target.activationEpoch];
+      }
+      const holder = s.activeOperation;
+      if (holder?.operationId === op.operationId && holder.transitionId === op.transitionId) {
+        delete s.activeOperation;
+      }
+    });
+  }
+
+  /**
+   * **부작용 앞에서** 아직 내 차례인지 확인한다 (6차 반례 ⑥).
+   *
+   * `drive()` 는 예약을 지나온 뒤에도 매 단계 외부 효과를 낸다. 그 사이 새 리더가
+   * fence 하면 옛 러너가 게시·HUP 을 계속하게 된다 — 판정만 나중에 거부됐다.
+   */
+  assertOwnership(op: ApplyOperation): void {
+    // **읽기만 한다.** `serial()` 을 쓰면 매 단계마다 상태가 그대로인 durable 쓰기가
+    // 하나씩 생긴다 — 디스크도 낭비고 크래시 지점 계측에 의미 없는 지점이 낀다.
+    // 확정 판정은 어차피 변이 연산 안에서 다시 한다. 여기서는 부작용을 **일찍** 막는다.
+    const s = this.store.load() ?? initial();
+    const token = normalizeNumeric(op.leaderToken, 'leaderToken');
+    if (BigInt(token) < BigInt(s.maxLeaderToken)) {
+      throw new DpRejection(
+        'stale_leader',
+        `토큰 ${token} 은 이미 본 최대 토큰 ${s.maxLeaderToken} 보다 낮다`,
+      );
+    }
+    const holder = s.activeOperation;
+    if (holder !== undefined
+      && (holder.operationId !== op.operationId || holder.transitionId !== op.transitionId)) {
+      throw new DpRejection(
+        'operation_in_flight',
+        `${holder.operationId}:${holder.transitionId} 가 apply 경로를 쥐고 있다`,
+      );
+    }
+  }
+
   writeJournal(entry: JournalEntry): Promise<void> {
     return this.serial((s) => {
-      // **저널도 예약이 있어야 쓴다.** 없으면 남의 오퍼레이션이 진행 중인 저널을
-      // 자기 것으로 덮는다 — 5차 반례 ②. 종단 단계만 예외인데, 그때는 이미 예약을
-      // 반납한 뒤라서 주인이 없는 게 정상이다.
-      // **모든 affected 평면의 주인이어야 한다.** 하나만 갖고 저널을 쓰면 나머지
-      // 평면은 남이 옮기는 중일 수 있다.
-      if (!isTerminalPhase(entry.phase)) {
-        for (const plane of planesOf(entry.op)) {
-          const tuple = tupleFor(entry.op, plane);
-          if (!ownsSlot(s, tuple)) {
-            throw new DpRejection(
-              'not_reserved',
-              `${transitionKey(tuple)} 는 (${plane}, ${tuple.target.activationEpoch}) ` +
-                `슬롯을 예약하지 않았다`,
-            );
-          }
-        }
+      // 부작용 앞의 펜싱과 같은 검사다. 저널 기록도 부작용이다.
+      assertLeader(s, normalizeNumeric(entry.op.leaderToken, 'leaderToken'));
+
+      // **소유권은 슬롯이 아니라 `activeOperation` 이 갖는다.** 슬롯은 commit 하면서
+      // 사라지므로 그걸로 검사하면 자기 종단 기록조차 막힌다. 전역 실행권 하나로 본다.
+      const holder = s.activeOperation;
+      const mine = holder !== undefined
+        && holder.operationId === entry.op.operationId
+        && holder.transitionId === entry.op.transitionId;
+      if (!mine) {
+        throw new DpRejection(
+          'not_reserved',
+          `${entry.op.operationId}:${entry.op.transitionId} 는 apply 경로를 쥐고 있지 않다`,
+        );
+      }
+
+      // **단계 전이는 한 명만 이긴다** (6차 반례 ③). 진 쪽은 다시 읽고 따라간다.
+      // 소유권 검사 **뒤에** 온다 — 남의 저널을 덮으려는 것과 같은 오퍼레이션의 경쟁은
+      // 원인이 다르므로 다른 이름으로 거부해야 한다.
+      const expected = (s.journal?.seq ?? 0) + 1;
+      if (entry.seq !== expected) {
+        throw new DpRejection(
+          'journal_conflict',
+          `저널이 앞으로 갔다: seq ${expected} 를 기대했는데 ${entry.seq} 가 왔다`,
+        );
       }
       s.journal = entry;
     });
@@ -418,6 +592,15 @@ export class DpAgent {
       }
       if (slot.stagedDigest !== op.payloadDigest) {
         throw new DpRejection('digest_mismatch', `staged digest 가 다르다`);
+      }
+
+      // **여기가 최종 심판이다** (§3.5 · 6차 반례 ②). 러너도 증거를 보지만, 러너를
+      // 거치지 않는 호출이 있으면 그 검사는 없는 것과 같다.
+      if (!provesActivation(evidence, op.targetGeneration)) {
+        throw new DpRejection(
+          'not_activated',
+          `증거가 세대 '${op.targetGeneration}' 의 활성화를 증명하지 못한다: ${JSON.stringify(evidence)}`,
+        );
       }
 
       s.planes[op.plane] = { ...op.target, payloadDigest: op.payloadDigest };
