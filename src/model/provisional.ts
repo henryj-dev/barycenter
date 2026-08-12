@@ -28,26 +28,55 @@ export type UdpPreset = 'dns' | 'wireguard' | 'game_generic' | 'custom';
  */
 export type SniOutcome = 'reject' | { pool: string };
 
-export type Listener = {
+type ListenerBase = {
   key: string;
-  protocol: ListenerProtocol;
   bind: string;
   port: number;
   enabled: boolean;
-  /** tcp / udp 는 라우트 매칭이 없으므로 필수. */
+};
+
+/**
+ * **신뢰할 수 없는 입력.** JSON·DB·API 에서 온 그대로의 모양이다.
+ *
+ * 검증기는 이걸 받는다. 검증기가 이미 좁혀진 타입을 받으면 정작 막아야 할 조합을
+ * 표현할 수가 없어서 아무것도 검사하지 못한다 — 타입이 런타임 입력을 대신하지 못한다.
+ */
+export type RawListener = ListenerBase & {
+  protocol: ListenerProtocol;
   defaultPool?: string;
-  /**
-   * 앞단 LB 가 보낸 PROXY 헤더를 받는다. UDP 는 엔진이 지원하지 않는다 (§4.7).
-   * 실제 계약(신뢰 CIDR 등)은 §4.7 의 InboundProxyProtocol 이지만, 렌더러가 알아야 하는
-   * 것은 "받는가" 하나뿐이라 여기서는 그것만 갖는다.
-   */
   acceptProxyProtocol?: boolean;
   udp?: { preset: UdpPreset };
   http?: HttpProfile;
-  /** tls_passthrough 전용 */
   onUnmatchedSni?: SniOutcome;
   prereadTimeoutS?: number;
 };
+
+export type HttpListener = ListenerBase & {
+  protocol: 'http';
+  acceptProxyProtocol?: boolean;
+  http?: HttpProfile;
+};
+
+export type PassthroughListener = ListenerBase & {
+  protocol: 'tls_passthrough';
+  acceptProxyProtocol?: boolean;
+  onUnmatchedSni?: SniOutcome;
+  prereadTimeoutS?: number;
+};
+
+export type TcpListener = ListenerBase & {
+  protocol: 'tcp';
+  defaultPool: string;
+  acceptProxyProtocol?: boolean;
+};
+
+export type UdpListener = ListenerBase & {
+  protocol: 'udp';
+  defaultPool: string;
+  udp: { preset: UdpPreset };
+};
+
+export type Listener = HttpListener | PassthroughListener | TcpListener | UdpListener;
 
 /**
  * `least_conn` 은 v0 에 없다. stream/http OSS 에 네이티브로 있지만, S1 이 통과해 Lua
@@ -106,6 +135,13 @@ export type PassthroughRoute = {
   action: PassthroughAction;
 };
 
+/**
+ * **검증을 통과한 모델.** 렌더러는 이것만 받는다.
+ *
+ * 리스너가 판별 유니온이라 프로토콜에 없는 필드는 **표현 자체가 안 된다.** UDP 리스너에
+ * `acceptProxyProtocol` 을 넣으면 컴파일이 막힌다 — 5차 검수가 재현한 조합이다.
+ * 런타임 입력은 타입이 못 막으므로 `validateModel` 이 같은 규칙을 다시 검사한다.
+ */
 export type Model = {
   listeners: Listener[];
   httpRoutes: HttpRoute[];
@@ -113,3 +149,6 @@ export type Model = {
   pools: Pool[];
   backends: Backend[];
 };
+
+/** 검증 전 모델. `validateModel` 의 입력이다. */
+export type RawModel = Omit<Model, 'listeners'> & { listeners: RawListener[] };

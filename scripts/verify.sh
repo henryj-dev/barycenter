@@ -105,7 +105,8 @@ cat <<'GATES'
  2. ApplyOperation     평면별 진행 · partial_transition · ActivationEvidence ·
                        failure/rollback 종단 상태가 durable 스키마에 없다.
  3. 변이 envelope      §9.2 config 경로에 leader token · operation tuple 없음.
- 4. fail-closed 타입   잘못된 조합 4종이 검증 issue 0 건으로 통과한다.
+ 4. fail-closed 타입   ✅ 해소. RawModel(입력) / Model(검증 통과) 두 층으로 나누고
+                       리스너를 프로토콜 판별 유니온으로 만들었다. 뮤턴트 6종 전부 잡힘.
 
  → v0.1 타입·API·DB 스키마 freeze: **No-Go**
 GATES
@@ -114,7 +115,7 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 미해소 blocker 3건 → non-zero 로 끝낸다."
+  echo " --freeze-gate: 미해소 blocker 2건 → non-zero 로 끝낸다."
   exit 2
 fi
 

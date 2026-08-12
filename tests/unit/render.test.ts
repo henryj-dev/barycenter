@@ -334,9 +334,12 @@ describe('R19 — 명시적 default_server (E32)', () => {
   });
 
   it('defaultAction 을 풀로 지정하면 그리로 보낸다', () => {
+    // 판별 유니온이라 `http` 프로필은 http 리스너에만 붙는다. 좁히고 나서 쓴다.
+    const first = web.listeners[0]!;
+    if (first.protocol !== 'http') throw new Error('픽스처가 http 리스너가 아니다');
     const m: Model = {
       ...web,
-      listeners: [{ ...web.listeners[0]!, http: { defaultAction: { pool: 'api' } } }],
+      listeners: [{ ...first, http: { defaultAction: { pool: 'api' } } }],
     };
     const conf = render(m).conf;
     expect(conf).toMatch(/default_server;[\s\S]*?proxy_pass http:\/\/pool_api;/);

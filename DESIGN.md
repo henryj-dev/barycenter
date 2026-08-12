@@ -1548,9 +1548,25 @@ S15 · S16 · S17 · S18 · S19. 남는 것은 **S7(완료) · S11 · S12** 와 
    좌표를 옮긴다.**
 3. **모든 변이에 같은 envelope.** `§9.2` 의 config prepare/commit/abort 에는 leader token 도
    operation tuple 도 없다. 설정 경로가 멤버십 튜플 **밖에서** 부작용을 낼 수 있다.
-4. **fail-closed 타입.** provisional 모델은 잘못된 조합을 표현 가능하게 두고 검증기가
-   승인한다 — TCP 리스너에 기본 풀 없음, HTTP 라우트가 TCP 리스너 참조, 고아 백엔드,
-   UDP 에 `proxy_protocol`. 넷 다 issue 0 건이다. 이 타입은 v0.1 계약의 근거가 못 된다.
+4. ~~**fail-closed 타입.**~~ ✅ **해소** — `src/model/provisional.ts` · `src/validate/model.ts`.
+
+   타입을 **두 층**으로 나눴다. `RawModel` 은 신뢰할 수 없는 입력이고(JSON·DB·API 에서
+   온 그대로), `Model` 은 검증을 통과한 것이다. 리스너는 프로토콜 판별 유니온이라
+   UDP 에 `acceptProxyProtocol` 을 넣으면 **컴파일이 막힌다.**
+
+   검증기가 `RawModel` 을 받는 게 핵심이다. 좁혀진 타입을 받으면 정작 막아야 할 조합을
+   **표현할 수가 없어서 아무것도 검사하지 못한다** — 타입은 런타임 입력을 대신하지 못한다.
+   두 층은 같은 규칙을 각자 검사한다.
+
+   새 거부 다섯: `listener_requires_default_pool` · `route_protocol_mismatch` ·
+   `pool_protocol_mismatch` · `orphan_backend` · `option_not_supported`.
+
+   덤으로 `render.ts` 의 `listener.defaultPool!` 논넌널 단언이 사라졌다. tcp·udp 리스너에
+   기본 풀이 **타입으로** 필수가 됐기 때문이다. 그 단언이 가리고 있던 것이 바로 이
+   반례였다 — 기본 풀 없는 TCP 리스너는 예외 없이 렌더 결과에서 통째로 빠졌다.
+
+   계약은 `tests/conformance/review5-fail-closed.test.ts` (19건, positive control 4건 포함).
+   뮤턴트 6종이 전부 잡힌다.
 
 **순서.** 위 넷을 스키마로 먼저 정의하고, 재현된 반례를 conformance test 로 고정한 뒤,
 구현이 그걸 통과하게 만든다. 테스트를 더 늘리는 것이 다음 게이트가 아니다.

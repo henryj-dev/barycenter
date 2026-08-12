@@ -28,6 +28,10 @@ import { ModelValidationError, validateModel } from '../validate/model.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
 import type {
+  HttpListener,
+  PassthroughListener,
+  TcpListener,
+  UdpListener,
   Backend,
   HttpRoute,
   Listener,
@@ -109,8 +113,8 @@ function listenArgs(l: Listener): ConfValue[] {
     : bind.value.family === 'v6'
       ? [lit(`[${bind.value.addr}]:${l.port}`), lit('ipv6only=on')]
       : [lit(`${bind.value.addr}:${l.port}`)];
-  // udp 는 PROXY 수신을 지원하지 않는다 (§4.7). 모델이 막지만 렌더도 내지 않는다.
-  if (l.acceptProxyProtocol === true && l.protocol !== 'udp') base.push(lit('proxy_protocol'));
+  // udp 는 PROXY 수신을 지원하지 않는다 (§4.7). **타입에 그 필드가 없다** — 먼저 좁힌다.
+  if (l.protocol !== 'udp' && l.acceptProxyProtocol === true) base.push(lit('proxy_protocol'));
   return base;
 }
 
@@ -165,7 +169,7 @@ function upstreamBlock(pool: Pool, backends: Backend[], sourceIpVar: string): Co
  * 호스트를 독립 단위로 펼치면 둘 다 사라진다.
  */
 function httpServerBlocks(
-  listener: Listener,
+  listener: HttpListener,
   routes: HttpRoute[],
   poolsWithBackends: Set<string>,
 ): ConfNode[] {
@@ -256,7 +260,7 @@ function locationBody(r: HttpRoute, poolsWithBackends: Set<string>): ConfNode[] 
  * E32 로 실측: 없으면 모르는 Host 가 **첫 번째 server 블록**으로 조용히 들어간다.
  * 멀티테넌트에서 그건 테넌트 간 누수다. 기본은 `444`(응답 없이 끊기)로 막는다.
  */
-function defaultServerBlock(listener: Listener, poolsWithBackends: Set<string>): ConfNode {
+function defaultServerBlock(listener: HttpListener, poolsWithBackends: Set<string>): ConfNode {
   const action = listener.http?.defaultAction ?? 'reject';
   const body: ConfNode[] =
     action !== 'reject' && poolsWithBackends.has(action.pool)
@@ -285,7 +289,7 @@ function outcomeValue(outcome: SniOutcome | undefined, poolsWithBackends: Set<st
 }
 
 function passthroughNodes(
-  listener: Listener,
+  listener: PassthroughListener,
   routes: PassthroughRoute[],
   poolsWithBackends: Set<string>,
 ): ConfNode[] {
@@ -344,7 +348,7 @@ function passthroughNodes(
   return [sniMap, server];
 }
 
-function streamServerBlock(listener: Listener, pool: Pool | undefined): ConfNode {
+function streamServerBlock(listener: TcpListener | UdpListener, pool: Pool | undefined): ConfNode {
   const children: ConfNode[] = [];
   const isUdp = listener.protocol === 'udp';
   const preset = isUdp ? UDP_PRESETS[listener.udp?.preset ?? 'custom'] : undefined;
@@ -355,7 +359,7 @@ function streamServerBlock(listener: Listener, pool: Pool | undefined): ConfNode
     if (preset?.reuseport) args.push(lit('reuseport'));
   }
   children.push(directive('listen', args));
-  children.push(directive('proxy_pass', [lit(upstreamName(listener.defaultPool!))]));
+  children.push(directive('proxy_pass', [lit(upstreamName(listener.defaultPool))]));
 
   if (preset) {
     if (preset.responses !== undefined) {
@@ -395,15 +399,15 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
   const viaProxyProtocol = new Set<string>();
   if (!caps.streamRealip) {
     for (const l of listeners) {
-      if (l.acceptProxyProtocol !== true || l.protocol === 'udp') continue;
+      if (l.protocol === 'udp' || l.acceptProxyProtocol !== true) continue;
       for (const poolKey of poolsReachedBy(l, model)) viaProxyProtocol.add(poolKey);
     }
   }
   const sourceIpVar = (poolKey: string): string =>
     viaProxyProtocol.has(poolKey) ? 'proxy_protocol_addr' : 'remote_addr';
-  const httpListeners = listeners.filter((l) => l.protocol === 'http');
+  const httpListeners = listeners.filter((l): l is HttpListener => l.protocol === 'http');
   const streamListeners = listeners.filter(
-    (l) => l.protocol === 'tcp' || l.protocol === 'udp' || l.protocol === 'tls_passthrough',
+    (l): l is PassthroughListener | TcpListener | UdpListener => l.protocol !== 'http',
   );
 
   const top: ConfNode[] = [block('events', [], [directive('worker_connections', [num(1024)])])];
@@ -475,7 +479,8 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
         if (o !== undefined && o !== 'reject' && poolsWithBackends.has(o.pool)) {
           usedPools.add(o.pool);
         }
-      } else if (l.defaultPool !== undefined && poolsWithBackends.has(l.defaultPool)) {
+      } else if (poolsWithBackends.has(l.defaultPool)) {
+        // tcp·udp 는 기본 풀이 **필수**다 (타입이 강제한다). undefined 검사가 필요 없다.
         usedPools.add(l.defaultPool);
       }
     }
@@ -489,7 +494,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     for (const l of streamListeners) {
       if (l.protocol === 'tls_passthrough') {
         children.push(...passthroughNodes(l, ptByListener.get(l.key) ?? [], poolsWithBackends));
-      } else if (l.defaultPool !== undefined && poolsWithBackends.has(l.defaultPool)) {
+      } else if (poolsWithBackends.has(l.defaultPool)) {
         children.push(streamServerBlock(l, pools.get(l.defaultPool)));
       }
     }

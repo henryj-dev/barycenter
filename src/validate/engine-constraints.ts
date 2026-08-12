@@ -15,7 +15,7 @@
  * 의도한 대로 동작한다. 다만 무엇이 일어났는지는 알려야 하므로 경고로 남긴다.
  */
 import type { EngineCapabilities } from '../engine/capabilities.js';
-import type { Listener, Model, Pool } from '../model/provisional.js';
+import type { Pool, RawListener, RawModel } from '../model/provisional.js';
 
 export type EngineIssueCode =
   | 'proxy_protocol_chain_requires_stream_realip'
@@ -30,10 +30,10 @@ export type EngineIssue = {
 };
 
 /** PROXY 헤더를 받을 수 있는 것은 TCP 계열 리스너뿐이다. UDP 는 엔진이 지원하지 않는다. */
-const acceptsProxyProtocol = (l: Listener): boolean =>
+const acceptsProxyProtocol = (l: RawListener): boolean =>
   l.enabled && l.protocol !== 'udp' && l.acceptProxyProtocol === true;
 
-export function checkEngineConstraints(model: Model, caps: EngineCapabilities): EngineIssue[] {
+export function checkEngineConstraints(model: RawModel, caps: EngineCapabilities): EngineIssue[] {
   if (caps.supports.streamRealip) return [];
 
   const pools = new Map<string, Pool>(model.pools.map((p) => [p.key, p]));
@@ -74,7 +74,7 @@ export function checkEngineConstraints(model: Model, caps: EngineCapabilities): 
 }
 
 /** 이 리스너를 통해 트래픽이 닿는 풀들. */
-export function poolsReachedBy(listener: Listener, model: Model): string[] {
+export function poolsReachedBy(listener: RawListener, model: RawModel): string[] {
   const out = new Set<string>();
   if (listener.defaultPool !== undefined) out.add(listener.defaultPool);
 
