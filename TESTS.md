@@ -180,6 +180,7 @@ PASS=43  FAIL=0  SKIP=1
 | **S16** | **SNI 별 TLS policy 렌더** | 동일 `listen` 의 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 (E27 은 문법만 확인) | `override` 제거, TlsPolicy 는 리스너 단위 |
 | **S17** | **TLS 인증서 선택 렌더** | exact / 1-라벨 와일드카드 / `default_server` 조합에서 **SAN 이 커버하지 않는 인증서가 제시되는 일 0** (E22.2 위험) | v0 은 exact host 만 허용 |
 | **S18** | **ACME 상태기계** | 오더·챌린지·재시도·고아 TXT 정리. v0.6 전 실행 | ACME 범위 축소 |
+| **S19** | **롤백 경로 합성** | 옛 topology·TLS 자료를 새 세대로 clone 하고 새 epoch 를 구워 활성화. S8 과 S11 이 함께 성립하는가 | 설계 재작업 (block) |
 
 ### S1 / S5 실행 결과 — `./spike/s1-s5/run.sh`
 
@@ -519,6 +520,11 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | **P7** | 새 워커가 accept 시작했는데 E-new 슬롯 미준비 | **일어나지 않아야 한다.** 슬롯이 준비되지 않은 워커는 ready 가 되지 않는다 (§6.5-3) |
 | **P8** | 옛 HTTP 워커가 keepalive/HTTP2 연결에서 새 요청 처리 중 | **E-old 슬롯이 살아 있다.** 서빙 워커가 전부 사라질 때까지 유지 (§6.5-5) |
 | **P15** | 옛 리더가 보낸 rollback RPC 가 새 리더 apply 뒤에 도착 | **DP Agent 가 거부** — 더 높은 `leader_token` 을 본 뒤에는 낮은 토큰의 요청을 전부 거부 (§3.5) |
+| **P18** | 낮은 토큰 요청이 검사 후 yield 하는 사이 높은 토큰이 완주 | **거부.** 검사와 적용이 하나의 임계구역이어야 한다 (§3.6-4). *4차 검수가 재현한 실패 지점* |
+| **P19** | 취소된 미래 epoch `E13` 의 지연 RPC 가 활성 `E12` 뒤 도착 | **거부** — "더 높으니까"가 아니라 `expected_current` CAS 로 판정 (§3.6-2) |
+| **P20** | 같은 좌표에 다른 `payload_digest` 로 재요청 | **거부.** digest 가 같을 때만 cached ACK (§3.6-3) |
+| **P21** | DP Agent 재시작 후 낮은 토큰 RPC | 거부 — 토큰은 side effect **전에** fsync 됐다 (§3.5) |
+| **P22** | 먼저 시작한 프로브가 나중 것보다 늦게 완료 | 낡은 결과를 버린다 — `probe_start_seq` CAS (§6.6) |
 | **P16** | DP Agent 재시작 후 옛 토큰 RPC 도착 | 거부 — 최대 토큰은 durable |
 | **P17** | 같은 `topology_version` 인데 `activation_epoch` 만 다름 | 헬스 **재투영 가능** — 멤버십 식별 공간이 같다 (§3.3-4) |
 | P9 | 백엔드 host/port 변경 후 옛 endpoint 의 지연 프로브 결과 도착 | 거부 — `{backend_id, endpoint_fingerprint, probe_spec_digest}` 전부 일치할 때만 투영 (§3.3-5) |

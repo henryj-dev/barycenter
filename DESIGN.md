@@ -8,6 +8,22 @@
 > **개정 이력.** v0 초안 → 검수 1차(C4/H15/M6/L3) → v1 → 검수 2차(반박 재판정 + C2/H9/M5/L2)
 > → v2 → 검수 3차(blocking 9건 + High/Medium) 반영 → **현재 v3**. 근거와 철회한 반박은 **§15**.
 >
+> **v4 (2026-08-12) — 4차 검수의 설계 Critical 4건을 확정했다.**
+> ① **§3.6 operation tuple** — epoch 하나로는 "허가된 operation" 을 증명하지 못한다.
+> 취소된 미래 epoch, 같은 epoch payload 교체, 리더 교체가 전부 통과했다. 튜플 전체를 싣고
+> **검사와 적용을 하나의 임계구역**으로 묶는다. ② **§6.5 커밋 순서 커서** — PG `nextval` 은
+> 커밋 순서와 달라서 cut 이 이벤트를 영구 누락시킨다. 잠금 행으로 연속 커서를 발급하고
+> 스냅샷과 HWM 을 같은 스냅샷에서 읽는다. abort 는 버퍼를 옮기지 않는다. ③ **§6.6 헬스 관측
+> ABA** — 먼저 시작한 프로브가 늦게 끝나면 낡은 결과가 최신을 덮는다. `probe_incarnation` ·
+> `probe_start_seq` · `resolved_endpoint_digest` 로 CAS 한다. ④ **§8.4 참조 테이블** —
+> refcount 를 파생값으로 두면 crash 에서 이중 감소·누락이 생긴다. 불변
+> `generation_secret_ref` 를 정본으로 하고 시크릿에 `live→delete_pending→deleted` 를 둔다.
+>
+> 함께: 롤백은 head 를 뒤로 옮기지 않고 `rollback_of` 를 붙인 **새 리비전**을 만든다 ·
+> **HUP exactly-once 를 포기**하고 bounded duplicate 를 허용한다 · 무엇이 새 epoch 를 쓰는지
+> 분류기로 고정한다 · 세대는 디렉토리 rename 으로 **통째로** 게시한다 · 드라이버 계약에
+> 좌표를 전파하고 큰 수는 decimal string 으로 다룬다 · **S19**(롤백 경로 합성) 신설.
+>
 > **⚠️ 4차 검수 (2026-08-12) — 스파이크 결론을 되돌린다.**
 > 외부 검수가 **S11 하네스에서 동시성 결함을 재현했다.** `/stage` 가 토큰을 검사한 뒤
 > `read_body()` 에서 yield 하고, 재개 후 재검사 없이 슬롯을 쓴다. 그 사이 더 높은 토큰이
@@ -225,19 +241,17 @@ E10 → E11 → rollback to E10
 
 **핵심 규칙 — 롤백도 새 값을 쓴다.**
 
-1. 모든 스냅샷·델타·ACK·DP RPC 는 `(activation_epoch, membership_revision, payload_digest)` 를 갖는다.
-2. **`activation_epoch` 는 절대 재사용하지 않는다.** 롤백은 "E10 으로 되돌아가는" 것이 아니라
+1. **`activation_epoch` 는 절대 재사용하지 않는다.** 롤백은 "E10 으로 되돌아가는" 것이 아니라
    **옛 topology 를 새 `E12` 로 활성화하는 것**이다. `topology_version` 은 E10 시절 값으로
    돌아가지만 epoch 는 앞으로만 간다. 지연된 `(E10, …)` RPC 는 자동으로 무효가 된다.
-3. `activation_epoch` 보다 낮은 값을 실은 요청은 **거부한다** (`EpochMismatch`). 카운터를 남긴다.
-4. `topology_version` 이 같으면 멤버십 식별 공간이 같다는 뜻이므로, **헬스를 재투영할 수 있다.**
+2. `topology_version` 이 같으면 멤버십 식별 공간이 같다는 뜻이므로, **헬스를 재투영할 수 있다.**
    epoch 가 달라도 상관없다. 이게 "롤백 후 최신 헬스 유지"를 안전하게 만드는 근거다.
-5. 백엔드 UUID 는 **영구 재사용 금지.** 헬스 재투영은
-   `{backend_id, endpoint_fingerprint(host:port), probe_spec_digest}` 가 **전부** 일치할 때만 한다.
-   host/port 나 프로브 설정이 바뀌면 옛 엔드포인트의 지연 프로브 결과가 새 엔드포인트에
-   투영될 수 있다.
+3. 백엔드 UUID 는 **영구 재사용 금지.**
 
-`GET /api/v1/status` 는 위 전부를 노출한다.
+> **롤백은 옛 세대를 다시 게시하는 것이 아니다.** 세대에는 `activation_epoch` 가 구워져
+> 있으므로(§6.5), 옛 바이트를 그대로 재활성화하면 epoch 가 재사용된다. 롤백은 옛 topology
+> 와 TLS 자료를 **새 세대로 clone 하고 새 epoch 리터럴을 구워** 활성화한다. S8(세대 결박)과
+> S11(새 epoch)을 합성하려면 이 경로가 필요하고, **별도로 검증해야 한다** (S19).
 
 ### 3.4 http 와 stream 은 별개 상태 평면이다
 
@@ -281,12 +295,53 @@ RPC 는 네트워크나 DP 큐에 남아 있을 수 있다.** 새 리더가 appl
 `previous_revision` CAS 와 `abort(opId)` 만으로는 막지 못한다.
 
 - 리더는 선출될 때 **엄격 단조 증가하는 `leader_token`** 을 받는다 (PG 시퀀스).
-- 모든 DP RPC 는 `leader_token` 을 싣는다.
-- **DP Agent 는 지금까지 본 최대 토큰을 durable 하게 보관한다.** 더 높은 토큰을 본 뒤에는
-  더 낮은 토큰의 `prepare`/`commit`/`abort`/`rollback` 을 **전부 거부**한다.
-- DP Agent 는 진행 중 오퍼레이션도 durable 하게 들고 있어, 재시작 후에도 이 판정을 유지한다.
+- 신임 리더는 **어떤 operation 보다 먼저 `fence(token)` 핸드셰이크를 완료**한다. 이게 끝나야
+  자기가 리더라고 행동할 수 있다.
+- **DP Agent 는 토큰을 side effect *전에* fsync 하고 ACK 한다.** 순서가 반대면, 부작용을
+  낸 뒤 fsync 전에 죽었을 때 재시작 후 더 낮은 토큰을 다시 받아들인다.
+- 더 높은 토큰을 본 뒤에는 더 낮은 토큰의 `prepare`/`commit`/`abort`/`rollback` 을
+  **전부 거부**한다. 진행 중 operation 도 durable 하게 들고 있어 재시작 후에도 판정이 남는다.
+- 토큰 검사와 상태 변경은 **하나의 임계구역**이다 (§ 3.6-4).
 
 컨트롤 플레인은 자기가 리더라고 *믿을* 수 있을 뿐이다. 실제 심판은 DP Agent 다.
+
+### 3.6 operation tuple — epoch 만으로는 부족하다
+
+v3 은 "낮은 epoch 를 거부한다"까지였다. 그것만으로는 세 구멍이 남는다.
+
+| 구멍 | 시나리오 |
+|---|---|
+| 취소된 미래 epoch | E12 활성 중 `E13` 을 준비하다 abort 했는데, 지연된 `E13` RPC 가 뒤늦게 도착 → 현재 규칙은 "더 높으니까" 받는다 |
+| 같은 epoch payload 교체 | `E12` 로 두 번 stage 하면 뒤엣것이 앞엣것을 덮는다 |
+| 리더 교체 | `activation_epoch` 는 리더가 누구인지 말해주지 않는다 |
+
+**따라서 epoch 하나가 아니라 튜플 전체를 싣고, durable 상태에 CAS 한다.**
+
+```
+OperationTuple {
+  leader_token          엄격 단조. § 3.5
+  operation_id          이 apply 의 고유 ID
+  transition_id         이 평면 전환의 고유 ID
+  expected_current      DP 가 지금 이 좌표에 있어야 한다 (CAS 의 기대값)
+  target                이 요청이 옮기려는 좌표
+  plane                 http | stream
+  membership_revision
+  payload_digest        같은 좌표 재요청은 digest 가 같을 때만 cached ACK
+}
+```
+
+DP Agent 의 수용 규칙:
+
+1. `leader_token` 이 durable 최대 토큰보다 작으면 **거부**.
+2. `expected_current` 가 DP 의 현재 좌표와 다르면 **거부** — 알려지지 않은 더 높은 epoch 도
+   여기서 걸린다. "더 높으니까 받는다"가 아니라 "내가 아는 직전 좌표에서 오는 것만 받는다".
+3. 같은 `(operation_id, transition_id)` 재요청은 `payload_digest` 가 같을 때만 **cached ACK**.
+   다르면 거부한다 — 같은 좌표에 다른 내용을 밀어 넣는 경로를 없앤다.
+4. 수용은 **durable CAS 한 번**으로 확정한다. 검사와 적용 사이에 yield 가 있으면 안 된다.
+
+> **왜 4번을 못박는가.** S11 하네스가 정확히 여기서 깨졌다 — 토큰을 검사한 뒤
+> `read_body()` 에서 yield 하고, 재개 후 재검사 없이 슬롯을 썼다. 그 사이 더 높은 토큰이
+> 완주하면 낮은 토큰의 쓰기가 살아남는다. **검사와 적용은 하나의 임계구역이어야 한다.**
 
 ---
 
@@ -699,11 +754,17 @@ planned ──commit──→ committed ──apply──→ operation_bound ─
 | → `committed` | `base_revision == head` 여야 한다. **이 순간 `target_revision` 과 `activation_epoch` 를 예약**하고 artifact 에 결박한다. `plan_id` 는 여기서 단회 소비된다 |
 | → `operation_bound` | `(plan_id → operation_id)` 가 **unique**. 같은 `plan_id` 로 다시 apply 하면 새 오퍼레이션이 아니라 **같은 operation 을 반환**한다 (멱등) |
 | → `applied` | 이 artifact 가 실제로 활성화됐다 |
-| `superseded` | 더 최근 리비전이 적용됐다. **이 plan 은 일반 apply 로 재생할 수 없다** |
+| `superseded` | **`target_revision ≠ desired_head`.** 일반 apply 는 항상 head 만 적용한다. "더 최근 것이 적용됐다"는 모호했다 — 커밋만 되고 적용은 안 된 리비전이 있으면 판정이 갈린다 |
 
 - **과거 리비전 적용은 명시적 rollback 으로만.** `R1` 커밋 → `R2` 적용 뒤에 `R1` plan 을
-  `/apply` 로 되돌리는 경로는 없다. `POST /operations/{id}/rollback` 또는
-  `POST /apply {rollback_to: revision}` 이 별도 의도로 존재하고, 감사에도 그렇게 남는다.
+  `/apply` 로 되돌리는 경로는 없다.
+- **롤백은 head 를 뒤로 옮기지 않는다.** desired 가 `R2` 인데 runtime 만 `R1` 로 되돌리면
+  reconciler 가 다시 `R2` 를 적용해 버린다. 반대로 head 를 `R1` 로 되돌리면 리비전 단조
+  계약이 깨진다.
+  → **`R1` 의 내용으로 새 `ConfigRevision R3` 을 만들고 `rollback_of: R1` 을 붙인다.**
+  head 는 앞으로만 간다. 새 activation operation 이 발행되므로 §3.3-1 의 epoch 규칙과도 맞는다.
+  · 긴급 상황의 runtime-only 롤백은 **`reconcile_suspended`** 라는 별도 상태로 표시한다.
+    이 상태에서는 reconciler 가 자동 재적용을 하지 않고, 해제는 명시적이다.
 - **committed artifact 는 pin 된다.** TTL 은 `planned` 상태에만 적용된다. 커밋된 artifact 는
   적용·롤백 보존 기간이 끝날 때까지 지우지 않는다 — 24시간 뒤 만료돼 되돌릴 수단이
   사라지는 상황을 만들지 않는다 (§ 8.4 GC root).
@@ -793,8 +854,19 @@ weight·admin_state 변경                       (그 외 없음)
 와 weight 는 **모델 변경이라 ConfigRevision 을 올린다.** 같은 값을 두 경로가 각각 바꾸면
 경합한다. 따라서:
 
-- `admin_state`/weight 변경 → 설정 경로. 단 **렌더 결과가 동일하면 reload 를 생략**하고
-  epoch 를 유지한 채 멤버십만 push 한다 (`requires_reload=false` 최적화).
+- **무엇이 새 epoch 를 쓰는지 분류기로 고정한다.** "렌더 결과가 byte 로 같으면" 은 기준이
+  될 수 없다 — 부트스트랩 멤버십이 아티팩트에 들어가면 애초에 같을 수 없고, 세대에 epoch 가
+  구워지므로 새 epoch 를 예약하면 byte 도 달라진다.
+
+  | 변경 종류 | 좌표 |
+  |---|---|
+  | 리스너·라우트·풀·백엔드 **CRUD**, TLS 자료 | 새 세대 + **새 `activation_epoch`** |
+  | `admin_state` · `weight` | **같은 epoch**, `membership_revision` 증가 |
+  | 헬스 판정 | **같은 epoch**, `membership_revision` 증가 |
+
+  즉 `admin_state`/weight 는 모델 변경이지만 **topology 식별 공간을 바꾸지 않으므로**
+  세대를 새로 내지 않는다. `static_generation_revision`(디스크)과
+  `applied_model_revision`(적용된 모델)을 따로 노출해 둘이 갈릴 수 있음을 드러낸다.
 - **헬스 판정만이 순수 멤버십 경로다.** 헬스는 사용자 소유 필드가 아니므로 경합하지 않는다.
 - DNS 변화는 대안 B 에서 엔진이 처리하고, 멤버십 평면 경로에서는 CP 가 재해석해
   설정 경로로 반영한다.
@@ -843,9 +915,15 @@ weight·admin_state 변경                       (그 외 없음)
 | 10 | GC 디스크 삭제 후, refcount 감소 전 | release ledger | § 8.4 |
 | 11 | 롤백 중 | 혼재 | 이전 세대를 **새 epoch 로** 재게시 후 동일 절차 |
 
-> **HUP 재전송은 운영적으로 멱등이 아니다.** 신호를 두 번 보내면 워커 cycle 이 하나 더 생겨
-> 옛 워커 세대가 쌓인다. 그래서 #5·#6 은 재전송이 아니라 **마스터 cycle 관측**으로 먼저
-> 갈라야 한다.
+> **HUP 은 exactly-once 로 만들 수 없다.** 마스터 cycle 이 그대로라는 사실만으로는
+> "신호를 못 보냈다"와 "보냈지만 아직 처리 전이다"를 구분할 수 없다. 재전송하면 워커
+> cycle 이 하나 더 생기고, 안 하면 미전송 케이스가 멈춘다.
+>
+> → **exactly-once 요구를 버린다.** 대신 **식별 가능한 bounded duplicate** 를 허용한다:
+> 재전송은 상한(기본 2회)을 두고, 최종 판정은 §6.3 의 세대 리터럴로 한다. 중복 cycle 은
+> `serving_generations` 에 드러나므로 admission control(§6.4)이 흡수한다.
+> **S12 의 합격 기준도 "추가 cycle 0" 이 아니라 "최종 세대가 정확하고 중복이 상한 이내"** 다.
+> 더 강한 보장이 필요하면 crash 를 견디는 reload supervisor 가 있어야 한다.
 
 - **단일 리더** — PG advisory lock + `leader_token`. 최종 판정은 DP Agent (§ 3.5).
 - **CAS** — DP Agent 는 `previous_revision` 이 자신의 `published_revision` 과 일치할 때만 진행.
@@ -943,11 +1021,41 @@ E-old 슬롯이 살아 있어야 한다. 단일 활성 epoch 로는 두 세대�
 4. replay   활성화 직후, high-water mark **이후**의 헬스 이벤트를 순서대로 적용한다.
             (버리지 않는다. 합쳐서 적용한다.)
 5. retain   E-old 슬롯은 그 세대를 서빙하는 워커가 **전부 사라질 때까지** 유지한다.
+            유지하는 동안에도 **eligibility 는 계속 투영한다** — 옛 워커가 재시도할 때
+            이미 `disabled` 된 peer 를 다시 고르면 안 된다. 리듀서는 serving 중인 **모든**
+            호환 슬롯에 eligibility 를 쓴다.
 6. abort    prepare 가 실패하면 E-new 슬롯을 버리고, 버퍼는 **기존 epoch 로 되돌린다.**
             prepare 동안에도 활성 epoch 는 헬스 갱신을 계속 받는다.
 ```
 
-헬스 이벤트에는 **durable sequence** 를 붙인다. 그래야 high-water mark 가 의미를 갖는다.
+#### 시퀀스는 누가 발급하고 어디에 저장하는가
+
+"durable sequence 를 붙인다"만으로는 부족하다. **PG 시퀀스(`nextval`)는 커밋 순서와 다르다.**
+
+```
+T1: nextval → 100, 아직 커밋 안 함
+T2: nextval → 101, 커밋
+    cut = 101 로 잡힌다
+T1: 뒤늦게 커밋
+    replay 는 > 101 만 재생 → **100 이 영구 누락**
+```
+
+그래서 **커밋된 연속 커서**를 따로 발급한다.
+
+| 요소 | 규칙 |
+|---|---|
+| 이벤트 저장 | 헬스 판정 변경과 **outbox 삽입을 같은 트랜잭션**으로 한다. 이벤트 로그가 정본이다 |
+| 커서 발급 | `nextval` 이 아니라 **잠금 행**(`SELECT … FOR UPDATE`)으로 다음 번호를 준다. 그래서 번호 순서 = 커밋 순서 |
+| cut | 스냅샷과 high-water mark 를 **같은 MVCC 스냅샷/잠금** 안에서 읽는다. 따로 읽으면 그 사이가 유실된다 |
+| replay | `> HWM` 을 순서대로 적용한다 |
+
+#### abort — 버퍼를 옮기지 않는다
+
+v3 은 "abort 시 버퍼를 기존 epoch 로 되돌린다"고 했다. **연산이 잘못 정의됐다** — 옛 슬롯에
+이미 같은 이벤트가 적용됐다면 중복 또는 역순 적용이 된다.
+
+**이벤트 로그가 단일 정본이고, 슬롯은 커서만 갖는다.** abort 는 staged 슬롯과 그 커서를
+버릴 뿐 이벤트를 옮기지 않는다. 활성 epoch 는 자기 커서로 계속 진행한다.
 
 ### 6.6 멤버십 리듀서 — 소유자가 달라도 경합은 남는다
 
@@ -958,6 +1066,24 @@ v2 는 "`admin_state`/weight 는 사용자 소유, 헬스는 프로버 소유라
 - **단일 리듀서**가 `{spec revision, raw health}` 를 합성해 eligibility 를 만들고 시퀀스를 발급한다.
 - 헬스 프로듀서는 **헬스 필드만** 쓴다. peer 전체를 덮어쓰지 않는다.
 - **`admin_state` 가 항상 우선한다.** `disabled`/`draining` 은 어떤 헬스 값으로도 뒤집히지 않는다.
+
+#### 헬스 관측에도 ABA 가 있다
+
+§3.3-2 는 `topology_version` 이 같으면 헬스를 재투영해도 된다고 했다. **그것만으로는 부족하다.**
+같은 백엔드·같은 host:port·같은 프로브 설정이어도, **먼저 시작한 프로브 A 가 나중에 시작한
+B 보다 늦게 끝나면** A 의 낡은 결과가 최신 상태를 덮는다. `disable → enable` 이나 DNS 의
+A-B-A 도 같은 모양이다.
+
+프로브 결과에 **관측 좌표**를 싣고 백엔드별로 CAS 한다.
+
+| 필드 | 의미 |
+|---|---|
+| `probe_incarnation` | 프로브 설정이 바뀔 때마다 증가 |
+| `probe_start_seq` | 이 프로브 실행의 시작 순번 (백엔드별 단조) |
+| `resolved_endpoint_digest` | DNS 를 푼 **실제** 주소. 이름이 같아도 주소가 바뀌면 다른 관측이다 |
+
+리듀서는 `probe_start_seq` 가 마지막으로 반영한 값보다 클 때만 적용한다. 늦게 도착한 낡은
+완료는 버린다.
 
 ### 6.7 멤버십 경로의 실패 모드
 
@@ -978,7 +1104,9 @@ v2 는 "`admin_state`/weight 는 사용자 소유, 헬스는 프로버 소유라
 
 **DP Agent 의 durable 스냅샷**은 `last-known.json` 하나가 아니다. 어느 평면·어느 epoch·어느
 topology digest 에 호환되는 스냅샷인지 표현할 수 없기 때문이다.
-→ `membership/{plane}/{topology_digest}.json` 으로 콘텐츠 주소 지정하고 atomic fsync+rename.
+→ `membership/{plane}/{activation_epoch}-{topology_digest}-{revision}.json` 으로 **불변 키**를
+지정하고, 활성 포인터는 별도 파일로 둔다. `topology_digest` 만으로는 같은 topology 를 새
+epoch 로 롤백했을 때 슬롯을 구분하지 못한다.
 
 ---
 
@@ -1085,7 +1213,14 @@ http {
 ```
 
 - `manifest.json` 이 `material_ref`(`store://name@version`)와 `sha256` 을 세대에 결박한다.
-- DP Agent 가 세대 디렉토리 안에 인증서를 **원자적으로 materialize** (temp → fsync → rename).
+- **세대 전체를 원자적으로 게시한다.** 파일 하나씩 rename 하면 여러 key/chain/OCSP/manifest 가
+  한 세대로 **완성됐음**을 보장하지 못한다 — 중간 상태에서 reload 가 들어올 수 있다.
+  `generations/.tmp-N/` 에 전부 쓰고 검증·fsync 한 뒤 `manifest.json` 과 `READY` 를 마지막에
+  쓰고, **디렉토리를 rename** 한다.
+- 경로는 도메인이 아니라 **자료 ID 기준**이다 (`certs/<certificate_id>/`). 같은 도메인에
+  RSA·ECDSA 두 장이 붙을 수 있고, 도메인이 바뀌어도 자료는 그대로일 수 있다.
+- 결박 대상은 leaf/key/chain 만이 아니다. **OCSP staple, 신뢰 CA 번들, 업스트림 클라이언트
+  인증서** 등 런타임 TLS 자료 전부가 manifest 에 들어간다.
 - 직후 **인증서-키 일치·SAN·not_after·권한(0400, DP uid)** 검증.
 - 세대 보존: 최근 N 개 + `serving_generations` 에 남아 있는 모든 세대.
 
@@ -1284,21 +1419,39 @@ v1 의 "refcount 0 이면 삭제, refcount 는 보존 세대 수" 는 **순환**
 
 #### release ledger — 이중 감소를 구조로 막는다
 
+v3 의 ledger 는 **crash-safe 하지 않았다.** insert 와 refcount 감소를 나눠 놓았기 때문이다.
+
 ```
-1. GC 후보 = 위 root 어디에도 없음 AND 보존 개수 초과 AND 롤백 보존 경과
-2. tombstone 을 **먼저 durable 하게** 쓴다.
-   tombstone = { generation, secret_refs[], phase: 'pending' }
-3. 디스크 삭제 → tombstone.phase = 'disk_released'
-4. secret_refs 각각에 대해 release ledger 에 삽입한다.
-     UNIQUE (generation, secret_version)
-   → 재시도해도 두 번 감소하지 않는다. 삽입 성공한 것만 refcount 를 줄인다.
-5. tombstone.phase = 'released'
-6. refcount 0 + 유예(기본 7일) 경과 → 시크릿 삭제를 비동기 큐에 넣는다.
-   **삭제 직전에 zero-ref 를 다시 확인한다** (그 사이 새 세대가 같은 버전을 참조했을 수 있다)
-7. 시크릿 삭제 실패 → 재시도 + "시크릿 누수" 경보. **세대 GC 는 절대 막지 않는다**
+ledger insert 성공 → (crash) → refcount 감소 안 됨
+재시도 → UNIQUE 충돌로 insert 실패 → **감소가 영구 누락**
 ```
 
-각 단계의 크래시는 phase 를 읽어 그 지점부터 재개한다 (§ 6.2 표 #10).
+**refcount 를 파생값으로 두지 않는다.** 정본은 불변 참조 테이블이다.
+
+```sql
+-- 세대가 어떤 시크릿 버전을 쓰는지. 세대 생성 시 함께 삽입되고 이후 바뀌지 않는다.
+generation_secret_ref (generation, secret_version)  PRIMARY KEY (generation, secret_version)
+```
+
+- **참조 수 = 살아 있는 세대 중 이 버전을 참조하는 행의 수.** 별도 카운터가 없으므로
+  이중 감소도 누락도 원리적으로 생기지 않는다.
+- 세대 tombstone → 행 삭제 → 시크릿 상태 판정을 **한 트랜잭션**으로 한다.
+- 시크릿 자체는 상태를 갖는다: `live → delete_pending → deleted`.
+  `delete_pending` 으로 옮기는 것과 참조 0 확인은 같은 트랜잭션이다.
+  새 세대가 그 버전을 참조하려 하면 `delete_pending` 인 동안은 **거부**한다 — 삭제 직전
+  zero-ref 재확인만으로는 그 사이 끼어드는 참조를 막지 못한다 (TOCTOU).
+- 외부 SecretStore 삭제는 `delete_pending` 상태에서만 하고, 성공하면 `deleted` 로 옮긴다.
+  실패는 재시도 + 누수 경보이며 **세대 GC 를 막지 않는다.**
+
+```
+1. GC 후보 = §8.4 root 어디에도 없음 AND 보존 개수 초과 AND 롤백 보존 경과
+2. [트랜잭션] 세대 tombstone + generation_secret_ref 행 삭제
+              + 참조 0 이 된 시크릿을 delete_pending 으로
+3. 디스크 삭제 (실패해도 2 는 이미 확정. 재시도 가능)
+4. delete_pending + 유예 경과 → 외부 SecretStore 삭제 → deleted
+```
+
+각 단계의 크래시는 DB 상태를 읽어 그 지점부터 재개한다 (§ 6.2 표 #10).
 
 ---
 
@@ -1324,8 +1477,11 @@ v0.7 은 **참조 구현 + 로딩 하드닝 + 호환성 테스트 키트**다.
 
 ```ts
 export interface ConfigSnapshot {
-  revision: number;
-  topology_epoch: number;
+  /** 큰 수를 JSON 으로 왕복시켜야 하므로 decimal string 이다. number 는 안전 정수를 넘긴다. */
+  revision: string;
+  topology_version: string;
+  topology_digest: string;
+  activation_epoch: string;
   digest: string;
   listeners: readonly Listener[];
   httpRoutes: readonly HttpRoute[];
@@ -1335,6 +1491,17 @@ export interface ConfigSnapshot {
   tlsPolicies: readonly TlsPolicy[];
   sniBindings: readonly SniCertificateBinding[];
   secrets: readonly SecretBinding[];      // store://name@version + sha256
+}
+
+/** 평면별 ACK. 집계값 하나로는 어느 평면이 stage/commit 됐는지 알 수 없어 재시도가 불가능하다. */
+export interface PlaneAck {
+  plane: 'http' | 'stream';
+  activation_epoch: string;
+  membership_revision: string;
+  payload_digest: string;
+  transition_id: string;
+  preparedWorkers: number;
+  activeWorkers: number;
 }
 
 export interface DataplaneCapabilities {
@@ -1359,18 +1526,20 @@ export interface DataplaneDriver {
   abort(opId: string): Promise<void>;
   status(opId?: string): Promise<DataplaneStatus>;   // 4-way + serving_generations[]
 
-  // 멤버십 평면 — epoch 결박 · 서브시스템별 ACK
-  pushMembershipSnapshot(
-    epoch: number, rev: number, s: MembershipSnapshot
-  ): Promise<MembershipAck>;             // { http: rev, stream: rev, convergedWorkers }
-  pushMembershipDelta(
-    epoch: number, rev: number, d: MembershipDelta
-  ): Promise<MembershipAck>;             // epoch 불일치는 EpochMismatch 로 reject
+  // 멤버십 평면 — §3.6 operation tuple 을 통째로 싣는다.
+  // epoch 하나로는 "허가된 operation" 을 증명하지 못한다.
+  stageMembership(op: OperationTuple, s: MembershipSnapshot): Promise<PlaneAck>;
+  commitMembership(op: OperationTuple): Promise<PlaneAck>;
+  abortMembership(op: OperationTuple): Promise<void>;
+  pushHealthDelta(op: OperationTuple, d: MembershipDelta): Promise<PlaneAck>;
+  fence(leaderToken: string): Promise<{ maxToken: string }>;   // §3.5 — 모든 operation 보다 먼저
 }
 ```
 
-**오류 분류** (`DriverError.kind`): `validation` | `capability` | `epoch_mismatch` |
-`transient` | `conflict` | `permission` | `fatal`.
+**오류 분류** (`DriverError.kind`): `validation` | `capability` | `stale_leader` |
+`coordinate_mismatch` | `digest_mismatch` | `transient` | `conflict` | `permission` | `fatal`.
+
+`epoch_mismatch` 를 `coordinate_mismatch` 로 넓혔다 — 거부 사유가 epoch 만이 아니다 (§3.6).
 
 ### 9.3 로딩 — 하드닝
 
@@ -1467,14 +1636,15 @@ k8s 네이티브 배포는 별도 과제.
 | S8 | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | 설계 재작업 (block) |
 | S9 | SNI 결과 3분기 관측성 | TLS-no-SNI / malformed / preread timeout 구분 가능 여부 (**비-TLS 는 E26.1 로 이미 확인**) | 현행 유지 — 부재·파싱실패는 계속 `reject` 고정 |
 | S10 | 라우트 컴파일러 | exact/wildcard/path 우선순위 + 라우트 500개 p99 영향 < 5% | `strict_priority` 모드 미제공 |
-| S11 | **activation_epoch 경합** | ① 롤백 후 옛 epoch RPC 거부 ② 스냅샷 cut 이후 델타 미유실 ③ staging 전 accept 시작 없음 ④ 다중 serving epoch 공존 ⑤ 옛 리더 토큰 거부 — 전부 잘못된 peer 선택 0회 | 설계 재작업 (block) |
-| S12 | 크래시 저널 | §6.2 표의 **11개 지점** 전부(모든 durable write·외부 side-effect 직전/직후)에서 복구 정확. HUP 재전송이 워커 세대를 늘리지 않는지 포함 | 설계 재작업 (block) |
+| S11 ❌ | **operation tuple 과 경합** | ① 롤백 후 옛 좌표 RPC 거부 ② cut 이후 델타 미유실 ③ staging 전 accept 없음 ④ 다중 serving epoch ⑤ 옛 리더 토큰 거부 ⑥ **동시 RPC** ⑦ 취소된 미래 epoch 거부 ⑧ 같은 좌표 다른 digest 거부 ⑨ DP 재시작 후 토큰 유지 — 전부 잘못된 peer 선택 0회 | 설계 재작업 (block) |
+| S12 | 크래시 저널 | §6.2 표의 모든 지점(durable write·외부 side-effect 직전/직후)에서 복구 정확. **최종 세대가 정확하고 중복 cycle 이 상한 이내** (exactly-once 는 요구하지 않는다 — §6.2) | 설계 재작업 (block) |
 | S13 | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 오삭제 0회 + §8.4 GC 각 단계 크래시에서 **누수·이중감소 0회** + GC root 누락 0회 | GC 보수화 |
 | S14 | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL/NXDOMAIN/timeout, 기존 세션 거동 | 폴백 자체가 없음 → 요구 재조정 |
 | S15 | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
 | S16 | SNI 별 TLS policy 렌더 | 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 | `override` 제거 |
 | S17 | TLS 인증서 선택 렌더 | exact / 1라벨 와일드카드 / `default_server` 조합에서 SAN 미커버 인증서 제시 0회 | v0 은 exact host 만 |
 | S18 | ACME 상태기계 | 오더·챌린지·재시도·고아 TXT 정리 (v0.6 전) | ACME 범위 축소 |
+| S19 | **롤백 경로 합성** | 옛 topology·TLS 자료를 **새 세대로 clone 하고 새 epoch 를 구워** 활성화. S8(세대 결박)과 S11(새 epoch)이 함께 성립하는가 | 설계 재작업 (block) |
 
 **S8·S11·S12 실패는 프로젝트 block 이다** (설계를 다시 해야 한다). 나머지는 기능 축소 또는
 대안 B 로 흡수된다. **S7 은 프로젝트 block 은 아니지만 ApplyOperation 스키마 freeze 에는
