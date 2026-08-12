@@ -4,16 +4,41 @@
 
 > *A barycenter is the common center of mass that bodies in a system actually orbit — the point where the whole thing balances.*
 
-> ⚠️ **Status: design phase. No implementation yet.**
-> The full design lives in [`DESIGN.md`](./DESIGN.md), and the test cases derived from it in
-> [`TESTS.md`](./TESTS.md) (both written in Korean).
-> One group of tests already runs without any implementation — `./tests/engine/run.sh` checks
-> the nginx/OpenResty behaviours the design takes for granted against the real engine image.
-> It has been through two rounds of external review; every finding is folded in, and the
-> rebuttals — including the two that were withdrawn on the second pass — are recorded in §15.
-> **Implementation is gated on an architecture spike** (§12.0): the spike itself is a Go,
-> freezing the type/API/DB schema is not. Interfaces, data model, and scope are still open to
-> change. Feedback welcome.
+> ⚠️ **Status: design + architecture spike. Not a product yet.**
+> The design lives in [`DESIGN.md`](./DESIGN.md) and the test cases derived from it in
+> [`TESTS.md`](./TESTS.md) (both written in Korean). Three rounds of external review are folded
+> in; the rebuttals — including three that were later withdrawn — are recorded in §15.
+>
+> **The data model, API, and DB schema are deliberately *not* frozen yet** (§12.0). What is
+> implemented is the part whose contract the engine already decides — the config renderer and
+> its validators — plus throwaway spikes that answer the questions the design was betting on.
+
+Run everything with `./scripts/verify.sh` (or `--quick` to skip the Docker-backed suites).
+
+| | | |
+|---|---|---|
+| `npm test` | 116 | renderer · string contracts · socket overlap · route compiler · engine capabilities |
+| `npm run test:golden` | 8 | rendered output must pass `nginx -t` **on the real engine** |
+| `npm run test:engine` | 43 | nginx/OpenResty behaviours the design takes for granted |
+| `./spike/s1-s5/run.sh` | 8 | reload-free membership changes across HTTP/TCP/UDP |
+| `./spike/s7/run.sh` | 9 | proving a reload actually took effect |
+| `./spike/s8/run.sh` | 11 | rolling a certificate back to an earlier generation |
+| `./spike/s11/run.sh` | 14 | epoch fencing under contention |
+
+### What the spikes settled
+
+- **Membership can change without a reload** — on HTTP, TCP *and* UDP, with the first request
+  after the switch already going to the new peer, zero reloads, same master PID. This was the
+  bet the whole design rested on. The pure-nginx fallback is now just a fallback.
+- **`nginx -t` passing is not evidence that a reload took effect.** With a port held by another
+  process, the config validates, the master survives, and nginx quietly keeps serving the *old*
+  config. Detecting that reliably needs both a worker registry (success signal) and the error
+  log watermark (failure signal) — registry alone takes a full timeout to say "no".
+- **Binding certificates into the generation directory is what makes rollback real.** Running
+  the old layout side by side reproduces the bug: the config rolls back, the certificate does not.
+- **Reusing an epoch on rollback is an ABA hazard.** Splitting "which topology" from "which
+  activation" and never reusing an activation number is what makes a late in-flight RPC from a
+  deposed leader harmless.
 
 ---
 
@@ -69,9 +94,9 @@ not a moat. The bets that need execution quality instead:
 - **Real TCP/UDP load balancing** — upstream pools, balancing algorithms, health probes that
   are configured independently of the data protocol, and observable connection draining.
   Not just port forwarding.
-- **SNI-based TLS pass-through** on layer 4 (via `ssl_preread`), with separate, required
-  fallbacks for no-SNI and unmatched SNI — a client that sends no SNI must never land on an
-  arbitrary backend by default.
+- **SNI-based TLS pass-through** on layer 4 (via `ssl_preread`). A missing or unparseable SNI
+  is rejected — not configurable — so a client that sends none can never land on an arbitrary
+  backend. Only *unmatched* SNI has a configurable fallback.
 - **Inbound and backend ports are independent.** `:999 → A:11` and `:888 → B:11` are just two
   listeners pointing at two pools.
 - **GUI, API, and CLI are equals.** The REST API is the only entry point; the web UI and `bary`
@@ -141,11 +166,16 @@ provisioned into the image. See [§9 of the design doc](./DESIGN.md).
 
 TypeScript on Node.js · PostgreSQL · SvelteKit for the web UI · nginx / OpenResty as the data plane.
 
+Pinned engine for the test suites: `openresty/openresty:alpine` (OpenResty 1.31.1.1). Override
+with `BARY_ENGINE_IMAGE=… npm run test:engine` to check a candidate image — the suite reports
+which capabilities it has rather than assuming a fixed module list, because no public image
+ships both `stream_realip` and `ngx_stream_lua`.
+
 ## Roadmap
 
 | | | |
 |---|---|---|
-| **v0.0** | Architecture spike, S1–S15 — each with a pass threshold and a decision on failure | ← **gate: no schema is frozen before this passes** |
+| **v0.0** | Architecture spike, S1–S18 — each with a pass threshold and a decision on failure | ← **in progress: S1 · S7 · S8 · S11 pass; S12 is the last freeze blocker** |
 | **v0.1** | Typed model, `topology_epoch`, sealed changesets, apply state machine + crash table, DP agent, config AST renderer, minimal auth/audit | |
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap validator, route compiler | ← *proof of concept ends here* |
 | **v0.3** | Membership plane — dual http/stream zones, epoch fencing, health prober, drain observation | |

@@ -24,25 +24,49 @@
 ## 실행
 
 ```bash
-npm test                # 단위 — 렌더러 · 문자열 · 소켓 · 라우트 컴파일러
-npm run test:golden     # 렌더 산출물을 실제 엔진 nginx -t 로 검증 (도커 필요)
-npm run test:engine     # 엔진 사실 검증 (도커 필요)
-npm run typecheck
+./scripts/verify.sh           # 전부. 지금 어디까지 확인됐는지 한 번에 본다
+./scripts/verify.sh --quick   # 도커 없이 (단위 + 타입)
+```
+
+개별로:
+
+```bash
+npm test                # 단위 — 렌더러 · 문자열 · 소켓 · 라우트 컴파일러 · capability
+npm run test:golden     # 렌더 산출물을 실제 엔진 nginx -t 로 검증
+npm run test:engine     # 엔진 사실 검증
+./spike/s1-s5/run.sh    # S1 멤버십 평면 · S5 이중 zone
+./spike/s7/run.sh       # S7 활성화 판정
+./spike/s8/run.sh       # S8 인증서 세대 롤백
+./spike/s11/run.sh      # S11 activation_epoch 경합
 
 BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 ```
 
-### 현재 상태
+> 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
+> 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
+
+### 현재 상태 — 209개 검증, 전부 통과
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS / 0 FAIL** — §2 참조 |
-| 스파이크 S11 | `./spike/s11/run.sh` | **14 PASS / 0 FAIL** — §2 참조 |
-| 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS / 0 FAIL** — §2 참조 |
-| 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS / 0 FAIL** — §2 참조 |
-| 엔진 사실 (E) | `npm run test:engine` | **43 PASS / 0 FAIL / 1 SKIP** |
-| 단위 (M7·X1, M6, §7.5, R, capability) | `npm test` | **114 PASS** |
-| 골든 (R17·R18) | `npm run test:golden` | **8 PASS** — 실제 nginx -t |
+| 단위 | `npm test` | **116 PASS** |
+| 골든 (실제 `nginx -t`) | `npm run test:golden` | **8 PASS** |
+| 엔진 사실 (E) | `npm run test:engine` | **43 PASS / 1 SKIP** |
+| 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
+| 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS** |
+| 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS** |
+| 스파이크 S11 | `./spike/s11/run.sh` | **14 PASS** |
+
+### 착수 게이트 현황 (§2)
+
+| | 항목 | 상태 |
+|---|---|---|
+| ✅ | S1 멤버십 평면 · S7 활성화 판정 · S8 인증서 롤백 · S11 epoch 경합 | 통과 |
+| ~ | S5 이중 zone·워커 수렴 통과 / **평면 부분 전환 미검증** | 부분 |
+| ~ | S11 P1·P7·P8·P15 통과 / **P2·P3·P4·P5·P6 미검증** (프로토콜 로직) | 부분 |
+| ❌ | **S12 크래시 저널** | **v0.1 스키마 freeze 의 마지막 block** |
+| ❌ | S13 GC ledger | 미착수 |
+| ❌ | S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18 | 미착수 |
 
 ---
 
