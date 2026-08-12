@@ -10,27 +10,13 @@
  * 생기고, 안 하면 미전송이 멈춘다. → **exactly-once 를 버리고 bounded duplicate 를
  * 허용한다.** 대신 관측을 먼저 하고, 재전송에는 상한을 둔다.
  */
-import type { DurableStore, AgentState } from './agent.js';
+import type { AgentState, ApplyPhase, DpAgent, DurableStore, JournalEntry, OperationTuple } from './agent.js';
 
-export type Phase =
-  | 'publish_intent'
-  | 'published'
-  | 'reload_intent'
-  | 'reload_observed'
-  | 'activated'
-  | 'failed'
-  /** 저널이 비어 있다 — 이 오퍼레이션은 시작조차 못 했다. 복구할 것이 없다 (§6.2 #1). */
-  | 'no_operation';
+
+export type Phase = ApplyPhase;
 
 /** reload 재전송 상한. 넘으면 실패로 확정한다 (§6.2). */
 export const RELOAD_ATTEMPT_LIMIT = 2;
-
-export type JournalEntry = {
-  operationId: string;
-  targetGeneration: string;
-  phase: Phase;
-  reloadAttempts: number;
-};
 
 /** DP Agent 가 소유하는 외부 부작용. **전부 관측 가능해야 한다.** */
 export interface Effects {
@@ -71,15 +57,17 @@ const DEFAULT_POLL: PollPolicy = {
 };
 
 export class ApplyRunner {
-  private journal: JournalEntry | undefined;
   private readonly poll: PollPolicy;
 
+  /**
+   * **DpAgent 가 durable 상태를 소유한다.** 저널과 멤버십 좌표가 서로 다른 소유자를
+   * 가지면 같은 store 를 두고 덮어쓴다 — 5차 반례 ③④ 가 그것이었다.
+   */
   constructor(
-    private readonly store: DurableStore,
+    private readonly agent: DpAgent,
     private readonly effects: Effects,
     poll: Partial<PollPolicy> = {},
   ) {
-    this.journal = readJournal(this.store.load());
     this.poll = { ...DEFAULT_POLL, ...poll };
   }
 
@@ -96,8 +84,8 @@ export class ApplyRunner {
   }
   private history: Phase[] = [];
 
-  async run(op: { operationId: string; targetGeneration: string }): Promise<Phase> {
-    await this.write({ ...op, phase: 'publish_intent', reloadAttempts: 0 });
+  async run(op: OperationTuple, targetGeneration: string): Promise<Phase> {
+    await this.write({ op, targetGeneration, phase: 'publish_intent', reloadAttempts: 0 });
     return this.drive();
   }
 
@@ -105,7 +93,7 @@ export class ApplyRunner {
    * 재시작 후 이어받는다. 저널의 단계에서 시작하되, **애매한 지점은 관측으로 확정**한다.
    */
   async recover(): Promise<Phase> {
-    const j = this.journal;
+    const j = this.agent.readJournal();
     // §6.2 #1 — 첫 저널 쓰기 전에 죽었으면 부작용도 없다. "실패" 가 아니라 "없던 일" 이다.
     // 컨트롤 플레인이 같은 plan 으로 다시 시도하면 된다.
     if (j === undefined) return 'no_operation';
@@ -119,13 +107,14 @@ export class ApplyRunner {
     // 단계 수 × reload 상한보다 넉넉하되 유한하다.
     const HARD_LIMIT = 64;
     for (let guard = 0; ; guard += 1) {
+      const j = this.agent.readJournal();
+      if (j === undefined) return 'no_operation';
       if (guard > HARD_LIMIT) {
         throw new Error(
-          `apply 상태기계가 ${HARD_LIMIT} 회 안에 끝나지 않았다 (phase=${this.journal?.phase}). ` +
+          `apply 상태기계가 ${HARD_LIMIT} 회 안에 끝나지 않았다 (phase=${j.phase}). ` +
             `전이 규칙에 사이클이 있다.`,
         );
       }
-      const j = this.journal!;
       switch (j.phase) {
         case 'publish_intent': {
           // 기록은 있는데 게시했는지 모른다 → 관측한다. 이미 됐으면 다시 하지 않는다.
@@ -136,6 +125,13 @@ export class ApplyRunner {
           break;
         }
         case 'published': {
+          // §6.5-1 — 멤버십 슬롯은 **HUP 앞에** 올린다. 새 워커가 accept 를 시작한 뒤에
+          // 올리면 그 사이 옛 상태로 peer 를 고른다. 재요청 판정은 Agent 가 digest 로 한다.
+          await this.agent.stage(j.op, j.targetGeneration);
+          await this.write({ ...j, phase: 'membership_staged' });
+          break;
+        }
+        case 'membership_staged': {
           await this.write({ ...j, phase: 'reload_intent' });
           break;
         }
@@ -159,42 +155,29 @@ export class ApplyRunner {
         }
         case 'reload_observed': {
           const accepting = await this.effects.observeAccepting();
-          await this.write({
-            ...j,
-            phase: accepting === j.targetGeneration ? 'activated' : 'reload_intent',
-          });
+          if (accepting !== j.targetGeneration) {
+            await this.write({ ...j, phase: 'reload_intent' });
+            break;
+          }
+          // 세대가 활성화됐다. 이제 멤버십 좌표를 옮긴다 (§6.5-4).
+          await this.agent.commit(j.op);
+          await this.write({ ...j, phase: 'activated' });
           break;
         }
         case 'activated':
         case 'failed':
+        case 'no_operation':
           return j.phase;
       }
     }
   }
 
-  /** 저널 쓰기는 durable 하다. 여기가 §6.2 표의 "intent fsync" 지점이다. */
+  /** 저널 쓰기도 Agent 의 직렬 구간을 지난다 — §6.2 표의 "intent fsync" 지점이다. */
   private async write(entry: JournalEntry): Promise<void> {
-    const state = this.store.load() ?? emptyState();
-    await this.store.save({ ...state, journal: entry } as AgentState & { journal: JournalEntry });
-    this.journal = entry;
+    await this.agent.writeJournal(entry);
     if (this.history[this.history.length - 1] !== entry.phase) this.history.push(entry.phase);
   }
 }
-
-function readJournal(state: AgentState | undefined): JournalEntry | undefined {
-  return (state as (AgentState & { journal?: JournalEntry }) | undefined)?.journal;
-}
-
-const emptyState = (): AgentState => ({
-  maxLeaderToken: '0',
-  planes: {
-    http: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
-    stream: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
-  },
-  staged: { http: {}, stream: {} },
-  completed: {},
-  aborted: {},
-});
 
 // ── 테스트용 크래시 주입 ────────────────────────────────────────────────
 

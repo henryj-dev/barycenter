@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { MemoryStore } from '../../src/dp/agent.js';
+import { DpAgent, MemoryStore, type OperationTuple } from '../../src/dp/agent.js';
 import { ApplyRunner, CrashInjected, type Effects, type Phase } from '../../src/dp/apply.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
@@ -97,6 +97,17 @@ const effects = (): Effects => ({
   async observeAccepting() {
     return probeAccepting();
   },
+});
+
+/** apply 가 옮기는 멤버십 좌표. §3.6 튜플이 저널을 타고 흐른다. */
+const OP = (n: string): OperationTuple => ({
+  leaderToken: '10',
+  operationId: n,
+  transitionId: `${n}-t`,
+  plane: 'http',
+  expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+  target: { activationEpoch: '1', membershipRevision: '1' },
+  payloadDigest: `sha256:${n}`,
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -176,10 +187,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
 
   it('저널이 실제 nginx 를 gen-2 로 옮긴다', async () => {
     const fx = effects();
-    const phase = await new ApplyRunner(new MemoryStore(), fx).run({
-      operationId: 'e2e-1',
-      targetGeneration: 'gen-2',
-    });
+    const phase = await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-1'), 'gen-2');
     expect(phase).toBe<Phase>('activated');
     expect(await waitAccepting('gen-2')).toBe('gen-2');
   });
@@ -198,7 +206,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
       },
     };
     await expect(
-      new ApplyRunner(store, crashing).run({ operationId: 'e2e-2', targetGeneration: 'gen-2' }),
+      new ApplyRunner(new DpAgent(store), crashing).run(OP('e2e-2'), 'gen-2'),
     ).rejects.toBeInstanceOf(CrashInjected);
 
     // 이 시점: 링크는 gen-2, 실행 중인 nginx 는 아직 gen-1
@@ -206,7 +214,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
     expect(await probeAccepting()).toBe('gen-1');
 
     // 재시작한 Agent 가 이어받는다.
-    const phase = await new ApplyRunner(store, effects()).recover();
+    const phase = await new ApplyRunner(new DpAgent(store), effects()).recover();
     expect(phase).toBe<Phase>('activated');
     expect(await waitAccepting('gen-2')).toBe('gen-2');
   });
@@ -224,12 +232,12 @@ describe('S12 end-to-end — 실제 nginx', () => {
         await fx.signalReload();
       },
     };
-    await new ApplyRunner(store, counted).run({ operationId: 'e2e-3', targetGeneration: 'gen-2' });
+    await new ApplyRunner(new DpAgent(store), counted).run(OP('e2e-3'), 'gen-2');
     expect(await waitAccepting('gen-2')).toBe('gen-2');
     expect(reloads).toBe(1);
 
-    await new ApplyRunner(store, counted).recover();
-    await new ApplyRunner(store, counted).recover();
+    await new ApplyRunner(new DpAgent(store), counted).recover();
+    await new ApplyRunner(new DpAgent(store), counted).recover();
     expect(reloads, '이미 활성화된 세대에 reload 를 다시 보냈다').toBe(1);
     expect(await probeAccepting()).toBe('gen-2');
   });
@@ -237,15 +245,11 @@ describe('S12 end-to-end — 실제 nginx', () => {
   // §3.3 — 롤백은 옛 세대를 되돌리는 게 아니라 **새 활성화 사건**이다.
   it('롤백도 새 오퍼레이션으로 수렴한다', async () => {
     const fx = effects();
-    await new ApplyRunner(new MemoryStore(), fx).run({
-      operationId: 'e2e-fwd', targetGeneration: 'gen-2',
-    });
+    await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-fwd'), 'gen-2');
     expect(await waitAccepting('gen-2')).toBe('gen-2');
 
     // gen-3 는 gen-1 과 같은 내용이라고 가정한 clone 이다 (§3.3 — 옛 topology, 새 세대).
-    const back = await new ApplyRunner(new MemoryStore(), fx).run({
-      operationId: 'e2e-back', targetGeneration: 'gen-3',
-    });
+    const back = await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-back'), 'gen-3');
     expect(back).toBe<Phase>('activated');
     expect(await waitAccepting('gen-3')).toBe('gen-3');
   });
@@ -253,7 +257,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
   it('없는 세대는 게시하지 않는다 — 실행 중인 nginx 를 건드리지 않는다', async () => {
     const store = new MemoryStore();
     await expect(
-      new ApplyRunner(store, effects()).run({ operationId: 'e2e-4', targetGeneration: 'gen-없음' }),
+      new ApplyRunner(new DpAgent(store), effects()).run(OP('e2e-4'), 'gen-없음'),
     ).rejects.toThrow();
     expect(await probeAccepting()).toBe('gen-1');
     expect(await effects().observePublished()).toBe('gen-1');

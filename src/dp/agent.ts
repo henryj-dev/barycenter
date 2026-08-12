@@ -72,7 +72,32 @@ export type AgentState = {
   completed: Record<string, { payloadDigest: string; ack: PlaneAck }>;
   /** abort 된 전환. 지연된 stage/commit 이 되살리지 못하게 막는다. */
   aborted: Record<string, true>;
+  /**
+   * 진행 중인 apply 오퍼레이션의 저널 (§6.2).
+   *
+   * **여기 있어야 한다.** 저널과 멤버십 좌표가 서로 다른 소유자를 가지면 같은 store 를
+   * 두고 덮어쓴다 — 5차 반례 ④ 가 그것이었다. 하나의 직렬 구간이 둘 다 소유한다.
+   */
+  journal?: JournalEntry;
 };
+
+/** §6.2 의 apply 단계. 튜플을 통째로 들고 있어야 복구가 같은 operation 을 재개한다. */
+export type JournalEntry = {
+  op: OperationTuple;
+  targetGeneration: string;
+  phase: ApplyPhase;
+  reloadAttempts: number;
+};
+
+export type ApplyPhase =
+  | 'publish_intent'
+  | 'published'
+  | 'membership_staged'
+  | 'reload_intent'
+  | 'reload_observed'
+  | 'activated'
+  | 'failed'
+  | 'no_operation';
 
 export interface DurableStore {
   load(): AgentState | undefined;
@@ -122,6 +147,28 @@ export class DpAgent {
   /** 아직 활성화되지 않은 슬롯의 digest. 없으면 undefined. */
   stagedDigest(plane: Plane, epoch: string): string | undefined {
     return (this.store.load() ?? initial()).staged[plane][epoch];
+  }
+
+  /** 진행 중인 apply 저널. 없으면 undefined. */
+  readJournal(): JournalEntry | undefined {
+    return (this.store.load() ?? initial()).journal;
+  }
+
+  /**
+   * 저널 쓰기도 **같은 직렬 구간**을 지난다. 멤버십 좌표와 저널이 한 소유자 아래 있어야
+   * 서로 덮어쓰지 않는다 (5차 반례 ③④).
+   */
+  writeJournal(entry: JournalEntry): Promise<void> {
+    return this.serial((s) => {
+      s.journal = entry;
+    });
+  }
+
+  /** 오퍼레이션이 끝나면 저널을 비운다. */
+  clearJournal(): Promise<void> {
+    return this.serial((s) => {
+      delete s.journal;
+    });
   }
 
   /**

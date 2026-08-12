@@ -46,11 +46,11 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 327개 통과, 게이트는 별개
+### 현재 상태 — 스위트 333개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **208 PASS** |
+| 단위 | `npm test` | **214 PASS** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | **e2e (실제 nginx)** | `npm run test:e2e` | **6 PASS** — 저널이 실제 nginx 를 수렴시킨다 |
 
@@ -482,6 +482,11 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | A4.3 | 마커를 shared dict 로 구현 | **실패해야 정상** — 옛 워커도 새 값을 읽는다. 세대별 렌더 리터럴이어야 함 |
 | A4.4 | HUP 후 error log 에 `emerg` | 워터마크 이후만 수집. 이전 것은 무시 |
 | A4.5 | 합성 프로브: TCP connect / TLS handshake(SNI) / UDP | 리스너별 전부 통과해야 `verified` |
+
+> **저널과 멤버십은 한 오퍼레이션이다.** `DpAgent` 가 durable 상태를 소유하고
+> operation tuple 이 저널을 타고 흐른다. 둘이 같은 store 를 각자 쓰던 시절에는 서로를
+> 덮어썼다(5차 반례 ③④). 멤버십 staging 은 **HUP 앞에**(§6.5-1), 좌표 이동은
+> **활성화 확인 뒤에**(§6.5-4) 일어나며 둘 다 뮤테이션으로 변별력을 확인했다.
 
 ### A5 크래시 주입 매트릭스 (S12) — **부분 RUNNABLE** `tests/unit/apply-journal.test.ts`
 
