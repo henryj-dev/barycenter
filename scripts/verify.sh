@@ -40,6 +40,7 @@ echo "════════════════════════�
 
 run "typecheck            " npx tsc --noEmit
 run "unit                 " npm test --silent
+run "conformance (반례)   " npm run test:conformance --silent
 
 if [ $QUICK -eq 1 ]; then
   echo "  (--quick: 도커가 필요한 묶음은 실행하지 않았다)"
@@ -98,8 +99,9 @@ cat <<'GATES'
 
  ─── 범위를 줄여도 남는 v0.1 blocker (§9.1.1) ─────────────────────────
 
- 1. 소유권과 원자성    active-operation 예약 없음. 낮은 리더 토큰이 거부되기
-                       전에 게시한다(§3.5 위반). 같은 좌표를 둘이 잡는다.
+ 1. 소유권과 원자성    ✅ 해소. (plane, target_activation_epoch) 단일 CAS 예약 +
+                       durable 버전 CAS. 반례 ①②③④⑥ 이 conformance 로 고정됐고
+                       뮤턴트 7종이 전부 잡힌다.
  2. ApplyOperation     평면별 진행 · partial_transition · ActivationEvidence ·
                        failure/rollback 종단 상태가 durable 스키마에 없다.
  3. 변이 envelope      §9.2 config 경로에 leader token · operation tuple 없음.
@@ -112,7 +114,7 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 미해소 blocker 4건 → non-zero 로 끝낸다."
+  echo " --freeze-gate: 미해소 blocker 3건 → non-zero 로 끝낸다."
   exit 2
 fi
 

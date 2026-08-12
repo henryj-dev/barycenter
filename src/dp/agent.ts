@@ -47,31 +47,73 @@ export type PlaneAck = PlaneState & {
 
 export type RejectionKind =
   | 'stale_leader'
-  | 'aborted'
+  /** 이 전환은 이미 끝났다. `terminalState` 가 어떻게 끝났는지 말한다. */
+  | 'terminal'
+  /** (plane, target_activation_epoch) 슬롯을 남이 갖고 있다. */
+  | 'slot_taken'
+  /** 예약 없이 하려 했다. 예약은 부작용보다 **먼저** 온다 (§3.5). */
+  | 'not_reserved'
+  /** 같은 키인데 튜플이 다르다. 캐시된 ACK 를 주면 안 되는 경우다. */
+  | 'tuple_mismatch'
   | 'stale_state'
   | 'coordinate_mismatch'
   | 'digest_mismatch'
   | 'epoch_not_monotonic'
   | 'not_staged';
 
-export class DpRejection extends Error {
-  constructor(readonly kind: RejectionKind, message: string) {
+/** 전환이 끝나는 방식. **셋은 상호 배타적**이다 — 하나에 들어가면 다른 곳으로 못 간다. */
+export type TerminalKind = 'activated' | 'failed' | 'aborted';
+
+/** durable 상태가 다른 writer 에게 밀렸다. 다시 읽고 다시 판정해야 한다. */
+export class StoreConflict extends Error {
+  constructor(message: string) {
     super(message);
+    this.name = 'StoreConflict';
+  }
+}
+
+export class DpRejection extends Error {
+  readonly terminalState?: TerminalKind;
+  constructor(readonly kind: RejectionKind, message: string, terminalState?: TerminalKind) {
+    super(message);
+    if (terminalState !== undefined) this.terminalState = terminalState;
     this.name = 'DpRejection';
   }
 }
 
 // ── durable 상태 ─────────────────────────────────────────────────────────
 
+/**
+ * `(plane, target_activation_epoch)` 슬롯의 **주인**. §9.1.1 blocker 1.
+ *
+ * 5차 검수 전까지 이 자리에는 digest 문자열 하나뿐이었다. 그래서 "이 좌표는 누구
+ * 것인가" 를 아무도 몰랐고, 서로 다른 operation 이 같은 좌표를 잡고 서로의 슬롯을
+ * 덮고 지웠다. 튜플 전체를 실어야 주인이 정해진다.
+ */
+export type Reservation = {
+  /** 정본 튜플. 이 슬롯의 주인이다. */
+  op: OperationTuple;
+  /** stage 된 payload digest. 아직 올리지 않았으면 undefined. */
+  stagedDigest?: string;
+};
+
 export type AgentState = {
+  /**
+   * durable CAS 용 단조 버전. `save` 는 `version === 직전 + 1` 일 때만 성공한다.
+   *
+   * **인스턴스 안의 직렬화만으로는 부족하다.** 같은 store 를 보는 두 Agent 는 서로의
+   * 큐를 모르므로 둘 다 같은 상태를 읽고 각자 쓴다. 5차 검수가 그렇게 리더 토큰을
+   * 12 에서 11 로 되감았다.
+   */
+  version: number;
   maxLeaderToken: string;
   planes: Record<Plane, PlaneState>;
-  /** epoch → payload digest. 아직 활성화되지 않은 슬롯 (§6.5 staging). */
-  staged: Record<Plane, Record<string, string>>;
-  /** `operationId:transitionId:plane:step` → 그때 돌려준 ACK 와 digest. 재요청 판정용. */
-  completed: Record<string, { payloadDigest: string; ack: PlaneAck }>;
-  /** abort 된 전환. 지연된 stage/commit 이 되살리지 못하게 막는다. */
-  aborted: Record<string, true>;
+  /** epoch → 예약. 아직 활성화되지 않은 슬롯 (§6.5 staging). */
+  reservations: Record<Plane, Record<string, Reservation>>;
+  /** `operationId:transitionId:plane:step` → 그때 돌려준 ACK 와 정본 튜플. 재요청 판정용. */
+  completed: Record<string, { tuple: string; payloadDigest: string; ack: PlaneAck }>;
+  /** 끝난 전환. 지연된 RPC 가 되살리지 못하게 막는다. */
+  terminal: Record<string, TerminalKind>;
   /**
    * 진행 중인 apply 오퍼레이션의 저널 (§6.2).
    *
@@ -101,7 +143,12 @@ export type ApplyPhase =
 
 export interface DurableStore {
   load(): AgentState | undefined;
-  /** **fsync 까지 끝나고 나서** resolve 해야 한다. */
+  /**
+   * **fsync 까지 끝나고 나서** resolve 해야 한다.
+   *
+   * `state.version` 이 저장된 것의 바로 다음이 아니면 `StoreConflict` 로 거부한다.
+   * 이게 없으면 프로세스·인스턴스 간 lost update 를 막을 수단이 없다.
+   */
   save(state: AgentState): Promise<void>;
 }
 
@@ -113,7 +160,13 @@ export class MemoryStore implements DurableStore {
     return this.state === undefined ? undefined : structuredClone(this.state);
   }
   async save(state: AgentState): Promise<void> {
+    // 지연은 **검사 앞**에 둔다. 그래야 둘 다 load 를 통과한 뒤 CAS 에서 갈린다 —
+    // 그게 실제 fsync 가 만드는 창이다.
     if (this.delayMs > 0) await new Promise((r) => setTimeout(r, this.delayMs));
+    const expected = (this.state?.version ?? 0) + 1;
+    if (state.version !== expected) {
+      throw new StoreConflict(`버전 충돌: ${expected} 를 기대했는데 ${state.version} 이 왔다`);
+    }
     this.state = structuredClone(state);
   }
 }
@@ -121,11 +174,12 @@ export class MemoryStore implements DurableStore {
 const ZERO: PlaneState = { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' };
 
 const initial = (): AgentState => ({
+  version: 0,
   maxLeaderToken: '0',
   planes: { http: { ...ZERO }, stream: { ...ZERO } },
-  staged: { http: {}, stream: {} },
+  reservations: { http: {}, stream: {} },
   completed: {},
-  aborted: {},
+  terminal: {},
 });
 
 const sameCoordinate = (a: Coordinate, b: Coordinate): boolean =>
@@ -146,7 +200,17 @@ export class DpAgent {
 
   /** 아직 활성화되지 않은 슬롯의 digest. 없으면 undefined. */
   stagedDigest(plane: Plane, epoch: string): string | undefined {
-    return (this.store.load() ?? initial()).staged[plane][epoch];
+    return (this.store.load() ?? initial()).reservations[plane]?.[epoch]?.stagedDigest;
+  }
+
+  /** 슬롯의 주인. 없으면 undefined. */
+  reservationOwner(plane: Plane, epoch: string): OperationTuple | undefined {
+    return (this.store.load() ?? initial()).reservations[plane]?.[epoch]?.op;
+  }
+
+  /** 전환이 어떻게 끝났는지. 아직이면 undefined. */
+  terminalOf(op: OperationTuple): TerminalKind | undefined {
+    return (this.store.load() ?? initial()).terminal[transitionKey(op)];
   }
 
   /** 진행 중인 apply 저널. 없으면 undefined. */
@@ -160,6 +224,17 @@ export class DpAgent {
    */
   writeJournal(entry: JournalEntry): Promise<void> {
     return this.serial((s) => {
+      // **저널도 예약이 있어야 쓴다.** 없으면 남의 오퍼레이션이 진행 중인 저널을
+      // 자기 것으로 덮는다 — 5차 반례 ②. 종단 단계만 예외인데, 그때는 이미 예약을
+      // 반납한 뒤라서 주인이 없는 게 정상이다.
+      const terminalPhase = entry.phase === 'activated' || entry.phase === 'failed';
+      if (!terminalPhase && !ownsSlot(s, entry.op)) {
+        throw new DpRejection(
+          'not_reserved',
+          `${transitionKey(entry.op)} 는 (${entry.op.plane}, ${entry.op.target.activationEpoch}) ` +
+            `슬롯을 예약하지 않았다`,
+        );
+      }
       s.journal = entry;
     });
   }
@@ -181,13 +256,24 @@ export class DpAgent {
       //   · 같은 store 를 보는 다른 인스턴스가 쓴 것을 덮어써 토큰이 되감기고
       //   · 다른 컴포넌트(예: ApplyRunner 저널)가 같은 store 에 쓴 것을 날린다.
       // 5차 검수가 지목한 반례 두 개가 전부 이 하나에서 나왔다.
-      const loaded = this.store.load();
-      const next = structuredClone(loaded ?? initial());
-      // 알려지지 않은 필드(다른 컴포넌트의 것)를 보존한 채로 우리 몫만 바꾼다.
-      const result = mutate(next);
-      // §3.5 — 토큰과 좌표는 side effect 를 인정하기 **전에** durable 해야 한다.
-      await this.store.save(next);
-      return result;
+      //
+      // 그런데 다시 읽는 것만으로는 부족하다. 읽고 나서 쓰기까지 사이에 남이 쓸 수
+      // 있기 때문이다. 그 창은 **CAS 로만** 닫힌다 — 밀리면 다시 읽고 **다시 판정**한다.
+      // 낡은 상태로 내린 판정을 재사용하면 안 되므로 mutate 를 통째로 다시 돌린다.
+      for (let attempt = 0; ; attempt += 1) {
+        const loaded = this.store.load();
+        const next = structuredClone(loaded ?? initial());
+        next.version = (loaded?.version ?? 0) + 1;
+        // 알려지지 않은 필드(다른 컴포넌트의 것)를 보존한 채로 우리 몫만 바꾼다.
+        const result = mutate(next);
+        try {
+          // §3.5 — 토큰과 좌표는 side effect 를 인정하기 **전에** durable 해야 한다.
+          await this.store.save(next);
+          return result;
+        } catch (e) {
+          if (!(e instanceof StoreConflict) || attempt >= CAS_RETRY_LIMIT) throw e;
+        }
+      }
     });
     // 실패해도 큐가 끊기면 안 된다.
     this.tail = run.catch(() => undefined);
@@ -203,27 +289,34 @@ export class DpAgent {
     });
   }
 
+  /**
+   * §9.1.1 blocker 1 — **부작용보다 먼저** 좌표를 예약한다.
+   *
+   * `(plane, target_activation_epoch)` 는 한 오퍼레이션만 갖는다. 여기서 리더 토큰과
+   * 좌표 CAS 를 통과해야 게시도 저널 기록도 시작할 수 있다. 5차 검수는 이게 없어서
+   * `stale_leader` 로 거부된 오퍼레이션이 이미 `current` 심볼릭 링크를 옮긴 것을
+   * 재현했다 — §3.5 는 "토큰을 side effect **전에** fsync 하고 ACK 한다" 이다.
+   */
+  reserve(op: OperationTuple): Promise<PlaneAck> {
+    return this.serial((s) => {
+      const replay = admit(s, op, 'reserve');
+      if (replay !== undefined) return replay;
+      acquire(s, op);
+      return record(s, op, 'reserve', { ...op.target, payloadDigest: op.payloadDigest });
+    });
+  }
+
+  /**
+   * 슬롯에 payload 를 올린다. 예약이 없으면 여기서 잡는다 — 예약은 **먼저 잡을 수도**
+   * 있고(`reserve`), 첫 stage 가 잡을 수도 있다. 어느 쪽이든 주인은 하나다.
+   */
   stage(op: OperationTuple, _payload: unknown): Promise<PlaneAck> {
     return this.serial((s) => {
       const replay = admit(s, op, 'stage');
       if (replay !== undefined) return replay;
 
-      const current = s.planes[op.plane];
-      if (!sameCoordinate(current, op.expectedCurrent)) {
-        throw new DpRejection(
-          'coordinate_mismatch',
-          `${op.plane} 는 (${current.activationEpoch},${current.membershipRevision}) 인데 ` +
-            `(${op.expectedCurrent.activationEpoch},${op.expectedCurrent.membershipRevision}) 를 기대했다`,
-        );
-      }
-      if (BigInt(op.target.activationEpoch) <= BigInt(current.activationEpoch)) {
-        throw new DpRejection(
-          'epoch_not_monotonic',
-          `activation_epoch 는 앞으로만 간다: ${current.activationEpoch} → ${op.target.activationEpoch}`,
-        );
-      }
-
-      s.staged[op.plane][op.target.activationEpoch] = op.payloadDigest;
+      const slot = acquire(s, op);
+      slot.stagedDigest = op.payloadDigest;
       return record(s, op, 'stage', { ...op.target, payloadDigest: op.payloadDigest });
     });
   }
@@ -238,35 +331,51 @@ export class DpAgent {
       if (sameCoordinate(current, op.target) && current.payloadDigest === op.payloadDigest) {
         return record(s, op, 'commit', current);
       }
-      if (!sameCoordinate(current, op.expectedCurrent)) {
-        throw new DpRejection('coordinate_mismatch', `${op.plane} 좌표가 기대와 다르다`);
-      }
-      const staged = s.staged[op.plane][op.target.activationEpoch];
-      if (staged === undefined) {
-        // abort 된 epoch 나, 애초에 staging 되지 않은 epoch 의 지연 RPC 가 여기로 온다.
+      const slot = s.reservations[op.plane][op.target.activationEpoch];
+      if (slot === undefined) {
         throw new DpRejection(
           'not_staged',
           `epoch ${op.target.activationEpoch} 는 staging 되지 않았다`,
         );
       }
-      if (staged !== op.payloadDigest) {
+      if (canonical(slot.op) !== canonical(op)) {
+        throw new DpRejection(
+          'slot_taken',
+          `(${op.plane}, ${op.target.activationEpoch}) 는 ${transitionKey(slot.op)} 의 것이다`,
+        );
+      }
+      if (!sameCoordinate(current, op.expectedCurrent)) {
+        throw new DpRejection('coordinate_mismatch', `${op.plane} 좌표가 기대와 다르다`);
+      }
+      if (slot.stagedDigest === undefined) {
+        throw new DpRejection(
+          'not_staged',
+          `epoch ${op.target.activationEpoch} 는 예약만 됐고 payload 가 없다`,
+        );
+      }
+      if (slot.stagedDigest !== op.payloadDigest) {
         throw new DpRejection('digest_mismatch', `staged digest 가 다르다`);
       }
 
       s.planes[op.plane] = { ...op.target, payloadDigest: op.payloadDigest };
-      delete s.staged[op.plane][op.target.activationEpoch];
+      finish(s, op, 'activated');
       return record(s, op, 'commit', s.planes[op.plane]);
     });
   }
 
   abort(op: OperationTuple): Promise<void> {
     return this.serial((s) => {
-      assertLeader(s, op.leaderToken);
-      s.maxLeaderToken = maxToken(s.maxLeaderToken, op.leaderToken);
-      // §6.5 — abort 는 staged 슬롯을 버릴 뿐 이벤트를 옮기지 않는다.
-      delete s.staged[op.plane][op.target.activationEpoch];
-      // 이 전환은 여기서 끝난다. 지연 RPC 가 되살리지 못하게 표시한다.
-      s.aborted[transitionKey(op)] = true;
+      finalize(s, op, 'aborted');
+    });
+  }
+
+  /**
+   * 전환을 실패로 끝낸다. **슬롯을 반납한다** — 안 그러면 실패한 좌표가 영구히 잠기고,
+   * 지연 도착한 commit 이 뒤늦게 좌표를 옮긴다 (5차 반례 ⑥).
+   */
+  fail(op: OperationTuple): Promise<void> {
+    return this.serial((s) => {
+      finalize(s, op, 'failed');
     });
   }
 
@@ -298,7 +407,97 @@ export class DpAgent {
 
 // ── 임계구역 안에서만 쓰는 헬퍼 (전부 동기) ──────────────────────────────
 
+/** CAS 가 밀렸을 때 다시 읽고 다시 판정하는 횟수. 유한해야 매달리지 않는다. */
+const CAS_RETRY_LIMIT = 8;
+
 const maxToken = (a: string, b: string): string => (BigInt(b) > BigInt(a) ? b : a);
+
+/**
+ * 튜플의 **정본 표현**. 키가 같아도 이게 다르면 다른 요청이다.
+ *
+ * 5차 검수가 `operationId`·`transitionId`·`payloadDigest` 는 같고 좌표만 바꾼 요청으로
+ * 캐시된 ACK 를 받아냈다. 멱등 판정은 키가 아니라 **튜플 전체**로 해야 한다.
+ */
+const canonical = (op: OperationTuple): string =>
+  [
+    op.leaderToken,
+    op.operationId,
+    op.transitionId,
+    op.plane,
+    op.expectedCurrent.activationEpoch,
+    op.expectedCurrent.membershipRevision,
+    op.target.activationEpoch,
+    op.target.membershipRevision,
+    op.payloadDigest,
+  ].join('|');
+
+/** 이 오퍼레이션이 그 슬롯의 주인인가. */
+function ownsSlot(s: AgentState, op: OperationTuple): boolean {
+  const slot = s.reservations[op.plane][op.target.activationEpoch];
+  return slot !== undefined && canonical(slot.op) === canonical(op);
+}
+
+/**
+ * 슬롯을 잡는다. 비어 있으면 좌표 CAS 를 통과해야 하고, 차 있으면 **주인이어야** 한다.
+ * 이 함수가 "한 좌표에 한 오퍼레이션" 을 강제하는 유일한 지점이다.
+ */
+function acquire(s: AgentState, op: OperationTuple): Reservation {
+  const existing = s.reservations[op.plane][op.target.activationEpoch];
+  if (existing !== undefined) {
+    if (canonical(existing.op) !== canonical(op)) {
+      throw new DpRejection(
+        'slot_taken',
+        `(${op.plane}, ${op.target.activationEpoch}) 는 이미 ${transitionKey(existing.op)} 의 것이다`,
+      );
+    }
+    return existing;
+  }
+
+  const current = s.planes[op.plane];
+  if (!sameCoordinate(current, op.expectedCurrent)) {
+    throw new DpRejection(
+      'coordinate_mismatch',
+      `${op.plane} 는 (${current.activationEpoch},${current.membershipRevision}) 인데 ` +
+        `(${op.expectedCurrent.activationEpoch},${op.expectedCurrent.membershipRevision}) 를 기대했다`,
+    );
+  }
+  if (BigInt(op.target.activationEpoch) <= BigInt(current.activationEpoch)) {
+    throw new DpRejection(
+      'epoch_not_monotonic',
+      `activation_epoch 는 앞으로만 간다: ${current.activationEpoch} → ${op.target.activationEpoch}`,
+    );
+  }
+
+  const slot: Reservation = { op };
+  s.reservations[op.plane][op.target.activationEpoch] = slot;
+  return slot;
+}
+
+/** 전환을 끝내고 슬롯을 반납한다. **내 슬롯만** 지운다. */
+function finish(s: AgentState, op: OperationTuple, how: TerminalKind): void {
+  if (ownsSlot(s, op)) {
+    delete s.reservations[op.plane][op.target.activationEpoch];
+  }
+  s.terminal[transitionKey(op)] = how;
+}
+
+/** 리더 검사까지 포함한 종단 처리. `abort` / `fail` 이 쓴다. */
+function finalize(s: AgentState, op: OperationTuple, how: TerminalKind): void {
+  assertLeader(s, op.leaderToken);
+  s.maxLeaderToken = maxToken(s.maxLeaderToken, op.leaderToken);
+
+  const already = s.terminal[transitionKey(op)];
+  if (already !== undefined) {
+    // 같은 방식으로 다시 끝내는 것은 멱등이다. 다른 방식이면 종단 상태 오염이다.
+    if (already === how) return;
+    throw new DpRejection(
+      'terminal',
+      `${transitionKey(op)} 는 이미 ${already} 로 끝났다 — ${how} 로 바꿀 수 없다`,
+      already,
+    );
+  }
+  finish(s, op, how);
+}
 
 function assertLeader(s: AgentState, token: string): void {
   if (BigInt(token) < BigInt(s.maxLeaderToken)) {
@@ -313,7 +512,7 @@ function assertLeader(s: AgentState, token: string): void {
  * 멱등 키. 튜플은 **전환**을 식별하고, stage·commit·health 는 그 전환의 서로 다른 단계다.
  * 단계를 키에서 빼면 commit 이 stage 의 재요청으로 취급된다.
  */
-type Step = 'stage' | 'commit' | 'health';
+type Step = 'reserve' | 'stage' | 'commit' | 'health';
 /** **plane 이 들어가야 한다.** 빠지면 한 평면의 ACK 를 다른 평면이 훔친다 (5차 반례). */
 const key = (op: OperationTuple, step: Step): string =>
   `${op.operationId}:${op.transitionId}:${op.plane}:${step}`;
@@ -330,21 +529,45 @@ function admit(s: AgentState, op: OperationTuple, step: Step): PlaneAck | undefi
   assertLeader(s, op.leaderToken);
   s.maxLeaderToken = maxToken(s.maxLeaderToken, op.leaderToken);
 
-  // abort 는 전환을 **끝낸다.** 지연 도착한 stage/commit 이 캐시로 성공을 돌려주거나
-  // 슬롯을 되살리면 안 된다 (5차 반례).
-  if (s.aborted[transitionKey(op)] === true) {
-    throw new DpRejection('aborted', `${transitionKey(op)} 는 이미 abort 됐다`);
+  // **종단 검사가 먼저다 — 단, 어떻게 끝났는지를 본다.**
+  //
+  //   · aborted / failed  → 전환은 **일어나지 않았다.** 지연 도착한 RPC 에 캐시된 ACK 를
+  //                         돌려주면 "성공했다" 고 거짓말하는 것이다. 전부 거부한다.
+  //   · activated         → 전환은 **일어났다.** 복구가 다시 돌린 commit 처럼 상태를
+  //                         바꾸지 않는 replay 는 통과시켜야 멱등이 성립한다.
+  //
+  // 이 구분을 뭉개면 둘 중 하나가 깨진다. 종단 전부를 거부하면 복구가 실패하고,
+  // 종단 전부를 통과시키면 abort 된 전환이 되살아난다.
+  const already = s.terminal[transitionKey(op)];
+  if (already === 'aborted' || already === 'failed') {
+    throw new DpRejection('terminal', `${transitionKey(op)} 는 이미 ${already} 로 끝났다`, already);
   }
 
   const seen = s.completed[key(op, step)];
-  if (seen === undefined) return undefined;
-  if (seen.payloadDigest !== op.payloadDigest) {
-    throw new DpRejection(
-      'digest_mismatch',
-      `${key(op, step)} 는 이미 다른 digest 로 처리됐다 (${seen.payloadDigest} ≠ ${op.payloadDigest})`,
-    );
+  if (seen !== undefined) {
+    if (seen.tuple !== canonical(op)) {
+      // 무엇이 달라졌는지까지 말한다. 내용이 다른 것과 좌표가 다른 것은 원인이 다르다.
+      if (seen.payloadDigest !== op.payloadDigest) {
+        throw new DpRejection(
+          'digest_mismatch',
+          `${key(op, step)} 는 이미 다른 digest 로 처리됐다 ` +
+            `(${seen.payloadDigest} ≠ ${op.payloadDigest})`,
+        );
+      }
+      throw new DpRejection(
+        'tuple_mismatch',
+        `${key(op, step)} 는 digest 가 같지만 튜플이 다르다 — 같은 키에 다른 요청이다`,
+      );
+    }
+    return { ...seen.ack, cached: true };
   }
-  return { ...seen.ack, cached: true };
+
+  // 끝났는데 이 단계의 기록이 없다 — 그 전환에 없던 단계다. 새로 시작하면 안 된다.
+  if (already !== undefined) {
+    throw new DpRejection('terminal', `${transitionKey(op)} 는 이미 ${already} 로 끝났다`, already);
+  }
+
+  return undefined;
 }
 
 function record(s: AgentState, op: OperationTuple, step: Step, result: PlaneState): PlaneAck {
@@ -354,6 +577,6 @@ function record(s: AgentState, op: OperationTuple, step: Step, result: PlaneStat
     transitionId: op.transitionId,
     cached: false,
   };
-  s.completed[key(op, step)] = { payloadDigest: op.payloadDigest, ack };
+  s.completed[key(op, step)] = { tuple: canonical(op), payloadDigest: op.payloadDigest, ack };
   return ack;
 }

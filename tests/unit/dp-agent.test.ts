@@ -124,9 +124,11 @@ describe('§3.6 stage → commit', () => {
     await a.fence('10');
     await a.stage(op(), 'payload');
     await a.abort(op());
-    // `not_staged` 가 아니라 `aborted` 다 — 슬롯이 없는 것과 전환이 끝난 것은 다르다.
+    // `not_staged` 가 아니라 `terminal` 이다 — 슬롯이 없는 것과 전환이 끝난 것은 다르다.
+    // 5차 검수 뒤 abort/failed/activated 를 **상호 배타적인 종단 상태 하나**로 합쳤다.
+    // 어떻게 끝났는지는 `DpRejection.terminalState` 가 들고 있다 (§9.1.1 blocker 1).
     // 전자는 아직 안 왔을 수도 있지만 후자는 되살아나면 안 된다.
-    expect(await rejectionOf(a.commit(op()))).toBe('aborted');
+    expect(await rejectionOf(a.commit(op()))).toBe('terminal');
   });
 
   it('P19 좌표가 지나간 뒤 도착한 옛 stage 도 거부한다', async () => {
@@ -304,7 +306,7 @@ describe('5차 검수 반례', () => {
     await a.abort(op());
     // abort 는 이 전환을 끝낸다. 뒤늦게 도착한 stage 는 "성공했다" 고 답해서도,
     // 슬롯을 되살려서도 안 된다.
-    expect(await rejectionOf(a.stage(op(), 'p'))).toBe('aborted');
+    expect(await rejectionOf(a.stage(op(), 'p'))).toBe('terminal');
     expect(a.stagedDigest('http', '1')).toBeUndefined();
   });
 
@@ -323,7 +325,9 @@ describe('5차 검수 반례', () => {
     const agentFirst = new DpAgent(store);   // 기동 시점에 만들어졌다
     await agentFirst.fence('10');
     // 그 사이 다른 컴포넌트가 같은 store 에 무언가를 썼다.
-    const withExtra = { ...store.load()!, journal: { marker: 'keep-me' } };
+    // 남의 쓰기도 CAS 를 지킨다 — 버전을 올려야 저장된다.
+    const loaded = store.load()!;
+    const withExtra = { ...loaded, version: loaded.version + 1, journal: { marker: 'keep-me' } };
     await store.save(withExtra as never);
     // 이제 agent 가 다시 쓴다. 자기 기억으로 덮으면 남의 것이 날아간다.
     await agentFirst.fence('11');

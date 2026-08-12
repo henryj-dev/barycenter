@@ -85,6 +85,10 @@ export class ApplyRunner {
   private history: Phase[] = [];
 
   async run(op: OperationTuple, targetGeneration: string): Promise<Phase> {
+    // §3.5 · §9.1.1 blocker 1 — **여기가 첫 관문이다.**
+    // 리더 토큰과 좌표 CAS 가 게시보다, 저널 기록보다 먼저다. 순서가 반대면
+    // 거부될 오퍼레이션이 이미 `current` 를 옮긴 뒤가 된다 (5차 반례 ①).
+    await this.agent.reserve(op);
     await this.write({ op, targetGeneration, phase: 'publish_intent', reloadAttempts: 0 });
     return this.drive();
   }
@@ -143,6 +147,9 @@ export class ApplyRunner {
           }
           if (j.reloadAttempts >= RELOAD_ATTEMPT_LIMIT) {
             // 상한을 넘었다. 무한 재전송은 워커 세대만 쌓는다 (§6.4 admission control).
+            // **실패도 종단이다.** 슬롯을 반납하고 전환을 닫아야 지연 commit 이
+            // 뒤늦게 좌표를 옮기지 못한다 (5차 반례 ⑥).
+            await this.agent.fail(j.op);
             await this.write({ ...j, phase: 'failed' });
             break;
           }

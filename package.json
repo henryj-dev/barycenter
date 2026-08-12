@@ -12,6 +12,7 @@
     "verify": "./scripts/verify.sh",
     "verify:quick": "./scripts/verify.sh --quick",
     "test": "vitest run tests/unit",
+    "test:conformance": "vitest run tests/conformance",
     "test:watch": "vitest tests/unit",
     "test:golden": "vitest run tests/golden",
     "test:e2e": "vitest run tests/e2e",

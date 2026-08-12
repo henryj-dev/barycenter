@@ -1524,10 +1524,24 @@ S15 · S16 · S17 · S18 · S19. 남는 것은 **S7(완료) · S11 · S12** 와 
 
 범위를 줄여도 사라지지 않는 것이 넷이다. 전부 5차 검수에서 **녹색 테스트 상태로 재현됐다.**
 
-1. **소유권과 원자성.** durable active-operation 예약이 없다. `(plane, target_activation_epoch)`
-   를 단일 CAS 슬롯으로 예약하지 않아서, 서로 다른 operation 이 같은 좌표를 동시에 잡고
-   서로의 슬롯을 덮고 지운다. 낮은 리더 토큰이 **거부되기 전에 게시한다** — §3.5 위반이다.
-   `serial()` 은 인스턴스 안에서만 직렬화하므로 프로세스 간에는 lost update 가 난다.
+1. ~~**소유권과 원자성.**~~ ✅ **해소** — `src/dp/agent.ts`.
+
+   `(plane, target_activation_epoch)` 를 **단일 CAS 슬롯**으로 예약한다. 슬롯은 정본 튜플
+   전체를 들고 있으므로 주인이 정해지고, 남의 슬롯에는 stage 도 abort 도 닿지 않는다.
+   `ApplyRunner.run` 은 **게시보다 저널 기록보다 먼저** `reserve` 를 지난다 — §3.5 의
+   "토큰을 side effect 전에 fsync 한다" 가 코드에서 성립한다.
+
+   인스턴스 간 lost update 는 `AgentState.version` **durable CAS** 로 닫았다. 밀리면 다시
+   읽고 **다시 판정한다** — 낡은 상태로 내린 판정을 재사용하지 않는다.
+
+   종단 상태는 `activated` / `failed` / `aborted` **셋이 상호 배타적**이다. 실패도 슬롯을
+   반납하므로 좌표가 영구히 잠기지 않고, 지연 commit 이 뒤늦게 좌표를 옮기지 못한다.
+   `aborted`·`failed` 는 모든 replay 를 거부하고 `activated` 만 replay 를 통과시킨다 —
+   전부 거부하면 복구가 깨지고 전부 통과시키면 abort 가 되살아난다.
+
+   계약은 `tests/conformance/review5-reservation.test.ts` 에 있다 (14건). 뮤턴트 7종
+   (예약 제거 · 주인 무시 · 남의 슬롯 삭제 · CAS 제거 · 저널 소유권 제거 · 슬롯 미반납 ·
+   좌표 뺀 정본)이 전부 잡히는 것을 확인했다.
 2. **`ApplyOperation` 스키마.** 평면별 진행, `partial_transition`, `ActivationEvidence`,
    failure/rollback 종단 상태가 durable 스키마에 없다. 지금은 세대 문자열 하나로 활성화를
    증명한다. reload 상한 초과 시 롤백 없이 `failed` 만 적어서, **지연 commit 이 뒤늦게
