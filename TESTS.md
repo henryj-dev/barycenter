@@ -39,6 +39,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS / 0 FAIL** — §2 참조 |
 | 스파이크 S11 | `./spike/s11/run.sh` | **14 PASS / 0 FAIL** — §2 참조 |
 | 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS / 0 FAIL** — §2 참조 |
+| 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS / 0 FAIL** — §2 참조 |
 | 엔진 사실 (E) | `npm run test:engine` | **43 PASS / 0 FAIL / 1 SKIP** |
 | 단위 (M7·X1, M6, §7.5, R, capability) | `npm test` | **114 PASS** |
 | 골든 (R17·R18) | `npm run test:golden` | **8 PASS** — 실제 nginx -t |
@@ -127,7 +128,7 @@ PASS=43  FAIL=0  SKIP=1
 | **S5** ~ | **http/stream 이중 zone + 워커 수렴** | 양쪽 ACK 후 **전 워커** 수렴 < 500ms. 한쪽 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존 시나리오 포함 | → 대안 B |
 | **S6** | `least_conn` 근사 오차 | native(zone 유·무) 대비 편차 < 10%. **워크로드·하드웨어·베이스라인을 먼저 정의** | v0 알고리즘에서 제외 |
 | **S7** ✅ | reload 실패 판정 | 오탐/미탐 0, 판정 시간 < 3s. E23 을 자동화 | ApplyOperation 스키마 freeze **block** |
-| **S8** | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | **block** |
+| **S8** ✅ | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | **block** |
 | **S9** | SNI 결과 분기 관측성 | TLS-no-SNI / malformed / preread timeout 구분 (**비-TLS 는 E26.1 로 확인 완료**) | 현행 유지 — 부재·파싱실패는 계속 `reject` 고정 |
 | **S10** | 라우트 컴파일러 | exact/wildcard/path 우선순위 정확 + 라우트 500개에서 p99 영향 < 5% | `strict_priority` 미제공 |
 | **S11** | **epoch 경합** | 아래 P1~P8 시나리오 전부에서 잘못된 peer 선택 **0회** | **block** |
@@ -198,6 +199,36 @@ PASS=14  FAIL=0     openresty/1.31.1.1, worker_processes 2
 
 **엔진 스파이크로 덮이지 않는 것**: 평면 부분 전환(P5·P6), 스냅샷 cut→replay(P3),
 버퍼링/abort(P2·P4)는 컨트롤 플레인 프로토콜 로직이다. 프로토콜 구현 단계에서 검증한다.
+
+### S8 실행 결과 — `./spike/s8/run.sh`
+
+```
+PASS=11  FAIL=0
+```
+
+두 배치를 나란히 돌린다.
+
+| ID | 결과 |
+|---|---|
+| S8.prevalidate | **게시 전에** 새 세대를 그 자리에서 `nginx -t` 할 수 있다 — §6.2 prepare 성립 |
+| S8.initial / renew / swap | 세대 전환이 conf 와 인증서를 함께 바꾼다 |
+| **S8.rollback** | 배치 A(세대 결박) — **롤백이 그 시점의 key/chain 을 정확히 복원** |
+| **S8.mutable_broken** | 배치 B(세대 밖 mutable) — **롤백해도 갱신된 인증서가 그대로 나온다** |
+| S8.mismatch | cert/key 불일치는 `nginx -t` 가 거부 |
+| S8.gc_traffic | 인증서를 지워도 **열린 fd 로 트래픽은 계속 흐른다** |
+| S8.gc_root | 그런데 **다음 reload 는 실패한다** — 트래픽만 보면 알 수 없다 |
+
+**배치 B 가 1차 검수 Critical #4 의 실물이다.** "롤백은 symlink 되돌리기 + reload 로 끝난다"가
+왜 거짓이었는지를 재현한다. conf 는 되돌아가는데 인증서 파일은 이미 덮여 있다.
+
+**S8.gc_traffic + S8.gc_root 이 §8.4 GC root 의 근거다.** 활성 세대의 파일을 지워도 트래픽은
+멀쩡하다. 다음 reload 에서야 터진다. 그래서 "지금 잘 돌아간다"는 GC 안전의 근거가 못 된다.
+
+**부수 발견 — `ssl_certificate` 는 conf_prefix 기준으로 풀린다.** prefix 가 아니다. 세대 conf
+안에 `certs/...` 라고 쓰면 `-c current/nginx.conf` 로는 symlink 를 따라가고,
+`-t -c generations/N/nginx.conf` 로는 그 세대 자신을 가리킨다. 이 성질이 게시 전 검증을
+가능하게 한다. 경로에 세대 번호를 넣으면(`generations/N/certs/...`) `current` 를 거칠 때
+`current/generations/N/...` 로 풀려 깨진다 — 실제로 처음에 이렇게 짜서 기동에 실패했다.
 
 ### S7 실행 결과 — `./spike/s7/run.sh`
 
