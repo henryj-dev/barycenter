@@ -45,11 +45,11 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 295개 통과, 게이트는 별개
+### 현재 상태 — 스위트 307개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **182 PASS** |
+| 단위 | `npm test` | **194 PASS** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | 엔진 사실 (E) | `npm run test:engine` | **61 PASS / 1 SKIP** |
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
@@ -66,7 +66,8 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | ~ | S5 | 이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증 |
 | ~ | S7 | 로그 행 수를 정본 신호로 씀 → 진단용으로 강등하고 판정 계약 재작성 필요 |
 | ~ | S8 | CN 만 비교 / key·SPKI·chain·SNI 별 자료 미검증 |
-| ❌ | S12 크래시 저널 · S13 GC ledger | 미착수 |
+| ~ | **S12 크래시 저널** | `ApplyRunner` 로 구현. 저장·부작용의 **모든 직전/직후**를 훑고 관측 우선을 확인. 뮤테이션으로 변별력 검증. 남은 것: 실제 FS·nginx end-to-end, 시크릿 materialize, 평면별 전이 |
+| ❌ | S13 GC ledger | 미착수 |
 | ❌ | S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18 | 미착수 |
 
 > **"S12 만 남았다"는 판정은 철회됐다.** 스위트가 green 인 것과 게이트가 열리는 것은
@@ -476,7 +477,14 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | A4.4 | HUP 후 error log 에 `emerg` | 워터마크 이후만 수집. 이전 것은 무시 |
 | A4.5 | 합성 프로브: TCP connect / TLS handshake(SNI) / UDP | 리스너별 전부 통과해야 `verified` |
 
-### A5 크래시 주입 매트릭스 (S12)
+### A5 크래시 주입 매트릭스 (S12) — **부분 RUNNABLE** `tests/unit/apply-journal.test.ts`
+
+> 지점을 손으로 고르지 않는다. 저장과 부작용을 **같은 시계로 세고 전 지점을 훑는다** —
+> §6.2 표가 7행에서 11행으로 늘어난 이유가 "고르면 빠뜨린다" 였다.
+>
+> 합격 기준은 v4 에서 바뀌었다: HUP 은 exactly-once 로 만들 수 없으므로
+> **최종 세대가 정확하고 중복 reload 가 상한 이내**인지를 본다.
+
 
 **모든 durable write 와 외부 side-effect 의 직전/직후**에 프로세스를 죽인다. 3차 검수가
 "7행으로는 부족하다"고 지적한 부분이다.
