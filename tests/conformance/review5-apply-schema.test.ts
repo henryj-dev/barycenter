@@ -28,6 +28,7 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   transitionId: 't-1',
   affectedPlanes: ['http'],
   targetGeneration: 'gen-1',
+  generationDigest: 'sha256:gen',
   planes: {
     http: {
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },

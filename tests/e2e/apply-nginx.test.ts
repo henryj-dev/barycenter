@@ -30,6 +30,7 @@ import { DpAgent } from '../../src/dp/agent.js';
 import { FileStore } from '../../src/dp/store-fs.js';
 import { ApplyRunner, CrashInjected, type Effects } from '../../src/dp/apply.js';
 import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
+import { materializeGeneration, verifyGeneration } from '../../src/dp/materialize.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
 const PORT = 18099;
@@ -41,12 +42,20 @@ const docker = (...args: string[]): string =>
   execFileSync('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
 
 /** 세대마다 **다른 리터럴**을 굽는다 — 이게 §6.3 의 활성 세대 마커다. */
+const GENERATION_DIGESTS = new Map<string, string>();
+
+/**
+ * 세대를 **materializer 로** 만든다 (§7.2).
+ *
+ * 손으로 디렉토리를 써 두면 원자적 게시도 manifest 도 테스트되지 않는다. 6차 검수가
+ * "세대 디렉토리 게시를 수행하는 production 코드가 없다" 고 지적한 자리다.
+ */
 function makeGeneration(name: string): void {
-  const dir = join(prefix, 'generations', name);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, 'nginx.conf'),
-    `daemon off;
+  const manifest = materializeGeneration({
+    prefix,
+    generation: name,
+    files: {
+      'nginx.conf': `daemon off;
 error_log /prefix/logs/error.log warn;
 pid /prefix/logs/nginx.pid;
 events { worker_connections 64; }
@@ -64,8 +73,9 @@ stream {
     }
 }
 `,
-    'utf8',
-  );
+    },
+  });
+  GENERATION_DIGESTS.set(name, manifest.digest);
 }
 
 /**
@@ -120,6 +130,15 @@ const effects = (): Effects => {
   // HUP 을 보낸 시점의 워터마크. 그 이후 증가분만 이 전환의 것이다 (§6.3).
   let watermark: number | undefined;
   return {
+  async preflight(generation, expectedDigest) {
+    // 실제 파일을 다시 읽어 대조한다 — 호스트에서 돌지만 같은 바이트를 본다.
+    try {
+      verifyGeneration(prefix, generation, expectedDigest);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: (e as Error).message };
+    }
+  },
   async publish(generation) {
     const dir = `/prefix/generations/${generation}`;
     docker('exec', container, 'sh', '-c',
@@ -156,6 +175,7 @@ const OP = (n: string, generation: string): ApplyOperation => ({
   transitionId: `${n}-t`,
   affectedPlanes: ['http'],
   targetGeneration: generation,
+  generationDigest: GENERATION_DIGESTS.get(generation) ?? 'sha256:없는세대',
   planes: {
     http: {
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
@@ -316,6 +336,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
     // publish 는 성공하되 reload 직전에 죽는 부작용을 끼운다.
     const fx = effects();
     const crashing = {
+      preflight: fx.preflight.bind(fx),
       publish: fx.publish.bind(fx),
       observePublished: fx.observePublished.bind(fx),
       observeActivation: fx.observeActivation.bind(fx),
@@ -342,6 +363,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
     let reloads = 0;
     const fx = effects();
     const counted = {
+      preflight: fx.preflight.bind(fx),
       publish: fx.publish.bind(fx),
       observePublished: fx.observePublished.bind(fx),
       observeActivation: fx.observeActivation.bind(fx),
@@ -374,9 +396,9 @@ describe('S12 end-to-end — 실제 nginx', () => {
 
   it('없는 세대는 게시하지 않는다 — 실행 중인 nginx 를 건드리지 않는다', async () => {
     const store = newStore();
-    await expect(
-      new ApplyRunner(new DpAgent(store), effects()).run(OP('e2e-4', 'gen-없음')),
-    ).rejects.toThrow();
+    // 없는 세대는 **게시 전 검사**에서 걸린다. 예외가 아니라 정상적인 실패다 (§6.2 #2).
+    const r = await new ApplyRunner(new DpAgent(store), effects()).run(OP('e2e-4', 'gen-없음'));
+    expect(r.phase).toBe('failed');
     expect(await probeAccepting()).toBe('gen-1');
     expect(await effects().observePublished()).toBe('gen-1');
   });

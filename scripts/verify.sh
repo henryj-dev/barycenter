@@ -120,9 +120,9 @@ cat <<'GATES'
  6차 반례 7건은 전부 닫혔다. **그러나 검수 E 의 목록은 그것만이 아니다.**
 
  남은 것 (6차 E)
-   · 세대 materializer(§7.2) — .tmp-N · manifest/READY · 디렉토리 rename 이 없다
-   · 게시 전 `nginx -t` 가 없다
-   · 오퍼레이션이 artifact digest 에 결박되지 않는다 (같은 이름 다른 바이트)
+   ✅ 세대 materializer(§7.2) · 게시 전 nginx -t · artifact digest 결박 — 해소.
+      .tmp-<이름>-<nonce>/ 에 쓰고 통째로 rename, manifest 를 마지막에.
+      preflight 단계가 **게시 앞에서** 디스크를 다시 읽어 대조한다. 뮤턴트 7종 잡힘.
    · OpenAPI · DDL · changeset · auth/audit 스키마가 없다
    · DESIGN §6.2 · §6.3 · §9.2 와 실제 ABI 불일치
    · fsync 순서 · 락 생성 원자성 미검증 (fault injection 필요)

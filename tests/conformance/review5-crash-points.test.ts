@@ -16,7 +16,9 @@
  * **범위를 정직하게 적는다.** §6.2 표는 11 행이지만 v0.1 의 apply 경로가 덮는 것은
  * 3~8 행이다 (§9.1.1 로 범위를 줄였다).
  *
- *   1·2행  렌더·검증 — apply 앞이다. `ApplyRunner` 의 크래시 표면이 아니다.
+ *   1행    렌더 — apply 앞이다. CP 가 세대를 만든다.
+ *   2행    검증 — **이제 덮는다.** `preflight` 단계가 manifest 를 대조하고 `nginx -t`
+ *          를 돌린다 (6차 검수 지적).
  *   9행    시크릿 materialize — TLS 는 v0.6.
  *   10행   GC — v0.6.
  *   11행   롤백 — **같은 경로다.** §3.3 에 따라 롤백은 새 활성화 사건이므로 3~8 행을
@@ -33,6 +35,7 @@ const OP: ApplyOperation = {
   transitionId: 't-1',
   affectedPlanes: ['http', 'stream'],
   targetGeneration: 'gen-2',
+  generationDigest: 'sha256:gen',
   planes: {
     http: {
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
@@ -61,6 +64,8 @@ function sweep(crashAt: number | undefined) {
 const NORMAL_PATH = [
   // **한 쓰기다.** `reserveAll` 이 두 평면을 한 임계구역에서 잡는다 (6차 반례 ③).
   'reserve:http+reserve:stream',
+  // 게시 **앞의** 검사 (§6.2 #2). 여기서 걸리면 current 도 nginx 도 그대로다.
+  'journal:preflight',
   'journal:publish_intent',
   'publish',
   'journal:published',
@@ -141,6 +146,8 @@ const gapExists = (seen: string[], after: string, before: string): boolean => {
 
 describe('§6.2 크래시 표의 각 행에 대응하는 지점이 있다', () => {
   const rows: Array<{ row: number; label: string; after: string; before: string }> = [
+    { row: 2, label: '검증 후, publish_intent 기록 전',
+      after: 'journal:preflight:after', before: 'journal:publish_intent:before' },
     { row: 3, label: 'publish_intent 기록 후, symlink 교체 전',
       after: 'journal:publish_intent:after', before: 'publish:before' },
     { row: 4, label: 'symlink 교체 후, published 기록 전',
@@ -171,13 +178,12 @@ describe('§6.2 크래시 표의 각 행에 대응하는 지점이 있다', () =
   it('덮지 않는 행은 **왜 안 덮는지** 말한다', () => {
     // 통과만 하는 테스트가 아니다. 범위를 코드에 적어 두면 범위가 바뀔 때 여기가 걸린다.
     const outOfScope: Record<number, string> = {
-      1: '렌더 전 — apply 앞이다',
-      2: '검증 전 — apply 앞이다',
+      1: '렌더 전 — apply 앞이다 (CP 가 세대를 만든다)',
       9: '시크릿 materialize — TLS 는 v0.6 (§9.1.1)',
       10: 'GC — v0.6 (§9.1.1)',
       11: '롤백 — 3~8 행과 같은 경로다 (§3.3, e2e 가 확인)',
     };
-    const covered = [3, 4, 5, 6, 7, 8];
+    const covered = [2, 3, 4, 5, 6, 7, 8];
     const all = [...covered, ...Object.keys(outOfScope).map(Number)].sort((a, b) => a - b);
     expect(all, '§6.2 표는 11 행이다 — 빠진 행이 있다').toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   });

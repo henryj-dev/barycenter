@@ -24,6 +24,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { materializeGeneration } from '../../src/dp/materialize.js';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,7 +55,7 @@ import { DpAgent } from ${src('agent.ts')};
 import { FsEffects } from ${src('effects-fs.ts')};
 import { ApplyRunner } from ${src('apply.ts')};
 
-const [, , generation, operationId, epoch] = process.argv;
+const [, , generation, operationId, epoch, digest] = process.argv;
 
 const store = FileStore.open('/prefix/state/agent.json');
 const agent = new DpAgent(store);
@@ -82,6 +83,7 @@ const op = {
   transitionId: operationId + '-t',
   affectedPlanes: ['http'],
   targetGeneration: generation,
+  generationDigest: digest,
   planes: {
     http: {
       expectedCurrent: { activationEpoch: prev, membershipRevision: prev },
@@ -113,12 +115,9 @@ try {
   return outfile;
 }
 
-function makeGeneration(name: string): void {
-  const dir = join(prefix, 'generations', name);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, 'nginx.conf'),
-    `daemon off;
+const GENERATION_DIGESTS = new Map<string, string>();
+
+const CONF = (name: string): string => `daemon off;
 error_log /prefix/logs/error.log warn;
 pid /prefix/logs/nginx.pid;
 events { worker_connections 64; }
@@ -129,21 +128,27 @@ http {
         location /generation { return 200 "${name}"; }
     }
 }
-`,
-    'utf8',
-  );
+`;
+
+/**
+ * 세대를 **materializer 로** 만든다 (§7.2).
+ *
+ * 6차 검수: "세대 디렉토리 게시를 수행하는 production 코드가 없다 — 테스트가 손으로
+ * 써 뒀을 뿐이다." 손으로 쓴 디렉토리는 manifest 가 없어서 이제 게시 전 검사에 막힌다.
+ */
+function makeGeneration(name: string): void {
+  const m = materializeGeneration({ prefix, generation: name, files: { 'nginx.conf': CONF(name) } });
+  GENERATION_DIGESTS.set(name, m.digest);
 }
 
 /**
- * **뜰 수 없는 세대.** 이미 점유된 포트를 듣는다 → HUP 이 bind 에 실패하고 error log 가
- * 늘어난다. S7 이 실증한 상황을 프로덕션 경로로 재현하기 위한 것이다.
+ * 뜰 수 없는 세대 — 이미 점유된 포트를 듣는다 (S7 재현).
+ *
+ * 문자열 치환으로 만들지 않는다. 한 번 그렇게 했다가 첫 `}` 를 잡아 설정이 깨졌고,
+ * 테스트는 **다른 이유로** 실패하면서 통과할 뻔했다.
  */
 function makeUnbindableGeneration(name: string, busyPort: number): void {
-  const dir = join(prefix, 'generations', name);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, 'nginx.conf'),
-    `daemon off;
+  const conf = `daemon off;
 error_log /prefix/logs/error.log warn;
 pid /prefix/logs/nginx.pid;
 events { worker_connections 64; }
@@ -155,9 +160,9 @@ http {
     }
     server { listen ${busyPort}; }
 }
-`,
-    'utf8',
-  );
+`;
+  const m = materializeGeneration({ prefix, generation: name, files: { 'nginx.conf': conf } });
+  GENERATION_DIGESTS.set(name, m.digest);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -184,7 +189,8 @@ async function serving(): Promise<string | undefined> {
 
 /** 컨테이너 안의 에이전트를 한 번 돌린다. */
 const runAgent = (generation: string, operationId: string, epoch: string): string =>
-  docker('exec', container, 'node', '/agent.mjs', generation, operationId, epoch);
+  docker('exec', container, 'node', '/agent.mjs', generation, operationId, epoch,
+    GENERATION_DIGESTS.get(generation) ?? 'sha256:없는세대');
 
 const field = (out: string, key: string): string | undefined =>
   out.split('\n').find((l) => l.startsWith(`${key}=`))?.slice(key.length + 1);
@@ -331,9 +337,9 @@ describe('DP Agent 를 컨테이너 안에서 돌린다 — FsEffects 실물 경
 
   it('없는 세대는 게시하지 않는다 — 실행 중인 nginx 를 건드리지 않는다', async () => {
     const out = runAgent('gen-없음', 'inc-6', '1');
-    // **무엇으로 실패했는지까지 본다.** PHASE 부재만 보면 번들이 딴 이유로 죽어도 통과한다.
-    expect(field(out, 'THREW'), `실패 사유가 없다: ${out}`).toBe('Error');
-    expect(field(out, 'PHASE')).toBeUndefined();
+    // 없는 세대는 **게시 전 검사**에서 걸린다. 예외가 아니라 정상적인 실패다 (§6.2 #2).
+    expect(field(out, 'PHASE'), out).toBe('failed');
+    expect(field(out, 'EPOCH'), '실패했는데 좌표가 움직였다').toBe('0');
     expect(await serving(), '없는 세대를 게시했다').toBe('gen-1');
     expect(docker('exec', container, 'readlink', '/prefix/current')).toBe('generations/gen-1');
   });

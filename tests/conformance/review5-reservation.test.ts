@@ -36,6 +36,7 @@ const APPLY = (op: OperationTuple, generation = 'gen-1'): ApplyOperation => ({
   transitionId: op.transitionId,
   affectedPlanes: [op.plane],
   targetGeneration: generation,
+  generationDigest: 'sha256:gen',
   planes: {
     [op.plane]: {
       expectedCurrent: op.expectedCurrent,

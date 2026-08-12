@@ -28,6 +28,7 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   transitionId: 't-1',
   affectedPlanes: ['http'],
   targetGeneration: 'gen-1',
+  generationDigest: 'sha256:gen',
   planes: {
     http: {
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
@@ -143,6 +144,7 @@ describe('③ 같은 오퍼레이션을 동시에 여러 번 보내도 HUP 은 �
       operationId: 'B',
       transitionId: 'B',
       targetGeneration: 'gen-B',
+      generationDigest: 'sha256:gen',
       planes: {
         stream: {
           expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
@@ -363,6 +365,7 @@ describe('앞선 오퍼레이션의 종단 저널이 다음 것을 막지 않는
         operationId: 'B',
         transitionId: 'B',
         targetGeneration: 'gen-2',
+        generationDigest: 'sha256:gen',
         planes: {
           http: {
             expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },

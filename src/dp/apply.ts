@@ -33,7 +33,22 @@ export const RELOAD_ATTEMPT_LIMIT = 2;
 export const PARTIAL_RETRY_LIMIT = 2;
 
 /** DP Agent 가 소유하는 외부 부작용. **전부 관측 가능해야 한다.** */
+/** 게시 전 검사 결과. `ok` 가 false 면 게시하지 않는다. */
+export type PreflightResult = {
+  ok: boolean;
+  reason?: string;
+  /** `nginx -t` 결과. 관측하지 못했으면 undefined. */
+  configTestPassed?: boolean;
+};
+
 export interface Effects {
+  /**
+   * 게시 **전** 검사 (§6.2 #2 · §7.2).
+   *
+   * 세대의 바이트가 오퍼레이션이 말한 digest 와 같은지, 엔진이 그 설정을 받아들이는지
+   * 본다. 여기서 막지 못하면 잘못된 설정이 `current` 를 거쳐 HUP 까지 간다.
+   */
+  preflight(generation: string, expectedDigest: string): Promise<PreflightResult>;
   publish(generation: string): Promise<void>;
   /** 지금 `current` symlink 가 가리키는 세대. */
   observePublished(): Promise<string | undefined>;
@@ -78,6 +93,8 @@ const DEFAULT_POLL: PollPolicy = {
 export class ApplyRunner {
   private readonly poll: PollPolicy;
   private history: Phase[] = [];
+  /** 마지막 실패 사유. 결과에 실어 운영자가 원인을 알 수 있게 한다. */
+  private lastFailure: string | undefined;
 
   /**
    * **DpAgent 가 durable 상태를 소유한다.** 저널과 좌표가 서로 다른 소유자를 가지면
@@ -127,7 +144,7 @@ export class ApplyRunner {
       await ignoreConflict(
         this.write({
           op,
-          phase: 'publish_intent',
+          phase: 'preflight',
           reloadAttempts: 0,
           seq: (existing?.seq ?? 0) + 1,
           progress: progressOf(op, 'reserved'),
@@ -198,6 +215,16 @@ export class ApplyRunner {
       const gen = j.op.targetGeneration;
 
       switch (j.phase) {
+        case 'preflight': {
+          // **게시 앞이다.** 여기서 걸리면 current 는 그대로고 nginx 도 그대로다.
+          const check = await this.effects.preflight(gen, j.op.generationDigest);
+          if (!check.ok) {
+            await this.failAll(j, check.reason ?? '게시 전 검사 실패');
+            break;
+          }
+          await ignoreConflict(this.write(next(j, { phase: 'publish_intent' })));
+          break;
+        }
         case 'publish_intent': {
           // 기록은 있는데 게시했는지 모른다 → 관측한다. 이미 됐으면 다시 하지 않는다.
           if ((await this.effects.observePublished()) !== gen) {
@@ -319,7 +346,8 @@ export class ApplyRunner {
   }
 
   /** 전 평면을 실패로 닫는다. 슬롯을 반납해야 좌표가 영구히 잠기지 않는다. */
-  private async failAll(j: JournalEntry): Promise<void> {
+  private async failAll(j: JournalEntry, reason?: string): Promise<void> {
+    if (reason !== undefined) this.lastFailure = reason;
     for (const plane of planesOf(j.op)) {
       await ignoreRejection(this.agent.fail(tupleFor(j.op, plane)));
     }
@@ -530,6 +558,17 @@ export class FakeEffects implements Effects {
   crashAfterEffect: 'publish' | 'reload' | undefined;
 
   constructor(readonly clock: CrashClock = new CrashClock()) {}
+
+  /** 기본은 통과. 개별 테스트가 막고 싶을 때 바꾼다. */
+  preflightOk = true;
+  preflightCalls = 0;
+
+  async preflight(_generation: string, _expectedDigest: string): Promise<PreflightResult> {
+    this.preflightCalls += 1;
+    return this.preflightOk
+      ? { ok: true, configTestPassed: true }
+      : { ok: false, reason: '주입된 preflight 실패' };
+  }
 
   async publish(generation: string): Promise<void> {
     if (this.crashBeforeEffect === 'publish') throw new CrashInjected('before publish');

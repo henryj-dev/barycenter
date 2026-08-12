@@ -56,6 +56,13 @@ export type ApplyOperation = MutationEnvelope & {
   planes: Partial<Record<Plane, PlaneTarget>>;
   /** 활성화할 설정 세대. */
   targetGeneration: string;
+  /**
+   * 그 세대의 **내용** digest (§7.2 manifest).
+   *
+   * 이름만으로는 무엇을 활성화하는지 말하지 못한다. 6차 검수가 같은 이름 아래 다른
+   * 바이트를 활성화하는 경로를 지적했다. 게시 앞에서 디스크와 대조한다.
+   */
+  generationDigest: string;
 };
 
 /**
@@ -135,6 +142,8 @@ export type ApplyResult = {
 
 /** §6.2 의 apply 단계. */
 export type ApplyPhase =
+  /** 게시 전 검사 — manifest 대조와 `nginx -t` (§6.2 #2). */
+  | 'preflight'
   | 'publish_intent'
   | 'published'
   | 'membership_staged'

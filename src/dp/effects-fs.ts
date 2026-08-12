@@ -13,7 +13,8 @@
  */
 import { existsSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import type { Effects } from './apply.js';
+import type { Effects, PreflightResult } from './apply.js';
+import { verifyGeneration } from './materialize.js';
 import type { ActivationEvidence } from './operation.js';
 
 export type FsEffectsOptions = {
@@ -37,6 +38,13 @@ export type FsEffectsOptions = {
    * 이 워터마크를 음성 신호로 넣자 71ms 에 잡혔다.
    */
   probeErrorLogLines?: () => Promise<number>;
+  /**
+   * `nginx -t` 상당. 세대 경로를 받아 엔진이 그 설정을 받아들이는지 답한다.
+   *
+   * 없으면 **manifest 대조만** 하고 넘어간다. 관측하지 못한 것과 실패한 것은 다르므로
+   * 없다고 해서 막지는 않는다 — 다만 그만큼 늦게 발견한다.
+   */
+  configTest?: (generation: string) => Promise<boolean>;
 };
 
 export class FsEffects implements Effects {
@@ -47,6 +55,30 @@ export class FsEffects implements Effects {
 
   private get link(): string {
     return join(this.opts.prefix, 'current');
+  }
+
+  /**
+   * 게시 전 검사 (§6.2 #2 · §7.2).
+   *
+   * **디스크의 바이트를 다시 읽어 대조한다.** manifest 만 믿으면 manifest 만 맞고 내용이
+   * 바뀐 세대를 활성화한다.
+   */
+  async preflight(generation: string, expectedDigest: string): Promise<PreflightResult> {
+    try {
+      verifyGeneration(this.opts.prefix, generation, expectedDigest);
+    } catch (e) {
+      return { ok: false, reason: (e as Error).message };
+    }
+    if (this.opts.configTest === undefined) return { ok: true };
+    try {
+      const passed = await this.opts.configTest(generation);
+      return passed
+        ? { ok: true, configTestPassed: true }
+        : { ok: false, reason: '엔진이 설정을 거부했다 (nginx -t)', configTestPassed: false };
+    } catch (e) {
+      // 검사를 **못 한 것**은 실패가 아니다. 판정은 관측이 한다 (§6.3).
+      return { ok: true, reason: `config test 를 돌리지 못했다: ${(e as Error).message}` };
+    }
   }
 
   async publish(generation: string): Promise<void> {

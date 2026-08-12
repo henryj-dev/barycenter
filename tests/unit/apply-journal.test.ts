@@ -33,6 +33,7 @@ const OP: ApplyOperation = {
   transitionId: 't-1',
   affectedPlanes: ['http'],
   targetGeneration: TARGET,
+  generationDigest: 'sha256:gen',
   planes: {
     http: {
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
@@ -76,7 +77,7 @@ describe('정상 경로', () => {
     const runner = new ApplyRunner(agentOn(store), new FakeEffects(), FAST);
     await runner.run(OP);
     expect(runner.phases()).toEqual([
-      'publish_intent', 'published', 'membership_staged', 'reload_intent', 'reload_observed', 'activated',
+      'preflight', 'publish_intent', 'published', 'membership_staged', 'reload_intent', 'reload_observed', 'activated',
     ]);
   });
 });
