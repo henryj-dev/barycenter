@@ -50,6 +50,7 @@ else
     FAILED=1
   else
     run "golden (nginx -t)    " npm run test:golden --silent
+    run "e2e (실제 nginx)      " npm run test:e2e --silent
     run "engine facts         " ./tests/engine/run.sh
     run "spike S1/S5          " ./spike/s1-s5/run.sh
     run "spike S7             " ./spike/s7/run.sh
@@ -87,11 +88,11 @@ cat <<'GATES'
  ~  S8   CN 만 비교 / key·SPKI·chain·SNI 별 자료 미검증
 
  ~  S12  크래시 저널
-         ApplyRunner(src/dp/apply.ts) 로 구현. 저장·부작용의 모든 직전/직후에
-         크래시를 주입해 훑고, 관측이 저널보다 우선함을 확인했다. 관측을 빼거나
-         재전송 상한을 없애면 실패하는 것을 뮤테이션으로 확인.
-         남은 것: 실제 파일시스템·nginx 와 물린 end-to-end, 시크릿 materialize,
-         평면별 전이.
+         ApplyRunner 로 구현하고 **실제 nginx 와 물렸다** (tests/e2e).
+         저장·부작용의 모든 직전/직후에 크래시를 주입해 훑고, 관측이 저널보다
+         우선함을 확인. 관측을 빼거나 재전송 상한을 없애면 실패하는 것을
+         뮤테이션으로 확인.
+         남은 것: 시크릿 materialize, 평면별 전이, 세대 디렉토리 원자 게시.
  ❌ S13  GC ledger          미착수
  ❌ S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18
 

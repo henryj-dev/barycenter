@@ -51,14 +51,44 @@ export class CrashInjected extends Error {
 
 // ── 러너 ─────────────────────────────────────────────────────────────────
 
+/**
+ * 신호를 보낸 뒤 관측까지 얼마나 기다리는가.
+ *
+ * `FakeEffects` 는 HUP 이 즉시 반영되지만 **실제 nginx 는 아니다.** 신호 직후에 관측해
+ * "아직 안 바뀌었다" 고 판정하면 멀쩡한 reload 를 실패로 몰고 재전송만 늘린다.
+ * end-to-end 를 붙이고 나서야 드러난 차이다 — S7 의 판정 예산(< 3s) 안에서 폴링한다.
+ */
+export type PollPolicy = {
+  attempts: number;
+  intervalMs: number;
+  sleep: (ms: number) => Promise<void>;
+};
+
+const DEFAULT_POLL: PollPolicy = {
+  attempts: 25,
+  intervalMs: 100,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+};
+
 export class ApplyRunner {
   private journal: JournalEntry | undefined;
+  private readonly poll: PollPolicy;
 
   constructor(
     private readonly store: DurableStore,
     private readonly effects: Effects,
+    poll: Partial<PollPolicy> = {},
   ) {
     this.journal = readJournal(this.store.load());
+    this.poll = { ...DEFAULT_POLL, ...poll };
+  }
+
+  /** 신호 직후 반영을 기다린다. 예산 안에 안 바뀌면 그냥 돌아가 상위가 판정한다. */
+  private async awaitAccepting(target: string): Promise<void> {
+    for (let i = 0; i < this.poll.attempts; i += 1) {
+      if ((await this.effects.observeAccepting()) === target) return;
+      await this.poll.sleep(this.poll.intervalMs);
+    }
   }
 
   phases(): Phase[] {
@@ -122,7 +152,9 @@ export class ApplyRunner {
           }
           await this.write({ ...j, reloadAttempts: j.reloadAttempts + 1 });
           await this.effects.signalReload();
-          // 같은 단계로 돌아가 관측으로 판정한다.
+          // 신호가 반영될 시간을 준다. 이걸 빼면 멀쩡한 reload 를 실패로 몰고
+          // 재전송만 늘린다 (실제 nginx 에 붙여 보고서야 드러났다).
+          await this.awaitAccepting(j.targetGeneration);
           break;
         }
         case 'reload_observed': {

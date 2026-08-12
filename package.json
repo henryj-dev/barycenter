@@ -14,6 +14,7 @@
     "test": "vitest run tests/unit",
     "test:watch": "vitest tests/unit",
     "test:golden": "vitest run tests/golden",
+    "test:e2e": "vitest run tests/e2e",
     "test:engine": "./tests/engine/run.sh",
     "typecheck": "tsc --noEmit"
   },

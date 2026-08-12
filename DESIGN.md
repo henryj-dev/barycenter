@@ -1579,6 +1579,11 @@ export interface DataplaneDriver {
 - 컨트롤 플레인 + 데이터 플레인 **별도 컨테이너**.
 - **배포 1급 경로는 컨테이너 이미지**다. `docker compose` 한 장으로 CP+DP 가 뜨는 것이 기본
   설치 경험. 바이너리 배포는 Node SEA 로 v1.0 이후 검토.
+> **DP Agent 를 호스트에 두는 구성은 없다.** end-to-end 를 붙이다 확인했다 — 호스트에서
+> `current` 심볼릭 링크를 바꿨더니 컨테이너가 보는 링크가 **비어 있었고**
+> `open() "…/current/nginx.conf" failed (22: Invalid argument)` 가 났다 (Docker Desktop
+> bind mount). 에이전트와 nginx 는 같은 파일시스템을 봐야 한다.
+
 - **DP Agent 는 별도 마운트 네임스페이스의 사이드카**로 둔다. 같은 컨테이너 안에서 "Agent 만
   RW, nginx 만 RO" 는 **literal 하게 불가능하다** — 마운트의 read-only 속성은 프로세스가
   아니라 네임스페이스 단위다. 사이드카가 불가능한 배포에서는 **UID·디렉토리 소유권·ACL**
