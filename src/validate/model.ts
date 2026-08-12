@@ -13,6 +13,7 @@
  */
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
+import { parseHashKey } from './strings.js';
 import type { Model } from '../model/provisional.js';
 
 export type ModelIssueCode =
@@ -21,7 +22,8 @@ export type ModelIssueCode =
   | 'unknown_listener'
   | 'pool_has_no_backend'
   | 'socket_conflict'
-  | 'route_compile_error';
+  | 'route_compile_error'
+  | 'invalid_hash_key';
 
 export type ModelIssue = {
   code: ModelIssueCode;
@@ -64,6 +66,15 @@ export function validateModel(model: Model): ModelIssue[] {
       });
     }
   };
+
+  // ── 풀 ──
+  for (const pool of model.pools) {
+    if (pool.algorithm !== 'hash') continue;
+    const parsed = parseHashKey(pool.protocolClass, pool.hashKey ?? 'remote_addr');
+    if (!parsed.ok) {
+      issues.push({ code: 'invalid_hash_key', subjects: [pool.key], message: parsed.message });
+    }
+  }
 
   // ── 리스너 ──
   const reservations: SocketReservation[] = [];

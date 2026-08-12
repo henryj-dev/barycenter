@@ -15,6 +15,7 @@
  *   E26    — $ssl_preread_protocol 이 비어 있으면 비-TLS 다. no-SNI 분기의 근거.
  */
 import { createHash } from 'node:crypto';
+import { isIPv6 } from 'node:net';
 
 import {
   block, directive, entry, lit, num, regex, serialize, variable,
@@ -23,6 +24,7 @@ import {
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
 import { poolsReachedBy } from '../validate/engine-constraints.js';
 import { ModelValidationError, validateModel } from '../validate/model.js';
+import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
 import type {
   Backend,
@@ -52,8 +54,32 @@ const CONSERVATIVE: RenderCapabilities = { streamRealip: false };
 const byKey = <T extends { key: string }>(xs: T[]): T[] =>
   [...xs].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
-const ident = (key: string): string => key.replace(/[^A-Za-z0-9_]/g, '_');
+/**
+ * 키를 nginx 식별자로 바꾼다.
+ *
+ * 단순 치환은 **비단사**다 — `a-b` 와 `a_b` 가 같은 이름이 되어 upstream 이 중복 선언되고
+ * `nginx -t` 가 실패한다. 치환이 손실을 낳는 경우에만 짧은 다이제스트를 붙여 단사로 만든다
+ * (4차 검수). 손실이 없으면 읽기 좋은 이름을 그대로 쓴다.
+ */
+function ident(key: string): string {
+  const safe = key.replace(/[^A-Za-z0-9_]/g, '_');
+  if (safe === key) return safe;
+  const digest = createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 8);
+  return `${safe}_${digest}`;
+}
 const upstreamName = (poolKey: string): string => `pool_${ident(poolKey)}`;
+
+/** nginx 는 IPv6 업스트림에 대괄호를 요구한다 (E34). 없으면 `invalid port` 로 거부된다. */
+const endpoint = (host: string, port: number): string =>
+  isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`;
+
+/**
+ * map 의 제어어. 인용해도 제어어로 해석되므로(E33) 리터럴로 매칭하려면 앵커 정규식을 쓴다.
+ */
+const MAP_KEYWORDS = new Set(['default', 'hostnames', 'volatile', 'include']);
+
+/** 정규식 메타문자를 이스케이프한다. */
+const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** UDP 프리셋 — 값을 틀리면 세션이 안 닫히거나 조기에 닫힌다 (§4.1). */
 const UDP_PRESETS: Record<UdpPreset, { responses?: number; timeoutS: number; reuseport: boolean }> = {
@@ -101,19 +127,21 @@ function algorithmDirectives(pool: Pool, sourceIpVar: string): ConfNode[] {
   }
 }
 
+/**
+ * 해시 변수명은 **검증기가 정한 것을 그대로 쓴다.** 렌더가 따로 해석하면 검증기와 결론이
+ * 갈려 `$cookie_sid-token` 같은 무효 변수가 나간다 (4차 검수).
+ */
 function hashVariable(pool: Pool): string {
-  const spec = pool.hashKey ?? 'remote_addr';
-  if (spec === 'request_uri') return 'request_uri';
-  const header = /^header\((.+)\)$/.exec(spec);
-  if (header) return `http_${header[1]!.toLowerCase().replace(/-/g, '_')}`;
-  const cookie = /^cookie\((.+)\)$/.exec(spec);
-  if (cookie) return `cookie_${cookie[1]!}`;
-  return 'remote_addr';
+  const parsed = parseHashKey(pool.protocolClass, pool.hashKey ?? 'remote_addr');
+  if (!parsed.ok) {
+    throw new Error(`검증되지 않은 hash_key 가 렌더에 도달했다: ${pool.key} → ${pool.hashKey}`);
+  }
+  return parsed.value.variable;
 }
 
 function upstreamBlock(pool: Pool, backends: Backend[], sourceIpVar: string): ConfNode {
   const servers = byKey(backends).map((b) => {
-    const args: ConfValue[] = [lit(`${b.host}:${b.port}`)];
+    const args: ConfValue[] = [lit(endpoint(b.host, b.port))];
     if (b.weight !== 1) args.push(lit(`weight=${b.weight}`));
     return directive('server', args);
   });
@@ -266,7 +294,11 @@ function passthroughNodes(
         : lit('');
     const match: ConfValue =
       c.pattern.kind === 'exact'
-        ? lit(c.pattern.host)
+        ? // E33 — map 제어어와 겹치는 호스트는 인용해도 제어어로 해석된다.
+          // 앵커 정규식으로 내야 리터럴로 매칭된다.
+          MAP_KEYWORDS.has(c.pattern.host)
+          ? regex(`~^${reEscape(c.pattern.host)}$`)
+          : lit(c.pattern.host)
         : // E21 — SNI 는 대소문자를 구분하지 않으므로 ~* 여야 한다.
           // [^.]+ 로 한 라벨만 매치한다: nginx 와일드카드는 다중 라벨을 삼키지만(E22.2)
           // X.509 와일드카드는 한 라벨만 보장한다. 넓게 잡으면 인증서 오선택이 된다.

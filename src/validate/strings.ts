@@ -52,12 +52,20 @@ export function normalizeHost(input: string): Result<string> {
   if (host.length === 0) return err('invalid_host', '호스트가 점 하나뿐이다');
 
   // IDNA — WHATWG URL 파서가 A-label 변환을 해준다.
+  //
+  // ⚠️ 이 파서는 IDNA 뿐 아니라 **IPv4 정규화까지** 한다. `127.1`·`2130706433`·`0x7f.1` 이
+  // 전부 `127.0.0.1` 로 바뀐다. 호스트 이름 검증기가 그런 표기를 조용히 받아들이면
+  // 저장된 값과 사용자가 쓴 값이 달라진다. 변환 결과가 IPv4 인데 원문이 그 형태가
+  // 아니었다면 거부한다.
   let ascii: string;
   try {
     const u = new URL(`http://${host}`);
     ascii = u.hostname;
   } catch {
     return err('invalid_host', `IDNA 변환에 실패했다: ${JSON.stringify(input)}`);
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ascii) && ascii !== host) {
+    return err('invalid_host', `비정규 IPv4 표기다 (${host} → ${ascii}). 점 4개 형태로 쓴다`);
   }
   // URL 파서가 경로·포트 등을 떼어냈다면 원본이 호스트가 아니었다는 뜻이다.
   if (ascii.length === 0) return err('invalid_host', '호스트를 해석할 수 없다');
@@ -122,20 +130,35 @@ export function validateHeaderValue(input: string): Result<string> {
   if (/[\u0000-\u001F\u007F]/.test(input)) {
     return err('invalid_header_value', '제어 문자는 쓸 수 없다 (헤더 분리)');
   }
-  for (const m of input.matchAll(/\$\{?([A-Za-z0-9_]+)\}?/g)) {
-    const name = m[1]!;
+  // 문법을 **끝까지 소비**한다. 정규식으로 훑기만 하면 `$`, `$-x`, `${host`, `$ host` 가
+  // 통과하는데 nginx 는 invalid variable 로 거부한다 (4차 검수).
+  let i = 0;
+  while (i < input.length) {
+    const ch = input[i]!;
+    if (ch !== '$') { i += 1; continue; }
+    const rest = input.slice(i);
+    const m = /^\$(?:\{([A-Za-z0-9_]+)\}|([A-Za-z0-9_]+))/.exec(rest);
+    if (m === null) {
+      return err('invalid_header_value', `변수 참조가 아닌 '$' 가 있다: ${JSON.stringify(input)}`);
+    }
+    const name = (m[1] ?? m[2])!;
     if (!ALLOWED_VARIABLES.has(name)) {
       return err('invalid_header_value', `허용되지 않은 변수 참조: $${name}`);
     }
+    i += m[0].length;
   }
   return ok(input);
 }
 
+/**
+ * 파싱 결과는 **렌더가 그대로 쓸 nginx 변수명**을 함께 들고 다닌다.
+ * 검증기와 렌더러가 각자 문자열을 해석하면 서로 다른 결론을 낸다 (4차 검수).
+ */
 export type HashKey =
-  | { kind: 'remote_addr' }
-  | { kind: 'request_uri' }
-  | { kind: 'header'; name: string }
-  | { kind: 'cookie'; name: string };
+  | { kind: 'remote_addr'; variable: 'remote_addr' }
+  | { kind: 'request_uri'; variable: 'request_uri' }
+  | { kind: 'header'; name: string; variable: string }
+  | { kind: 'cookie'; name: string; variable: string };
 
 /**
  * 해시 키. **자유 문자열을 받지 않는다** — 화이트리스트된 형태만 파싱한다.
@@ -145,11 +168,11 @@ export type HashKey =
 export function parseHashKey(protocolClass: ProtocolClass, spec: string): Result<HashKey> {
   const streamOnly = protocolClass !== 'http';
 
-  if (spec === 'remote_addr') return ok({ kind: 'remote_addr' });
+  if (spec === 'remote_addr') return ok({ kind: 'remote_addr', variable: 'remote_addr' });
   if (streamOnly) {
     return err('invalid_hash_key', `${protocolClass} 풀은 remote_addr 만 해시 키로 쓸 수 있다`);
   }
-  if (spec === 'request_uri') return ok({ kind: 'request_uri' });
+  if (spec === 'request_uri') return ok({ kind: 'request_uri', variable: 'request_uri' });
 
   const m = /^(header|cookie)\(([^()]*)\)$/.exec(spec);
   if (!m) return err('invalid_hash_key', `알 수 없는 해시 키: ${JSON.stringify(spec)}`);
@@ -158,5 +181,18 @@ export function parseHashKey(protocolClass: ProtocolClass, spec: string): Result
   const name = m[2]!;
   const nameCheck = validateHeaderName(name);
   if (!nameCheck.ok) return err('invalid_hash_key', `${kind} 이름이 token 이 아니다: ${name}`);
-  return ok({ kind, name });
+
+  // token 이라고 nginx 변수명이 되는 것은 아니다.
+  //   $http_*   — 소문자화하고 '-' 를 '_' 로 바꾼다. 그 외 문자는 무효.
+  //   $cookie_* — 이름을 그대로 쓴다. '-' 조차 무효.
+  if (kind === 'header') {
+    if (!/^[A-Za-z0-9-]+$/.test(name)) {
+      return err('invalid_hash_key', `헤더 이름이 nginx 변수명이 될 수 없다: ${name}`);
+    }
+    return ok({ kind, name, variable: `http_${name.toLowerCase().replace(/-/g, '_')}` });
+  }
+  if (!/^[A-Za-z0-9_]+$/.test(name)) {
+    return err('invalid_hash_key', `쿠키 이름이 nginx 변수명이 될 수 없다: ${name}`);
+  }
+  return ok({ kind, name, variable: `cookie_${name}` });
 }

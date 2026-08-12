@@ -195,6 +195,34 @@ const fixtures: Array<{ name: string; model: Model }> = [
       ],
     },
   },
+  {
+    // 4차 검수 High 묶음: 비단사 identifier · IPv6 백엔드 · map 제어어.
+    // 셋 다 산출물이 `nginx -t` 에서 깨지던 것들이다.
+    name: 'R20 identifier 충돌 · IPv6 백엔드 · map 제어어 SNI',
+    model: {
+      ...base,
+      listeners: [
+        { key: 'l1', protocol: 'tcp', bind: '0.0.0.0', port: 9401, enabled: true, defaultPool: 'a-b' },
+        { key: 'l2', protocol: 'tcp', bind: '0.0.0.0', port: 9402, enabled: true, defaultPool: 'a_b' },
+        { key: 'tls', protocol: 'tls_passthrough', bind: '0.0.0.0', port: 9403, enabled: true,
+          onUnmatchedSni: 'reject' },
+      ],
+      pools: [
+        { key: 'a-b', protocolClass: 'tcp', algorithm: 'round_robin' },
+        { key: 'a_b', protocolClass: 'tcp', algorithm: 'round_robin' },
+        { key: 'v6', protocolClass: 'tcp', algorithm: 'round_robin' },
+      ],
+      backends: [
+        { key: 'x', pool: 'a-b', host: '10.0.0.1', port: 11, weight: 1 },
+        { key: 'y', pool: 'a_b', host: '10.0.0.2', port: 11, weight: 1 },
+        { key: 'z', pool: 'v6', host: '2001:db8::1', port: 443, weight: 1 },
+      ],
+      passthroughRoutes: [
+        { key: 'r', listener: 'tls', snis: ['default'], priority: 1,
+          action: { kind: 'proxy', pool: 'v6' } },
+      ],
+    },
+  },
 ];
 
 describe('R17 — 실제 엔진 nginx -t', () => {

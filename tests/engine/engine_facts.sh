@@ -590,6 +590,55 @@ else
   bad E32 "기동 실패"
 fi
 
+# E33 — map 의 제어어는 인용해도 제어어다 (§7.5 SNI/host 렌더의 근거)
+conf_test E33.quoted fail "map 키를 \"default\" 로 인용해도 default 절로 해석된다" <<'EOF'
+events {}
+http {
+  map $host $p {
+    "default"       quoted;
+    default         fallback;
+  }
+  server { listen 19330; location / { return 200 $p; } }
+}
+EOF
+
+P=$(mkprefix E33)
+cat > "$P/conf/nginx.conf" <<'EOF'
+events {}
+http {
+  access_log off;
+  map $host $p {
+    ~^default$    literal_default;
+    ~^hostnames$  literal_hostnames;
+    api.test      exact;
+    default       fallback;
+  }
+  server { listen 19331; location / { return 200 $p; } }
+}
+EOF
+if start_ng "$P"; then
+  [ "$(body 19331 / default)" = literal_default ] \
+    && ok E33.regex "앵커 정규식 ~^default\$ 로는 **리터럴 호스트 default 를 매칭할 수 있다**" \
+    || bad E33.regex "기대 literal_default, 실제 $(body 19331 / default)"
+  [ "$(body 19331 / hostnames)" = literal_hostnames ] && ok E33.regex2 "hostnames 도 동일" \
+                                                      || bad E33.regex2 "실패"
+  [ "$(body 19331 / api.test)" = exact ] && ok E33.exact "일반 호스트는 그대로" || bad E33.exact "실패"
+  stop_ng "$P"
+else
+  bad E33 "기동 실패"
+fi
+
+# E34 — IPv6 업스트림은 대괄호가 필요하다
+conf_test E34.bare fail "IPv6 백엔드를 bracket 없이 쓰면 거부된다" <<'EOF'
+events {}
+stream { upstream p { server 2001:db8::1:443; } server { listen 19340; proxy_pass p; } }
+EOF
+
+conf_test E34.bracket pass "bracket 을 씌우면 통과한다" <<'EOF'
+events {}
+stream { upstream p { server [2001:db8::1]:443; } server { listen 19341; proxy_pass p; } }
+EOF
+
 # E27 — 비-default server 의 ssl_protocols 가 SNI 별로 적용되는가 (§4.6 override, 3차 지적)
 conf_test E27 pass "동일 listen 의 server 별 ssl_protocols 를 설정할 수 있다 (동작은 S16 에서 확인)" <<'EOF'
 events {}

@@ -45,13 +45,13 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 236개 통과, 게이트는 별개
+### 현재 상태 — 스위트 255개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **137 PASS** |
-| 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **9 PASS** |
-| 엔진 사실 (E) | `npm run test:engine` | **48 PASS / 1 SKIP** |
+| 단위 | `npm test` | **149 PASS** |
+| 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
+| 엔진 사실 (E) | `npm run test:engine` | **54 PASS / 1 SKIP** |
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
 | 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS** |
 | 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS** |
@@ -128,6 +128,10 @@ PASS=43  FAIL=0  SKIP=1
 | E31.1 | `location /` 뒤에 `location /api`, `GET /api/x` | **`/api` 가 이긴다** — 선언 순서도 priority 도 아닌 longest-prefix | §7.5 · 4차 |
 | E31.2 | 매칭 없는 경로 | `/` 로 폴백 | §7.5 |
 | E32.1 | `default_server` 없이 모르는 Host | **첫 번째 server 로 조용히 들어간다** — 테넌트 간 누수 | §4.6 · 4차 |
+| E33.quoted | map 키를 `"default"` 로 인용 | **거부** — 인용해도 default 절이다 | §7.5 · 4차 |
+| E33.regex | `~^default$` 를 키로 | 리터럴 호스트 `default` 를 매칭한다 | §7.5 |
+| E34.bare | IPv6 백엔드 bracket 없이 | **거부** — `invalid port in upstream` | §7.1 · 4차 |
+| E34.bracket | `[2001:db8::1]:443` | 수용 | §7.1 |
 | E28.1 | `stream_realip` 없이 `$proxy_protocol_addr` | **실 클라이언트 IP 를 준다** → 소스IP 해시 대체 경로 | §7.6 |
 | E28.2 | 같은 조건의 `$remote_addr` | 앞단 프록시 주소로 남는다 | §7.6 |
 | E29.1 | PROXY 수신 + 송신 체인 | **실 클라이언트 IP 를 잃는다** → 모델이 조합을 막는 근거 | §7.6 |
@@ -384,6 +388,9 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | M7.4 | host 에 `"; } server { listen 80; #` | 422 — 인젝션 |
 | M7.5 | 리다이렉트 대상에 `javascript:` | 422 |
 | M7.6 | 위 전부에 대한 **퍼즈** (10만 케이스) | 렌더 산출물이 항상 `nginx -t` 통과 or 저장 거부. **중간 상태 없음** — *미구현* |
+| M7.7 | 짝 없는 `$` (`$`, `$-x`, `${host`) | 422 — 검증기가 문법을 끝까지 소비한다 — **RUNNABLE** |
+| M7.8 | 비정규 IPv4 표기 (`127.1`, `0x7f.1`) | 422 — WHATWG URL 이 조용히 정규화하는 것을 막는다 — **RUNNABLE** |
+| M7.9 | `cookie(sid-token)`, `header(X.Foo)` | 422 — nginx 변수명이 될 수 없다 — **RUNNABLE** |
 
 ---
 
@@ -404,6 +411,9 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | R6 | `source_ip_hash`, `protocol_class=http` | `ip_hash;` |
 | R7 | `source_ip_hash`, `protocol_class=tcp` | `hash $remote_addr consistent;` |
 | R8 | SNI 라우트 + `on_unmatched_sni=pool` | map 에 `~*` 정규식(대소문자 무시) + `[^.]+`(1라벨) + `default` |
+| R20 | IPv6 백엔드 | `[2001:db8::1]:443` — bracket 없으면 엔진이 거부 (E34) |
+| R20 | 풀 키 `a-b` 와 `a_b` | **서로 다른** upstream 이름 — 치환이 비단사면 중복 선언이 된다 |
+| R20 | SNI 가 `default` | `~^default$` 앵커 정규식 — 인용은 소용없다 (E33) |
 | R19 | http 리스너 | 리스너마다 명시적 `default_server` 하나. 기본 `444`. **실제 요청으로 확인** (E32) |
 | R9 | SNI 라우트, 부재 SNI | map 에 `"" "";` 가 렌더되어 폴백 풀이 아니라 reject 로 간다. **v0 은 `$ssl_preread_protocol` 분기를 만들지 않는다** (두 경우 동작이 같다) |
 | R10 | 겹치는 exact/wildcard host, priority 역전 | 컴파일 결과가 §7.5 클래스 순서를 따르고 **plan 이 경고** |

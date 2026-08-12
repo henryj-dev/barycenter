@@ -353,3 +353,79 @@ describe('R19 — 명시적 default_server (E32)', () => {
     expect(render(m).conf.match(/default_server/g)).toHaveLength(2);
   });
 });
+
+describe('R20 — 4차 검수 구현 High', () => {
+  const stream = (poolKey: string, host: string): Model => ({
+    ...empty,
+    listeners: [{ key: 'l', protocol: 'tcp', bind: '0.0.0.0', port: 900, enabled: true, defaultPool: poolKey }],
+    pools: [{ key: poolKey, protocolClass: 'tcp', algorithm: 'round_robin' }],
+    backends: [{ key: 'b', pool: poolKey, host, port: 443, weight: 1 }],
+  });
+
+  // E34: bracket 없으면 `invalid port in upstream`
+  it('IPv6 백엔드에 대괄호를 씌운다', () => {
+    expect(render(stream('p', '2001:db8::1')).conf).toContain('server [2001:db8::1]:443;');
+  });
+
+  it('IPv4 와 DNS 이름은 그대로', () => {
+    expect(render(stream('p', '10.0.0.1')).conf).toContain('server 10.0.0.1:443;');
+    expect(render(stream('p', 'backend.example.com')).conf).toContain('server backend.example.com:443;');
+  });
+
+  // identifier 변환이 비단사면 서로 다른 풀이 같은 upstream 이름을 갖는다 → nginx -t 실패
+  it('a-b 와 a_b 는 서로 다른 upstream 이름을 갖는다', () => {
+    const m: Model = {
+      ...empty,
+      listeners: [
+        { key: 'l1', protocol: 'tcp', bind: '0.0.0.0', port: 901, enabled: true, defaultPool: 'a-b' },
+        { key: 'l2', protocol: 'tcp', bind: '0.0.0.0', port: 902, enabled: true, defaultPool: 'a_b' },
+      ],
+      pools: [
+        { key: 'a-b', protocolClass: 'tcp', algorithm: 'round_robin' },
+        { key: 'a_b', protocolClass: 'tcp', algorithm: 'round_robin' },
+      ],
+      backends: [
+        { key: 'x', pool: 'a-b', host: '10.0.0.1', port: 11, weight: 1 },
+        { key: 'y', pool: 'a_b', host: '10.0.0.2', port: 11, weight: 1 },
+      ],
+    };
+    const names = [...render(m).conf.matchAll(/upstream (\S+) \{/g)].map((x) => x[1]);
+    expect(new Set(names).size, `upstream 이름이 겹쳤다: ${names.join(', ')}`).toBe(2);
+  });
+
+  // E33: map 의 제어어는 인용해도 제어어다. 앵커 정규식으로만 리터럴 매칭이 된다.
+  it('map 제어어와 겹치는 SNI 는 앵커 정규식으로 낸다', () => {
+    const m: Model = {
+      ...empty,
+      listeners: [
+        { key: 'tls', protocol: 'tls_passthrough', bind: '0.0.0.0', port: 443, enabled: true,
+          onUnmatchedSni: 'reject' },
+      ],
+      pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' }],
+      backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 443, weight: 1 }],
+      passthroughRoutes: [
+        { key: 'r', listener: 'tls', snis: ['default'], priority: 1, action: { kind: 'proxy', pool: 'p' } },
+      ],
+    };
+    const conf = render(m).conf;
+    expect(conf).toContain('~^default$ pool_p;');
+    // 제어어가 그대로 키로 나가면 default 절이 중복되어 nginx -t 가 실패한다
+    expect(conf).not.toMatch(/^\s*default pool_p;$/m);
+  });
+
+  it('일반 호스트는 정규식으로 바꾸지 않는다', () => {
+    const m: Model = {
+      ...empty,
+      listeners: [
+        { key: 'tls', protocol: 'tls_passthrough', bind: '0.0.0.0', port: 443, enabled: true,
+          onUnmatchedSni: 'reject' },
+      ],
+      pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' }],
+      backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 443, weight: 1 }],
+      passthroughRoutes: [
+        { key: 'r', listener: 'tls', snis: ['mail.example.com'], priority: 1, action: { kind: 'proxy', pool: 'p' } },
+      ],
+    };
+    expect(render(m).conf).toContain('mail.example.com pool_p;');
+  });
+});
