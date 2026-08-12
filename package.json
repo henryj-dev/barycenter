@@ -8,6 +8,7 @@
   "engines": {
     "node": ">=22"
   },
+  "exports": { ".": "./src/index.ts" },
   "scripts": {
     "verify": "./scripts/verify.sh",
     "verify:quick": "./scripts/verify.sh --quick",

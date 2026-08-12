@@ -1579,6 +1579,36 @@ topology epoch CAS 와 가변 membership 커서를 분리해야 하는데, 그 �
 
 ### 9.1.1 v0.1 이 고정하는 것 — surface 확정
 
+#### 동결을 둘로 나눈다 (6차 검수 뒤)
+
+원래 질문은 "v0.1 **타입·API·DB 스키마** 를 고정할 수 있는가" 였다. 이걸 둘로 나눈다.
+
+| | 무엇 | 언제 |
+|---|---|---|
+| **A. 타입·DP ABI** | 모델·렌더러·`DataplaneDriver`·세대 규약 | **지금** — 구현과 테스트가 있다 |
+| **B. API·DB 스키마** | OpenAPI · PG DDL · changeset · auth/audit | **구현과 함께** |
+
+**왜 나누는가.** 여섯 번의 검수가 같은 것을 가르쳤다 — **구현하지 않은 계약을 고정하면
+반드시 깨진다.** §9.1 에서 멤버십 계약을 철회한 이유가 그것이고, 5차 반례 ⑤ 는 정상적인
+헬스 진행만으로 그 계약이 깨지는 것을 보여 줬다.
+
+지금 B 를 고정하면 같은 실수를 더 큰 규모로 반복한다. REST 서버도 정본 DB 도 reconciler 도
+없는 상태에서 OpenAPI 와 DDL 을 적어 두면, 그건 계약이 아니라 **아직 검증되지 않은 희망**이다.
+6차 검수의 표현대로 "C 계열은 실행 테스트가 아니라 명세뿐" 이다.
+
+A 는 다르다. 렌더러는 61 개의 엔진 사실 위에 서 있고, DP ABI 는 반례 conformance
+157 건과 실물 nginx e2e 14 건이 지킨다. 이건 고정할 수 있다.
+
+**A 의 동결 대상은 `src/index.ts` 다.** 문서의 문장이 아니라 값이다 — 목록이 바뀌면
+`tests/conformance/v01-surface.test.ts` 가 깨진다. 6차 검수가 "뺐다고 적은 기능이 공개
+타입에 남아 있다" 고 지적했는데, 그건 표면이 코드로 정의돼 있지 않아서 생긴 일이다.
+
+**B 로 미루는 것.** REST 서버 · OpenAPI · PG migration/DDL · `ConfigRevision`/changeset
+sealing · `AuditSink`/`Notifier`/`AuthProvider` · §4 의 `ResourceMeta`. 이것들은 v0.1
+**출시**에는 필요하지만 지금 고정할 근거가 없다.
+
+
+
 freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스키마에 등장하지 않는다.**
 "나중에 쓸지 모르니 필드만 미리" 는 금지다 — 표현 가능한 것은 언젠가 들어온다.
 
@@ -2154,7 +2184,7 @@ block 이다** — 활성화를 판정하지 못하면 상태기계를 고정할
 
 | 단계 | 내용 | 완료 판정 |
 |---|---|---|
-| **v0.1** 골격 | 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
+| **v0.1** 골격 | (동결은 둘로 나뉜다 — §9.1.1) 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
 | **v0.2** L4 | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
 | **v0.3** 멤버십 | 이중 zone 멤버십 평면 + epoch 결박 + 헬스 프로버 + 드레인 관측 + **§6.5 커서·cut·replay 와 멤버십 드라이버 계약 확정** (§9.1) | 백엔드 down 시 reload 없이 격리되고, apply 중 헬스 변화가 경합하지 않는다 (S11 시나리오 회귀 테스트). **활성 epoch 안의 헬스 진행이 전환 중인 commit 을 깨지 않는다** |
 | **v0.4** CLI | `bary` 전 리소스 + changeset/plan/commit/apply + 트랜잭셔널 export/import | GUI 없이 전부 가능. 같은 매니페스트를 두 번 import 해도 결과가 같다 |

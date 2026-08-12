@@ -119,23 +119,36 @@ cat <<'GATES'
 
  6차 반례 7건은 전부 닫혔다. **그러나 검수 E 의 목록은 그것만이 아니다.**
 
- 남은 것 (6차 E)
-   ✅ 세대 materializer(§7.2) · 게시 전 nginx -t · artifact digest 결박 — 해소.
-      .tmp-<이름>-<nonce>/ 에 쓰고 통째로 rename, manifest 를 마지막에.
-      preflight 단계가 **게시 앞에서** 디스크를 다시 읽어 대조한다. 뮤턴트 7종 잡힘.
-   · OpenAPI · DDL · changeset · auth/audit 스키마가 없다
-   ✅ DESIGN §6.2 · §6.3 · §9.2 — 해소. 실제 v0.1 ABI 로 다시 썼고 옛 계약은
-      비규범 부록(6.2.1 · 9.2.1)으로 내렸다. **갈라지면 깨지는 테스트**를 달았다.
-   · fsync 순서 · 락 생성 원자성 미검증 (fault injection 필요)
+ 6차 E 의 남은 항목
+   ✅ 세대 materializer(§7.2) · 게시 전 nginx -t · artifact digest 결박
+   ✅ DESIGN §6.2 · §6.3 · §9.2 — 실제 ABI 로 다시 쓰고 대조를 테스트로 걸었다
+   ·  OpenAPI · DDL · changeset · auth/audit 스키마가 없다      → 아래 B
+   ·  fsync 순서 · 락 생성 원자성 미검증 (fault injection 필요)  → 아래 A
 
- → v0.1 타입·API·DB 스키마 freeze: **No-Go**
+ ─── 동결은 둘로 나뉜다 (§9.1.1) ──────────────────────────────────────
+
+ A. 타입 · DP ABI      src/index.ts 가 동결 대상이다. 목록이 바뀌면 테스트가 깨진다.
+                       렌더러는 엔진 사실 61 건 위에, DP ABI 는 반례 conformance 와
+                       실물 nginx e2e 위에 서 있다.
+
+    남은 것: fsync 순서 · 락 생성 원자성이 **검증되지 않았다** (코드에는 있다).
+             전원 차단 / 파일시스템 fault injection 이 필요하다.
+             6차 검수 판단으로는 "타입 freeze 자체보다 구현·출시 blocker" 다.
+
+ B. API · DB 스키마    OpenAPI · PG DDL · changeset · auth/audit — **아직 없다.**
+                       구현과 함께 고정한다. 구현하지 않은 계약을 고정하면 깨진다는
+                       것을 여섯 번 배웠다 (§9.1 멤버십 철회).
+
+ → A(타입·DP ABI): 7차 검수의 확인을 기다린다. 스스로 Go 라고 적은 적이
+                    여섯 번 있었고 여섯 번 틀렸다.
+ → B(API·DB):      **No-Go** — 만들지 않았다.
 GATES
 
 # 스위트 통과와 freeze 가능은 다르다. CI 가 exit code 만 보고 오해하지 않게
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 6차 반례는 닫혔으나 위 목록이 남았다 → non-zero."
+  echo " --freeze-gate: B(API·DB)가 없고 A는 미확인 → non-zero 로 끝낸다."
   exit 2
 fi
 
