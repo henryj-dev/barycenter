@@ -81,34 +81,55 @@ describe('클래스 내부 정렬', () => {
   });
 });
 
-describe('그림자 / 도달 불가 라우트', () => {
-  it('같은 host 와 같은 path_prefix 가 둘이면 뒤엣것은 도달 불가다', () => {
+describe('중복과 path 우선순위 — E31 이 정정한 것', () => {
+  it('같은 host + 같은 path_prefix 는 **오류**다 — nginx 가 duplicate location 으로 거부한다', () => {
     const out = compileHostRoutes([
       r('first', 'api.example.com', 10, '/'),
       r('second', 'api.example.com', 5, '/'),
     ]);
-    const w = out.warnings.find((x) => x.kind === 'unreachable');
-    expect(w).toBeDefined();
-    expect(w!.routes).toEqual(['second']);
+    expect(out.errors.map((e) => e.kind)).toEqual(['duplicate_match']);
+    expect(out.order).toEqual([]);
   });
 
-  it('path_prefix 가 다르면 그림자가 아니다', () => {
+  it('대소문자만 다른 중복도 오류다', () => {
+    const out = compileHostRoutes([
+      r('upper', 'API.Example.com.', 5),
+      r('lower', 'api.example.com', 5),
+    ]);
+    expect(out.errors.map((e) => e.kind)).toEqual(['duplicate_match']);
+  });
+
+  it('path_prefix 가 다르면 정상이다', () => {
     const out = compileHostRoutes([
       r('root', 'api.example.com', 10, '/'),
       r('api', 'api.example.com', 5, '/api'),
     ]);
-    expect(out.warnings.filter((x) => x.kind === 'unreachable')).toEqual([]);
+    expect(out.errors).toEqual([]);
   });
 
-  it('넓은 path_prefix 가 먼저 오면 좁은 쪽을 가린다', () => {
-    // nginx location 은 longest-prefix 지만, 우리는 컴파일된 순서를 정본으로 삼는다.
+  // E31: location 은 선언 순서도 사용자 priority 도 아닌 **longest-prefix** 로 고른다.
+  it('같은 host 안에서는 priority 와 무관하게 긴 path 가 먼저다', () => {
+    expect(
+      order([r('broad', 'api.example.com', 99, '/'), r('narrow', 'api.example.com', 1, '/api')]),
+    ).toEqual(['narrow', 'broad']);
+  });
+
+  it('사용자 priority 가 path 순서와 어긋나면 경고한다 — 조용히 다르게 동작하지 않는다', () => {
     const out = compileHostRoutes([
       r('broad', 'api.example.com', 99, '/'),
       r('narrow', 'api.example.com', 1, '/api'),
     ]);
-    const w = out.warnings.find((x) => x.kind === 'shadowed');
+    const w = out.warnings.find((x) => x.kind === 'path_priority_ignored');
     expect(w).toBeDefined();
     expect(w!.routes).toEqual(['broad', 'narrow']);
+  });
+
+  it('priority 가 path 길이와 같은 방향이면 경고하지 않는다', () => {
+    const out = compileHostRoutes([
+      r('broad', 'api.example.com', 1, '/'),
+      r('narrow', 'api.example.com', 99, '/api'),
+    ]);
+    expect(out.warnings.filter((x) => x.kind === 'path_priority_ignored')).toEqual([]);
   });
 
   it('와일드카드는 정확일치를 가리지 않는다 — 엔진이 정확일치를 먼저 본다', () => {
@@ -116,7 +137,7 @@ describe('그림자 / 도달 불가 라우트', () => {
       r('wild', '*.example.com', 99),
       r('exact', 'api.example.com', 1),
     ]);
-    expect(out.warnings.filter((x) => x.kind === 'shadowed')).toEqual([]);
+    expect(out.errors).toEqual([]);
   });
 });
 
@@ -124,15 +145,7 @@ describe('입력 검증', () => {
   it('잘못된 host 패턴은 컴파일 오류다', () => {
     const out = compileHostRoutes([r('bad', '*.a.*.b.com', 1)]);
     expect(out.errors.map((e) => e.route)).toEqual(['bad']);
+    expect(out.errors.map((e) => e.kind)).toEqual(['invalid_host']);
     expect(out.order).toEqual([]);
-  });
-
-  it('host 를 정규화한 뒤 비교한다', () => {
-    const out = compileHostRoutes([
-      r('upper', 'API.Example.com.', 5),
-      r('lower', 'api.example.com', 5),
-    ]);
-    const w = out.warnings.find((x) => x.kind === 'unreachable');
-    expect(w, '대소문자만 다른 중복은 그림자다').toBeDefined();
   });
 });

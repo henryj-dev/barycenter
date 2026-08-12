@@ -45,13 +45,13 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 209개 검증, 전부 통과
+### 현재 상태 — 스위트 218개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **116 PASS** |
+| 단위 | `npm test` | **120 PASS** |
 | 골든 (실제 `nginx -t`) | `npm run test:golden` | **8 PASS** |
-| 엔진 사실 (E) | `npm run test:engine` | **43 PASS / 1 SKIP** |
+| 엔진 사실 (E) | `npm run test:engine` | **48 PASS / 1 SKIP** |
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
 | 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS** |
 | 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS** |
@@ -61,12 +61,16 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 
 | | 항목 | 상태 |
 |---|---|---|
-| ✅ | S1 멤버십 평면 · S7 활성화 판정 · S8 인증서 롤백 · S11 epoch 경합 | 통과 |
-| ~ | S5 이중 zone·워커 수렴 통과 / **평면 부분 전환 미검증** | 부분 |
-| ~ | S11 P1·P7·P8·P15 통과 / **P2·P3·P4·P5·P6 미검증** (프로토콜 로직) | 부분 |
-| ❌ | **S12 크래시 저널** | **v0.1 스키마 freeze 의 마지막 block** |
-| ❌ | S13 GC ledger | 미착수 |
+| ❌ | **S11 activation_epoch 경합** | **게이트 FAIL** — 동시 요청에서 낮은 토큰이 슬롯을 덮어쓰는 것이 재현됐다 (4차 검수) |
+| ~ | S1 | reload 없는 peer 선택 **primitive** 만. 가중치·재시도·drain·DNS 없음 |
+| ~ | S5 | 이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증 |
+| ~ | S7 | 로그 행 수를 정본 신호로 씀 → 진단용으로 강등하고 판정 계약 재작성 필요 |
+| ~ | S8 | CN 만 비교 / key·SPKI·chain·SNI 별 자료 미검증 |
+| ❌ | S12 크래시 저널 · S13 GC ledger | 미착수 |
 | ❌ | S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18 | 미착수 |
+
+> **"S12 만 남았다"는 판정은 철회됐다.** 스위트가 green 인 것과 게이트가 열리는 것은
+> 다르다. `./scripts/verify.sh` 가 이제 둘을 나눠서 출력한다.
 
 ---
 
@@ -119,6 +123,11 @@ PASS=43  FAIL=0  SKIP=1
 | E26.1 | 비-TLS 트래픽에서 `$ssl_preread_protocol` | **빈 문자열** → 비-TLS 를 구분할 수 있다 | §4.1 |
 | E26.2 | TLS-no-SNI | *SKIP* — TLS 백엔드 필요. **S9 로 이관** | §4.1 |
 | E27 | 동일 `listen` 의 server 별 `ssl_protocols` 설정 | 문법 수용 (실제 적용 여부는 **S16**) | §4.6 · 3차 |
+| E30.1 | `[::]:p` 와 `0.0.0.0:p` 동시 기동 | **공존한다** — `ipv6only` 기본값은 `on` | §4.5 · 4차 |
+| E30.2 | IPv4 접속 | v4 소켓이 받는다 | §4.5 |
+| E31.1 | `location /` 뒤에 `location /api`, `GET /api/x` | **`/api` 가 이긴다** — 선언 순서도 priority 도 아닌 longest-prefix | §7.5 · 4차 |
+| E31.2 | 매칭 없는 경로 | `/` 로 폴백 | §7.5 |
+| E32.1 | `default_server` 없이 모르는 Host | **첫 번째 server 로 조용히 들어간다** — 테넌트 간 누수 | §4.6 · 4차 |
 | E28.1 | `stream_realip` 없이 `$proxy_protocol_addr` | **실 클라이언트 IP 를 준다** → 소스IP 해시 대체 경로 | §7.6 |
 | E28.2 | 같은 조건의 `$remote_addr` | 앞단 프록시 주소로 남는다 | §7.6 |
 | E29.1 | PROXY 수신 + 송신 체인 | **실 클라이언트 IP 를 잃는다** → 모델이 조합을 막는 근거 | §7.6 |

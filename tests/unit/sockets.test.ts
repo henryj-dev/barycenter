@@ -87,8 +87,18 @@ describe('socketsOverlap — M6', () => {
     expect(socketsOverlap(res('http', '0.0.0.0', 8080), res('http', '0.0.0.0', 8081))).toBe(false);
   });
 
-  it('M6.4 [::] 와일드카드는 IPv4 와일드카드를 덮는다 (ipv6only=off 기본)', () => {
-    expect(socketsOverlap(res('http', '::', 8080), res('http', '0.0.0.0', 8080))).toBe(true);
+  // E30 으로 실측: nginx 의 ipv6only 기본값은 on 이라 두 소켓은 공존한다.
+  // v2 는 이걸 겹침으로 봤고 테스트가 그 오류를 고정하고 있었다.
+  it('M6.4 [::] 와 0.0.0.0 은 겹치지 않는다 — ipv6only 기본값이 on (E30)', () => {
+    expect(socketsOverlap(res('http', '::', 8080), res('http', '0.0.0.0', 8080))).toBe(false);
+  });
+
+  it('v6 와일드카드는 같은 family 의 특정 주소를 덮는다', () => {
+    expect(socketsOverlap(res('http', '::', 8080), res('http', '2001:db8::1', 8080))).toBe(true);
+  });
+
+  it('v4 와일드카드는 v6 특정 주소를 덮지 않는다', () => {
+    expect(socketsOverlap(res('http', '0.0.0.0', 8080), res('http', '2001:db8::1', 8080))).toBe(false);
   });
 
   it('IPv6 특정 주소는 IPv4 특정 주소와 겹치지 않는다', () => {

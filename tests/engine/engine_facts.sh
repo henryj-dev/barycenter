@@ -526,6 +526,70 @@ else
   bad E29 "기동 실패"
 fi
 
+# E30 — ipv6only 기본값. [::]:p 와 0.0.0.0:p 가 충돌하는가 (§4.5 겹침 판정의 근거)
+P=$(mkprefix E30)
+cat > "$P/conf/nginx.conf" <<'EOF'
+events {}
+error_log logs/err.log warn;
+http {
+  access_log off;
+  server { listen [::]:19300;    return 200 "v6"; }
+  server { listen 0.0.0.0:19300; return 200 "v4"; }
+}
+EOF
+if start_ng "$P"; then
+  ok E30.1 "[::]:p 와 0.0.0.0:p 가 **공존한다** — ipv6only 기본값은 on. 겹침으로 보면 안 된다"
+  [ "$(body 19300 / x)" = v4 ] && ok E30.2 "IPv4 로 접속하면 v4 소켓이 받는다" \
+                               || bad E30.2 "예상 밖: $(body 19300 / x)"
+  stop_ng "$P"
+else
+  bad E30.1 "기동 실패 — 두 소켓이 충돌한다. ipv6only 기본이 off 인 빌드다: $(tail -1 "$P/logs/err.log" 2>/dev/null)"
+fi
+
+# E31 — location 은 선언 순서가 아니라 longest-prefix 다 (§7.5 라우트 컴파일러의 근거)
+P=$(mkprefix E31)
+cat > "$P/conf/nginx.conf" <<'EOF'
+events {}
+http {
+  access_log off;
+  server {
+    listen 19310;
+    location /     { return 200 "ROOT"; }
+    location /api  { return 200 "API"; }
+  }
+}
+EOF
+if start_ng "$P"; then
+  r=$(body 19310 /api/x x)
+  [ "$r" = API ] \
+    && ok E31.1 "먼저 선언된 / 가 아니라 **더 긴 /api 가 이긴다** — 사용자 priority 로 path 순서를 뒤집을 수 없다" \
+    || bad E31.1 "기대 API, 실제 '$r' — 선언 순서를 따른다면 §7.5 재작성 필요"
+  [ "$(body 19310 /other x)" = ROOT ] && ok E31.2 "매칭 안 되면 / 로" || bad E31.2 "폴백 실패"
+  stop_ng "$P"
+else
+  bad E31 "기동 실패"
+fi
+
+# E32 — default_server 가 없으면 모르는 Host 는 어디로 가는가 (§4.6)
+P=$(mkprefix E32)
+cat > "$P/conf/nginx.conf" <<'EOF'
+events {}
+http {
+  access_log off;
+  server { listen 19320; server_name api.example.com; return 200 "FIRST_TENANT"; }
+  server { listen 19320; server_name web.example.com; return 200 "SECOND_TENANT"; }
+}
+EOF
+if start_ng "$P"; then
+  r=$(body 19320 / evil.example)
+  [ "$r" = FIRST_TENANT ] \
+    && ok E32.1 "모르는 Host 가 **첫 번째 server 로 조용히 들어간다** — 명시적 default_server 가 없으면 테넌트 간 누수다" \
+    || bad E32.1 "예상 밖: '$r'"
+  stop_ng "$P"
+else
+  bad E32 "기동 실패"
+fi
+
 # E27 — 비-default server 의 ssl_protocols 가 SNI 별로 적용되는가 (§4.6 override, 3차 지적)
 conf_test E27 pass "동일 listen 의 server 별 ssl_protocols 를 설정할 수 있다 (동작은 S16 에서 확인)" <<'EOF'
 events {}

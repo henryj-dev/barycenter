@@ -65,8 +65,11 @@ export function normalizeBind(input: string): Result<BindAddress> {
 /**
  * 두 예약이 같은 소켓을 두고 다투는가.
  *
- * IPv6 와일드카드는 `ipv6only=off` 기본에서 IPv4 까지 덮는다. 이걸 겹침으로 보지 않으면
- * `nginx -t` 는 통과하고 HUP 에서 bind 가 실패한다 — E23 이 보여준 최악의 경로다.
+ * **address family 를 넘는 겹침은 없다.** nginx 의 `ipv6only` 기본값은 `on` 이라
+ * `[::]:p` 와 `0.0.0.0:p` 는 공존한다 — E30 으로 실측했다. v2 는 기본값을 `off` 로
+ * 보고 이 둘을 충돌로 판정했고, 테스트가 그 오류를 고정하고 있었다.
+ *
+ * 렌더러는 이 가정을 숨기지 않기 위해 `[::]:port ipv6only=on` 을 명시적으로 낸다.
  */
 export function socketsOverlap(a: SocketReservation, b: SocketReservation): boolean {
   if (a.key === b.key) return false;
@@ -80,10 +83,9 @@ export function socketsOverlap(a: SocketReservation, b: SocketReservation): bool
   const x = na.value;
   const y = nb.value;
 
-  if (x.wildcard && y.wildcard) return true;
-  if (x.wildcard) return x.family === 'v6' || y.family === 'v4';
-  if (y.wildcard) return y.family === 'v6' || x.family === 'v4';
-  return x.family === y.family && x.addr === y.addr;
+  if (x.family !== y.family) return false;      // ipv6only=on — family 를 넘지 않는다
+  if (x.wildcard || y.wildcard) return true;    // 같은 family 안의 와일드카드는 전부 덮는다
+  return x.addr === y.addr;
 }
 
 /** 결과는 입력 순서와 무관하게 결정적이다 — plan diff 가 흔들리면 안 된다. */

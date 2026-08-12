@@ -30,12 +30,16 @@ export type CompiledRoute = {
 };
 
 export type CompileWarning = {
-  kind: 'priority_inversion' | 'unreachable' | 'shadowed';
+  kind: 'priority_inversion' | 'path_priority_ignored';
   routes: string[];
   message: string;
 };
 
-export type CompileError = { route: string; message: string };
+export type CompileError = {
+  kind: 'invalid_host' | 'duplicate_match';
+  route: string;
+  message: string;
+};
 
 export type CompileResult = {
   order: CompiledRoute[];
@@ -62,7 +66,7 @@ export function compileHostRoutes(routes: RouteInput[]): CompileResult {
   for (const r of routes) {
     const parsed = parseHostPattern(r.host);
     if (!parsed.ok) {
-      errors.push({ route: r.key, message: parsed.message });
+      errors.push({ kind: 'invalid_host', route: r.key, message: parsed.message });
       continue;
     }
     compiled.push({
@@ -74,13 +78,37 @@ export function compileHostRoutes(routes: RouteInput[]): CompileResult {
     });
   }
 
+  // 같은 (host, path_prefix) 는 nginx 에서 duplicate location / conflicting map 이라
+  // 산출물이 `nginx -t` 를 통과하지 못한다. 경고가 아니라 오류다.
+  const seen = new Map<string, string>();
+  for (const c of [...compiled].sort((a, b) => cmp(a.key, b.key))) {
+    const k = `${patternKey(c.pattern)}|${c.pathPrefix}`;
+    const first = seen.get(k);
+    if (first === undefined) seen.set(k, c.key);
+    else {
+      errors.push({
+        kind: 'duplicate_match',
+        route: c.key,
+        message: `'${first}' 와 매치 조건이 같다 (${k}). nginx 가 중복 location 으로 거부한다.`,
+      });
+    }
+  }
+
   // 오류가 있으면 순서를 내지 않는다 — 반쯤 컴파일된 순서는 거짓말이다.
   if (errors.length > 0) return { order: [], warnings: [], errors };
+
+  // 호스트별 대표 priority. 같은 호스트의 라우트는 한 server 블록에 모이므로
+  // 서로의 순서는 priority 가 아니라 **longest-prefix** 가 정한다 (E31).
+  const hostPriority = new Map<string, number>();
+  for (const c of compiled) {
+    const k = patternKey(c.pattern);
+    hostPriority.set(k, Math.max(hostPriority.get(k) ?? -Infinity, c.priority));
+  }
 
   const order = [...compiled].sort(
     (a, b) =>
       CLASS_RANK[b.matchClass] - CLASS_RANK[a.matchClass] ||
-      b.priority - a.priority ||
+      hostPriority.get(patternKey(b.pattern))! - hostPriority.get(patternKey(a.pattern))! ||
       b.pathPrefix.length - a.pathPrefix.length ||
       cmp(a.key, b.key),
   );
@@ -107,37 +135,27 @@ function analyze(order: CompiledRoute[]): CompileWarning[] {
     }
   }
 
-  // 2) 같은 호스트 패턴 + 같은 path_prefix → 뒤엣것은 절대 도달하지 못한다.
-  const seen = new Map<string, string>();
-  for (const r of order) {
-    const k = `${patternKey(r.pattern)}|${r.pathPrefix}`;
-    const first = seen.get(k);
-    if (first === undefined) {
-      seen.set(k, r.key);
-    } else {
-      warnings.push({
-        kind: 'unreachable',
-        routes: [r.key],
-        message: `'${first}' 와 매치 조건이 같아 '${r.key}' 에는 요청이 도달하지 않는다.`,
-      });
-    }
-  }
-
-  // 3) 같은 호스트에서 넓은 path_prefix 가 먼저 오면 좁은 쪽을 가린다.
+  // 2) 같은 호스트 안에서 priority 가 path 길이와 반대 방향이면 그 priority 는 무시된다.
+  //    E31 로 실측: nginx location 은 선언 순서도 우리 priority 도 아닌 longest-prefix 다.
+  //    조용히 다르게 동작하는 대신 경고한다.
   for (let i = 0; i < order.length; i += 1) {
     for (let j = i + 1; j < order.length; j += 1) {
-      const broad = order[i]!;
-      const narrow = order[j]!;
-      if (patternKey(broad.pattern) !== patternKey(narrow.pattern)) continue;
-      if (broad.pathPrefix === narrow.pathPrefix) continue; // (2) 가 다룬다
-      if (!narrow.pathPrefix.startsWith(broad.pathPrefix)) continue;
-      warnings.push({
-        kind: 'shadowed',
-        routes: [broad.key, narrow.key],
-        message:
-          `'${broad.key}'(${broad.pathPrefix}) 가 먼저 매칭되어 ` +
-          `'${narrow.key}'(${narrow.pathPrefix}) 를 가린다.`,
-      });
+      const a = order[i]!;
+      const b = order[j]!;
+      if (patternKey(a.pattern) !== patternKey(b.pattern)) continue;
+      if (a.pathPrefix.length === b.pathPrefix.length) continue;
+      // order 는 이미 longest-prefix 순이다. a 가 먼저인데 priority 가 더 낮다면
+      // 사용자가 지정한 순서와 실제 동작이 어긋난다.
+      if (a.priority < b.priority) {
+        warnings.push({
+          kind: 'path_priority_ignored',
+          routes: [b.key, a.key].sort(cmp),
+          message:
+            `'${a.key}'(${a.pathPrefix}, priority ${a.priority}) 가 ` +
+            `'${b.key}'(${b.pathPrefix}, priority ${b.priority}) 보다 먼저 매칭된다. ` +
+            `같은 호스트 안에서는 priority 가 아니라 path 길이가 순서를 정한다.`,
+        });
+      }
     }
   }
 

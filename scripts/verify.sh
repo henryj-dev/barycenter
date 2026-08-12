@@ -63,15 +63,34 @@ echo "════════════════════════�
 printf '%s\n' "${RESULTS[@]}"
 echo "═══════════════════════════════════════════════════════════════"
 
+# 스위트가 통과하는 것과 착수 게이트가 열리는 것은 다르다.
+# 4차 검수 전까지 이 스크립트는 둘을 뭉뚱그려 "S12 만 남았다" 는 거짓 신호를 냈다.
 if [ $FAILED -eq 0 ]; then
-  echo " 전부 통과."
-  echo ""
-  echo " 남은 착수 게이트 (DESIGN.md §12.0):"
-  echo "   S12  크래시 저널        — v0.1 스키마 freeze 의 마지막 block"
-  echo "   S13  GC ledger"
-  echo "   S5/S11 프로토콜 잔여분  — 평면 부분 전환 · 스냅샷 cut→replay"
-  echo "   S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18"
+  echo " 구현된 스위트: 전부 통과."
 else
-  echo " 실패한 묶음이 있다."
+  echo " 실패한 스위트가 있다."
 fi
+
+cat <<'GATES'
+
+ ─── 착수 게이트는 별개다 (DESIGN.md §12.0) ───────────────────────────
+
+ ❌ S11  activation_epoch 경합      게이트 FAIL
+         순차 하네스는 통과하지만, 동시 요청에서 낮은 leader_token 이
+         read_body() yield 뒤 토큰 재검사 없이 슬롯을 덮어써 트래픽이
+         오염되는 것이 재현됐다 (4차 검수). 하네스를 상태기계 property
+         테스트로 다시 써야 한다.
+
+ ~  S1   멤버십 평면        primitive 만 확인. 가중치·재시도·drain·DNS 없음
+ ~  S5   이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증
+ ~  S7   로그 행 수를 정본 신호로 씀 → 진단용으로 강등하고 판정 계약 재작성 필요
+ ~  S8   CN 만 비교 / key·SPKI·chain·SNI 별 자료 미검증
+
+ ❌ S12  크래시 저널        미착수
+ ❌ S13  GC ledger          미착수
+ ❌ S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18
+
+ → v0.1 타입·API·DB 스키마 freeze: **No-Go**
+GATES
+
 exit $FAILED
