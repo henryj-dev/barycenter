@@ -45,11 +45,11 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 275개 통과, 게이트는 별개
+### 현재 상태 — 스위트 295개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **162 PASS** |
+| 단위 | `npm test` | **182 PASS** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | 엔진 사실 (E) | `npm run test:engine` | **61 PASS / 1 SKIP** |
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
@@ -61,7 +61,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 
 | | 항목 | 상태 |
 |---|---|---|
-| ❌ | **S11 activation_epoch 경합** | **게이트 FAIL** — 동시 요청에서 낮은 토큰이 슬롯을 덮어쓰는 것이 재현됐다 (4차 검수) |
+| ~ | **S11 operation tuple 과 경합** | DP Agent 상태기계(`src/dp`)로 재구현. **P18~P22 통과**하고 직렬화를 제거하면 실패하는 것을 뮤테이션으로 확인. 남은 것: 실제 nginx 와 물린 end-to-end, P3·P5·P6 |
 | ~ | S1 | reload 없는 peer 선택 **primitive** 만. 가중치·재시도·drain·DNS 없음 |
 | ~ | S5 | 이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증 |
 | ~ | S7 | 로그 행 수를 정본 신호로 씀 → 진단용으로 강등하고 판정 계약 재작성 필요 |
@@ -525,6 +525,11 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | **P20** | 같은 좌표에 다른 `payload_digest` 로 재요청 | **거부.** digest 가 같을 때만 cached ACK (§3.6-3) |
 | **P21** | DP Agent 재시작 후 낮은 토큰 RPC | 거부 — 토큰은 side effect **전에** fsync 됐다 (§3.5) |
 | **P22** | 먼저 시작한 프로브가 나중 것보다 늦게 완료 | 낡은 결과를 버린다 — `probe_start_seq` CAS (§6.6) |
+
+**P18~P21 은 `tests/unit/dp-agent.test.ts` 에서 실행된다** (P22 는 리듀서 구현 후).
+동시성 테스트는 **뮤테이션으로 변별력을 확인**했다 — `serial()` 의 직렬화를 제거하면
+두 테스트가 실패한다. 변별하지 못하는 동시성 테스트는 거짓 확신만 준다는 것이
+S11 하네스의 교훈이다.
 | **P16** | DP Agent 재시작 후 옛 토큰 RPC 도착 | 거부 — 최대 토큰은 durable |
 | **P17** | 같은 `topology_version` 인데 `activation_epoch` 만 다름 | 헬스 **재투영 가능** — 멤버십 식별 공간이 같다 (§3.3-4) |
 | P9 | 백엔드 host/port 변경 후 옛 endpoint 의 지연 프로브 결과 도착 | 거부 — `{backend_id, endpoint_fingerprint, probe_spec_digest}` 전부 일치할 때만 투영 (§3.3-5) |

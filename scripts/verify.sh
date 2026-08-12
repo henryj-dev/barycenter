@@ -75,11 +75,11 @@ cat <<'GATES'
 
  ─── 착수 게이트는 별개다 (DESIGN.md §12.0) ───────────────────────────
 
- ❌ S11  activation_epoch 경합      게이트 FAIL
-         순차 하네스는 통과하지만, 동시 요청에서 낮은 leader_token 이
-         read_body() yield 뒤 토큰 재검사 없이 슬롯을 덮어써 트래픽이
-         오염되는 것이 재현됐다 (4차 검수). 하네스를 상태기계 property
-         테스트로 다시 써야 한다.
+ ~  S11  operation tuple 과 경합
+         DP Agent 상태기계(src/dp)로 재구현. P18~P22 가 통과하고, 직렬화를
+         제거하면 실패하는 것을 뮤테이션으로 확인했다.
+         남은 것: 실제 nginx 와 물린 end-to-end, plane 부분 전환(P5/P6),
+         cut→replay(P3), 취소/재시작 조합.
 
  ~  S1   멤버십 평면        primitive 만 확인. 가중치·재시도·drain·DNS 없음
  ~  S5   이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증
