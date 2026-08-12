@@ -99,7 +99,30 @@ const effects = (): Effects => ({
   },
 });
 
-const settle = (ms = 900) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 조건이 참이 될 때까지 기다린다.
+ *
+ * 고정 `sleep` 은 느린 머신에서 거짓 실패를, 빠른 머신에서 거짓 성공을 만든다.
+ * 실제로 이 파일이 간헐적으로 깨졌다 — **간헐적으로 깨지는 테스트는 없느니만 못하다.**
+ * green 이 될 때까지 다시 돌리는 습관을 들이기 때문이다.
+ */
+async function waitFor<T>(
+  probe: () => Promise<T>,
+  ok: (v: T) => boolean,
+  budgetMs = 8000,
+): Promise<T> {
+  const deadline = Date.now() + budgetMs;
+  let last: T = await probe();
+  while (!ok(last) && Date.now() < deadline) {
+    await sleep(100);
+    last = await probe();
+  }
+  return last;
+}
+
+const waitAccepting = (gen: string) => waitFor(probeAccepting, (g) => g === gen);
 
 describe('S12 end-to-end — 실제 nginx', () => {
   beforeAll(() => {
@@ -130,7 +153,11 @@ describe('S12 end-to-end — 실제 nginx', () => {
       '--entrypoint', '/usr/local/openresty/bin/openresty',
       IMAGE, '-p', '/prefix', '-c', 'current/nginx.conf',
     );
-    await settle(1200);
+    // 고정 대기 대신 **실제로 응답할 때까지** 기다린다.
+    const up = await waitAccepting('gen-1');
+    if (up !== 'gen-1') {
+      throw new Error(`컨테이너가 뜨지 않았다: ${docker('logs', container)}`);
+    }
   }, 120_000);
 
   afterEach(() => {
@@ -153,9 +180,8 @@ describe('S12 end-to-end — 실제 nginx', () => {
       operationId: 'e2e-1',
       targetGeneration: 'gen-2',
     });
-    await settle();
     expect(phase).toBe<Phase>('activated');
-    expect(await probeAccepting()).toBe('gen-2');
+    expect(await waitAccepting('gen-2')).toBe('gen-2');
   });
 
   it('게시 직후 죽어도 복구가 이어받는다', async () => {
@@ -181,9 +207,8 @@ describe('S12 end-to-end — 실제 nginx', () => {
 
     // 재시작한 Agent 가 이어받는다.
     const phase = await new ApplyRunner(store, effects()).recover();
-    await settle();
     expect(phase).toBe<Phase>('activated');
-    expect(await probeAccepting()).toBe('gen-2');
+    expect(await waitAccepting('gen-2')).toBe('gen-2');
   });
 
   it('이미 반영된 뒤 복구를 다시 돌려도 reload 를 더 보내지 않는다', async () => {
@@ -197,10 +222,10 @@ describe('S12 end-to-end — 실제 nginx', () => {
       signalReload: async () => {
         reloads += 1;
         await fx.signalReload();
-        await settle();          // nginx 가 실제로 세대를 바꿀 시간을 준다
       },
     };
     await new ApplyRunner(store, counted).run({ operationId: 'e2e-3', targetGeneration: 'gen-2' });
+    expect(await waitAccepting('gen-2')).toBe('gen-2');
     expect(reloads).toBe(1);
 
     await new ApplyRunner(store, counted).recover();
@@ -215,16 +240,14 @@ describe('S12 end-to-end — 실제 nginx', () => {
     await new ApplyRunner(new MemoryStore(), fx).run({
       operationId: 'e2e-fwd', targetGeneration: 'gen-2',
     });
-    await settle();
-    expect(await probeAccepting()).toBe('gen-2');
+    expect(await waitAccepting('gen-2')).toBe('gen-2');
 
     // gen-3 는 gen-1 과 같은 내용이라고 가정한 clone 이다 (§3.3 — 옛 topology, 새 세대).
     const back = await new ApplyRunner(new MemoryStore(), fx).run({
       operationId: 'e2e-back', targetGeneration: 'gen-3',
     });
-    await settle();
     expect(back).toBe<Phase>('activated');
-    expect(await probeAccepting()).toBe('gen-3');
+    expect(await waitAccepting('gen-3')).toBe('gen-3');
   });
 
   it('없는 세대는 게시하지 않는다 — 실행 중인 nginx 를 건드리지 않는다', async () => {

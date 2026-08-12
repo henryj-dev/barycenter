@@ -53,6 +53,10 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | 단위 | `npm test` | **208 PASS** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | **e2e (실제 nginx)** | `npm run test:e2e` | **6 PASS** — 저널이 실제 nginx 를 수렴시킨다 |
+
+> e2e 는 고정 `sleep` 을 쓰지 않는다. **조건이 참이 될 때까지 폴링한다.**
+> 처음엔 고정 대기를 썼다가 간헐적으로 깨졌다 — 간헐적으로 깨지는 테스트는 없느니만
+> 못하다. green 이 될 때까지 다시 돌리는 습관을 들이기 때문이다.
 | 엔진 사실 (E) | `npm run test:engine` | **61 PASS / 1 SKIP** |
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
 | 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS** |
