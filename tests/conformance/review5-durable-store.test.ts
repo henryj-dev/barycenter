@@ -201,8 +201,9 @@ describe('프로세스 간 단일 writer — 진짜 두 번째 프로세스로 �
 
   it('죽은 프로세스가 남긴 락은 회수한다', () => {
     store.release();
-    // 존재하지 않을 pid 로 락을 위조한다.
-    writeFileSync(`${statePath}.lock`, JSON.stringify({ pid: 0x7ffffff0 }), 'utf8');
+    // 존재하지 않을 pid 로 락을 위조한다. **nonce 도 있어야 한다** — 6차 검수 뒤
+    // 읽을 수 없는 락은 회수 대상이 아니라 "살아 있는 것" 으로 취급한다.
+    writeFileSync(`${statePath}.lock`, JSON.stringify({ pid: 0x7ffffff0, nonce: '위조' }), 'utf8');
     expect(runChild(statePath), '죽은 락에 영원히 막혔다').toBe('OPENED');
     store = FileStore.open(statePath);
   });

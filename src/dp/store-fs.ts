@@ -19,6 +19,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -26,7 +27,7 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { AgentState, DurableStore } from './agent.js';
 import { StoreConflict } from './agent.js';
@@ -45,6 +46,29 @@ export class StoreLocked extends Error {
   constructor(readonly holderPid: number) {
     super(`다른 프로세스(pid ${holderPid})가 이 상태를 쓰고 있다`);
     this.name = 'StoreLocked';
+  }
+}
+
+/**
+ * 락을 잃었다. 놓았거나, 죽은 줄 알고 남이 회수했거나.
+ *
+ * **조용히 성공하면 안 된다.** 두 프로세스가 같은 상태를 각자 옮기게 된다.
+ */
+export class StoreLockLost extends Error {
+  constructor(message: string) {
+    super(`이 상태의 쓰기 권한이 없다: ${message}`);
+    this.name = 'StoreLockLost';
+  }
+}
+
+type LockRecord = { pid: number; nonce: string };
+
+/** 상태를 읽기만 하는 핸들. **`save` 가 없다** — 타입에도 런타임에도. */
+export class ReadOnlyFileStore {
+  constructor(readonly path: string) {}
+
+  load(): AgentState | undefined {
+    return readState(this.path);
   }
 }
 
@@ -70,6 +94,13 @@ function fsyncDir(path: string): void {
 export class FileStore implements DurableStore {
   private tmpCounter = 0;
   private lockPath: string | undefined;
+  /**
+   * 이 핸들의 락 표식 (6차 반례 ⑤).
+   *
+   * pid 만으로는 부족하다. 놓았다 다시 잡은 같은 프로세스, 죽은 줄 알고 회수당한 뒤의
+   * 옛 핸들 — 둘 다 pid 가 같다. **매 쓰기마다 이게 아직 파일에 있는지 확인한다.**
+   */
+  private nonce: string | undefined;
 
   private constructor(readonly path: string) {}
 
@@ -87,26 +118,46 @@ export class FileStore implements DurableStore {
     return store;
   }
 
-  /** 락 없이 연다. **읽기 전용 검사에만 쓴다** — 두 writer 가 붙으면 안 된다. */
-  static openUnlocked(path: string): FileStore {
-    return new FileStore(path);
+  /**
+   * 읽기 전용으로 연다. 락을 잡지 않는 대신 **쓸 수 없는 타입**을 돌려준다.
+   *
+   * 6차 검수 전에는 이게 `FileStore` 를 돌려줬고, 그래서 주인이 있는 파일을 그냥
+   * 덮어쓸 수 있었다. "쓰기에만 쓰지 마세요" 는 계약이 아니다.
+   */
+  static openReadOnly(path: string): ReadOnlyFileStore {
+    return new ReadOnlyFileStore(path);
   }
 
   private acquire(lockPath: string): void {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const nonce = randomBytes(16).toString('hex');
+      // **완성된 파일을 원자적으로 건다.** `wx` 로 만들고 나서 내용을 쓰면 그 사이에
+      // 남이 빈 파일을 읽고 "망가진 락" 으로 판단해 지울 수 있다 (6차 지적).
+      // `link` 는 대상이 있으면 EEXIST 로 실패하므로 만들기와 걸기가 한 번에 끝난다.
+      const tmp = `${lockPath}.new-${process.pid}-${nonce}`;
+      writeLockFile(tmp, { pid: process.pid, nonce });
       try {
-        const fd = openSync(lockPath, 'wx');
-        writeSync(fd, JSON.stringify({ pid: process.pid }), 0, 'utf8');
-        fsyncSync(fd);
-        closeSync(fd);
+        linkSync(tmp, lockPath);
+        unlinkSync(tmp);
         fsyncDir(dirname(lockPath));
         this.lockPath = lockPath;
+        this.nonce = nonce;
         return;
       } catch (e) {
+        unlinkSync(tmp);
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-        const holder = readHolder(lockPath);
-        if (holder !== undefined && isAlive(holder)) throw new StoreLocked(holder);
-        // 죽은 프로세스가 남긴 락이다. 회수하고 한 번 더 시도한다.
+      }
+
+      const holder = readLock(lockPath);
+      if (holder === undefined || isAlive(holder.pid)) {
+        // 읽을 수 없는 락은 **살아 있는 것으로 취급한다.** 지우는 쪽으로 틀리면
+        // 두 writer 가 열린다 — 안 열리는 쪽으로 틀리는 게 낫다.
+        throw new StoreLocked(holder?.pid ?? -1);
+      }
+      // 죽은 프로세스의 락이다. **그 레코드가 아직 그대로일 때만** 지운다 —
+      // 그 사이 남이 새로 잡았으면 nonce 가 다르다.
+      const still = readLock(lockPath);
+      if (still?.nonce === holder.nonce) {
         try {
           unlinkSync(lockPath);
         } catch {
@@ -117,49 +168,47 @@ export class FileStore implements DurableStore {
     throw new StoreLocked(-1);
   }
 
-  /** 락을 놓는다. 프로세스 종료 시에도 불러야 다음 기동이 즉시 열린다. */
+  /** 이 핸들이 아직 주인인가. 아니면 던진다. */
+  private assertOwner(): void {
+    if (this.lockPath === undefined || this.nonce === undefined) {
+      throw new StoreLockLost('락을 잡지 않았거나 이미 놓았다');
+    }
+    const holder = readLock(this.lockPath);
+    if (holder === undefined) throw new StoreLockLost('락 파일이 사라졌다');
+    if (holder.nonce !== this.nonce) {
+      throw new StoreLockLost(`락의 주인이 바뀌었다 (pid ${holder.pid})`);
+    }
+  }
+
+  /**
+   * 락을 놓는다. 프로세스 종료 시에도 불러야 다음 기동이 즉시 열린다.
+   *
+   * **내 락만 지운다.** 죽은 줄 알고 회수당한 뒤 뒤늦게 놓으면, 확인 없이 지우는 순간
+   * 새 주인의 락이 사라지고 제3 writer 가 열린다 (6차 반례 ⑤c).
+   */
   release(): void {
-    if (this.lockPath === undefined) return;
+    const lockPath = this.lockPath;
+    const nonce = this.nonce;
+    this.lockPath = undefined;
+    this.nonce = undefined;
+    if (lockPath === undefined) return;
+    if (readLock(lockPath)?.nonce !== nonce) return;
     try {
-      unlinkSync(this.lockPath);
+      unlinkSync(lockPath);
     } catch {
       /* 이미 없으면 그만 */
     }
-    this.lockPath = undefined;
   }
 
   load(): AgentState | undefined {
-    if (!existsSync(this.path)) return undefined;
-
-    let raw: string;
-    try {
-      raw = readFileSync(this.path, 'utf8');
-    } catch (e) {
-      throw new StoreCorrupted(`읽을 수 없다: ${(e as Error).message}`);
-    }
-    // 빈 파일은 "없는 것" 이 아니다. 쓰다 만 흔적일 수 있다.
-    if (raw.length === 0) throw new StoreCorrupted('파일이 비어 있다');
-
-    let envelope: Envelope;
-    try {
-      envelope = JSON.parse(raw) as Envelope;
-    } catch (e) {
-      throw new StoreCorrupted(`JSON 이 아니다 (부분 쓰기?): ${(e as Error).message}`);
-    }
-    if (envelope.schema !== STORE_SCHEMA) {
-      throw new StoreCorrupted(`모르는 스키마 ${envelope.schema} (아는 것은 ${STORE_SCHEMA})`);
-    }
-    if (envelope.state === undefined || envelope.state === null) {
-      throw new StoreCorrupted('상태가 없다');
-    }
-    const actual = digestOf(envelope.state);
-    if (actual !== envelope.checksum) {
-      throw new StoreCorrupted(`체크섬 불일치 (${envelope.checksum} ≠ ${actual})`);
-    }
-    return envelope.state;
+    return readState(this.path);
   }
 
   async save(state: AgentState): Promise<void> {
+    // **쓰기마다 주인인지 확인한다** (6차 반례 ⑤). `open()` 경쟁만으로는 부족하다 —
+    // 놓은 핸들도, 회수당한 핸들도 계속 쓸 수 있었다.
+    this.assertOwner();
+
     // CAS 를 **먼저** 본다. 밀린 쓰기가 임시 파일조차 만들지 않게.
     const current = existsSync(this.path) ? this.load() : undefined;
     const expected = (current?.version ?? 0) + 1;
@@ -186,10 +235,53 @@ export class FileStore implements DurableStore {
   }
 }
 
-function readHolder(lockPath: string): number | undefined {
+function readState(path: string): AgentState | undefined {
+  if (!existsSync(path)) return undefined;
+
+  let raw: string;
   try {
-    const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: number };
-    return typeof parsed.pid === 'number' ? parsed.pid : undefined;
+    raw = readFileSync(path, 'utf8');
+  } catch (e) {
+    throw new StoreCorrupted(`읽을 수 없다: ${(e as Error).message}`);
+  }
+  // 빈 파일은 "없는 것" 이 아니다. 쓰다 만 흔적일 수 있다.
+  if (raw.length === 0) throw new StoreCorrupted('파일이 비어 있다');
+
+  let envelope: Envelope;
+  try {
+    envelope = JSON.parse(raw) as Envelope;
+  } catch (e) {
+    throw new StoreCorrupted(`JSON 이 아니다 (부분 쓰기?): ${(e as Error).message}`);
+  }
+  if (envelope.schema !== STORE_SCHEMA) {
+    throw new StoreCorrupted(`모르는 스키마 ${envelope.schema} (아는 것은 ${STORE_SCHEMA})`);
+  }
+  if (envelope.state === undefined || envelope.state === null) {
+    throw new StoreCorrupted('상태가 없다');
+  }
+  const actual = digestOf(envelope.state);
+  if (actual !== envelope.checksum) {
+    throw new StoreCorrupted(`체크섬 불일치 (${envelope.checksum} ≠ ${actual})`);
+  }
+  return envelope.state;
+}
+
+function writeLockFile(path: string, record: LockRecord): void {
+  const fd = openSync(path, 'wx');
+  try {
+    writeSync(fd, JSON.stringify(record), 0, 'utf8');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readLock(lockPath: string): LockRecord | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as Partial<LockRecord>;
+    return typeof parsed.pid === 'number' && typeof parsed.nonce === 'string'
+      ? { pid: parsed.pid, nonce: parsed.nonce }
+      : undefined;
   } catch {
     return undefined;
   }

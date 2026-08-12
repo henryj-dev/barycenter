@@ -110,16 +110,22 @@ cat <<'GATES'
                             + apply 실행 큐. 6개 동시 → publish 1회 · HUP 1회.
  ④ partial 복구           ✅ 해소. partially_activated 가 비종단이다. 유한 재시도 뒤
                             소유권과 남은 예약을 반납한다.
- ⑤ FileStore 락 우회        openUnlocked().save() 로 덮어쓴다. 놓은 handle 도 쓴다.
-                            새 주인이 죽은 락을 회수한 뒤 옛 handle 의 release 가
-                            그 락을 지워 제3 writer 가 열린다.
+ ⑤ FileStore 락           ✅ 해소. 락 레코드에 nonce. save 마다 주인 확인, release 도
+                            내 락만 지운다. 읽기 전용은 save 가 없는 타입이다.
  ⑥ 복구 경로 펜싱         ✅ 해소. drive() 가 **매 단계 부작용 앞에서** 토큰과
                             소유권을 재확인한다.
  ⑦ 좌표 정규화            ✅ 해소. tupleFor 가 BigInt 정규형으로 만든다.
                             10진 정수가 아니면 거부한다.
 
- 그 외 미해소: 세대 materializer(§7.2) · 게시 전 nginx -t · OpenAPI/DDL ·
-               DESIGN §6.2·§6.3·§9.2 와 실제 ABI 불일치 · fsync 순서 미검증
+ 6차 반례 7건은 전부 닫혔다. **그러나 검수 E 의 목록은 그것만이 아니다.**
+
+ 남은 것 (6차 E)
+   · 세대 materializer(§7.2) — .tmp-N · manifest/READY · 디렉토리 rename 이 없다
+   · 게시 전 `nginx -t` 가 없다
+   · 오퍼레이션이 artifact digest 에 결박되지 않는다 (같은 이름 다른 바이트)
+   · OpenAPI · DDL · changeset · auth/audit 스키마가 없다
+   · DESIGN §6.2 · §6.3 · §9.2 와 실제 ABI 불일치
+   · fsync 순서 · 락 생성 원자성 미검증 (fault injection 필요)
 
  → v0.1 타입·API·DB 스키마 freeze: **No-Go**
 GATES
@@ -128,7 +134,7 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 6차 반례 ⑤(FileStore 락) 외 그 밖의 항목 미해소 → non-zero."
+  echo " --freeze-gate: 6차 반례는 닫혔으나 위 목록이 남았다 → non-zero."
   exit 2
 fi
 

@@ -46,12 +46,12 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 463개 통과, 게이트는 별개
+### 현재 상태 — 스위트 475개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
 | 단위 | `npm test` | **216 PASS** |
-| conformance | `npm run test:conformance` | **120 PASS** — 5차 반례(blocker 1~5) · 크래시 지점 매핑 · **6차 반례 ①②③④⑥⑦** |
+| conformance | `npm run test:conformance` | **132 PASS** — 5차 반례(blocker 1~5) · 크래시 지점 매핑 · **6차 반례 ①~⑦ 전부** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | **e2e (실제 nginx)** | `npm run test:e2e` | **14 PASS** — 저널이 실제 nginx 를 수렴시킨다 (http·stream 두 평면). 그중 6건은 **DP 컨테이너 안에서** `FsEffects` 까지 실물로 돈다 |
 
