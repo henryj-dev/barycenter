@@ -9,7 +9,12 @@
 
 export type ProtocolClass = 'http' | 'tcp' | 'udp';
 
-export type ListenerProtocol = 'http' | 'https' | 'tls_passthrough' | 'tcp' | 'udp';
+/**
+ * **`https` 는 없다.** 렌더러가 TLS 종단을 내지 못하는데 타입으로 제공하면, v3 처럼
+ * `protocol: 'https'` 가 평문 `listen 443;` 으로 렌더된다. S16(SNI 별 TLS policy)·
+ * S17(인증서 선택)이 통과하고 실제 TLS 렌더러가 생긴 뒤에 되살린다.
+ */
+export type ListenerProtocol = 'http' | 'tls_passthrough' | 'tcp' | 'udp';
 
 export type UdpPreset = 'dns' | 'wireguard' | 'game_generic' | 'custom';
 
@@ -38,6 +43,7 @@ export type Listener = {
    */
   acceptProxyProtocol?: boolean;
   udp?: { preset: UdpPreset };
+  http?: HttpProfile;
   /** tls_passthrough 전용 */
   onUnmatchedSni?: SniOutcome;
   prereadTimeoutS?: number;
@@ -48,6 +54,14 @@ export type Listener = {
  * 밸런서 경로가 확정된 이상 그 경로에서는 워커별 근사가 된다. 정확한 것처럼 보이는
  * 이름으로 근사를 파느니 빼는 편이 낫다. S6 이 오차를 재고 나서 되살릴지 정한다.
  */
+/**
+ * `default_server` 의 동작. E32 로 실측: 명시하지 않으면 모르는 Host 가 **첫 번째 server**
+ * 로 조용히 들어간다. 멀티테넌트에서는 테넌트 간 누수다. 기본은 끊는 것이다.
+ */
+export type HttpProfile = {
+  defaultAction?: 'reject' | { pool: string };
+};
+
 export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash';
 
 export type Pool = {

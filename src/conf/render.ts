@@ -22,6 +22,7 @@ import {
 } from './ast.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
 import { poolsReachedBy } from '../validate/engine-constraints.js';
+import { ModelValidationError, validateModel } from '../validate/model.js';
 import { normalizeBind } from '../validate/sockets.js';
 import type {
   Backend,
@@ -62,17 +63,25 @@ const UDP_PRESETS: Record<UdpPreset, { responses?: number; timeoutS: number; reu
   custom: { timeoutS: 600, reuseport: false },
 };
 
-/** `listen` 인자. 와일드카드 바인드면 포트만 낸다. */
+/**
+ * `listen` 인자.
+ *
+ * 잘못된 bind 는 여기 도달하지 않는다 — `validateModel` 이 먼저 막는다. 도달했다면
+ * 검증을 건너뛴 것이므로 조용히 와일드카드로 바꾸지 않고 던진다 (4차 검수 Critical).
+ *
+ * IPv6 는 `ipv6only=on` 을 **명시**한다. 그게 nginx 기본값이지만(E30), 겹침 판정이 그
+ * 가정 위에 서 있으므로 산출물이 가정을 드러내야 한다.
+ */
 function listenArgs(l: Listener): ConfValue[] {
   const bind = normalizeBind(l.bind);
-  const base: ConfValue[] =
-    bind.ok && bind.value.wildcard
-      ? [num(l.port)]
-      : bind.ok && bind.value.family === 'v6'
-        ? [lit(`[${bind.value.addr}]:${l.port}`)]
-        : bind.ok
-          ? [lit(`${bind.value.addr}:${l.port}`)]
-          : [num(l.port)];
+  if (!bind.ok) {
+    throw new Error(`검증되지 않은 bind 가 렌더에 도달했다: ${l.key} → ${JSON.stringify(l.bind)}`);
+  }
+  const base: ConfValue[] = bind.value.wildcard
+    ? [num(l.port)]
+    : bind.value.family === 'v6'
+      ? [lit(`[${bind.value.addr}]:${l.port}`), lit('ipv6only=on')]
+      : [lit(`${bind.value.addr}:${l.port}`)];
   // udp 는 PROXY 수신을 지원하지 않는다 (§4.7). 모델이 막지만 렌더도 내지 않는다.
   if (l.acceptProxyProtocol === true && l.protocol !== 'udp') base.push(lit('proxy_protocol'));
   return base;
@@ -195,6 +204,31 @@ function httpServerBlocks(
   return out;
 }
 
+/**
+ * 명시적 `default_server`.
+ *
+ * E32 로 실측: 없으면 모르는 Host 가 **첫 번째 server 블록**으로 조용히 들어간다.
+ * 멀티테넌트에서 그건 테넌트 간 누수다. 기본은 `444`(응답 없이 끊기)로 막는다.
+ */
+function defaultServerBlock(listener: Listener, poolsWithBackends: Set<string>): ConfNode {
+  const action = listener.http?.defaultAction ?? 'reject';
+  const body: ConfNode[] =
+    action !== 'reject' && poolsWithBackends.has(action.pool)
+      ? [
+          block('location', [lit('/')], [
+            directive('proxy_pass', [lit(`http://${upstreamName(action.pool)}`)]),
+            directive('proxy_set_header', [lit('Host'), variable('host')]),
+          ]),
+        ]
+      : [directive('return', [num(444)])];
+
+  return block('server', [], [
+    directive('listen', [...listenArgs(listener), lit('default_server')]),
+    directive('server_name', [lit('_')]),
+    ...body,
+  ]);
+}
+
 // ───────────────────────────────────────────────────────────── stream ───────
 
 /** SNI 결과를 map 값으로 바꾼다. reject 는 빈 값 → proxy_pass 가 실패하고 연결이 끊긴다. */
@@ -289,6 +323,10 @@ function streamServerBlock(listener: Listener, pool: Pool | undefined): ConfNode
 // ──────────────────────────────────────────────────────────── render ───────
 
 export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): RenderedConfig {
+  // fail closed. 검증 실패를 렌더가 흡수하면 의미가 바뀐다 (4차 검수 Critical).
+  const issues = validateModel(model);
+  if (issues.length > 0) throw new ModelValidationError(issues);
+
   const pools = new Map(model.pools.map((p) => [p.key, p]));
   const backendsByPool = new Map<string, Backend[]>();
   for (const b of model.backends) {
@@ -313,7 +351,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
   }
   const sourceIpVar = (poolKey: string): string =>
     viaProxyProtocol.has(poolKey) ? 'proxy_protocol_addr' : 'remote_addr';
-  const httpListeners = listeners.filter((l) => l.protocol === 'http' || l.protocol === 'https');
+  const httpListeners = listeners.filter((l) => l.protocol === 'http');
   const streamListeners = listeners.filter(
     (l) => l.protocol === 'tcp' || l.protocol === 'udp' || l.protocol === 'tls_passthrough',
   );
@@ -332,6 +370,8 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     const usedPools = new Set<string>();
     let anyWebsocket = false;
     for (const l of httpListeners) {
+      const da = l.http?.defaultAction;
+      if (da !== undefined && da !== 'reject' && poolsWithBackends.has(da.pool)) usedPools.add(da.pool);
       for (const r of routesByListener.get(l.key) ?? []) {
         if (r.action.kind !== 'proxy') continue;
         if (!poolsWithBackends.has(r.action.pool)) continue;
@@ -356,6 +396,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
       );
     }
     for (const l of httpListeners) {
+      children.push(defaultServerBlock(l, poolsWithBackends));
       children.push(
         ...httpServerBlocks(l, routesByListener.get(l.key) ?? [], poolsWithBackends),
       );

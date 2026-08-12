@@ -26,7 +26,6 @@ const res = (
 describe('transportOf', () => {
   it('L7 프로토콜은 전부 tcp 로 접힌다', () => {
     expect(transportOf('http')).toBe('tcp');
-    expect(transportOf('https')).toBe('tcp');
     expect(transportOf('tls_passthrough')).toBe('tcp');
     expect(transportOf('tcp')).toBe('tcp');
   });
@@ -67,8 +66,8 @@ describe('normalizeBind', () => {
 });
 
 describe('socketsOverlap — M6', () => {
-  it('M6.1 https:443 과 tls_passthrough:443 은 충돌한다', () => {
-    expect(socketsOverlap(res('https', '0.0.0.0', 443), res('tls_passthrough', '0.0.0.0', 443))).toBe(true);
+  it('M6.1 http:443 과 tls_passthrough:443 은 충돌한다 — 둘 다 transport=tcp', () => {
+    expect(socketsOverlap(res('http', '0.0.0.0', 443), res('tls_passthrough', '0.0.0.0', 443))).toBe(true);
   });
 
   it('M6.2 tcp:9999 와 udp:9999 는 공존한다 (E12)', () => {
@@ -114,7 +113,7 @@ describe('socketsOverlap — M6', () => {
 describe('findSocketConflicts', () => {
   it('충돌 쌍을 전부 찾는다', () => {
     const conflicts = findSocketConflicts([
-      res('https', '0.0.0.0', 443, 'web'),
+      res('http', '0.0.0.0', 443, 'web'),
       res('tls_passthrough', '0.0.0.0', 443, 'passthru'),
       res('tcp', '0.0.0.0', 9999, 'game-tcp'),
       res('udp', '0.0.0.0', 9999, 'game-udp'),
@@ -126,12 +125,12 @@ describe('findSocketConflicts', () => {
 
   it('충돌이 없으면 빈 배열', () => {
     expect(
-      findSocketConflicts([res('http', '0.0.0.0', 80, 'a'), res('https', '0.0.0.0', 443, 'b')]),
+      findSocketConflicts([res('http', '0.0.0.0', 80, 'a'), res('http', '0.0.0.0', 443, 'b')]),
     ).toEqual([]);
   });
 
   it('결과가 결정적이다 — 입력 순서와 무관', () => {
-    const a = res('https', '0.0.0.0', 443, 'web');
+    const a = res('http', '0.0.0.0', 443, 'web');
     const b = res('tls_passthrough', '0.0.0.0', 443, 'passthru');
     expect(findSocketConflicts([a, b])).toEqual(findSocketConflicts([b, a]));
   });

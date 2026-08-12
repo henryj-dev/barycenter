@@ -16,6 +16,13 @@
 > **S11 은 게이트 FAIL 이고 "리더 펜싱이 성립한다"는 결론을 철회한다.** 순차 하네스로
 > 동시성 안전을 주장한 것이 오류였다.
 >
+> **함께 고친 구현 Critical 3건** (4차 C 절):
+> ① 잘못된 `bind` 가 와일드카드로 확대되던 것 → `validateModel` 을 통과한 모델만 렌더한다
+> (fail closed). ② `protocol: 'https'` 가 평문 `listen 443;` 으로 렌더되던 것 → **타입에서
+> `https` 를 제거했다.** 렌더러가 TLS 종단을 못 내는데 타입으로 제공하면 거짓말이 된다.
+> S16·S17 통과와 실제 TLS 렌더러가 생긴 뒤에 되살린다. ③ `default_server` 부재로 모르는
+> Host 가 첫 테넌트로 들어가던 것 → 리스너마다 명시적 `default_server` 를 내고 기본은 `444`.
+>
 > 함께 실측으로 뒤집힌 것: `ipv6only` 기본값은 **`on`** (E30, `[::]` 와 `0.0.0.0` 은 공존),
 > location 은 선언 순서가 아니라 **longest-prefix** (E31), `default_server` 가 없으면 모르는
 > Host 가 **첫 번째 server 로 들어간다** (E32). 앞의 둘은 코드와 테스트가 틀린 사실을
@@ -1191,6 +1198,7 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
   따라서 목록을 하드코딩하면 어떤 이미지를 골라도 "설계 위반"이 된다. 필수와 선택을 나눈다.
 
   - **필수**: `stream`, `stream_ssl`, `stream_ssl_preread`, `http_v2`, `http_ssl`, `http_realip`
+  - ⚠️ v0 렌더러는 아직 TLS 종단을 내지 않으므로 `https` 리스너를 제공하지 않는다 (§4.1).
   - **선택(기능을 좁힘)**: `stream_realip`, `http_lua`, `stream_lua`
 
   `stream_realip` 이 없을 때 실측된 결과 (E28·E29):

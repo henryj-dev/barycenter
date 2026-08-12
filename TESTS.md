@@ -45,12 +45,12 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 218개 통과, 게이트는 별개
+### 현재 상태 — 스위트 236개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **120 PASS** |
-| 골든 (실제 `nginx -t`) | `npm run test:golden` | **8 PASS** |
+| 단위 | `npm test` | **137 PASS** |
+| 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **9 PASS** |
 | 엔진 사실 (E) | `npm run test:engine` | **48 PASS / 1 SKIP** |
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
 | 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS** |
@@ -303,6 +303,9 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | M1.2 | `protocol=http` + `http2=true` | 422 — `http2` 는 `HttpsProfile` 에만 |
 | M1.3 | `protocol=tcp`, `default_pool_id` 누락 | 422 |
 | M1.4 | `protocol=tls_passthrough` + `tls_policy_id` | 422 — 패스스루는 인증서를 제시하지 않는다 |
+| M1.9 | 잘못된 `bind`(`127.0.0.1x`) | **저장 거부.** 렌더가 와일드카드로 바꾸지 않는다 — **RUNNABLE** |
+| M1.10 | 없는 풀/리스너 참조, 백엔드 없는 풀 | **저장 거부.** 렌더에서 조용히 사라지게 두지 않는다 — **RUNNABLE** |
+| M1.11 | `protocol=https` | **표현 불가** — 렌더러가 TLS 종단을 못 내는 동안 타입에서 제거 |
 | M1.8 | `tls_passthrough` + `on_no_sni` 설정 시도 | **표현 불가** — 부재·파싱실패는 `reject` 고정. `on_unmatched_sni` 만 설정 가능 (§4.1) |
 | M1.5 | `inbound_proxy_protocol.enabled=true`, `trusted_proxy_cidrs=[]` | 422 — **비어 있으면 source IP 스푸핑** |
 | M1.6 | `udp.expected_responses` 를 `tcp` 리스너에 | 422 |
@@ -401,6 +404,7 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | R6 | `source_ip_hash`, `protocol_class=http` | `ip_hash;` |
 | R7 | `source_ip_hash`, `protocol_class=tcp` | `hash $remote_addr consistent;` |
 | R8 | SNI 라우트 + `on_unmatched_sni=pool` | map 에 `~*` 정규식(대소문자 무시) + `[^.]+`(1라벨) + `default` |
+| R19 | http 리스너 | 리스너마다 명시적 `default_server` 하나. 기본 `444`. **실제 요청으로 확인** (E32) |
 | R9 | SNI 라우트, 부재 SNI | map 에 `"" "";` 가 렌더되어 폴백 풀이 아니라 reject 로 간다. **v0 은 `$ssl_preread_protocol` 분기를 만들지 않는다** (두 경우 동작이 같다) |
 | R10 | 겹치는 exact/wildcard host, priority 역전 | 컴파일 결과가 §7.5 클래스 순서를 따르고 **plan 이 경고** |
 | R11 | UDP 리스너 + `preset=dns` | `proxy_responses 1; proxy_timeout 5s; listen ... udp reuseport;` |

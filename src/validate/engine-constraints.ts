@@ -85,7 +85,7 @@ export function poolsReachedBy(listener: Listener, model: Model): string[] {
     const outcome = listener.onUnmatchedSni;
     if (outcome !== undefined && outcome !== 'reject') out.add(outcome.pool);
   }
-  if (listener.protocol === 'http' || listener.protocol === 'https') {
+  if (listener.protocol === 'http') {
     for (const r of model.httpRoutes) {
       if (r.listener === listener.key && r.action.kind === 'proxy') out.add(r.action.pool);
     }

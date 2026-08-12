@@ -50,6 +50,30 @@ function nginxTest(conf: string): string | null {
   }
 }
 
+/**
+ * 렌더 산출물로 nginx 를 **실제로 띄우고** 컨테이너 안에서 프로브를 돌린다.
+ * `nginx -t` 는 문법만 본다 — 의미는 요청을 던져야 안다.
+ */
+function nginxProbe(conf: string, probe: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'bary-runtime-'));
+  try {
+    mkdirSync(join(dir, 'conf'), { recursive: true });
+    mkdirSync(join(dir, 'logs'), { recursive: true });
+    writeFileSync(join(dir, 'conf', 'nginx.conf'), `daemon off;\n${conf}`, 'utf8');
+    writeFileSync(join(dir, 'probe.sh'), probe, 'utf8');
+    return execFileSync(
+      'docker',
+      ['run', '--rm', '-v', `${dir}:/prefix`, '--entrypoint', '/bin/sh', IMAGE, '-c',
+       'apk add --no-cache curl >/dev/null 2>&1; ' +
+       '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.2; ' +
+       'sh /prefix/probe.sh'],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    ).toString().trim();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 const base: Model = {
   listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
 };
@@ -193,5 +217,52 @@ describe('R17 — 실제 엔진 nginx -t', () => {
 
   it('의도적으로 깨진 conf 는 거부된다 — 하네스가 실제로 검증하고 있음을 확인', () => {
     expect(nginxTest('events {}\nhttp { server { listen 80; not_a_directive on; } }\n')).not.toBeNull();
+  });
+});
+
+/**
+ * R19 — 런타임 의미 골든.
+ *
+ * 4차 검수: 골든이 문법만 보면 "평문 HTTPS·잘못된 default Host·잘못된 우선순위" 도
+ * 전부 유효한 conf 라 통과한다. E32 로 확인된 위험(모르는 Host 가 첫 테넌트로 들어감)은
+ * 실제 요청으로만 확인할 수 있다.
+ */
+describe('R19 — 런타임 동작 골든', () => {
+  beforeAll(() => {
+    if (!dockerAvailable()) throw new Error('도커가 필요하다.');
+  });
+
+  const multiTenant: Model = {
+    ...base,
+    listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true }],
+    pools: [
+      { key: 'a', protocolClass: 'http', algorithm: 'round_robin' },
+      { key: 'b', protocolClass: 'http', algorithm: 'round_robin' },
+    ],
+    backends: [
+      { key: 'ba', pool: 'a', host: '127.0.0.1', port: 9001, weight: 1 },
+      { key: 'bb', pool: 'b', host: '127.0.0.1', port: 9002, weight: 1 },
+    ],
+    httpRoutes: [
+      { key: 'r1', listener: 'web', hosts: ['tenant-a.example.com'], priority: 10,
+        action: { kind: 'reject', status: 403 } },
+      { key: 'r2', listener: 'web', hosts: ['tenant-b.example.com'], priority: 5,
+        action: { kind: 'reject', status: 404 } },
+    ],
+  };
+
+  it('모르는 Host 는 첫 테넌트가 아니라 default_server 로 간다 (E32)', () => {
+    const { conf } = render(multiTenant);
+    const out = nginxProbe(
+      conf,
+      `curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H 'Host: evil.example' http://127.0.0.1:8080/ ; echo
+       curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H 'Host: tenant-a.example.com' http://127.0.0.1:8080/ ; echo
+       curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H 'Host: tenant-b.example.com' http://127.0.0.1:8080/`,
+    );
+    const [unknown, tenantA, tenantB] = out.split('\n').map((x) => x.trim());
+    // 444 는 응답 없이 끊는 것이라 curl 은 000 을 보고한다. 어느 쪽이든 테넌트로 새지 않으면 된다.
+    expect(['000', '444'], `모르는 Host 가 ${unknown} 을 받았다 — 테넌트로 샜다`).toContain(unknown);
+    expect(tenantA).toBe('403');
+    expect(tenantB).toBe('404');
   });
 });

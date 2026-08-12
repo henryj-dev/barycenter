@@ -299,3 +299,57 @@ describe('R18 — stream_realip 부재를 렌더가 흡수한다 (E0 대응)', (
     expect(render(acceptingListener).conf).toContain('hash $proxy_protocol_addr consistent;');
   });
 });
+
+describe('R19 — 명시적 default_server (E32)', () => {
+  const web: Model = {
+    ...empty,
+    listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true }],
+    pools: [{ key: 'api', protocolClass: 'http', algorithm: 'round_robin' }],
+    backends: [{ key: 'x', pool: 'api', host: '10.0.2.10', port: 8080, weight: 1 }],
+    httpRoutes: [
+      { key: 'r1', listener: 'web', hosts: ['api.example.com'], priority: 10,
+        action: { kind: 'proxy', pool: 'api', websocket: false } },
+    ],
+  };
+
+  // E32: default_server 가 없으면 모르는 Host 가 **첫 번째 server** 로 조용히 들어간다.
+  // 멀티테넌트에서는 그게 테넌트 간 누수다.
+  it('http 리스너마다 default_server 를 정확히 하나 낸다', () => {
+    const conf = render(web).conf;
+    expect(conf.match(/listen 8080 default_server;/g)).toHaveLength(1);
+  });
+
+  it('기본 동작은 444 로 끊는 것이다 — 임의 테넌트로 보내지 않는다', () => {
+    expect(render(web).conf).toMatch(/default_server;[\s\S]*?return 444;/);
+  });
+
+  it('default_server 가 첫 server 블록이다 — 순서에 기대지 않지만 읽기 쉽게', () => {
+    const conf = render(web).conf;
+    expect(conf.indexOf('default_server')).toBeLessThan(conf.indexOf('api.example.com'));
+  });
+
+  it('일반 server 블록에는 default_server 가 붙지 않는다', () => {
+    const conf = render(web).conf;
+    expect(conf.match(/default_server/g)).toHaveLength(1);
+  });
+
+  it('defaultAction 을 풀로 지정하면 그리로 보낸다', () => {
+    const m: Model = {
+      ...web,
+      listeners: [{ ...web.listeners[0]!, http: { defaultAction: { pool: 'api' } } }],
+    };
+    const conf = render(m).conf;
+    expect(conf).toMatch(/default_server;[\s\S]*?proxy_pass http:\/\/pool_api;/);
+  });
+
+  it('리스너가 여러 개면 각각 하나씩', () => {
+    const m: Model = {
+      ...web,
+      listeners: [
+        web.listeners[0]!,
+        { key: 'web2', protocol: 'http', bind: '0.0.0.0', port: 8081, enabled: true },
+      ],
+    };
+    expect(render(m).conf.match(/default_server/g)).toHaveLength(2);
+  });
+});
