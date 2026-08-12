@@ -9,7 +9,8 @@
  * 그래서 **최종 세대가 정확하고 중복 reload 가 상한 이내**인지를 본다.
  */
 import { describe, expect, it } from 'vitest';
-import { DpAgent, MemoryStore, type OperationTuple } from '../../src/dp/agent.js';
+import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
+import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
 import {
   ApplyRunner,
   CrashClock,
@@ -26,16 +27,20 @@ const TARGET = 'gen-000002';
 const FAST = { attempts: 2, intervalMs: 0, sleep: async () => undefined };
 
 /** apply 가 옮기는 멤버십 좌표. §3.6 튜플이 저널을 타고 흐른다. */
-const OP: OperationTuple = {
+const OP: ApplyOperation = {
   leaderToken: '10',
   operationId: 'op-1',
   transitionId: 't-1',
-  plane: 'http',
-  expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
-  target: { activationEpoch: '1', membershipRevision: '1' },
-  payloadDigest: 'sha256:gen2',
+  affectedPlanes: ['http'],
+  targetGeneration: TARGET,
+  planes: {
+    http: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:gen2',
+    },
+  },
 };
-
 /** store 를 감싼 Agent. 저널과 멤버십을 한 소유자가 갖는다. */
 const agentOn = (store: MemoryStore | FaultStore) => new DpAgent(store);
 
@@ -47,7 +52,7 @@ async function runWithCrashAt(n: number) {
   const effects = new FakeEffects(clock);
   let crashed = false;
   try {
-    await new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET);
+    await new ApplyRunner(agentOn(store), effects, FAST).run(OP);
   } catch (e) {
     if (!(e instanceof CrashInjected)) throw e;
     crashed = true;
@@ -59,7 +64,7 @@ describe('정상 경로', () => {
   it('publish → reload → 관측 → activated', async () => {
     const store = new MemoryStore();
     const effects = new FakeEffects();
-    const phase = await new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET);
+    const phase = (await new ApplyRunner(agentOn(store), effects, FAST).run(OP)).phase;
     expect(phase).toBe<Phase>('activated');
     expect(effects.publishedGeneration).toBe(TARGET);
     expect(effects.acceptingGeneration).toBe(TARGET);
@@ -69,7 +74,7 @@ describe('정상 경로', () => {
   it('저널이 단계를 남긴다', async () => {
     const store = new MemoryStore();
     const runner = new ApplyRunner(agentOn(store), new FakeEffects(), FAST);
-    await runner.run(OP, TARGET);
+    await runner.run(OP);
     expect(runner.phases()).toEqual([
       'publish_intent', 'published', 'membership_staged', 'reload_intent', 'reload_observed', 'activated',
     ]);
@@ -91,12 +96,12 @@ describe('S12 — 모든 지점에서 죽여 본다', () => {
 
       // 재시작 — 같은 durable 상태에서 새 인스턴스가 이어받는다.
       clock.crashAt = undefined;
-      let phase = await new ApplyRunner(agentOn(store), effects, FAST).recover();
+      let phase = (await new ApplyRunner(agentOn(store), effects, FAST).recover()).phase;
 
       // 저널에 아무것도 없으면 시작조차 못 한 것이다 (§6.2 #1). CP 가 다시 시도한다.
       if (phase === 'no_operation') {
         expect(effects.publishCalls, `지점 ${n}: 기록 없이 부작용이 났다`).toBe(0);
-        phase = await new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET);
+        phase = (await new ApplyRunner(agentOn(store), effects, FAST).run(OP)).phase;
       }
 
       expect(phase, `지점 ${n}: 복구가 activated 로 끝나지 않았다`).toBe<Phase>('activated');
@@ -111,9 +116,9 @@ describe('S12 — 모든 지점에서 죽여 본다', () => {
     for (let n = 0; n < probe.steps; n += 1) {
       const { store, effects, clock } = await runWithCrashAt(n);
       clock.crashAt = undefined;
-      const p = await new ApplyRunner(agentOn(store), effects, FAST).recover();
+      const p = (await new ApplyRunner(agentOn(store), effects, FAST).recover()).phase;
       if (p === 'no_operation') {
-        await new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET);
+        await new ApplyRunner(agentOn(store), effects, FAST).run(OP);
       }
       expect(
         effects.reloadSignals,
@@ -125,7 +130,7 @@ describe('S12 — 모든 지점에서 죽여 본다', () => {
   it('기록 없이 죽으면 부작용도 없다 — no_operation (§6.2 #1)', async () => {
     const { store, effects, clock } = await runWithCrashAt(0);
     clock.crashAt = undefined;
-    expect(await new ApplyRunner(agentOn(store), effects, FAST).recover()).toBe<Phase>('no_operation');
+    expect((await new ApplyRunner(agentOn(store), effects, FAST).recover()).phase).toBe<Phase>('no_operation');
     expect(effects.publishCalls).toBe(0);
     expect(effects.reloadSignals).toBe(0);
   });
@@ -148,7 +153,7 @@ describe('§6.2 — 관측이 저널보다 우선한다', () => {
     // publish 직후(기록 전)에서 죽인다.
     effects.crashAfterEffect = 'publish';
     await expect(
-      new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET),
+      new ApplyRunner(agentOn(store), effects, FAST).run(OP),
     ).rejects.toBeInstanceOf(CrashInjected);
     expect(effects.publishCalls).toBe(1);
 
@@ -162,7 +167,7 @@ describe('§6.2 — 관측이 저널보다 우선한다', () => {
     const effects = new FakeEffects();
     effects.crashBeforeEffect = 'publish';
     await expect(
-      new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET),
+      new ApplyRunner(agentOn(store), effects, FAST).run(OP),
     ).rejects.toBeInstanceOf(CrashInjected);
     expect(effects.publishCalls).toBe(0);
 
@@ -177,7 +182,7 @@ describe('§6.2 — 관측이 저널보다 우선한다', () => {
     const effects = new FakeEffects();
     effects.crashAfterEffect = 'reload';       // 신호는 갔고 기록 전에 죽었다
     await expect(
-      new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET),
+      new ApplyRunner(agentOn(store), effects, FAST).run(OP),
     ).rejects.toBeInstanceOf(CrashInjected);
     expect(effects.reloadSignals).toBe(1);
 
@@ -194,7 +199,7 @@ describe('reload 가 끝내 반영되지 않으면', () => {
     const store = new MemoryStore();
     const effects = new FakeEffects();
     effects.reloadTakesEffect = false;         // 포트 점유 등으로 새 세대가 활성화되지 않는다
-    const phase = await new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET);
+    const phase = (await new ApplyRunner(agentOn(store), effects, FAST).run(OP)).phase;
     expect(phase).toBe<Phase>('failed');
     expect(effects.reloadSignals).toBeLessThanOrEqual(RELOAD_ATTEMPT_LIMIT);
     expect(effects.acceptingGeneration).not.toBe(TARGET);
@@ -204,9 +209,9 @@ describe('reload 가 끝내 반영되지 않으면', () => {
     const store = new MemoryStore();
     const effects = new FakeEffects();
     effects.reloadTakesEffect = false;
-    await new ApplyRunner(agentOn(store), effects, FAST).run(OP, TARGET);
+    await new ApplyRunner(agentOn(store), effects, FAST).run(OP);
     const signals = effects.reloadSignals;
-    expect(await new ApplyRunner(agentOn(store), effects, FAST).recover()).toBe<Phase>('failed');
+    expect((await new ApplyRunner(agentOn(store), effects, FAST).recover()).phase).toBe<Phase>('failed');
     expect(effects.reloadSignals).toBe(signals);
   });
 });
@@ -224,26 +229,23 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
     const effects = new FakeEffects();
     // reload 시점에 이미 슬롯이 올라가 있어야 한다. 새 워커가 accept 를 시작한 뒤에
     // 올리면 그 사이 옛 상태로 peer 를 고른다.
-    let stagedAtReload: string | undefined;
-    const watching = {
-      ...effects,
-      publish: effects.publish.bind(effects),
-      observePublished: effects.observePublished.bind(effects),
-      observeAccepting: effects.observeAccepting.bind(effects),
-      signalReload: async () => {
-        stagedAtReload = agent.stagedDigest('http', '1');
-        await effects.signalReload();
-      },
-    };
-    await new ApplyRunner(agent, watching, FAST).run(OP, TARGET);
-    expect(stagedAtReload, 'HUP 시점에 슬롯이 없었다').toBe('sha256:gen2');
+    class Watching extends FakeEffects {
+      stagedAtReload: string | undefined;
+      override async signalReload(): Promise<void> {
+        this.stagedAtReload = agent.stagedDigest('http', '1');
+        await super.signalReload();
+      }
+    }
+    const watching = new Watching();
+    await new ApplyRunner(agent, watching, FAST).run(OP);
+    expect(watching.stagedAtReload, 'HUP 시점에 슬롯이 없었다').toBe('sha256:gen2');
   });
 
   it('활성화되고 나서야 멤버십 좌표가 움직인다 (§6.5-4)', async () => {
     const store = new MemoryStore();
     const agent = agentOn(store);
     expect(agent.coordinate('http').activationEpoch).toBe('0');
-    await new ApplyRunner(agent, new FakeEffects(), FAST).run(OP, TARGET);
+    await new ApplyRunner(agent, new FakeEffects(), FAST).run(OP);
     expect(agent.coordinate('http')).toEqual({
       activationEpoch: '1', membershipRevision: '1', payloadDigest: 'sha256:gen2',
     });
@@ -254,7 +256,7 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
     const agent = agentOn(store);
     const effects = new FakeEffects();
     effects.reloadTakesEffect = false;
-    const phase = await new ApplyRunner(agent, effects, FAST).run(OP, TARGET);
+    const phase = (await new ApplyRunner(agent, effects, FAST).run(OP)).phase;
     expect(phase).toBe<Phase>('failed');
     expect(agent.coordinate('http').activationEpoch, '실패했는데 좌표가 움직였다').toBe('0');
   });
@@ -262,7 +264,7 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
   it('저널과 멤버십이 같은 durable 상태에 함께 산다', async () => {
     const store = new MemoryStore();
     const agent = agentOn(store);
-    await new ApplyRunner(agent, new FakeEffects(), FAST).run(OP, TARGET);
+    await new ApplyRunner(agent, new FakeEffects(), FAST).run(OP);
     const state = store.load()!;
     expect(state.journal?.phase).toBe<Phase>('activated');
     expect(state.planes.http.activationEpoch).toBe('1');
@@ -282,7 +284,7 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
     await agent.fence('99');
     const effects = new FakeEffects();
     await expect(
-      new ApplyRunner(agent, effects, FAST).run({ ...OP, leaderToken: '10' }, TARGET),
+      new ApplyRunner(agent, effects, FAST).run({ ...OP, leaderToken: '10' }),
     ).rejects.toThrow();
     expect(agent.coordinate('http').activationEpoch).toBe('0');
     expect(effects.publishCalls, '§3.5 — 거부될 오퍼레이션이 current 를 옮겼다').toBe(0);
@@ -294,11 +296,11 @@ describe('reload_observed 이후 세대가 다시 바뀌면', () => {
   /** 처음 관측에서는 target 을 주고, 그 다음부터는 다른 세대를 준다. */
   class FlappingEffects extends FakeEffects {
     private seen = 0;
-    override async observeAccepting(): Promise<string | undefined> {
+    override async observeActivation(): Promise<ActivationEvidence | undefined> {
       this.seen += 1;
       // 1회: reload_intent 의 관측을 통과시켜 reload_observed 로 보낸다.
       // 그 뒤: reload_observed 의 **재확인**에서 다른 세대를 본다.
-      return this.seen <= 1 ? TARGET : 'gen-끼어듦';
+      return { acceptingGeneration: this.seen <= 1 ? TARGET : 'gen-끼어듦' };
     }
   }
 
@@ -306,7 +308,7 @@ describe('reload_observed 이후 세대가 다시 바뀌면', () => {
     const store = new MemoryStore();
     const agent = agentOn(store);
     const effects = new FlappingEffects();
-    const phase = await new ApplyRunner(agent, effects, FAST).run(OP, TARGET);
+    const phase = (await new ApplyRunner(agent, effects, FAST).run(OP)).phase;
 
     // 활성화를 확인하지 못했으므로 실패로 끝나야 하고,
     // **무엇보다 멤버십 좌표가 움직이면 안 된다.**

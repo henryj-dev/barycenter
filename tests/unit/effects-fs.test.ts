@@ -84,7 +84,27 @@ describe('관측', () => {
 
   it('활성 세대 관측은 주입된 프로브를 쓴다', async () => {
     const fx = effects({ probeAccepting: async () => 'gen-7' });
-    expect(await fx.observeAccepting()).toBe('gen-7');
+    expect((await fx.observeActivation())?.acceptingGeneration).toBe('gen-7');
+  });
+
+  it('config test 와 error log 증가분도 증거에 실린다 (§6.3)', async () => {
+    let lines = 5;
+    const fx = effects({
+      probeAccepting: async () => 'gen-7',
+      probeConfigTest: async () => true,
+      probeErrorLogLines: async () => lines,
+    });
+    // 신호를 보내면 그 시점이 워터마크가 된다.
+    await fx.signalReload();
+    lines = 8;
+    const e = await fx.observeActivation();
+    expect(e?.configTestPassed).toBe(true);
+    expect(e?.errorLogGrowth, '신호 이후 늘어난 줄 수').toBe(3);
+  });
+
+  it('신호 전에는 증가분을 말하지 않는다 — 기준선이 없다', async () => {
+    const fx = effects({ probeAccepting: async () => 'gen-7', probeErrorLogLines: async () => 9 });
+    expect((await fx.observeActivation())?.errorLogGrowth).toBeUndefined();
   });
 
   it('프로브가 실패하면 undefined 다 — 던지지 않는다', async () => {
@@ -94,7 +114,7 @@ describe('관측', () => {
         throw new Error('연결 거부');
       },
     });
-    expect(await fx.observeAccepting()).toBeUndefined();
+    expect(await fx.observeActivation()).toBeUndefined();
   });
 });
 

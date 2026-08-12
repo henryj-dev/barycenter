@@ -26,8 +26,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { DpAgent, MemoryStore, type OperationTuple } from '../../src/dp/agent.js';
-import { ApplyRunner, CrashInjected, type Effects, type Phase } from '../../src/dp/apply.js';
+import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
+import { ApplyRunner, CrashInjected, type Effects } from '../../src/dp/apply.js';
+import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
 const PORT = 18099;
@@ -78,7 +79,21 @@ async function probeAccepting(): Promise<string | undefined> {
  * 컨테이너 안에서 도는 DP Agent 의 부작용. `FsEffects` 와 같은 일을 하되 `docker exec` 를
  * 통해 컨테이너의 파일시스템에 대고 한다 — 그게 실제 배치다.
  */
-const effects = (): Effects => ({
+/** 컨테이너 안 error log 의 줄 수. S7 의 음성 신호를 실물에서 잰다. */
+function errorLogLines(): number {
+  try {
+    const out = docker('exec', container, 'sh', '-c',
+      'wc -l < /prefix/logs/error.log 2>/dev/null || echo 0');
+    return Number.parseInt(out.trim(), 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+const effects = (): Effects => {
+  // HUP 을 보낸 시점의 워터마크. 그 이후 증가분만 이 전환의 것이다 (§6.3).
+  let watermark: number | undefined;
+  return {
   async publish(generation) {
     const dir = `/prefix/generations/${generation}`;
     docker('exec', container, 'sh', '-c',
@@ -92,22 +107,36 @@ const effects = (): Effects => ({
     return out.length > 0 ? out.split('/').pop() : undefined;
   },
   async signalReload() {
+    // **신호 전에** 찍는다. 뒤에 찍으면 신호가 만든 오류를 놓친다.
+    watermark = errorLogLines();
     docker('kill', '--signal=HUP', container);
   },
-  async observeAccepting() {
-    return probeAccepting();
+  async observeActivation(): Promise<ActivationEvidence | undefined> {
+    const accepting = await probeAccepting();
+    if (accepting === undefined) return undefined;
+    const growth = watermark === undefined ? undefined : Math.max(0, errorLogLines() - watermark);
+    return {
+      acceptingGeneration: accepting,
+      ...(growth === undefined ? {} : { errorLogGrowth: growth }),
+    };
   },
-});
+  };
+};
 
-/** apply 가 옮기는 멤버십 좌표. §3.6 튜플이 저널을 타고 흐른다. */
-const OP = (n: string): OperationTuple => ({
+/** §3.6 봉투가 저널을 타고 흐른다. 여기서는 http 평면 하나를 옮긴다. */
+const OP = (n: string, generation: string): ApplyOperation => ({
   leaderToken: '10',
   operationId: n,
   transitionId: `${n}-t`,
-  plane: 'http',
-  expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
-  target: { activationEpoch: '1', membershipRevision: '1' },
-  payloadDigest: `sha256:${n}`,
+  affectedPlanes: ['http'],
+  targetGeneration: generation,
+  planes: {
+    http: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: `sha256:${n}`,
+    },
+  },
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -187,8 +216,8 @@ describe('S12 end-to-end — 실제 nginx', () => {
 
   it('저널이 실제 nginx 를 gen-2 로 옮긴다', async () => {
     const fx = effects();
-    const phase = await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-1'), 'gen-2');
-    expect(phase).toBe<Phase>('activated');
+    const phase = await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-1', 'gen-2'));
+    expect(phase.phase).toBe('activated');
     expect(await waitAccepting('gen-2')).toBe('gen-2');
   });
 
@@ -200,13 +229,13 @@ describe('S12 end-to-end — 실제 nginx', () => {
     const crashing = {
       publish: fx.publish.bind(fx),
       observePublished: fx.observePublished.bind(fx),
-      observeAccepting: fx.observeAccepting.bind(fx),
+      observeActivation: fx.observeActivation.bind(fx),
       signalReload: async () => {
         throw new CrashInjected('reload 직전');
       },
     };
     await expect(
-      new ApplyRunner(new DpAgent(store), crashing).run(OP('e2e-2'), 'gen-2'),
+      new ApplyRunner(new DpAgent(store), crashing).run(OP('e2e-2', 'gen-2')),
     ).rejects.toBeInstanceOf(CrashInjected);
 
     // 이 시점: 링크는 gen-2, 실행 중인 nginx 는 아직 gen-1
@@ -215,7 +244,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
 
     // 재시작한 Agent 가 이어받는다.
     const phase = await new ApplyRunner(new DpAgent(store), effects()).recover();
-    expect(phase).toBe<Phase>('activated');
+    expect(phase.phase).toBe('activated');
     expect(await waitAccepting('gen-2')).toBe('gen-2');
   });
 
@@ -226,13 +255,13 @@ describe('S12 end-to-end — 실제 nginx', () => {
     const counted = {
       publish: fx.publish.bind(fx),
       observePublished: fx.observePublished.bind(fx),
-      observeAccepting: fx.observeAccepting.bind(fx),
+      observeActivation: fx.observeActivation.bind(fx),
       signalReload: async () => {
         reloads += 1;
         await fx.signalReload();
       },
     };
-    await new ApplyRunner(new DpAgent(store), counted).run(OP('e2e-3'), 'gen-2');
+    await new ApplyRunner(new DpAgent(store), counted).run(OP('e2e-3', 'gen-2'));
     expect(await waitAccepting('gen-2')).toBe('gen-2');
     expect(reloads).toBe(1);
 
@@ -245,19 +274,19 @@ describe('S12 end-to-end — 실제 nginx', () => {
   // §3.3 — 롤백은 옛 세대를 되돌리는 게 아니라 **새 활성화 사건**이다.
   it('롤백도 새 오퍼레이션으로 수렴한다', async () => {
     const fx = effects();
-    await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-fwd'), 'gen-2');
+    await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-fwd', 'gen-2'));
     expect(await waitAccepting('gen-2')).toBe('gen-2');
 
     // gen-3 는 gen-1 과 같은 내용이라고 가정한 clone 이다 (§3.3 — 옛 topology, 새 세대).
-    const back = await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-back'), 'gen-3');
-    expect(back).toBe<Phase>('activated');
+    const back = await new ApplyRunner(new DpAgent(new MemoryStore()), fx).run(OP('e2e-back', 'gen-3'));
+    expect(back.phase).toBe('activated');
     expect(await waitAccepting('gen-3')).toBe('gen-3');
   });
 
   it('없는 세대는 게시하지 않는다 — 실행 중인 nginx 를 건드리지 않는다', async () => {
     const store = new MemoryStore();
     await expect(
-      new ApplyRunner(new DpAgent(store), effects()).run(OP('e2e-4'), 'gen-없음'),
+      new ApplyRunner(new DpAgent(store), effects()).run(OP('e2e-4', 'gen-없음')),
     ).rejects.toThrow();
     expect(await probeAccepting()).toBe('gen-1');
     expect(await effects().observePublished()).toBe('gen-1');

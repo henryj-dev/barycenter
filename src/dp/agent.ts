@@ -17,12 +17,16 @@
  * 깨진다.
  */
 
-export type Plane = 'http' | 'stream';
-
-export type Coordinate = {
-  activationEpoch: string;
-  membershipRevision: string;
-};
+import type {
+  ActivationEvidence,
+  ApplyOperation,
+  ApplyPhase,
+  Coordinate,
+  Plane,
+  PlaneProgress,
+} from './operation.js';
+import { isTerminalPhase, planesOf } from './operation.js';
+export type { ActivationEvidence, Coordinate, Plane };
 
 export type PlaneState = Coordinate & { payloadDigest: string };
 
@@ -59,7 +63,13 @@ export type RejectionKind =
   | 'coordinate_mismatch'
   | 'digest_mismatch'
   | 'epoch_not_monotonic'
-  | 'not_staged';
+  | 'not_staged'
+  /** 봉투가 어떤 평면도 말하지 않았다 (§9.1.1 blocker 3). */
+  | 'empty_envelope'
+  /** 봉투의 `affectedPlanes` 와 실린 목표가 어긋난다. */
+  | 'envelope_mismatch'
+  /** 증거가 활성화를 증명하지 못한다 (§6.3). */
+  | 'not_activated';
 
 /** 전환이 끝나는 방식. **셋은 상호 배타적**이다 — 하나에 들어가면 다른 곳으로 못 간다. */
 export type TerminalKind = 'activated' | 'failed' | 'aborted';
@@ -97,6 +107,9 @@ export type Reservation = {
   stagedDigest?: string;
 };
 
+/** 좌표를 옮긴 근거 (§6.3). `plane:epoch` 로 색인한다. */
+export type EvidenceRecord = { evidence: ActivationEvidence };
+
 export type AgentState = {
   /**
    * durable CAS 용 단조 버전. `save` 는 `version === 직전 + 1` 일 때만 성공한다.
@@ -115,6 +128,13 @@ export type AgentState = {
   /** 끝난 전환. 지연된 RPC 가 되살리지 못하게 막는다. */
   terminal: Record<string, TerminalKind>;
   /**
+   * `plane:activationEpoch` → 그 좌표로 옮긴 근거 (§6.3).
+   *
+   * **왜 옮겼는지 답할 수 없으면 옮기지 말았어야 한다.** 사후에 "이 세대가 왜 활성으로
+   * 판정됐나" 를 물을 수 있어야 장애 분석이 된다.
+   */
+  activationEvidence: Record<string, ActivationEvidence>;
+  /**
    * 진행 중인 apply 오퍼레이션의 저널 (§6.2).
    *
    * **여기 있어야 한다.** 저널과 멤버십 좌표가 서로 다른 소유자를 가지면 같은 store 를
@@ -123,23 +143,43 @@ export type AgentState = {
   journal?: JournalEntry;
 };
 
-/** §6.2 의 apply 단계. 튜플을 통째로 들고 있어야 복구가 같은 operation 을 재개한다. */
+/**
+ * §6.2 의 apply 단계. **오퍼레이션을 통째로** 들고 있어야 복구가 같은 것을 재개한다.
+ *
+ * 5차 검수 전에는 평면 하나짜리 튜플이었다. 그래서 두 평면을 함께 옮기는 오퍼레이션을
+ * 표현할 수 없었고, 실패했을 때 어느 평면이 반영됐는지 말할 수도 없었다 (§3.4).
+ */
 export type JournalEntry = {
-  op: OperationTuple;
-  targetGeneration: string;
+  op: ApplyOperation;
   phase: ApplyPhase;
   reloadAttempts: number;
+  /** 평면별로 어디까지 갔는가. */
+  progress?: Partial<Record<Plane, PlaneProgress>>;
+  /** 마지막으로 관측한 활성화 증거 (§6.3). */
+  evidence?: ActivationEvidence;
 };
 
-export type ApplyPhase =
-  | 'publish_intent'
-  | 'published'
-  | 'membership_staged'
-  | 'reload_intent'
-  | 'reload_observed'
-  | 'activated'
-  | 'failed'
-  | 'no_operation';
+/**
+ * 오퍼레이션에서 평면 하나의 튜플을 뽑는다.
+ *
+ * Agent 의 원시 연산(`reserve`/`stage`/`commit`)은 **평면 단위**로 남는다 — 좌표 CAS 가
+ * 평면별이기 때문이다. 여러 평면을 한 오퍼레이션으로 묶는 것은 러너의 일이다.
+ */
+export function tupleFor(op: ApplyOperation, plane: Plane): OperationTuple {
+  const t = op.planes[plane];
+  if (t === undefined) {
+    throw new DpRejection('envelope_mismatch', `오퍼레이션에 평면 '${plane}' 의 목표가 없다`);
+  }
+  return {
+    leaderToken: op.leaderToken,
+    operationId: op.operationId,
+    transitionId: op.transitionId,
+    plane,
+    expectedCurrent: t.expectedCurrent,
+    target: t.target,
+    payloadDigest: t.payloadDigest,
+  };
+}
 
 export interface DurableStore {
   load(): AgentState | undefined;
@@ -180,6 +220,7 @@ const initial = (): AgentState => ({
   reservations: { http: {}, stream: {} },
   completed: {},
   terminal: {},
+  activationEvidence: {},
 });
 
 const sameCoordinate = (a: Coordinate, b: Coordinate): boolean =>
@@ -194,6 +235,11 @@ export class DpAgent {
 
   constructor(private readonly store: DurableStore) {}
 
+  /** 지금까지 본 최대 리더 토큰. 이보다 낮은 토큰의 변이는 전부 거부된다 (§3.5). */
+  maxLeaderToken(): string {
+    return (this.store.load() ?? initial()).maxLeaderToken;
+  }
+
   coordinate(plane: Plane): PlaneState {
     return { ...(this.store.load() ?? initial()).planes[plane] };
   }
@@ -206,6 +252,11 @@ export class DpAgent {
   /** 슬롯의 주인. 없으면 undefined. */
   reservationOwner(plane: Plane, epoch: string): OperationTuple | undefined {
     return (this.store.load() ?? initial()).reservations[plane]?.[epoch]?.op;
+  }
+
+  /** 그 좌표로 옮긴 근거. 없으면 undefined. */
+  evidenceFor(plane: Plane, epoch: string): ActivationEvidence | undefined {
+    return (this.store.load() ?? initial()).activationEvidence[`${plane}:${epoch}`];
   }
 
   /** 전환이 어떻게 끝났는지. 아직이면 undefined. */
@@ -227,13 +278,19 @@ export class DpAgent {
       // **저널도 예약이 있어야 쓴다.** 없으면 남의 오퍼레이션이 진행 중인 저널을
       // 자기 것으로 덮는다 — 5차 반례 ②. 종단 단계만 예외인데, 그때는 이미 예약을
       // 반납한 뒤라서 주인이 없는 게 정상이다.
-      const terminalPhase = entry.phase === 'activated' || entry.phase === 'failed';
-      if (!terminalPhase && !ownsSlot(s, entry.op)) {
-        throw new DpRejection(
-          'not_reserved',
-          `${transitionKey(entry.op)} 는 (${entry.op.plane}, ${entry.op.target.activationEpoch}) ` +
-            `슬롯을 예약하지 않았다`,
-        );
+      // **모든 affected 평면의 주인이어야 한다.** 하나만 갖고 저널을 쓰면 나머지
+      // 평면은 남이 옮기는 중일 수 있다.
+      if (!isTerminalPhase(entry.phase)) {
+        for (const plane of planesOf(entry.op)) {
+          const tuple = tupleFor(entry.op, plane);
+          if (!ownsSlot(s, tuple)) {
+            throw new DpRejection(
+              'not_reserved',
+              `${transitionKey(tuple)} 는 (${plane}, ${tuple.target.activationEpoch}) ` +
+                `슬롯을 예약하지 않았다`,
+            );
+          }
+        }
       }
       s.journal = entry;
     });
@@ -321,7 +378,13 @@ export class DpAgent {
     });
   }
 
-  commit(op: OperationTuple): Promise<PlaneAck> {
+  /**
+   * 좌표를 옮긴다. **증거가 있어야 옮긴다** (§6.3).
+   *
+   * 5차 검수 전까지 활성화 증거는 세대 문자열 하나였고 그마저도 저장되지 않았다.
+   * 근거 없이 움직인 좌표는 사후에 검증할 수 없다.
+   */
+  commit(op: OperationTuple, evidence: ActivationEvidence): Promise<PlaneAck> {
     return this.serial((s) => {
       const replay = admit(s, op, 'commit');
       if (replay !== undefined) return replay;
@@ -358,6 +421,7 @@ export class DpAgent {
       }
 
       s.planes[op.plane] = { ...op.target, payloadDigest: op.payloadDigest };
+      s.activationEvidence[`${op.plane}:${op.target.activationEpoch}`] = evidence;
       finish(s, op, 'activated');
       return record(s, op, 'commit', s.planes[op.plane]);
     });

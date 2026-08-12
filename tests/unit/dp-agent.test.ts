@@ -11,6 +11,7 @@
  * 그래서 여기서는 **검사와 적용을 하나의 임계구역**으로 묶는다 (§3.6-4). 그게 지켜지는지
  * 확인하려면 durable 저장이 느릴 때 동시 요청을 섞어야 한다 — 순차 테스트로는 못 잡는다.
  */
+import type { ActivationEvidence } from '../../src/dp/operation.js';
 import { describe, expect, it } from 'vitest';
 import {
   DpAgent,
@@ -43,6 +44,9 @@ async function rejectionOf(p: Promise<unknown>): Promise<string> {
   throw new Error('거부되지 않았다');
 }
 
+/** 좌표를 옮기려면 근거가 있어야 한다 (§6.3). 단위 테스트에서는 최소 증거를 쓴다. */
+const EVIDENCE: ActivationEvidence = { acceptingGeneration: 'gen-1' };
+
 describe('§3.5 리더 펜싱', () => {
   it('더 높은 토큰을 수용하고 최대값을 올린다', async () => {
     const a = agent();
@@ -60,7 +64,7 @@ describe('§3.5 리더 펜싱', () => {
     const a = agent();
     await a.fence('11');
     expect(await rejectionOf(a.stage(op({ leaderToken: '10' }), 'payload'))).toBe('stale_leader');
-    expect(await rejectionOf(a.commit(op({ leaderToken: '10' })))).toBe('stale_leader');
+    expect(await rejectionOf(a.commit(op({ leaderToken: '10' }), EVIDENCE))).toBe('stale_leader');
     expect(await rejectionOf(a.abort(op({ leaderToken: '10' })))).toBe('stale_leader');
   });
 
@@ -85,7 +89,7 @@ describe('§3.6 stage → commit', () => {
     const a = agent();
     await a.fence('10');
     await a.stage(op(), 'payload');
-    const ack = await a.commit(op());
+    const ack = await a.commit(op(), EVIDENCE);
     expect(ack.activationEpoch).toBe('1');
     expect(ack.payloadDigest).toBe('sha256:aaa');
     expect(a.coordinate('http')).toEqual({
@@ -96,7 +100,7 @@ describe('§3.6 stage → commit', () => {
   it('staging 없이 commit 하면 거부한다', async () => {
     const a = agent();
     await a.fence('10');
-    expect(await rejectionOf(a.commit(op()))).toBe('not_staged');
+    expect(await rejectionOf(a.commit(op(), EVIDENCE))).toBe('not_staged');
   });
 
   it('expected_current 가 다르면 거부한다 — "더 높으니까"가 아니라 CAS 다', async () => {
@@ -109,7 +113,7 @@ describe('§3.6 stage → commit', () => {
   it('epoch 는 엄격 단조여야 한다', async () => {
     const a = agent();
     await a.fence('10');
-    await a.stage(op(), 'p'); await a.commit(op());
+    await a.stage(op(), 'p'); await a.commit(op(), EVIDENCE);
     const back = op({
       operationId: 'op-2', transitionId: 't-2',
       expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },
@@ -128,13 +132,13 @@ describe('§3.6 stage → commit', () => {
     // 5차 검수 뒤 abort/failed/activated 를 **상호 배타적인 종단 상태 하나**로 합쳤다.
     // 어떻게 끝났는지는 `DpRejection.terminalState` 가 들고 있다 (§9.1.1 blocker 1).
     // 전자는 아직 안 왔을 수도 있지만 후자는 되살아나면 안 된다.
-    expect(await rejectionOf(a.commit(op()))).toBe('terminal');
+    expect(await rejectionOf(a.commit(op(), EVIDENCE))).toBe('terminal');
   });
 
   it('P19 좌표가 지나간 뒤 도착한 옛 stage 도 거부한다', async () => {
     const a = agent();
     await a.fence('10');
-    await a.stage(op(), 'p'); await a.commit(op());          // 이제 E1
+    await a.stage(op(), 'p'); await a.commit(op(), EVIDENCE);          // 이제 E1
     // E0 을 기대하는 지연된 stage 가 뒤늦게 도착
     expect(await rejectionOf(a.stage(op({ operationId: 'late' }), 'evil'))).toBe('coordinate_mismatch');
   });
@@ -163,7 +167,7 @@ describe('헬스 델타 — 같은 epoch 안에서만', () => {
   it('membership_revision 을 올린다', async () => {
     const a = agent();
     await a.fence('10');
-    await a.stage(op(), 'p'); await a.commit(op());
+    await a.stage(op(), 'p'); await a.commit(op(), EVIDENCE);
     const h = op({
       operationId: 'h-1', transitionId: 'ht-1',
       expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },
@@ -177,7 +181,7 @@ describe('헬스 델타 — 같은 epoch 안에서만', () => {
   it('다른 epoch 로는 못 간다 — 헬스는 topology 를 바꾸지 않는다', async () => {
     const a = agent();
     await a.fence('10');
-    await a.stage(op(), 'p'); await a.commit(op());
+    await a.stage(op(), 'p'); await a.commit(op(), EVIDENCE);
     const h = op({
       operationId: 'h-2', transitionId: 'ht-2',
       expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },
@@ -191,7 +195,7 @@ describe('평면은 독립이다 (§3.4)', () => {
   it('http 를 옮겨도 stream 좌표는 그대로다', async () => {
     const a = agent();
     await a.fence('10');
-    await a.stage(op(), 'p'); await a.commit(op());
+    await a.stage(op(), 'p'); await a.commit(op(), EVIDENCE);
     expect(a.coordinate('stream')).toEqual({
       activationEpoch: '0', membershipRevision: '0', payloadDigest: '',
     });
@@ -201,7 +205,7 @@ describe('평면은 독립이다 (§3.4)', () => {
     const a = agent();
     await a.fence('10');
     const st = op({ plane: 'stream', operationId: 'op-s', transitionId: 't-s' });
-    await a.stage(st, 'p'); await a.commit(st);
+    await a.stage(st, 'p'); await a.commit(st, EVIDENCE);
     expect(a.coordinate('stream').activationEpoch).toBe('1');
     expect(a.coordinate('http').activationEpoch).toBe('0');
   });
@@ -272,9 +276,9 @@ describe('P18 동시성 — 검사와 적용은 하나의 임계구역이다', (
     await a.stage(op(), 'payload');
 
     const results = await Promise.all([
-      a.commit(op()).then(() => 'ok').catch(() => 'rejected'),
-      a.commit(op()).then(() => 'ok').catch(() => 'rejected'),
-      a.commit(op()).then(() => 'ok').catch(() => 'rejected'),
+      a.commit(op(), EVIDENCE).then(() => 'ok').catch(() => 'rejected'),
+      a.commit(op(), EVIDENCE).then(() => 'ok').catch(() => 'rejected'),
+      a.commit(op(), EVIDENCE).then(() => 'ok').catch(() => 'rejected'),
     ]);
 
     // 같은 operation 의 재요청이므로 전부 성공(cached)이거나 하나만 성공해야 한다.

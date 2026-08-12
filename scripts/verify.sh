@@ -102,11 +102,14 @@ cat <<'GATES'
  1. 소유권과 원자성    ✅ 해소. (plane, target_activation_epoch) 단일 CAS 예약 +
                        durable 버전 CAS. 반례 ①②③④⑥ 이 conformance 로 고정됐고
                        뮤턴트 7종이 전부 잡힌다.
- 2. ApplyOperation     평면별 진행 · partial_transition · ActivationEvidence ·
-                       failure/rollback 종단 상태가 durable 스키마에 없다.
- 3. 변이 envelope      §9.2 config 경로에 leader token · operation tuple 없음.
+ 2. ApplyOperation     ✅ 해소. 두 평면이 한 오퍼레이션으로 넘어가고, 활성화 증거가
+                       명시적 타입이자 commit 의 인자다. 뮤턴트 8종 전부 잡힘.
+ 3. 변이 envelope      ✅ 해소. MutationEnvelope 하나가 모든 변이를 지난다.
+                       참조 구현(LocalDataplaneDriver)까지 함께 세웠다.
  4. fail-closed 타입   ✅ 해소. RawModel(입력) / Model(검증 통과) 두 층으로 나누고
                        리스너를 프로토콜 판별 유니온으로 만들었다. 뮤턴트 6종 전부 잡힘.
+ 5. durable store      ❌ 남음. 구현체가 MemoryStore 뿐이다. 파일 저장의 부분 쓰기·
+                       fsync·손상 탐지·프로세스 간 단일 writer 가 없다.
 
  → v0.1 타입·API·DB 스키마 freeze: **No-Go**
 GATES
@@ -115,7 +118,7 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 미해소 blocker 2건 → non-zero 로 끝낸다."
+  echo " --freeze-gate: 미해소 blocker 1건(durable store) → non-zero 로 끝낸다."
   exit 2
 fi
 

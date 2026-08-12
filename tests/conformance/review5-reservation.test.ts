@@ -24,7 +24,26 @@ import {
   MemoryStore,
   type OperationTuple,
 } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects, type Phase } from '../../src/dp/apply.js';
+import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
+
+const EVIDENCE: ActivationEvidence = { acceptingGeneration: 'gen-1' };
+
+/** 튜플 하나를 한 평면짜리 오퍼레이션으로 감싼다. 예약 계약은 평면 수와 무관하다. */
+const APPLY = (op: OperationTuple, generation = 'gen-1'): ApplyOperation => ({
+  leaderToken: op.leaderToken,
+  operationId: op.operationId,
+  transitionId: op.transitionId,
+  affectedPlanes: [op.plane],
+  targetGeneration: generation,
+  planes: {
+    [op.plane]: {
+      expectedCurrent: op.expectedCurrent,
+      target: op.target,
+      payloadDigest: op.payloadDigest,
+    },
+  },
+});
 
 const OP = (o: Partial<OperationTuple> = {}): OperationTuple => ({
   leaderToken: '10',
@@ -57,7 +76,7 @@ describe('① 낮은 리더 토큰은 side effect 앞에서 막힌다 (§3.5)', 
     await agent.fence('99');
 
     const effects = new FakeEffects();
-    expect(await kindOf(new ApplyRunner(agent, effects, FAST).run(OP({ leaderToken: '10' }), 'gen-1')))
+    expect(await kindOf(new ApplyRunner(agent, effects, FAST).run(APPLY(OP({ leaderToken: '10' })))))
       .toBe('stale_leader');
 
     // **이 세 줄이 계약이다.** 판정이 stale_leader 여도 부작용이 남으면 위반이다.
@@ -71,8 +90,8 @@ describe('① 낮은 리더 토큰은 side effect 앞에서 막힌다 (§3.5)', 
     const agent = new DpAgent(new MemoryStore());
     await agent.fence('10');
     const effects = new FakeEffects();
-    expect(await new ApplyRunner(agent, effects, FAST).run(OP({ leaderToken: '10' }), 'gen-1'))
-      .toBe<Phase>('activated');
+    expect((await new ApplyRunner(agent, effects, FAST).run(APPLY(OP({ leaderToken: '10' }))))
+      .phase).toBe('activated');
     expect(effects.publishCalls).toBe(1);
   });
 });
@@ -85,18 +104,13 @@ describe('② 남의 오퍼레이션이 내 저널을 덮지 못한다 (§6.2)',
     const agent = new DpAgent(store);
     const opB = OP({ operationId: 'B', transitionId: 'B' });
 
-    await new ApplyRunner(agent, new FakeEffects(), FAST).run(opB, 'gen-B');
+    await new ApplyRunner(agent, new FakeEffects(), FAST).run(APPLY(opB, 'gen-B'));
     expect(agent.coordinate('http').activationEpoch).toBe('1');
 
     const opA = OP({ operationId: 'A', transitionId: 'A' });
     expect(
       await kindOf(
-        agent.writeJournal({
-          op: opA,
-          targetGeneration: 'gen-A',
-          phase: 'published',
-          reloadAttempts: 0,
-        }),
+        agent.writeJournal({ op: APPLY(opA, 'gen-A'), phase: 'published', reloadAttempts: 0 }),
       ),
     ).toBe('not_reserved');
 
@@ -199,14 +213,14 @@ describe('⑥ 종단 상태에 들어간 전환은 되살아나지 않는다 (§
     const agent = new DpAgent(store);
     const op = OP();
 
-    expect(await new ApplyRunner(agent, deaf(), FAST).run(op, 'gen-1')).toBe<Phase>('failed');
-    expect(await kindOf(agent.commit(op))).toBe('terminal');
+    expect((await new ApplyRunner(agent, deaf(), FAST).run(APPLY(op))).phase).toBe('failed');
+    expect(await kindOf(agent.commit(op, EVIDENCE))).toBe('terminal');
     expect(agent.coordinate('http').activationEpoch, 'failed 인데 좌표가 옮겨갔다').toBe('0');
   });
 
   it('failed 는 슬롯을 비운다 — 다음 오퍼레이션이 그 좌표를 쓸 수 있다', async () => {
     const agent = new DpAgent(new MemoryStore());
-    await new ApplyRunner(agent, deaf(), FAST).run(OP(), 'gen-1');
+    await new ApplyRunner(agent, deaf(), FAST).run(APPLY(OP()));
     expect(agent.stagedDigest('http', '1'), '실패한 전환의 슬롯이 남았다').toBeUndefined();
 
     // 새 전환은 같은 좌표를 다시 잡을 수 있어야 한다. 안 그러면 한 번 실패로 영구히 막힌다.
@@ -228,7 +242,7 @@ describe('⑥ 종단 상태에 들어간 전환은 되살아나지 않는다 (§
     const op = OP();
     await agent.reserve(op);
     await agent.stage(op, null);
-    await agent.commit(op);
+    await agent.commit(op, EVIDENCE);
     expect(await kindOf(agent.abort(op))).toBe('terminal');
     expect(agent.coordinate('http').activationEpoch, 'abort 가 활성 좌표를 되돌렸다').toBe('1');
   });

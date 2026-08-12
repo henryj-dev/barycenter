@@ -1542,12 +1542,32 @@ S15 · S16 · S17 · S18 · S19. 남는 것은 **S7(완료) · S11 · S12** 와 
    계약은 `tests/conformance/review5-reservation.test.ts` 에 있다 (14건). 뮤턴트 7종
    (예약 제거 · 주인 무시 · 남의 슬롯 삭제 · CAS 제거 · 저널 소유권 제거 · 슬롯 미반납 ·
    좌표 뺀 정본)이 전부 잡히는 것을 확인했다.
-2. **`ApplyOperation` 스키마.** 평면별 진행, `partial_transition`, `ActivationEvidence`,
-   failure/rollback 종단 상태가 durable 스키마에 없다. 지금은 세대 문자열 하나로 활성화를
-   증명한다. reload 상한 초과 시 롤백 없이 `failed` 만 적어서, **지연 commit 이 뒤늦게
-   좌표를 옮긴다.**
-3. **모든 변이에 같은 envelope.** `§9.2` 의 config prepare/commit/abort 에는 leader token 도
-   operation tuple 도 없다. 설정 경로가 멤버십 튜플 **밖에서** 부작용을 낼 수 있다.
+2. ~~**`ApplyOperation` 스키마.**~~ ✅ **해소** — `src/dp/operation.ts`.
+
+   `ApplyOperation` 이 봉투 + **평면별** 목표 + 목표 세대를 싣는다. 저널이 이걸 통째로
+   들고 다니므로 복구가 같은 오퍼레이션을 재개한다.
+
+   두 평면이 **한 오퍼레이션으로** 넘어간다. 예약 → 게시 → **전 평면 staging** → HUP →
+   증거 관측 → **전 평면 commit**. 한 평면의 예약이 막히면 이미 잡은 예약을 반납하고
+   **아무 부작용도 내지 않는다.** 일부만 넘어가면 `partially_activated` 이고 결과의
+   `progress` 가 평면별로 어디까지 갔는지 말한다 (§3.4).
+
+   `ActivationEvidence` 가 명시적 타입이 됐고 **`commit` 의 인자다** — 근거 없이 좌표를
+   옮길 수 없다. `provesActivation` 이 세대·config test·error log 증가분·워커 집합을 함께
+   본다. 관측하지 못한 것(`undefined`)은 반증이 아니고 **관측해서 나쁜 것만** 반증이다.
+   S7 이 실증한 것이 그거다 — 세대만 보면 4027ms 걸리던 판정이 error log 워터마크를
+   넣자 71ms 가 됐다. e2e 가 실물 컨테이너에서 이 워터마크를 잰다.
+
+   계약은 `tests/conformance/review5-apply-schema.test.ts`. 뮤턴트 8종이 전부 잡힌다.
+3. ~~**모든 변이에 같은 envelope.**~~ ✅ **해소** — `src/dp/driver.ts`.
+
+   `MutationEnvelope` 하나가 모든 변이를 지난다. `DataplaneDriver` 의 설정 경로도
+   리더 토큰과 `affectedPlanes` 를 받으므로, 봉투 없이 부작용을 내는 경로가 없다.
+   봉투가 말한 평면과 실린 목표가 **정확히 일치**해야 한다 — 무엇을 바꾸는지 말하지
+   않는 변이는 감사도 롤백도 안 된다.
+
+   **참조 구현(`LocalDataplaneDriver`)을 같이 뒀다.** 인터페이스만 두고 구현을 미루면
+   §9.1 의 멤버십과 같은 일이 난다 — 쓰이지 않는 계약은 깨진 채로 통과한다.
 4. ~~**fail-closed 타입.**~~ ✅ **해소** — `src/model/provisional.ts` · `src/validate/model.ts`.
 
    타입을 **두 층**으로 나눴다. `RawModel` 은 신뢰할 수 없는 입력이고(JSON·DB·API 에서
@@ -1568,8 +1588,18 @@ S15 · S16 · S17 · S18 · S19. 남는 것은 **S7(완료) · S11 · S12** 와 
    계약은 `tests/conformance/review5-fail-closed.test.ts` (19건, positive control 4건 포함).
    뮤턴트 6종이 전부 잡힌다.
 
+#### 그다음에 드러난 것
+
+5. **durable store 구현체가 없다.** `DurableStore` 는 이제 버전 CAS 를 계약으로 갖지만
+   구현은 `MemoryStore` 뿐이다. 단위·golden·e2e 가 전부 메모리 위에서 돈다. 실제 파일
+   저장의 부분 쓰기·fsync·손상 탐지·**프로세스 간 단일 writer** 가 아직 없다.
+
+   `serial()` 과 CAS 는 한 프로세스 안의 여러 인스턴스까지만 막는다. 두 프로세스가 같은
+   디렉토리를 열면 CAS 는 밀린 쪽을 거부하지만, 그건 락이 아니라 손실 방지일 뿐이다.
+   `DurableStore` 를 공개 계약으로 고정하려면 lock 과 corruption semantics 가 먼저다.
+
 **순서.** 위 넷을 스키마로 먼저 정의하고, 재현된 반례를 conformance test 로 고정한 뒤,
-구현이 그걸 통과하게 만든다. 테스트를 더 늘리는 것이 다음 게이트가 아니다.
+구현이 그걸 통과하게 만들었다. 넷은 닫혔고 5번이 남았다.
 
 ### 9.2 계약
 
