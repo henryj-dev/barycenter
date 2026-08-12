@@ -97,24 +97,27 @@ cat <<'GATES'
  ❌ S13  GC ledger          미착수
  ❌ S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18
 
- ─── 범위를 줄여도 남는 v0.1 blocker (§9.1.1) ─────────────────────────
+ ─── 6차 검수: 반례 7건이 **녹색 상태에서** 재현됐다 ────────────────
 
- 1. 소유권과 원자성    ✅ 해소. (plane, target_activation_epoch) 단일 CAS 예약 +
-                       durable 버전 CAS. 반례 ①②③④⑥ 이 conformance 로 고정됐고
-                       뮤턴트 7종이 전부 잡힌다.
- 2. ApplyOperation     ✅ 해소. 두 평면이 한 오퍼레이션으로 넘어가고, 활성화 증거가
-                       명시적 타입이자 commit 의 인자다. 뮤턴트 8종 전부 잡힘.
- 3. 변이 envelope      ✅ 해소. MutationEnvelope 하나가 모든 변이를 지난다.
-                       참조 구현(LocalDataplaneDriver)까지 함께 세웠다.
- 4. fail-closed 타입   ✅ 해소. RawModel(입력) / Model(검증 통과) 두 층으로 나누고
-                       리스너를 프로토콜 판별 유니온으로 만들었다. 뮤턴트 6종 전부 잡힘.
- 5. durable store      ✅ 해소. FileStore — 원자적 교체 · 손상 탐지 · 버전 CAS ·
-                       프로세스 간 락. 별도 프로세스로 배제를 확인. 뮤턴트 6종 잡힘.
+ 앞선 "blocker 1~5 해소" 중 셋은 **부분적이었다.** 아래는 전부 직접 재현했다.
 
- ─── 다음 검수가 확인해야 할 것 ───────────────────────────────────────
+ ① 런타임 타입 검증 없음   protocol:'https' → issue 0 건 → **평문 렌더**
+                            'bogus' · least_conn 도 통과. 4차 지적의 재발이다.
+ ② 증거를 검증하지 않음     commit() 이 provesActivation 을 부르지 않는다.
+                            엉뚱한 세대 · config test 실패 · 워커 0/4 로도 좌표가 움직인다.
+ ③ 동시 멱등성 없음         같은 오퍼레이션 6개 동시 → 전부 activated, **HUP 6회**.
+                            reload 상한이 우회된다.
+ ④ partial 이 종단 상태     partially_activated 에서 recover 가 재시도하지 않는다.
+                            못 넘어간 평면의 예약이 남는다.
+ ⑤ FileStore 락 우회        openUnlocked().save() 로 덮어쓴다. 놓은 handle 도 쓴다.
+                            새 주인이 죽은 락을 회수한 뒤 옛 handle 의 release 가
+                            그 락을 지워 제3 writer 가 열린다.
+ ⑥ 복구 경로에 펜싱 없음    drive() 가 리더 토큰을 재검사하지 않는다. 새 리더가 fence 한
+                            뒤 복구를 돌리면 판정은 stale_leader 인데 **publish = 1**.
+ ⑦ epoch 정규화 없음        '1' 과 '01' 이 서로 다른 슬롯을 잡는다.
 
-   · fsync 의 **순서**는 검증되지 않았다 (전원 차단 주입 필요)
-   · (그 외 지적은 전부 반영됐다 — §9.1.1 참고)
+ 그 외 미해소: 세대 materializer(§7.2) · 게시 전 nginx -t · OpenAPI/DDL ·
+               DESIGN §6.2·§6.3·§9.2 와 실제 ABI 불일치 · fsync 순서 미검증
 
  → v0.1 타입·API·DB 스키마 freeze: **No-Go**
 GATES
@@ -123,7 +126,7 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 지목된 blocker 5건은 닫혔으나 위 3건이 미확인 → non-zero."
+  echo " --freeze-gate: 6차 반례 7건 미해소 → non-zero 로 끝낸다."
   exit 2
 fi
 
