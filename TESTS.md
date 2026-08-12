@@ -46,11 +46,11 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 323개 통과, 게이트는 별개
+### 현재 상태 — 스위트 327개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **204 PASS** |
+| 단위 | `npm test` | **208 PASS** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | **e2e (실제 nginx)** | `npm run test:e2e` | **6 PASS** — 저널이 실제 nginx 를 수렴시킨다 |
 | 엔진 사실 (E) | `npm run test:engine` | **61 PASS / 1 SKIP** |
@@ -534,6 +534,10 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | **P19** | 취소된 미래 epoch `E13` 의 지연 RPC 가 활성 `E12` 뒤 도착 | **거부** — "더 높으니까"가 아니라 `expected_current` CAS 로 판정 (§3.6-2) |
 | **P20** | 같은 좌표에 다른 `payload_digest` 로 재요청 | **거부.** digest 가 같을 때만 cached ACK (§3.6-3) |
 | **P21** | DP Agent 재시작 후 낮은 토큰 RPC | 거부 — 토큰은 side effect **전에** fsync 됐다 (§3.5) |
+| **P23** | 같은 `(operation, transition)` 을 두 평면이 쓴다 | 평면마다 독립 판정 — 한쪽 ACK 를 다른 쪽이 훔치면 안 된다 (5차) |
+| **P24** | abort 한 전환에 지연 stage/commit 도착 | **`aborted` 로 거부.** 캐시로 성공을 돌려주거나 슬롯을 되살리면 안 된다 (5차) |
+| **P25** | 같은 store 를 보는 두 Agent 인스턴스 | 자기 기억으로 덮어쓰지 않는다 — 토큰 되감기 금지 (5차) |
+| **P26** | Agent 가 다른 컴포넌트의 durable 상태와 같은 store 를 쓴다 | 남의 필드를 날리지 않는다 (5차) |
 | **P22** | 먼저 시작한 프로브가 나중 것보다 늦게 완료 | 낡은 결과를 버린다 — `probe_start_seq` CAS (§6.6) |
 
 **P18~P21 은 `tests/unit/dp-agent.test.ts` 에서 실행된다** (P22 는 리듀서 구현 후).

@@ -124,7 +124,9 @@ describe('§3.6 stage → commit', () => {
     await a.fence('10');
     await a.stage(op(), 'payload');
     await a.abort(op());
-    expect(await rejectionOf(a.commit(op()))).toBe('not_staged');
+    // `not_staged` 가 아니라 `aborted` 다 — 슬롯이 없는 것과 전환이 끝난 것은 다르다.
+    // 전자는 아직 안 왔을 수도 있지만 후자는 되살아나면 안 된다.
+    expect(await rejectionOf(a.commit(op()))).toBe('aborted');
   });
 
   it('P19 좌표가 지나간 뒤 도착한 옛 stage 도 거부한다', async () => {
@@ -277,5 +279,57 @@ describe('P18 동시성 — 검사와 적용은 하나의 임계구역이다', (
     // 어느 쪽이든 좌표는 한 번만 움직인다.
     expect(a.coordinate('http').activationEpoch).toBe('1');
     expect(results).toContain('ok');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 5차 검수가 지목한 반례. 검수 자체는 제공자 필터에 걸려 중단됐지만, 중단 직전에
+// 네 가지를 지목했고 셋이 즉시 재현됐다.
+// ─────────────────────────────────────────────────────────────────────────
+describe('5차 검수 반례', () => {
+  it('멱등 키에 plane 이 들어간다 — 평면이 서로의 ACK 를 훔치면 안 된다', async () => {
+    const a = agent();
+    await a.fence('10');
+    await a.stage(op({ plane: 'http' }), 'p');
+    const s = await a.stage(op({ plane: 'stream' }), 'p');   // 같은 op/transition, 다른 평면
+    expect(s.plane).toBe('stream');
+    expect(s.cached, 'http 의 ACK 를 재사용했다').toBe(false);
+    expect(a.stagedDigest('stream', '1'), 'stream 에 staging 되지 않았다').toBe('sha256:aaa');
+  });
+
+  it('abort 한 전환은 되살아나지 않는다 — 지연 stage 가 캐시로 성공을 돌려주면 안 된다', async () => {
+    const a = agent();
+    await a.fence('10');
+    await a.stage(op(), 'p');
+    await a.abort(op());
+    // abort 는 이 전환을 끝낸다. 뒤늦게 도착한 stage 는 "성공했다" 고 답해서도,
+    // 슬롯을 되살려서도 안 된다.
+    expect(await rejectionOf(a.stage(op(), 'p'))).toBe('aborted');
+    expect(a.stagedDigest('http', '1')).toBeUndefined();
+  });
+
+  it('같은 store 를 보는 두 인스턴스가 서로의 상태를 되감지 못한다', async () => {
+    const store = new MemoryStore();
+    const a = new DpAgent(store);
+    const b = new DpAgent(store);            // b 는 a 가 쓴 것을 모른다
+    await a.fence('20');
+    // b 가 자기 기억으로 덮어쓰면 최대 토큰이 되감긴다 — 펜싱이 통째로 무너진다.
+    await expect(b.fence('11')).rejects.toThrow();
+    expect(store.load()?.maxLeaderToken).toBe('20');
+  });
+
+  it('한 인스턴스가 다른 컴포넌트의 durable 상태를 지우지 못한다', async () => {
+    const store = new MemoryStore();
+    const agentFirst = new DpAgent(store);   // 기동 시점에 만들어졌다
+    await agentFirst.fence('10');
+    // 그 사이 다른 컴포넌트가 같은 store 에 무언가를 썼다.
+    const withExtra = { ...store.load()!, journal: { marker: 'keep-me' } };
+    await store.save(withExtra as never);
+    // 이제 agent 가 다시 쓴다. 자기 기억으로 덮으면 남의 것이 날아간다.
+    await agentFirst.fence('11');
+    expect(
+      (store.load() as Record<string, unknown> | undefined)?.['journal'],
+      '다른 컴포넌트의 상태를 날렸다',
+    ).toBeDefined();
   });
 });

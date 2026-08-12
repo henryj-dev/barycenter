@@ -193,6 +193,7 @@ const emptyState = (): AgentState => ({
   },
   staged: { http: {}, stream: {} },
   completed: {},
+  aborted: {},
 });
 
 // ── 테스트용 크래시 주입 ────────────────────────────────────────────────

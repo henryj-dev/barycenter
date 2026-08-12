@@ -47,6 +47,8 @@ export type PlaneAck = PlaneState & {
 
 export type RejectionKind =
   | 'stale_leader'
+  | 'aborted'
+  | 'stale_state'
   | 'coordinate_mismatch'
   | 'digest_mismatch'
   | 'epoch_not_monotonic'
@@ -66,8 +68,10 @@ export type AgentState = {
   planes: Record<Plane, PlaneState>;
   /** epoch → payload digest. 아직 활성화되지 않은 슬롯 (§6.5 staging). */
   staged: Record<Plane, Record<string, string>>;
-  /** `operationId:transitionId` → 그때 돌려준 ACK 와 digest. 재요청 판정용. */
+  /** `operationId:transitionId:plane:step` → 그때 돌려준 ACK 와 digest. 재요청 판정용. */
   completed: Record<string, { payloadDigest: string; ack: PlaneAck }>;
+  /** abort 된 전환. 지연된 stage/commit 이 되살리지 못하게 막는다. */
+  aborted: Record<string, true>;
 };
 
 export interface DurableStore {
@@ -96,6 +100,7 @@ const initial = (): AgentState => ({
   planes: { http: { ...ZERO }, stream: { ...ZERO } },
   staged: { http: {}, stream: {} },
   completed: {},
+  aborted: {},
 });
 
 const sameCoordinate = (a: Coordinate, b: Coordinate): boolean =>
@@ -105,21 +110,18 @@ const sameCoordinate = (a: Coordinate, b: Coordinate): boolean =>
 // ── Agent ────────────────────────────────────────────────────────────────
 
 export class DpAgent {
-  private state: AgentState;
   /** 직렬화 큐. 임계구역이 하나씩만 돌게 만든다. */
   private tail: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly store: DurableStore) {
-    this.state = store.load() ?? initial();
-  }
+  constructor(private readonly store: DurableStore) {}
 
   coordinate(plane: Plane): PlaneState {
-    return { ...this.state.planes[plane] };
+    return { ...(this.store.load() ?? initial()).planes[plane] };
   }
 
   /** 아직 활성화되지 않은 슬롯의 digest. 없으면 undefined. */
   stagedDigest(plane: Plane, epoch: string): string | undefined {
-    return this.state.staged[plane][epoch];
+    return (this.store.load() ?? initial()).staged[plane][epoch];
   }
 
   /**
@@ -128,11 +130,16 @@ export class DpAgent {
    */
   private serial<T>(mutate: (state: AgentState) => T): Promise<T> {
     const run = this.tail.then(async () => {
-      const next = structuredClone(this.state);
+      // **매번 store 에서 다시 읽는다.** 인스턴스가 자기 기억을 정본으로 삼으면
+      //   · 같은 store 를 보는 다른 인스턴스가 쓴 것을 덮어써 토큰이 되감기고
+      //   · 다른 컴포넌트(예: ApplyRunner 저널)가 같은 store 에 쓴 것을 날린다.
+      // 5차 검수가 지목한 반례 두 개가 전부 이 하나에서 나왔다.
+      const loaded = this.store.load();
+      const next = structuredClone(loaded ?? initial());
+      // 알려지지 않은 필드(다른 컴포넌트의 것)를 보존한 채로 우리 몫만 바꾼다.
       const result = mutate(next);
       // §3.5 — 토큰과 좌표는 side effect 를 인정하기 **전에** durable 해야 한다.
       await this.store.save(next);
-      this.state = next;
       return result;
     });
     // 실패해도 큐가 끊기면 안 된다.
@@ -211,6 +218,8 @@ export class DpAgent {
       s.maxLeaderToken = maxToken(s.maxLeaderToken, op.leaderToken);
       // §6.5 — abort 는 staged 슬롯을 버릴 뿐 이벤트를 옮기지 않는다.
       delete s.staged[op.plane][op.target.activationEpoch];
+      // 이 전환은 여기서 끝난다. 지연 RPC 가 되살리지 못하게 표시한다.
+      s.aborted[transitionKey(op)] = true;
     });
   }
 
@@ -258,8 +267,12 @@ function assertLeader(s: AgentState, token: string): void {
  * 단계를 키에서 빼면 commit 이 stage 의 재요청으로 취급된다.
  */
 type Step = 'stage' | 'commit' | 'health';
+/** **plane 이 들어가야 한다.** 빠지면 한 평면의 ACK 를 다른 평면이 훔친다 (5차 반례). */
 const key = (op: OperationTuple, step: Step): string =>
-  `${op.operationId}:${op.transitionId}:${step}`;
+  `${op.operationId}:${op.transitionId}:${op.plane}:${step}`;
+/** 전환 단위 키. abort 는 단계가 아니라 전환 전체를 끝낸다. */
+const transitionKey = (op: OperationTuple): string =>
+  `${op.operationId}:${op.transitionId}:${op.plane}`;
 
 /**
  * 토큰 검사 + 재요청 판정. 재요청이면 캐시된 ACK 를 돌려준다.
@@ -269,6 +282,12 @@ const key = (op: OperationTuple, step: Step): string =>
 function admit(s: AgentState, op: OperationTuple, step: Step): PlaneAck | undefined {
   assertLeader(s, op.leaderToken);
   s.maxLeaderToken = maxToken(s.maxLeaderToken, op.leaderToken);
+
+  // abort 는 전환을 **끝낸다.** 지연 도착한 stage/commit 이 캐시로 성공을 돌려주거나
+  // 슬롯을 되살리면 안 된다 (5차 반례).
+  if (s.aborted[transitionKey(op)] === true) {
+    throw new DpRejection('aborted', `${transitionKey(op)} 는 이미 abort 됐다`);
+  }
 
   const seen = s.completed[key(op, step)];
   if (seen === undefined) return undefined;
