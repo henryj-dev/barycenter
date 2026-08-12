@@ -639,6 +639,69 @@ events {}
 stream { upstream p { server [2001:db8::1]:443; } server { listen 19341; proxy_pass p; } }
 EOF
 
+# E35 — server_name 정규식으로 1라벨 와일드카드를 만들 수 있는가 (§4.6 X.509 정합)
+P=$(mkprefix E35)
+cat > "$P/conf/nginx.conf" <<'EOF'
+events {}
+http {
+  access_log off;
+  server { listen 19350 default_server; return 200 "DEFAULT"; }
+  server { listen 19350; server_name ~^[^.]+\.example\.com$; return 200 "ONE_LABEL"; }
+}
+EOF
+if start_ng "$P"; then
+  [ "$(body 19350 / www.example.com)" = ONE_LABEL ] \
+    && ok E35.1 "앵커 정규식이 한 라벨을 매치한다" || bad E35.1 "실패: $(body 19350 / www.example.com)"
+  [ "$(body 19350 / deep.sub.example.com)" = DEFAULT ] \
+    && ok E35.2 "**여러 라벨은 매치하지 않는다** — X.509 와일드카드와 맞는다 (E22.2 와 대조)" \
+    || bad E35.2 "다중 라벨이 매치됐다"
+  [ "$(body 19350 / example.com)" = DEFAULT ] && ok E35.3 "apex 는 매치하지 않는다" || bad E35.3 "실패"
+  [ "$(body 19350 / WWW.EXAMPLE.COM)" = ONE_LABEL ] \
+    && ok E35.4 "대소문자 무관 — nginx 가 Host 를 소문자화한다" || bad E35.4 "실패"
+  stop_ng "$P"
+else
+  bad E35 "기동 실패"
+fi
+
+# E36 — 겹치는 server_name 은 경고만 내고 첫 블록이 이긴다 (조용한 오동작)
+P=$(mkprefix E36)
+cat > "$P/conf/nginx.conf" <<'EOF'
+events {}
+error_log logs/err.log warn;
+http {
+  access_log off;
+  server { listen 19360; server_name a.test b.test; return 200 "FIRST"; }
+  server { listen 19360; server_name b.test c.test; return 200 "SECOND"; }
+}
+EOF
+if start_ng "$P"; then
+  r=$(body 19360 / b.test)
+  if [ "$r" = FIRST ]; then
+    ok E36.1 "겹치는 server_name 은 **경고뿐이고 첫 블록이 이긴다** — nginx -t 는 통과하므로 모델이 막아야 한다"
+  else
+    bad E36.1 "예상 밖: '$r'"
+  fi
+  # 이 경고는 설정 파싱 중에 나오므로 error_log 가 아니라 **stderr** 로 간다.
+  # 즉 error.log 를 뒤져서는 못 찾는다 — 탐지하려면 nginx -t 출력을 봐야 한다.
+  if "$BIN" -t -p "$P" -c conf/nginx.conf 2>&1 | grep -q 'conflicting server name'; then
+    ok E36.2 "경고는 **nginx -t 의 stderr** 로 나온다. error.log 를 뒤져서는 못 찾는다"
+  else
+    bad E36.2 "nginx -t 에서도 경고가 없다"
+  fi
+  stop_ng "$P"
+else
+  bad E36 "기동 실패"
+fi
+
+# E37 — 인용하지 않은 정규식의 후행 백슬래시는 구분자를 이스케이프한다
+conf_test E37 fail "정규식 끝의 백슬래시가 세미콜론을 삼킨다" <<'EOF'
+events {}
+http {
+  map $host $x { ~^a\ v; default d; }
+  server { listen 19370; return 200 $x; }
+}
+EOF
+
 # E27 — 비-default server 의 ssl_protocols 가 SNI 별로 적용되는가 (§4.6 override, 3차 지적)
 conf_test E27 pass "동일 listen 의 server 별 ssl_protocols 를 설정할 수 있다 (동작은 S16 에서 확인)" <<'EOF'
 events {}

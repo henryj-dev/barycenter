@@ -20,7 +20,13 @@ export type EngineCapabilities = {
   flavor: EngineFlavor;
   /** nginx **core** 버전. OpenResty 의 4자리 버전은 앞 3자리로 접는다. */
   version: string;
+  /** `--with-*` 로 **정적** 컴파일된 것. */
   modules: ReadonlySet<string>;
+  /**
+   * `--add-dynamic-module` 로 빌드된 것. **빌드됐다고 로드된 것이 아니다** —
+   * `load_module` 지시가 있어야 쓸 수 있다. 여기서는 "있을 수도 있다"까지만 안다.
+   */
+  dynamicModules: ReadonlySet<string>;
   supports: {
     stream: boolean;
     streamLua: boolean;
@@ -62,8 +68,15 @@ export function parseEngineCapabilities(nginxV: string): EngineCapabilities {
   const version = raw.includes('/') ? parseVersion(raw.split('/')[1]!).slice(0, 3).join('.') : '';
 
   const modules = new Set<string>();
-  for (const m of nginxV.matchAll(/--with-([A-Za-z0-9_]+)/g)) modules.add(m[1]!);
+  const dynamicModules = new Set<string>();
+  // `--with-http_x_module=dynamic` 은 정적이 아니다. 먼저 걸러낸다.
+  for (const m of nginxV.matchAll(/--with-([A-Za-z0-9_]+)(=dynamic)?/g)) {
+    (m[2] === undefined ? modules : dynamicModules).add(m[1]!);
+  }
   for (const m of nginxV.matchAll(/--add-module=\S*?([A-Za-z0-9_]+)-[0-9]/g)) modules.add(m[1]!);
+  for (const m of nginxV.matchAll(/--add-dynamic-module=\S*?([A-Za-z0-9_]+)-[0-9]/g)) {
+    dynamicModules.add(m[1]!);
+  }
 
   const has = (name: string): boolean => modules.has(name);
   // OpenResty 는 --add-module=../ngx_lua-0.10.x / ../ngx_stream_lua-0.0.x 로 들어온다.
@@ -74,6 +87,7 @@ export function parseEngineCapabilities(nginxV: string): EngineCapabilities {
     flavor,
     version,
     modules,
+    dynamicModules,
     supports: {
       stream: has('stream'),
       streamLua,

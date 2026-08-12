@@ -5,7 +5,7 @@
  * R2 / R3 — 같은 모델은 항상 같은 바이트를 만든다.
  */
 import { describe, expect, it } from 'vitest';
-import { block, directive, lit, num, serialize, variable } from '../../src/conf/ast.js';
+import { block, directive, lit, num, regex, serialize, variable } from '../../src/conf/ast.js';
 
 describe('직렬화', () => {
   it('디렉티브를 렌더한다', () => {
@@ -81,5 +81,20 @@ describe('결정성 — R2 / R3', () => {
 
   it('빈 블록도 안정적으로 렌더된다', () => {
     expect(serialize([block('events', [], [])])).toBe('events {\n}\n');
+  });
+});
+
+describe('정규식 노드 — 인용하지 않으므로 경계를 지켜야 한다 (E37)', () => {
+  it('후행 백슬래시를 거부한다 — 뒤의 세미콜론을 이스케이프해 버린다', () => {
+    expect(() => regex('~^a\\')).toThrow();
+    expect(() => regex('~^abc\\\\\\')).toThrow();
+  });
+
+  it('짝수 개의 후행 백슬래시는 허용한다 — 리터럴 백슬래시다', () => {
+    expect(() => regex('~^abc\\\\')).not.toThrow();
+  });
+
+  it('중간의 이스케이프는 정상이다', () => {
+    expect(() => regex('~*^[^.]+\\.example\\.com$')).not.toThrow();
   });
 });

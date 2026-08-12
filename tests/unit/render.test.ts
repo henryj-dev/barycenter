@@ -429,3 +429,71 @@ describe('R20 — 4차 검수 구현 High', () => {
     expect(render(m).conf).toContain('mail.example.com pool_p;');
   });
 });
+
+describe('R21 — 호스트 매칭이 X.509 계약과 엔진 동작에 맞는가', () => {
+  const httpWith = (hosts: string[][]): Model => ({
+    ...empty,
+    listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true }],
+    pools: [{ key: 'p', protocolClass: 'http', algorithm: 'round_robin' }],
+    backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 80, weight: 1 }],
+    httpRoutes: hosts.map((h, i) => ({
+      key: `r${i}`, listener: 'web', hosts: h, priority: 10 - i,
+      action: { kind: 'proxy' as const, pool: 'p', websocket: false },
+    })),
+  });
+
+  // E22.2: nginx 의 *.example.com 은 다중 라벨을 삼킨다.
+  // E35: 앵커 정규식은 한 라벨만 매치한다 — 패스스루와 같은 계약이어야 한다.
+  it('HTTP 와일드카드도 1라벨 앵커 정규식으로 낸다', () => {
+    const conf = render(httpWith([['*.example.com']])).conf;
+    expect(conf).toContain('server_name ~^[^.]+\\.example\\.com$;');
+    expect(conf).not.toContain('server_name *.example.com;');
+  });
+
+  it('정확일치는 그대로 낸다', () => {
+    expect(render(httpWith([['api.example.com']])).conf).toContain('server_name api.example.com;');
+  });
+
+  // E36: 겹치는 server_name 은 경고만 나고 첫 블록이 이긴다 → 모델이 막아야 한다
+  it('호스트가 부분적으로 겹치는 라우트는 저장이 거부된다', () => {
+    expect(() => render(httpWith([['a.test', 'b.test'], ['b.test', 'c.test']]))).toThrow();
+  });
+
+  it('여러 호스트를 가진 라우트는 호스트마다 server 블록을 낸다', () => {
+    const conf = render(httpWith([['a.test', 'b.test']])).conf;
+    expect(conf).toContain('server_name a.test;');
+    expect(conf).toContain('server_name b.test;');
+  });
+});
+
+describe('R22 — PROXY 수신 리스너가 공유 풀의 해시를 오염시키지 않는다', () => {
+  // 한 풀을 PROXY 수신 리스너와 일반 리스너가 함께 쓰면, 일반 리스너에서는
+  // $proxy_protocol_addr 가 비어 모든 클라이언트가 한 peer 로 몰린다.
+  const mixed: Model = {
+    ...empty,
+    listeners: [
+      { key: 'edge', protocol: 'tcp', bind: '0.0.0.0', port: 9000, enabled: true,
+        defaultPool: 'shared', acceptProxyProtocol: true },
+      { key: 'direct', protocol: 'tcp', bind: '0.0.0.0', port: 9001, enabled: true,
+        defaultPool: 'shared' },
+    ],
+    pools: [{ key: 'shared', protocolClass: 'tcp', algorithm: 'source_ip_hash' }],
+    backends: [{ key: 'b', pool: 'shared', host: '10.0.0.1', port: 443, weight: 1 }],
+  };
+
+  it('혼합 공유는 저장이 거부된다', () => {
+    expect(() => render(mixed, { streamRealip: false })).toThrow();
+  });
+
+  it('stream_realip 이 있으면 $remote_addr 로 통일되므로 허용된다', () => {
+    expect(() => render(mixed, { streamRealip: true })).not.toThrow();
+  });
+
+  it('해시가 아닌 알고리즘이면 오염될 것이 없다', () => {
+    const rr: Model = {
+      ...mixed,
+      pools: [{ key: 'shared', protocolClass: 'tcp', algorithm: 'round_robin' }],
+    };
+    expect(() => render(rr, { streamRealip: false })).not.toThrow();
+  });
+});

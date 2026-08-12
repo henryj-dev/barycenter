@@ -56,6 +56,12 @@ export function regex(pattern: string): ConfValue {
   if (CONTROL.test(pattern) || /[\s;{}"'#]/.test(pattern)) {
     throw new Error(`정규식에 쓸 수 없는 문자가 있다: ${JSON.stringify(pattern)}`);
   }
+  // 인용하지 않으므로 후행 백슬래시가 **뒤의 세미콜론을 이스케이프한다.**
+  // E37 로 확인: `~^a\ v;` 는 `invalid number of the map parameters` 로 거부된다.
+  const trailing = /(\\*)$/.exec(pattern)![1]!.length;
+  if (trailing % 2 === 1) {
+    throw new Error(`정규식이 홀수 개의 백슬래시로 끝난다 — 구분자를 삼킨다: ${JSON.stringify(pattern)}`);
+  }
   return { kind: 'regex', pattern };
 }
 

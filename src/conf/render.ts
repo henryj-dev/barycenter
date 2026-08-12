@@ -22,6 +22,7 @@ import {
   type ConfNode, type ConfValue,
 } from './ast.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
+import { parseHostPattern } from '../validate/strings.js';
 import { poolsReachedBy } from '../validate/engine-constraints.js';
 import { ModelValidationError, validateModel } from '../validate/model.js';
 import { parseHashKey } from '../validate/strings.js';
@@ -153,83 +154,100 @@ function upstreamBlock(pool: Pool, backends: Backend[], sourceIpVar: string): Co
 
 // ─────────────────────────────────────────────────────────────── http ───────
 
+/**
+ * HTTP server 블록 — **호스트 하나에 블록 하나**.
+ *
+ * v3 은 라우트의 호스트 배열을 통째로 묶어 `server_name a b;` 를 냈고, 컴파일러에는
+ * `hosts[0]` 만 넘겼다. 두 문제가 있었다.
+ *   · 배열이 부분적으로 겹치면(`[a,b]` 와 `[b,c]`) nginx 는 **경고만 내고 첫 블록에 준다**
+ *     (E36). `nginx -t` 는 통과하므로 조용한 오동작이다. → 모델이 막는다 (validateModel).
+ *   · 호스트마다 매치 클래스가 다를 수 있는데 하나만 보고 순서를 정했다.
+ * 호스트를 독립 단위로 펼치면 둘 다 사라진다.
+ */
 function httpServerBlocks(
   listener: Listener,
   routes: HttpRoute[],
   poolsWithBackends: Set<string>,
 ): ConfNode[] {
-  // 같은 호스트 집합을 쓰는 라우트는 한 server 블록에 모은다.
-  // 그래야 server_name 이 중복되지 않는다.
-  const groups = new Map<string, { hosts: string[]; routes: HttpRoute[] }>();
+  // (호스트, 라우트) 쌍으로 펼친다.
+  const byHost = new Map<string, HttpRoute[]>();
   for (const r of byKey(routes)) {
-    const hosts = [...r.hosts].sort();
-    const sig = hosts.join(' ');
-    const g = groups.get(sig);
-    if (g) g.routes.push(r);
-    else groups.set(sig, { hosts, routes: [r] });
+    for (const h of r.hosts) {
+      const list = byHost.get(h) ?? [];
+      list.push(r);
+      byHost.set(h, list);
+    }
   }
 
   const out: ConfNode[] = [];
-  for (const sig of [...groups.keys()].sort()) {
-    const g = groups.get(sig)!;
-    const locations: ConfNode[] = [];
+  for (const host of [...byHost.keys()].sort()) {
+    const hostRoutes = byHost.get(host)!;
+    const parsed = parseHostPattern(host);
+    if (!parsed.ok) continue; // validateModel 이 이미 막았다
 
-    // 컴파일된 순서대로 location 을 낸다 — 사용자가 본 순서와 conf 순서를 일치시킨다.
-    const inputs: RouteInput[] = g.routes.map((r) =>
+    const inputs: RouteInput[] = hostRoutes.map((r) =>
       r.pathPrefix === undefined
-        ? { key: r.key, host: r.hosts[0]!, priority: r.priority }
-        : { key: r.key, host: r.hosts[0]!, priority: r.priority, pathPrefix: r.pathPrefix },
+        ? { key: r.key, host, priority: r.priority }
+        : { key: r.key, host, priority: r.priority, pathPrefix: r.pathPrefix },
     );
     const compiled = compileHostRoutes(inputs);
     const ordered =
       compiled.errors.length > 0
-        ? g.routes
-        : compiled.order.map((c) => g.routes.find((r) => r.key === c.key)!);
+        ? hostRoutes
+        : compiled.order.map((c) => hostRoutes.find((r) => r.key === c.key)!);
 
+    const locations: ConfNode[] = [];
     for (const r of ordered) {
-      const prefix = r.pathPrefix ?? '/';
-      const body: ConfNode[] = [];
-      switch (r.action.kind) {
-        case 'proxy': {
-          if (!poolsWithBackends.has(r.action.pool)) continue;
-          body.push(directive('proxy_pass', [lit(`http://${upstreamName(r.action.pool)}`)]));
-          body.push(directive('proxy_set_header', [lit('Host'), variable('host')]));
-          body.push(
-            directive('proxy_set_header', [
-              lit('X-Forwarded-For'),
-              variable('proxy_add_x_forwarded_for'),
-            ]),
-          );
-          body.push(directive('proxy_set_header', [lit('X-Forwarded-Proto'), variable('scheme')]));
-          body.push(directive('proxy_http_version', [lit('1.1')]));
-          if (r.action.websocket) {
-            body.push(directive('proxy_set_header', [lit('Upgrade'), variable('http_upgrade')]));
-            body.push(
-              directive('proxy_set_header', [lit('Connection'), variable('connection_upgrade')]),
-            );
-          }
-          break;
-        }
-        case 'redirect':
-          body.push(directive('return', [num(r.action.status), lit(r.action.to)]));
-          break;
-        case 'reject':
-          body.push(directive('return', [num(r.action.status)]));
-          break;
-      }
-      if (body.length > 0) locations.push(block('location', [lit(prefix)], body));
+      const body = locationBody(r, poolsWithBackends);
+      if (body.length > 0) locations.push(block('location', [lit(r.pathPrefix ?? '/')], body));
     }
-
     if (locations.length === 0) continue;
+
+    // E22.2/E35 — nginx 의 `*.example.com` 은 다중 라벨을 삼킨다. X.509 와일드카드는
+    // 한 라벨만 보장하므로, 계약대로 **앵커 정규식**으로 낸다. 패스스루와 같은 규칙이다.
+    const nameArg: ConfValue =
+      parsed.value.kind === 'exact'
+        ? lit(parsed.value.host)
+        : regex(`~^[^.]+\\.${parsed.value.suffix.replace(/\./g, '\\.')}$`);
+
     out.push(
       block('server', [], [
         directive('listen', listenArgs(listener)),
-        directive('server_name', g.hosts.map((h) => lit(h))),
+        directive('server_name', [nameArg]),
         ...locations,
       ]),
     );
   }
   return out;
+}
+
+/** 라우트 액션 하나를 location 본문으로. */
+function locationBody(r: HttpRoute, poolsWithBackends: Set<string>): ConfNode[] {
+  const body: ConfNode[] = [];
+  switch (r.action.kind) {
+    case 'proxy': {
+      if (!poolsWithBackends.has(r.action.pool)) return [];
+      body.push(directive('proxy_pass', [lit(`http://${upstreamName(r.action.pool)}`)]));
+      body.push(directive('proxy_set_header', [lit('Host'), variable('host')]));
+      body.push(
+        directive('proxy_set_header', [lit('X-Forwarded-For'), variable('proxy_add_x_forwarded_for')]),
+      );
+      body.push(directive('proxy_set_header', [lit('X-Forwarded-Proto'), variable('scheme')]));
+      body.push(directive('proxy_http_version', [lit('1.1')]));
+      if (r.action.websocket) {
+        body.push(directive('proxy_set_header', [lit('Upgrade'), variable('http_upgrade')]));
+        body.push(directive('proxy_set_header', [lit('Connection'), variable('connection_upgrade')]));
+      }
+      break;
+    }
+    case 'redirect':
+      body.push(directive('return', [num(r.action.status), lit(r.action.to)]));
+      break;
+    case 'reject':
+      body.push(directive('return', [num(r.action.status)]));
+      break;
+  }
+  return body;
 }
 
 /**
@@ -356,7 +374,7 @@ function streamServerBlock(listener: Listener, pool: Pool | undefined): ConfNode
 
 export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): RenderedConfig {
   // fail closed. 검증 실패를 렌더가 흡수하면 의미가 바뀐다 (4차 검수 Critical).
-  const issues = validateModel(model);
+  const issues = validateModel(model, { streamRealip: caps.streamRealip });
   if (issues.length > 0) throw new ModelValidationError(issues);
 
   const pools = new Map(model.pools.map((p) => [p.key, p]));

@@ -19,6 +19,7 @@ const caps = (streamRealip: boolean): EngineCapabilities => ({
   flavor: 'openresty',
   version: '1.31.1',
   modules: new Set<string>(),
+  dynamicModules: new Set<string>(),
   supports: {
     stream: true,
     streamLua: true,

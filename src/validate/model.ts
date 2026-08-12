@@ -14,6 +14,7 @@
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
 import { parseHashKey } from './strings.js';
+import { poolsReachedBy } from './engine-constraints.js';
 import type { Model } from '../model/provisional.js';
 
 export type ModelIssueCode =
@@ -23,7 +24,8 @@ export type ModelIssueCode =
   | 'pool_has_no_backend'
   | 'socket_conflict'
   | 'route_compile_error'
-  | 'invalid_hash_key';
+  | 'invalid_hash_key'
+  | 'mixed_proxy_protocol_pool';
 
 export type ModelIssue = {
   code: ModelIssueCode;
@@ -42,7 +44,13 @@ export class ModelValidationError extends Error {
   }
 }
 
-export function validateModel(model: Model): ModelIssue[] {
+/** 렌더 결과에 영향을 주는 엔진 capability 중, 검증이 알아야 하는 것. */
+export type ValidationCapabilities = { streamRealip: boolean };
+
+export function validateModel(
+  model: Model,
+  caps: ValidationCapabilities = { streamRealip: false },
+): ModelIssue[] {
   const issues: ModelIssue[] = [];
   const poolKeys = new Set(model.pools.map((p) => p.key));
   const listenerKeys = new Set(model.listeners.map((l) => l.key));
@@ -103,6 +111,36 @@ export function validateModel(model: Model): ModelIssue[] {
 
   for (const c of findSocketConflicts(reservations)) {
     issues.push({ code: 'socket_conflict', subjects: [c.a, c.b], message: c.reason });
+  }
+
+  // ── PROXY 수신 리스너와 일반 리스너가 같은 풀을 공유하는가 ──
+  //
+  // stream_realip 이 없으면 소스IP 해시가 $proxy_protocol_addr 로 렌더된다(§7.6). 그런데
+  // 같은 풀을 PROXY 를 받지 않는 리스너도 쓰면, 그쪽에서는 그 변수가 **비어 있어**
+  // 모든 클라이언트가 한 peer 로 몰린다. 조용히 망가지므로 저장에서 막는다 (4차 검수).
+  if (!caps.streamRealip) {
+    const hashPools = new Set(
+      model.pools.filter((p) => p.algorithm === 'source_ip_hash' || p.algorithm === 'hash').map((p) => p.key),
+    );
+    const viaProxy = new Set<string>();
+    const viaDirect = new Set<string>();
+    for (const l of model.listeners) {
+      if (!l.enabled) continue;
+      const target = l.acceptProxyProtocol === true && l.protocol !== 'udp' ? viaProxy : viaDirect;
+      for (const pk of poolsReachedBy(l, model)) target.add(pk);
+    }
+    for (const pk of hashPools) {
+      if (viaProxy.has(pk) && viaDirect.has(pk)) {
+        issues.push({
+          code: 'mixed_proxy_protocol_pool',
+          subjects: [pk],
+          message:
+            `풀 '${pk}' 를 PROXY 수신 리스너와 일반 리스너가 함께 쓴다. stream_realip 이 없어 ` +
+            `해시가 $proxy_protocol_addr 로 계산되는데, 일반 리스너에서는 그 값이 비어 모든 ` +
+            `클라이언트가 한 peer 로 몰린다. 풀을 분리하거나 stream_realip 이 있는 엔진을 쓴다.`,
+        });
+      }
+    }
   }
 
   // ── 라우트 ──

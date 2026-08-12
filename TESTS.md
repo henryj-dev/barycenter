@@ -45,13 +45,13 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 255개 통과, 게이트는 별개
+### 현재 상태 — 스위트 275개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **149 PASS** |
+| 단위 | `npm test` | **162 PASS** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
-| 엔진 사실 (E) | `npm run test:engine` | **54 PASS / 1 SKIP** |
+| 엔진 사실 (E) | `npm run test:engine` | **61 PASS / 1 SKIP** |
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
 | 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS** |
 | 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS** |
@@ -132,6 +132,10 @@ PASS=43  FAIL=0  SKIP=1
 | E33.regex | `~^default$` 를 키로 | 리터럴 호스트 `default` 를 매칭한다 | §7.5 |
 | E34.bare | IPv6 백엔드 bracket 없이 | **거부** — `invalid port in upstream` | §7.1 · 4차 |
 | E34.bracket | `[2001:db8::1]:443` | 수용 | §7.1 |
+| E35.1–4 | `server_name ~^[^.]+\.example\.com$` | **한 라벨만** 매치. 다중 라벨·apex 는 안 됨. 대소문자 무관 | §4.6 · 4차 |
+| E36.1 | 겹치는 `server_name` 을 가진 두 server | **경고뿐이고 첫 블록이 이긴다** — `nginx -t` 는 통과 | §7.5 · 4차 |
+| E36.2 | 그 경고의 위치 | error.log 가 아니라 **`nginx -t` stderr** | §7.5 |
+| E37 | 인용 없는 정규식의 후행 백슬래시 | **거부** — 뒤의 세미콜론을 삼킨다 | §4.9 · 4차 |
 | E28.1 | `stream_realip` 없이 `$proxy_protocol_addr` | **실 클라이언트 IP 를 준다** → 소스IP 해시 대체 경로 | §7.6 |
 | E28.2 | 같은 조건의 `$remote_addr` | 앞단 프록시 주소로 남는다 | §7.6 |
 | E29.1 | PROXY 수신 + 송신 체인 | **실 클라이언트 IP 를 잃는다** → 모델이 조합을 막는 근거 | §7.6 |
@@ -411,6 +415,10 @@ PASS=9  FAIL=0     openresty/1.31.1.1, worker_processes 3
 | R6 | `source_ip_hash`, `protocol_class=http` | `ip_hash;` |
 | R7 | `source_ip_hash`, `protocol_class=tcp` | `hash $remote_addr consistent;` |
 | R8 | SNI 라우트 + `on_unmatched_sni=pool` | map 에 `~*` 정규식(대소문자 무시) + `[^.]+`(1라벨) + `default` |
+| R21 | HTTP 와일드카드 | `~^[^.]+\.example\.com$` 앵커 정규식 — X.509 1라벨 계약과 맞춘다 (E22.2 vs E35) |
+| R21 | 호스트 부분 겹침(`[a,b]`+`[b,c]`) | **저장 거부** — 엔진은 경고만 내고 첫 블록에 준다 (E36) |
+| R21 | 호스트 여러 개인 라우트 | 호스트마다 server 블록 — `hosts[0]` 만 보고 순서를 정하지 않는다 |
+| R22 | PROXY 수신·일반 리스너가 해시 풀 공유 | **저장 거부** — 일반 쪽에서 `$proxy_protocol_addr` 가 비어 한 peer 로 몰린다 |
 | R20 | IPv6 백엔드 | `[2001:db8::1]:443` — bracket 없으면 엔진이 거부 (E34) |
 | R20 | 풀 키 `a-b` 와 `a_b` | **서로 다른** upstream 이름 — 치환이 비단사면 중복 선언이 된다 |
 | R20 | SNI 가 `default` | `~^default$` 앵커 정규식 — 인용은 소용없다 (E33) |

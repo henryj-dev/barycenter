@@ -92,3 +92,23 @@ describe('알 수 없는 입력', () => {
     expect(unknown.version).toBe('');
   });
 });
+
+describe('4차 검수 — 동적 모듈을 정적으로 오판정하지 않는다', () => {
+  it('=dynamic 으로 빌드된 것은 modules 가 아니라 dynamicModules 로 간다', () => {
+    // 실제 OpenResty 이미지가 http_image_filter_module 등을 dynamic 으로 빌드한다.
+    expect(openresty.modules.has('http_image_filter_module')).toBe(false);
+    expect(openresty.dynamicModules.has('http_image_filter_module')).toBe(true);
+  });
+
+  it('정적으로 빌드된 것은 그대로 modules 에 있다', () => {
+    expect(openresty.modules.has('stream')).toBe(true);
+    expect(openresty.dynamicModules.has('stream')).toBe(false);
+  });
+
+  it('빌드됐다는 것과 로드됐다는 것은 다르다 — supports 는 정적만 본다', () => {
+    const v = 'nginx version: nginx/1.31.3\nconfigure arguments: --with-stream --with-stream_realip_module=dynamic';
+    const caps = parseEngineCapabilities(v);
+    expect(caps.supports.streamRealip, 'dynamic 은 로드 보장이 없으므로 지원으로 치지 않는다').toBe(false);
+    expect(caps.dynamicModules.has('stream_realip_module')).toBe(true);
+  });
+});
