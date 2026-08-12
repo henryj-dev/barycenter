@@ -1618,7 +1618,37 @@ S15 · S16 · S17 · S18 · S19. 남는 것은 **S7(완료) · S11 · S12** 와 
 |---|---|
 | blocker 1 | 펜싱이 `run()` 에만 있다. `drive()` 는 리더 토큰을 재검사하지 않아 **복구 경로로 들어오면 게시한다**. 판정은 `stale_leader` 인데 `publishCalls = 1` 이다. |
 | blocker 2 | 증거가 **기록일 뿐 검사가 아니다.** `DpAgent.commit()` 이 `provesActivation` 을 부르지 않는다. 엉뚱한 세대·config test 실패·워커 0/4 로도 좌표가 움직인다. 러너가 검사하지만 §3.5 는 **Agent 가 최종 심판**이라고 말한다. |
-| blocker 4 | **런타임 디코더가 없다.** 판별 유니온은 컴파일 타임뿐이고 `validateModel` 은 `unknown` 을 해독하지 않는다. `protocol: 'https'` 가 issue 0 건으로 통과해 **평문으로 렌더된다** — 4차 지적 그대로의 재발이다. |
+| blocker 4 | ✅ **해소** — `src/model/decode.ts`. 아래 참조. |
+
+##### 런타임 해독기 (6차 ①)
+
+경계에서 `unknown` 을 해독한다. 세 규칙이다.
+
+1. **모르는 값은 거부한다.** enum 은 아는 것만 통과한다.
+2. **모르는 키도 거부한다.** 조용히 무시된 설정은 "저장은 됐는데 동작 안 함" 이 된다.
+   `defaultPoool` 오타 하나가 기본 풀 없는 리스너를 만들고, 그건 렌더에서 사라진다.
+3. **강제 변환하지 않는다.** `"8080"` 은 8080 이 아니라 오류다. 변환은 의미를 바꾼다.
+
+역할을 갈라 뒀다. `decodeModel` 은 **모양과 타입**만 보고, `validateModel` 은 **의미**
+(참조 무결성·소켓 충돌·프로토콜 정합)를 본다. `parseModel` 이 둘을 순서대로 돌린다 —
+모양이 깨진 값에 참조 무결성을 물으면 진짜 원인이 오류 더미에 묻힌다.
+
+`render` 도 해독을 한 번 더 한다. 타입이 `Model` 이라는 것은 컴파일 타임의 약속일
+뿐이고, 캐스팅해 넣으면 그 약속은 없는 것과 같다. 6차 반례가 정확히 그 경로였다.
+
+`protocol: 'https'` 는 이제 이렇게 끝난다.
+
+```
+validateModel  → 0 건        (의미 검증기다. 여기서 0 인 것이 맞다)
+decodeModel    → invalid_enum
+parseModel     → 아는 값이 아니다: "https"
+render         → ModelValidationError
+```
+
+계약은 `tests/conformance/review6-runtime-decode.test.ts` (25건, positive control 3건
+포함). 뮤턴트 7종이 전부 잡힌다 — enum 검사 제거 8건, 모르는 키 무시 4건, 필수 필드
+제거 3건, 숫자 강제 변환 1건, 범위 검사 제거 1건, render 해독 제거 1건, 프로토콜별
+필드 구분 제거 1건.
 
 새로 드러난 것도 넷이다.
 

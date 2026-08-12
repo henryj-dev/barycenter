@@ -35,7 +35,18 @@ export type ModelIssueCode =
   /** 어떤 풀에도 속하지 않은 백엔드. */
   | 'orphan_backend'
   /** 이 프로토콜에서 의미가 없거나 엔진이 지원하지 않는 옵션. */
-  | 'option_not_supported';
+  | 'option_not_supported'
+  // ── 아래는 런타임 해독기(`src/model/decode.ts`)가 낸다 ──
+  /** 타입이 다르다. 강제 변환하지 않는다. */
+  | 'invalid_type'
+  /** 아는 enum 값이 아니다. */
+  | 'invalid_enum'
+  /** 필수 필드가 없다. */
+  | 'missing_field'
+  /** 모르는 필드다 — 조용히 무시하면 오타가 설정을 날린다. */
+  | 'unknown_field'
+  /** 숫자가 허용 범위 밖이다. */
+  | 'out_of_range';
 
 export type ModelIssue = {
   code: ModelIssueCode;

@@ -101,8 +101,9 @@ cat <<'GATES'
 
  앞선 "blocker 1~5 해소" 중 셋은 **부분적이었다.** 아래는 전부 직접 재현했다.
 
- ① 런타임 타입 검증 없음   protocol:'https' → issue 0 건 → **평문 렌더**
-                            'bogus' · least_conn 도 통과. 4차 지적의 재발이다.
+ ① 런타임 타입 검증        ✅ 해소. src/model/decode.ts — 경계에서 unknown 을 해독한다.
+                            모르는 enum · 모르는 키 · 강제 변환을 전부 거부.
+                            뮤턴트 7종 잡힘.
  ② 증거를 검증하지 않음     commit() 이 provesActivation 을 부르지 않는다.
                             엉뚱한 세대 · config test 실패 · 워커 0/4 로도 좌표가 움직인다.
  ③ 동시 멱등성 없음         같은 오퍼레이션 6개 동시 → 전부 activated, **HUP 6회**.
@@ -126,7 +127,7 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: 6차 반례 7건 미해소 → non-zero 로 끝낸다."
+  echo " --freeze-gate: 6차 반례 6건 미해소 → non-zero 로 끝낸다."
   exit 2
 fi
 

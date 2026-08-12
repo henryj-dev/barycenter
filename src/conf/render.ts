@@ -25,6 +25,7 @@ import { compileHostRoutes, type RouteInput } from '../route/compile.js';
 import { parseHostPattern } from '../validate/strings.js';
 import { poolsReachedBy } from '../validate/engine-constraints.js';
 import { ModelValidationError, validateModel } from '../validate/model.js';
+import { decodeModel } from '../model/decode.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
 import type {
@@ -378,6 +379,13 @@ function streamServerBlock(listener: TcpListener | UdpListener, pool: Pool | und
 
 export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): RenderedConfig {
   // fail closed. 검증 실패를 렌더가 흡수하면 의미가 바뀐다 (4차 검수 Critical).
+  //
+  // **해독을 여기서도 한 번 더 한다.** 타입이 `Model` 이라는 것은 컴파일 타임의 약속일
+  // 뿐이고, JSON 에서 온 값을 캐스팅해 넣으면 그 약속은 없는 것과 같다. 6차 검수가
+  // `protocol: 'https'` 로 평문 설정을 만들어 낸 경로가 정확히 그것이었다.
+  const decoded = decodeModel(model);
+  if (!decoded.ok) throw new ModelValidationError(decoded.issues);
+
   const issues = validateModel(model, { streamRealip: caps.streamRealip });
   if (issues.length > 0) throw new ModelValidationError(issues);
 
