@@ -57,9 +57,34 @@ http {
         location /generation { return 200 "${name}"; }
     }
 }
+stream {
+    server {
+        listen 8443;
+        content_by_lua_block { ngx.say("${name}") }
+    }
+}
 `,
     'utf8',
   );
+}
+
+/**
+ * stream 평면의 활성 세대. **http 와 별개로** 확인해야 §3.4 의 이중 평면이 실물에서
+ * 성립하는지 알 수 있다. 한쪽만 보면 다른 쪽이 옛 세대로 남아도 모른다.
+ *
+ * busybox `nc` 는 stdin 이 EOF 면 소켓을 닫는다. 잠깐 열어 둬야 응답을 받는다.
+ */
+async function probeStream(): Promise<string | undefined> {
+  try {
+    const out = execFileSync(
+      'docker',
+      ['exec', container, 'sh', '-c', '(sleep 0.4) | nc 127.0.0.1 8443 2>/dev/null || true'],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    ).toString().trim();
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function probeAccepting(): Promise<string | undefined> {
@@ -153,6 +178,24 @@ function newStore(): FileStore {
   return s;
 }
 
+/** 두 평면을 한 오퍼레이션으로 옮긴다 (§3.4). */
+const BOTH = (n: string, generation: string): ApplyOperation => ({
+  ...OP(n, generation),
+  affectedPlanes: ['http', 'stream'],
+  planes: {
+    http: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: `sha256:${n}-h`,
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: `sha256:${n}-s`,
+    },
+  },
+});
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -224,9 +267,40 @@ describe('S12 end-to-end — 실제 nginx', () => {
     rmSync(prefix, { recursive: true, force: true });
   });
 
-  it('기동 직후 gen-1 을 서빙한다', async () => {
+  it('기동 직후 gen-1 을 서빙한다 — 두 평면 다', async () => {
     expect(await probeAccepting()).toBe('gen-1');
+    expect(await probeStream(), 'stream 평면이 응답하지 않는다').toBe('gen-1');
     expect(await effects().observePublished()).toBe('gen-1');
+  });
+
+  /**
+   * §3.4 — nginx 는 http 와 stream 을 **한 번의 HUP 으로** 함께 올린다.
+   *
+   * 무엇을 증명하고 무엇을 증명하지 않는지 갈라 둔다.
+   *   · 마커 두 개가 바뀌는 것은 **엔진 사실**이다 — 렌더된 stream 블록이 실제로
+   *     reload 에 반영된다는 것. 우리 두 평면 로직의 증거는 아니다.
+   *   · 두 평면 로직의 증거는 **좌표와 progress** 다. 한 평면만 commit 하면 거기가 깨진다.
+   */
+  it('두 평면이 실물에서 함께 넘어간다 (§3.4)', async () => {
+    const agent = new DpAgent(newStore());
+    const result = await new ApplyRunner(agent, effects()).run(BOTH('e2e-both', 'gen-2'));
+
+    expect(result.phase).toBe('activated');
+    expect(result.progress.http).toBe('committed');
+    expect(result.progress.stream).toBe('committed');
+    expect(result.partialTransition).toBe(false);
+
+    expect(await waitAccepting('gen-2'), 'http 평면이 안 넘어갔다').toBe('gen-2');
+    expect(
+      await waitFor(probeStream, (g) => g === 'gen-2'),
+      'stream 평면이 안 넘어갔다',
+    ).toBe('gen-2');
+
+    // 좌표도 둘 다 움직였어야 한다.
+    expect(agent.coordinate('http').activationEpoch).toBe('1');
+    expect(agent.coordinate('stream').activationEpoch).toBe('1');
+    // 활성화 근거가 남는다 (§6.3).
+    expect(agent.evidenceFor('stream', '1')?.acceptingGeneration).toBe('gen-2');
   });
 
   it('저널이 실제 nginx 를 gen-2 로 옮긴다', async () => {
