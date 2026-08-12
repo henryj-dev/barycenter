@@ -84,6 +84,10 @@ describe('정상 경로', () => {
 describe('S12 — 모든 지점에서 죽여 본다', () => {
   it('크래시 지점이 충분히 많다 — 지점을 손으로 고르지 않는다', async () => {
     const { clock } = await runWithCrashAt(9999);
+    // 개수는 **집합의 일치를 증명하지 않는다.** 5차 검수가 그걸 지적했고, 실제로
+    // publish·reload 지점을 통째로 빼도 이 검사는 통과했다. 지점의 이름과 §6.2 표와의
+    // 대응은 `tests/conformance/review5-crash-points.test.ts` 가 본다.
+    // 여기 남은 것은 "스윕이 돌 만큼은 있다" 는 하한일 뿐이다.
     expect(clock.steps, '주입 지점이 너무 적다').toBeGreaterThanOrEqual(9);
   });
 

@@ -434,6 +434,30 @@ export class DpAgent {
   }
 
   /**
+   * **시작하지 않은 전환을 되돌린다.** 예약만 잡고 부작용을 내기 전에 물러설 때 쓴다.
+   *
+   * `abort` 와 다르다. abort 는 전환을 **종단 상태로 닫아서** 지연 RPC 가 되살리지
+   * 못하게 한다. 그런데 여러 평면 중 하나의 예약이 막혀 이미 잡은 것을 놓는 경우는
+   * "이 오퍼레이션은 아무 일도 하지 않았다" 이므로, 같은 operationId 로 다시 시도할 수
+   * 있어야 한다. 종단으로 닫아 버리면 **크래시 한 번이 그 operationId 를 영구히 오염시킨다.**
+   *
+   * 그래서 예약과 함께 **멱등 기록도 지운다.** 안 지우면 재시도의 `reserve` 가 캐시된
+   * ACK 를 받아 슬롯 없이 성공했다고 답한다.
+   */
+  release(op: OperationTuple): Promise<void> {
+    return this.serial((s) => {
+      assertLeader(s, op.leaderToken);
+      if (s.terminal[transitionKey(op)] !== undefined) return;
+      if (ownsSlot(s, op)) {
+        delete s.reservations[op.plane][op.target.activationEpoch];
+      }
+      for (const step of ['reserve', 'stage', 'commit', 'health'] as const) {
+        delete s.completed[key(op, step)];
+      }
+    });
+  }
+
+  /**
    * 전환을 실패로 끝낸다. **슬롯을 반납한다** — 안 그러면 실패한 좌표가 영구히 잠기고,
    * 지연 도착한 commit 이 뒤늦게 좌표를 옮긴다 (5차 반례 ⑥).
    */

@@ -118,8 +118,10 @@ export class ApplyRunner {
         reserved.push(plane);
       }
     } catch (e) {
+      // **종단으로 닫지 않는다.** 아직 아무 부작용도 내지 않았으므로 같은
+      // operationId 로 다시 시도할 수 있어야 한다 (§6.2 — 없던 일이지 실패가 아니다).
       for (const plane of reserved) {
-        await ignoreRejection(this.agent.abort(tupleFor(op, plane)));
+        await ignoreRejection(this.agent.release(tupleFor(op, plane)));
       }
       throw e;
     }
@@ -344,12 +346,70 @@ function resultOf(j: JournalEntry): ApplyResult {
 export class CrashClock {
   steps = 0;
   crashAt: number | undefined;
+  /** 지나온 지점의 **이름**. 개수가 아니라 집합으로 판정하기 위한 것이다. */
+  readonly seen: string[] = [];
 
   tick(label: string): void {
     const at = this.steps;
     this.steps += 1;
+    this.seen.push(label);
     if (this.crashAt === at) throw new CrashInjected(`${label}#${at}`);
   }
+}
+
+/**
+ * durable 쓰기가 **무엇을 바꾸는 쓰기였는지** 이름을 붙인다.
+ *
+ * 5차 검수 지적: 크래시 지점을 개수(`>= 9`)로만 세면 §6.2 표의 어느 행을 덮었는지
+ * 말할 수 없다. 정상 경로 22 지점 중 18 개가 구분 없는 `save` 였으므로, publish·reload
+ * 지점을 통째로 빼도 개수 검사는 통과했다.
+ *
+ * 쓰기 주체에게 라벨을 들려 보내는 대신 **상태의 차이로 분류한다.** 그러면 프로덕션
+ * 코드에 테스트용 인자가 새지 않고, 분류가 실제로 일어난 변화를 따라간다.
+ */
+export function classifyWrite(before: AgentState | undefined, next: AgentState): string {
+  // 첫 쓰기도 이름을 가져야 한다. `undefined` 를 특별 취급하면 최초 예약이 이름을 잃는다.
+  const prev: AgentState = before ?? {
+    version: 0,
+    maxLeaderToken: '0',
+    planes: {
+      http: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+      stream: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+    },
+    reservations: { http: {}, stream: {} },
+    completed: {},
+    terminal: {},
+    activationEvidence: {},
+  };
+  for (const plane of ['http', 'stream'] as const) {
+    const before = prev.planes[plane];
+    const after = next.planes[plane];
+    if (before.activationEpoch !== after.activationEpoch) return `commit:${plane}`;
+
+    const prevSlots = prev.reservations[plane];
+    const nextSlots = next.reservations[plane];
+    for (const epoch of Object.keys(nextSlots)) {
+      const p = prevSlots[epoch];
+      const n = nextSlots[epoch]!;
+      if (p === undefined) return `reserve:${plane}`;
+      if (p.stagedDigest === undefined && n.stagedDigest !== undefined) return `stage:${plane}`;
+    }
+    for (const epoch of Object.keys(prevSlots)) {
+      if (nextSlots[epoch] === undefined) {
+        const how = Object.values(next.terminal).at(-1) ?? 'release';
+        return `${how}:${plane}`;
+      }
+    }
+  }
+
+  // 토큰 상승은 `admit` 의 부수효과라 거의 모든 쓰기에 딸려 온다. **맨 뒤에서** 본다 —
+  // 앞에 두면 첫 예약이 `fence` 로 잘못 분류된다.
+  if (prev.journal?.phase !== next.journal?.phase) return `journal:${next.journal?.phase ?? 'none'}`;
+  if (prev.maxLeaderToken !== next.maxLeaderToken) return 'fence';
+  if (JSON.stringify(prev.journal) !== JSON.stringify(next.journal)) {
+    return `journal:${next.journal?.phase ?? 'none'}:update`;
+  }
+  return 'noop';
 }
 
 /** durable 저장의 직전/직후에도 죽일 수 있게 감싼다. */
@@ -362,9 +422,10 @@ export class FaultStore implements DurableStore {
     return this.inner.load();
   }
   async save(state: AgentState): Promise<void> {
-    this.clock.tick('save:before');
+    const label = classifyWrite(this.inner.load(), state);
+    this.clock.tick(`${label}:before`);
     await this.inner.save(state);
-    this.clock.tick('save:after');
+    this.clock.tick(`${label}:after`);
   }
 }
 
