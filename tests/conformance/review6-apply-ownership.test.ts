@@ -245,6 +245,11 @@ describe('④ partially_activated 에서 복구가 이어받는다 (§6.2 #8)', 
 // ── ⑥ 복구 경로에도 펜싱이 있다 ────────────────────────────────────────
 
 describe('⑥ 복구도 부작용 앞에서 펜싱을 지난다 (§3.5)', () => {
+  /**
+   * 7차 반례 ① 이후 동작이 바뀌었다. `fence` 가 옛 오퍼레이션을 **승계**하므로 복구는
+   * 예외가 아니라 `superseded` 종단을 읽는다. 계약의 핵심은 그대로다 —
+   * **거부될 오퍼레이션이 부작용을 내지 않는다.**
+   */
   it('새 리더가 fence 한 뒤 옛 복구는 게시하지 못한다', async () => {
     const agent = new DpAgent(new MemoryStore());
     const op = OP({ leaderToken: '10' });
@@ -260,7 +265,7 @@ describe('⑥ 복구도 부작용 앞에서 펜싱을 지난다 (§3.5)', () => 
     await agent.fence('11'); // 새 리더 등장
 
     const fx = new FakeEffects();
-    expect(await kindOf(new ApplyRunner(agent, fx, FAST).recover())).toBe('stale_leader');
+    expect((await new ApplyRunner(agent, fx, FAST).recover()).phase).toBe('superseded');
     expect(fx.publishCalls, '§3.5 — 거부될 오퍼레이션이 current 를 옮겼다').toBe(0);
     expect(fx.reloadSignals).toBe(0);
     expect(agent.coordinate('http').activationEpoch).toBe('0');

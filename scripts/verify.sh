@@ -139,29 +139,24 @@ cat <<'GATES'
                        구현과 함께 고정한다. 구현하지 않은 계약을 고정하면 깨진다는
                        것을 여섯 번 배웠다 (§9.1 멤버십 철회).
 
- ─── 7차 검수: A 는 **동결 불가** ───────────────────────────────────────
+ ─── 7차 검수 다섯 지적 ────────────────────────────────────────────────
 
- ① 리더 승계가 없다 — **영구 교착**                        [ABI 모양]
-    fence(11) 뒤: 옛 저널 복구 → stale_leader
-                  새 리더의 새 작업 → operation_in_flight
-                  abortConfig 로 풀기 → stale_leader (옛 토큰이라 거부)
-    새 리더가 apply 경로를 영영 못 잡는다. activeOperation 을 도입하며 만든 구멍이다.
+ ① 리더 승계          ✅ 해소. **펜싱이 곧 승계다.** 더 높은 토큰이 fence 를 지나면
+                       옛 오퍼레이션의 예약을 반납하고 저널을 superseded 로 닫는다.
+                       이미 넘어간 좌표는 건드리지 않는다 (§3.3).
+ ② 펜싱 TOCTOU        ▲ 창을 좁혔다. 관측 뒤·부작용 앞에서 다시 본다.
+                       **완전히 닫히지 않는다** — nginx 가 토큰을 이해하지 못한다.
+                       남는 위험은 경계가 있고 좌표는 안전하다 (apply.ts 주석 참고).
+ ③ 문서와 코드 불일치  ✅ 해소. tls_passthrough · source_ip_hash 를 **포함으로 뒤집었다**.
+                       동작하고 검증된 것을 문서에서만 빼는 것은 축소가 아니다.
+                       해독기가 받는 enum 을 표면 테스트가 직접 못박는다.
+ ④ 표면만으로 구현 불가 ✅ 해소. LocalDataplaneDriver.create({store, effects}).
+                       DurableStore 구현에 필요한 타입을 전부 공개했다.
+ ⑤ 이름만 보는 테스트  ✅ 해소. **소비자처럼 쓰는** 테스트를 넣었다 — 루트 import 만으로
+                       저장소를 구현하고 드라이버를 만들고 거부를 분류한다.
 
- ② 펜싱이 비동기 관측 앞의 TOCTOU                          [구현 품질]
-    관측 await 중 fence(11) 가 완주하면 옛 러너가 publish 1회를 낸 뒤 stale_leader.
-
- ③ 뺐다고 적은 것이 공개 모델에 남아 있다                  [ABI 모양]
-    tls_passthrough · source_ip_hash 가 parseModel 을 통과한다.
-    §9.1.1 은 v0.2 라고 적어 놨다. 지금 동결하면 v0.1 계약이 된다.
-
- ④ 표면만으로 구현할 수 없다                                [ABI 모양]
-    LocalDataplaneDriver 는 비공개 DpAgent 를 인자로 받는다.
-    DurableStore 는 비공개 AgentState · StoreConflict 에 의존한다.
-
- ⑤ 표면 테스트가 런타임 이름만 본다                        [검증의 문제]
-    타입 export · 필드 · optional · 인자 · 반환형이 바뀌어도 통과한다.
-
- → A(타입·DP ABI): **No-Go**
+ → A(타입·DP ABI): 8차 검수의 확인을 기다린다. ② 는 설계상 남는 것이라
+                    "닫혔다" 고 적지 않았다.
  → B(API·DB):      **No-Go** — 만들지 않았다.
 GATES
 

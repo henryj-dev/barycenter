@@ -60,6 +60,13 @@ const BOTH = (o: Partial<ApplyOperation> = {}): ApplyOperation =>
 
 const FAST = { attempts: 1, intervalMs: 0, sleep: async () => {} };
 
+/**
+ * 이 스위트는 Agent 를 직접 들여다보므로 그 Agent 위의 드라이버가 필요하다.
+ * 공개 경로는 `LocalDataplaneDriver.create({store, effects})` 다 (7차 반례 ④).
+ */
+const driverOn = (agent: DpAgent, effects: FakeEffects): LocalDataplaneDriver =>
+  Reflect.construct(LocalDataplaneDriver, [agent, effects]) as LocalDataplaneDriver;
+
 const kindOf = async (p: Promise<unknown>): Promise<string> => {
   try {
     await p;
@@ -267,7 +274,7 @@ describe('DataplaneDriver 는 구현과 함께 선다 (§9.1 · §9.2)', () => {
   it('참조 구현이 계약을 만족한다 — 인터페이스만 두고 미루지 않는다', async () => {
     const agent = new DpAgent(new MemoryStore());
     const effects = new FakeEffects();
-    const driver: DataplaneDriver = new LocalDataplaneDriver(agent, effects);
+    const driver: DataplaneDriver = driverOn(agent, effects);
 
     await driver.fence('10');
     const before = await driver.status();
@@ -287,7 +294,7 @@ describe('DataplaneDriver 는 구현과 함께 선다 (§9.1 · §9.2)', () => {
 
   it('abort 는 오퍼레이션을 통째로 받는다 — 슬롯의 주인으로 인정받아야 지운다', async () => {
     const agent = new DpAgent(new MemoryStore());
-    const driver = new LocalDataplaneDriver(agent, new FakeEffects());
+    const driver = driverOn(agent, new FakeEffects());
     const op = BOTH();
 
     await agent.reserve(tupleFor(op, 'http'));
@@ -301,7 +308,7 @@ describe('DataplaneDriver 는 구현과 함께 선다 (§9.1 · §9.2)', () => {
   it('낮은 토큰은 드라이버 표면에서도 막힌다', async () => {
     const agent = new DpAgent(new MemoryStore());
     const effects = new FakeEffects();
-    const driver = new LocalDataplaneDriver(agent, effects);
+    const driver = driverOn(agent, effects);
     await driver.fence('99');
     expect(await kindOf(driver.applyConfig(OP({ leaderToken: '10' })))).toBe('stale_leader');
     expect(effects.publishCalls).toBe(0);

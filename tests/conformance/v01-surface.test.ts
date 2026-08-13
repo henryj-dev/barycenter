@@ -41,6 +41,7 @@ const FROZEN_VALUES = [
   'FileStore',
   'FsEffects',
   'ReadOnlyFileStore',
+  'StoreConflict',
   'StoreCorrupted',
   'StoreLockLost',
   'StoreLocked',
@@ -60,6 +61,42 @@ describe('v0.1 표면', () => {
     }
   });
 
+  /**
+   * 7차 검수 ③ — 이름 검사만으로는 못 잡는 것이 있다.
+   *
+   * `tls_passthrough` 와 `source_ip_hash` 는 **값**이 아니라 문자열 리터럴이라 표면
+   * 목록에 안 나온다. 그런데 `parseModel` 이 받아들이면 그건 v0.1 계약이다.
+   * 그래서 **해독기가 무엇을 받는지**를 직접 못박는다.
+   */
+  it('해독기가 받는 프로토콜과 알고리즘이 §9.1.1 과 같다', () => {
+    const accepts = (over: Record<string, unknown>): boolean =>
+      surface.parseModel({
+        listeners: [{ key: 'l', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true }],
+        httpRoutes: [],
+        passthroughRoutes: [],
+        pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin', ...over }],
+        backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 80, weight: 1 }],
+      }).ok;
+
+    // v0.1 에 **있는** 것 — 구현·엔진 테스트·골든이 지킨다 (§9.1.1, 7차 뒤 뒤집은 결정).
+    expect(accepts({ algorithm: 'round_robin' })).toBe(true);
+    expect(accepts({ algorithm: 'hash', hashKey: 'remote_addr' })).toBe(true);
+    expect(accepts({ algorithm: 'source_ip_hash' })).toBe(true);
+    // v0.1 에 **없는** 것
+    expect(accepts({ algorithm: 'least_conn' }), 'least_conn 은 v0 에 없다').toBe(false);
+
+    const listener = (protocol: string): boolean =>
+      surface.parseModel({
+        listeners: [{ key: 'l', protocol, bind: '0.0.0.0', port: 443, enabled: true }],
+        httpRoutes: [],
+        passthroughRoutes: [],
+        pools: [],
+        backends: [],
+      }).ok;
+    expect(listener('tls_passthrough'), 'tls_passthrough 는 v0.1 에 있다').toBe(true);
+    expect(listener('https'), 'https 는 렌더러가 TLS 를 못 내므로 없다').toBe(false);
+  });
+
   it('DP Agent 는 표면이 아니다 — 드라이버 뒤에 있다', () => {
     expect(Object.keys(surface)).not.toContain('DpAgent');
     expect(Object.keys(surface)).not.toContain('ApplyRunner');
@@ -68,6 +105,110 @@ describe('v0.1 표면', () => {
   it('테스트용 도구는 표면이 아니다', () => {
     for (const testOnly of ['FakeEffects', 'MemoryStore', 'CrashClock', 'FaultStore']) {
       expect(Object.keys(surface), `${testOnly} 가 공개 표면에 있다`).not.toContain(testOnly);
+    }
+  });
+});
+
+/**
+ * **이름만 보면 ④ 같은 결함을 못 잡는다** (7차 검수 ⑤).
+ *
+ * 목록 검사는 `LocalDataplaneDriver` 가 있다는 것만 확인했다. 그런데 그 생성자가
+ * **비공개 타입**을 요구해서 표면만으로는 만들 수 없었다. 이름은 맞고 계약은 깨져 있었다.
+ *
+ * 그래서 여기서는 **소비자처럼 쓴다.** 루트에서 import 한 것만으로 드라이버를 만들고
+ * 저장소를 구현한다. 시그니처가 바뀌면 `tsc` 가 잡는다.
+ */
+/** 아무것도 하지 않는 부작용. 표면의 타입만으로 만든다. */
+const NOOP_EFFECTS: surface.Effects = {
+  async preflight(): Promise<surface.PreflightResult> {
+    return { ok: true };
+  },
+  async publish() {},
+  async observePublished() {
+    return undefined;
+  },
+  async signalReload() {},
+  async observeActivation() {
+    return undefined;
+  },
+};
+
+describe('표면만으로 실제로 구현할 수 있는가', () => {
+  it('저장소를 갈아 끼울 수 있다 — DurableStore 를 밖에서 구현한다', async () => {
+    /** 표면에서 가져온 타입만으로 만든 저장소. */
+    class InMemory implements surface.DurableStore {
+      private state: surface.AgentState | undefined;
+      load(): surface.AgentState | undefined {
+        return this.state === undefined ? undefined : structuredClone(this.state);
+      }
+      async save(next: surface.AgentState): Promise<void> {
+        const expected = (this.state?.version ?? 0) + 1;
+        // CAS 를 구현하려면 이 오류 타입이 필요하다. 없으면 정확한 저장소를 못 만든다.
+        if (next.version !== expected) throw new surface.StoreConflict('버전 충돌');
+        this.state = structuredClone(next);
+      }
+    }
+
+    /** 부작용도 밖에서 구현한다. */
+    const effects: surface.Effects = {
+      ...NOOP_EFFECTS,
+      async observePublished() {
+        return 'gen-1';
+      },
+      async observeActivation() {
+        return { acceptingGeneration: 'gen-1' };
+      },
+    };
+
+    const driver: surface.DataplaneDriver = surface.LocalDataplaneDriver.create({
+      store: new InMemory(),
+      effects,
+    });
+
+    await driver.fence('10');
+    const op: surface.ApplyOperation = {
+      leaderToken: '10',
+      operationId: 'o',
+      transitionId: 't',
+      affectedPlanes: ['http'],
+      targetGeneration: 'gen-1',
+      generationDigest: 'sha256:g',
+      planes: {
+        http: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:h',
+        },
+      },
+    };
+    const result: surface.ApplyResult = await driver.applyConfig(op);
+    expect(result.phase).toBe('activated');
+
+    const status: surface.DriverStatus = await driver.status();
+    expect(status.planes.http.activationEpoch).toBe('1');
+    expect(status.maxLeaderToken).toBe('10');
+  });
+
+  it('거부를 분류할 수 있다 — 오류 타입이 공개돼 있어야 한다', async () => {
+    let saved: surface.AgentState | undefined;
+    const driver = surface.LocalDataplaneDriver.create({
+      store: {
+        load: () => saved,
+        save: async (s) => {
+          saved = s;
+        },
+      },
+      effects: NOOP_EFFECTS,
+    });
+
+    await driver.fence('20');
+    try {
+      await driver.fence('10');
+      expect.unreachable('낮은 토큰이 통과했다');
+    } catch (e) {
+      expect(e).toBeInstanceOf(surface.DpRejection);
+      const kind: surface.RejectionKind = (e as surface.DpRejection).kind;
+      expect(kind).toBe('stale_leader');
     }
   });
 });

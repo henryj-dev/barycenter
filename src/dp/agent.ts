@@ -511,23 +511,32 @@ export class DpAgent {
     return run;
   }
 
-  /** §3.5 — 신임 리더는 어떤 operation 보다 먼저 이걸 끝내야 한다. */
+  /**
+   * §3.5 — 신임 리더는 어떤 operation 보다 먼저 이걸 끝내야 한다.
+   *
+   * **펜싱이 곧 승계다** (7차 반례 ①). 더 높은 토큰이 여기를 통과하면 옛 리더는 더 이상
+   * 행동할 수 없다. 그런데 그 리더가 쥐고 있던 apply 경로를 놓아 주지 않으면 새 리더가
+   * 영영 아무것도 못 한다 — 옛 오퍼레이션을 `abort` 하려 해도 그 토큰이 이미 낡아서
+   * 거부된다. 리더 교체는 장애 상황에서 일어나는 일인데, 하필 그때 멈춰 선다.
+   *
+   * 그래서 여기서 놓아 준다. 예약을 반납하고 저널을 `superseded` 로 닫는다.
+   * **이미 넘어간 좌표는 건드리지 않는다** — 승계는 되돌리기가 아니다 (§3.3).
+   * 새 리더는 관측으로 세상을 다시 읽고 자기 오퍼레이션을 낸다.
+   */
   fence(leaderToken: string): Promise<{ maxToken: string }> {
     return this.serial((s) => {
-      assertLeader(s, leaderToken);
-      s.maxLeaderToken = leaderToken;
+      const token = normalizeNumeric(leaderToken, 'leaderToken');
+      assertLeader(s, token);
+      s.maxLeaderToken = token;
+
+      const holder = s.activeOperation;
+      if (holder !== undefined && BigInt(holder.leaderToken) < BigInt(token)) {
+        supersede(s, holder);
+      }
       return { maxToken: s.maxLeaderToken };
     });
   }
 
-  /**
-   * §9.1.1 blocker 1 — **부작용보다 먼저** 좌표를 예약한다.
-   *
-   * `(plane, target_activation_epoch)` 는 한 오퍼레이션만 갖는다. 여기서 리더 토큰과
-   * 좌표 CAS 를 통과해야 게시도 저널 기록도 시작할 수 있다. 5차 검수는 이게 없어서
-   * `stale_leader` 로 거부된 오퍼레이션이 이미 `current` 심볼릭 링크를 옮긴 것을
-   * 재현했다 — §3.5 는 "토큰을 side effect **전에** fsync 하고 ACK 한다" 이다.
-   */
   reserve(op: OperationTuple): Promise<PlaneAck> {
     return this.serial((s) => {
       const replay = admit(s, op, 'reserve');
@@ -742,6 +751,29 @@ function acquire(s: AgentState, op: OperationTuple): Reservation {
   const slot: Reservation = { op };
   s.reservations[op.plane][op.target.activationEpoch] = slot;
   return slot;
+}
+
+/**
+ * 옛 리더의 오퍼레이션을 승계한다 (7차 반례 ①).
+ *
+ * 예약을 반납하고 저널을 종단으로 닫는다. `terminal` 에는 표시하지 않는다 — 그 전환이
+ * "실패" 하거나 "취소" 된 것이 아니라 **소유권이 끊긴 것**이고, 이미 커밋된 평면이 있으면
+ * 그건 실제로 일어난 일이기 때문이다.
+ */
+function supersede(s: AgentState, holder: ActiveOperation): void {
+  const j = s.journal;
+  const sameOp = j !== undefined
+    && j.op.operationId === holder.operationId
+    && j.op.transitionId === holder.transitionId;
+
+  if (sameOp && j !== undefined) {
+    for (const plane of planesOf(j.op)) {
+      const t = tupleFor(j.op, plane);
+      if (ownsSlot(s, t)) delete s.reservations[plane][t.target.activationEpoch];
+    }
+    s.journal = { ...j, phase: 'superseded', seq: j.seq + 1 };
+  }
+  delete s.activeOperation;
 }
 
 /** 전환을 끝내고 슬롯을 반납한다. **내 슬롯만** 지운다. */

@@ -152,6 +152,8 @@ export type ApplyPhase =
   | 'activated'
   | 'partially_activated'
   | 'failed'
+  /** 더 높은 리더 토큰이 들어와 소유권이 끊겼다 (§3.5). */
+  | 'superseded'
   | 'no_operation';
 
 /**
@@ -171,6 +173,7 @@ export const ALL_APPLY_PHASES: readonly ApplyPhase[] = [
   'activated',
   'partially_activated',
   'failed',
+  'superseded',
   'no_operation',
 ];
 
@@ -179,6 +182,7 @@ export const TERMINAL_PHASES: readonly ApplyPhase[] = [
   'activated',
   'partially_activated',
   'failed',
+  'superseded',
   'no_operation',
 ];
 

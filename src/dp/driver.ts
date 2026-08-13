@@ -16,7 +16,7 @@
  */
 import type { ActivationEvidence, ApplyOperation, ApplyResult, Plane } from './operation.js';
 import { planesOf } from './operation.js';
-import { DpAgent, tupleFor } from './agent.js';
+import { DpAgent, tupleFor, type DurableStore } from './agent.js';
 import { ApplyRunner, type Effects } from './apply.js';
 
 /** 평면의 현재 좌표. */
@@ -83,10 +83,21 @@ export interface DataplaneDriver {
  * 5차 검수에서 깨진 것이 멤버십이었다 (§9.1). 계약은 구현과 함께 선다.
  */
 export class LocalDataplaneDriver implements DataplaneDriver {
-  constructor(
+  private constructor(
     private readonly agent: DpAgent,
     private readonly effects: Effects,
   ) {}
+
+  /**
+   * **공개 표면만으로 만들 수 있어야 한다** (7차 반례 ④).
+   *
+   * 전에는 생성자가 `DpAgent` 를 받았는데 그건 공개 표면이 아니다 — 계약을 내보내 놓고
+   * 그 계약을 만들 방법을 안 준 셈이었다. Agent 는 드라이버 뒤에 있고, 호출자는
+   * 저장소와 부작용만 고르면 된다.
+   */
+  static create(opts: { store: DurableStore; effects: Effects }): LocalDataplaneDriver {
+    return new LocalDataplaneDriver(new DpAgent(opts.store), opts.effects);
+  }
 
   private runner(): ApplyRunner {
     return new ApplyRunner(this.agent, this.effects);

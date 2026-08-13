@@ -192,6 +192,21 @@ export class ApplyRunner {
     }
   }
 
+  /**
+   * ⚠️ **완전히 닫히지 않는 경합이 남는다** (7차 반례 ②).
+   *
+   * `assertOwnership` 을 부작용 **직전**까지 당겼지만, 검사와 `publish`/`signalReload`
+   * 사이에는 여전히 틈이 있다. 그 틈을 없애려면 효과 대상(nginx)이 리더 토큰을 이해하고
+   * 낡은 토큰의 요청을 스스로 거부해야 하는데, 심볼릭 링크 교체와 SIGHUP 에는 그런
+   * 자리가 없다.
+   *
+   * 남는 위험은 **경계가 있다.** 옛 리더가 낼 수 있는 것은 (a) 이미 준비된 세대로의
+   * 게시 1회, (b) HUP 1회다. 새 리더는 `fence` 로 승계한 뒤 관측으로 세상을 다시 읽고
+   * 자기 세대를 게시하므로 (a) 는 덮인다. (b) 는 §6.2 가 이미 허용한 bounded duplicate 다.
+   *
+   * 좌표는 안전하다 — `commit` 은 Agent 의 직렬 구간 안에서 토큰을 다시 보므로 낡은
+   * 리더가 좌표를 옮기지는 못한다.
+   */
   /** 상태기계는 한 번에 하나만 돈다 (6차 반례 ③). 뒤에 온 호출은 끝난 결과를 읽는다. */
   private drive(): Promise<ApplyResult> {
     return this.agent.exclusiveApply(() => this.driveInner());
@@ -218,6 +233,7 @@ export class ApplyRunner {
         case 'preflight': {
           // **게시 앞이다.** 여기서 걸리면 current 는 그대로고 nginx 도 그대로다.
           const check = await this.effects.preflight(gen, j.op.generationDigest);
+          this.agent.assertOwnership(j.op);
           if (!check.ok) {
             await this.failAll(j, check.reason ?? '게시 전 검사 실패');
             break;
@@ -227,7 +243,11 @@ export class ApplyRunner {
         }
         case 'publish_intent': {
           // 기록은 있는데 게시했는지 모른다 → 관측한다. 이미 됐으면 다시 하지 않는다.
-          if ((await this.effects.observePublished()) !== gen) {
+          const published = await this.effects.observePublished();
+          // **관측 뒤 · 부작용 앞에서 한 번 더 본다** (7차 반례 ②). 루프 머리의 검사는
+          // 이 `await` 를 건너뛰지 못한다 — 관측 중에 새 리더가 완주할 수 있다.
+          this.agent.assertOwnership(j.op);
+          if (published !== gen) {
             await this.effects.publish(gen);
           }
           await ignoreConflict(this.write(next(j, { phase: 'published' })));
@@ -268,6 +288,7 @@ export class ApplyRunner {
             if (e instanceof DpRejection && e.kind === 'journal_conflict') break;
             throw e;
           }
+          this.agent.assertOwnership(j.op);
           await this.effects.signalReload();
           const after = await this.awaitActivation(gen);
           if (after !== undefined) {

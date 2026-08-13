@@ -96,9 +96,23 @@ export {
 export type { Effects, PreflightResult } from './dp/apply.js';
 
 /**
- * DP Agent 자체는 **표면이 아니다.** 드라이버 뒤에 있다.
+ * DP Agent 자체는 **표면이 아니다.** 드라이버 뒤에 있다 (`LocalDataplaneDriver.create`).
  *
- * `DpRejection` 과 `DurableStore` 만 내보낸다 — 호출자가 거부를 분류하고 저장소를
- * 갈아 끼울 수 있어야 하기 때문이다.
+ * 그런데 `DurableStore` 를 갈아 끼우려면 그 안을 흐르는 타입이 전부 필요하다. 7차 검수가
+ * 지적한 것이 그거다 — 계약을 내보내 놓고 **그 계약을 구현할 타입을 안 줬다.**
+ * `save` 는 `AgentState` 를 받고 CAS 를 위해 `StoreConflict` 를 던져야 하므로 둘 다 없으면
+ * 정확한 저장소를 만들 수 없다.
  */
-export { DpRejection, type DurableStore, type RejectionKind } from './dp/agent.js';
+export {
+  DpRejection,
+  StoreConflict,
+  type ActiveOperation,
+  type AgentState,
+  type DurableStore,
+  type JournalEntry,
+  type PlaneAck,
+  type PlaneState,
+  type RejectionKind,
+  type Reservation,
+  type TerminalKind,
+} from './dp/agent.js';
