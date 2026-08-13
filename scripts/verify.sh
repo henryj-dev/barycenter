@@ -139,8 +139,29 @@ cat <<'GATES'
                        구현과 함께 고정한다. 구현하지 않은 계약을 고정하면 깨진다는
                        것을 여섯 번 배웠다 (§9.1 멤버십 철회).
 
- → A(타입·DP ABI): 7차 검수의 확인을 기다린다. 스스로 Go 라고 적은 적이
-                    여섯 번 있었고 여섯 번 틀렸다.
+ ─── 7차 검수: A 는 **동결 불가** ───────────────────────────────────────
+
+ ① 리더 승계가 없다 — **영구 교착**                        [ABI 모양]
+    fence(11) 뒤: 옛 저널 복구 → stale_leader
+                  새 리더의 새 작업 → operation_in_flight
+                  abortConfig 로 풀기 → stale_leader (옛 토큰이라 거부)
+    새 리더가 apply 경로를 영영 못 잡는다. activeOperation 을 도입하며 만든 구멍이다.
+
+ ② 펜싱이 비동기 관측 앞의 TOCTOU                          [구현 품질]
+    관측 await 중 fence(11) 가 완주하면 옛 러너가 publish 1회를 낸 뒤 stale_leader.
+
+ ③ 뺐다고 적은 것이 공개 모델에 남아 있다                  [ABI 모양]
+    tls_passthrough · source_ip_hash 가 parseModel 을 통과한다.
+    §9.1.1 은 v0.2 라고 적어 놨다. 지금 동결하면 v0.1 계약이 된다.
+
+ ④ 표면만으로 구현할 수 없다                                [ABI 모양]
+    LocalDataplaneDriver 는 비공개 DpAgent 를 인자로 받는다.
+    DurableStore 는 비공개 AgentState · StoreConflict 에 의존한다.
+
+ ⑤ 표면 테스트가 런타임 이름만 본다                        [검증의 문제]
+    타입 export · 필드 · optional · 인자 · 반환형이 바뀌어도 통과한다.
+
+ → A(타입·DP ABI): **No-Go**
  → B(API·DB):      **No-Go** — 만들지 않았다.
 GATES
 
