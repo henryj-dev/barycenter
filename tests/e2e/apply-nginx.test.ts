@@ -29,7 +29,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DpAgent } from '../../src/dp/agent.js';
 import { FileStore } from '../../src/dp/store-fs.js';
 import { ApplyRunner, CrashInjected, type Effects } from '../../src/dp/apply.js';
-import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
+import type { ActivationEvidence, ApplyLease, ApplyOperation } from '../../src/dp/operation.js';
 import { materializeGeneration, verifyGeneration } from '../../src/dp/materialize.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
@@ -139,21 +139,24 @@ const effects = (): Effects => {
       return { ok: false, reason: (e as Error).message };
     }
   },
-  async publish(generation) {
+  async publish(generation, lease) {
     const dir = `/prefix/generations/${generation}`;
     docker('exec', container, 'sh', '-c',
       `test -f ${dir}/nginx.conf || { echo "세대가 없다: ${dir}" >&2; exit 3; }`);
     // ln + mv -T. mv 는 -T 없이는 목적지 심볼릭 링크를 **따라가** 디렉토리 안으로 옮긴다.
-    docker('exec', container, 'sh', '-c',
-      `ln -sfn generations/${generation} /prefix/current.tmp && mv -T /prefix/current.tmp /prefix/current`);
+    // 준비와 되돌릴 수 없는 교체를 나눈다 (8차 반례 ①).
+    docker('exec', container, 'sh', '-c', `ln -sfn generations/${generation} /prefix/current.tmp`);
+    lease?.assertValid();
+    docker('exec', container, 'sh', '-c', `mv -T /prefix/current.tmp /prefix/current`);
   },
   async observePublished() {
     const out = docker('exec', container, 'sh', '-c', 'readlink /prefix/current || true');
     return out.length > 0 ? out.split('/').pop() : undefined;
   },
-  async signalReload() {
+  async signalReload(lease) {
     // **신호 전에** 찍는다. 뒤에 찍으면 신호가 만든 오류를 놓친다.
     watermark = errorLogLines();
+    lease?.assertValid();
     docker('kill', '--signal=HUP', container);
   },
   async observeActivation(): Promise<ActivationEvidence | undefined> {
@@ -367,9 +370,9 @@ describe('S12 end-to-end — 실제 nginx', () => {
       publish: fx.publish.bind(fx),
       observePublished: fx.observePublished.bind(fx),
       observeActivation: fx.observeActivation.bind(fx),
-      signalReload: async () => {
+      signalReload: async (lease: ApplyLease) => {
         reloads += 1;
-        await fx.signalReload();
+        await fx.signalReload(lease);
       },
     };
     await new ApplyRunner(new DpAgent(store), counted).run(OP('e2e-3', 'gen-2'));

@@ -119,6 +119,9 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     for (const plane of planesOf(op)) {
       await this.agent.abort(tupleFor(op, plane));
     }
+    // **실행권도 놓는다** (8차 반례 ⑤). 예약만 지우면 activeOperation 이 남아
+    // 다음 오퍼레이션이 `operation_in_flight` 로 막힌다.
+    await this.agent.finishOperation(op);
   }
 
   async status(): Promise<DriverStatus> {

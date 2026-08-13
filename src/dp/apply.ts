@@ -18,6 +18,7 @@ import {
   type ActivationEvidence,
   type ApplyOperation,
   type ApplyPhase,
+  type ApplyLease,
   type ApplyResult,
   type Plane,
   type PlaneProgress,
@@ -49,10 +50,17 @@ export interface Effects {
    * 본다. 여기서 막지 못하면 잘못된 설정이 `current` 를 거쳐 HUP 까지 간다.
    */
   preflight(generation: string, expectedDigest: string): Promise<PreflightResult>;
-  publish(generation: string): Promise<void>;
+  /**
+   * 세대를 활성 포인터로 만든다.
+   *
+   * **되돌릴 수 없는 연산 직전에 `lease.assertValid()` 를 부르고, 그 사이에 `await` 를
+   * 두지 마라** (8차 반례 ①). 준비(임시 파일 생성 등)는 그 앞에서 해도 된다.
+   */
+  publish(generation: string, lease: ApplyLease): Promise<void>;
   /** 지금 `current` symlink 가 가리키는 세대. */
   observePublished(): Promise<string | undefined>;
-  signalReload(): Promise<void>;
+  /** HUP. `publish` 와 같은 규칙을 지킨다. */
+  signalReload(lease: ApplyLease): Promise<void>;
   /**
    * 활성화 증거 (§6.3). 세대 리터럴만이 아니라 관측할 수 있는 것을 **전부** 싣는다.
    *
@@ -151,7 +159,7 @@ export class ApplyRunner {
         }),
       );
     }
-    return this.drive();
+    return this.drive(op);
   }
 
   /**
@@ -169,7 +177,7 @@ export class ApplyRunner {
       );
       return resultOf(j);
     }
-    return this.drive();
+    return this.drive(j.op);
   }
 
   /** 신호 직후 반영을 기다린다. 예산 안에 안 바뀌면 그냥 돌아가 상위가 판정한다. */
@@ -216,16 +224,28 @@ export class ApplyRunner {
    * 동결하면 이 결함이 계약이 된다.
    */
   /** 상태기계는 한 번에 하나만 돈다 (6차 반례 ③). 뒤에 온 호출은 끝난 결과를 읽는다. */
-  private drive(): Promise<ApplyResult> {
-    return this.agent.exclusiveApply(() => this.driveInner());
+  private drive(bound: ApplyOperation): Promise<ApplyResult> {
+    return this.agent.exclusiveApply(() => this.driveInner(bound));
   }
 
-  private async driveInner(): Promise<ApplyResult> {
+  /**
+   * @param bound 이 호출이 책임지는 오퍼레이션.
+   *
+   * **저널에 있는 것을 무조건 몰지 않는다** (8차 반례 ③). 전에는 매 반복마다 저널을
+   * 다시 읽어 거기 있는 것을 실행했다. 그 사이 승계가 일어나 저널 주인이 바뀌면
+   * **옛 러너가 신임 오퍼레이션을 대신 끝까지 몰았다** — 소유권 검사도 통과한다,
+   * 저널의 op 를 기준으로 보기 때문이다.
+   */
+  private async driveInner(bound: ApplyOperation): Promise<ApplyResult> {
     // 절대 상한. 논리 오류가 프로세스를 매달면 안 된다.
     const HARD_LIMIT = 64;
     for (let guard = 0; ; guard += 1) {
       const j = this.agent.readJournal();
       if (j === undefined) return emptyResult();
+      // **내가 맡은 오퍼레이션인가.** 저널이 남의 것으로 바뀌었으면 여기서 손을 뗀다.
+      if (j.op.operationId !== bound.operationId || j.op.transitionId !== bound.transitionId) {
+        return emptyResult();
+      }
       // **부작용 앞에서 매번 확인한다** (6차 반례 ⑥). 예약은 과거의 승인일 뿐이고,
       // 그 사이 새 리더가 fence 했을 수 있다.
       this.agent.assertOwnership(j.op);
@@ -252,11 +272,11 @@ export class ApplyRunner {
         case 'publish_intent': {
           // 기록은 있는데 게시했는지 모른다 → 관측한다. 이미 됐으면 다시 하지 않는다.
           const published = await this.effects.observePublished();
-          // **관측 뒤 · 부작용 앞에서 한 번 더 본다** (7차 반례 ②). 루프 머리의 검사는
-          // 이 `await` 를 건너뛰지 못한다 — 관측 중에 새 리더가 완주할 수 있다.
-          this.agent.assertOwnership(j.op);
           if (published !== gen) {
-            await this.effects.publish(gen);
+            // lease 를 건넨다. **최종 검사는 부작용 구현 안에서** 되돌릴 수 없는 연산
+            // 직전에 일어난다 (8차 반례 ①) — 러너가 여기서 아무리 확인해도 그 뒤의
+            // `await` 안에서 리더가 바뀌면 소용없다.
+            await this.effects.publish(gen, this.agent.lease(j.op));
           }
           await ignoreConflict(this.write(next(j, { phase: 'published' })));
           break;
@@ -296,12 +316,18 @@ export class ApplyRunner {
             if (e instanceof DpRejection && e.kind === 'journal_conflict') break;
             throw e;
           }
-          this.agent.assertOwnership(j.op);
-          await this.effects.signalReload();
+          await this.effects.signalReload(this.agent.lease(j.op));
           const after = await this.awaitActivation(gen);
           if (after !== undefined) {
+            // **내 저널에만 쓴다** (8차 반례 ③). 전에는 `readJournal()` 이 돌려주는
+            // 것에 썼는데, 그 사이 승계가 일어나면 그건 **남의 오퍼레이션**이다.
             const now = this.agent.readJournal();
-            if (now !== undefined) await ignoreConflict(this.write(next(now, { evidence: after })));
+            const mine = now !== undefined
+              && now.op.operationId === j.op.operationId
+              && now.op.transitionId === j.op.transitionId;
+            if (mine && now !== undefined) {
+              await ignoreConflict(this.write(next(now, { evidence: after })));
+            }
           }
           break;
         }
@@ -562,10 +588,10 @@ export class FaultStore implements DurableStore {
     private readonly clock: CrashClock,
   ) {}
   load(): AgentState | undefined {
-    return this.inner.load();
+    return this.inner.load() as AgentState | undefined;
   }
   async save(state: AgentState): Promise<void> {
-    const label = classifyWrite(this.inner.load(), state);
+    const label = classifyWrite(this.inner.load() as AgentState | undefined, state);
     this.clock.tick(`${label}:before`);
     await this.inner.save(state);
     this.clock.tick(`${label}:after`);
@@ -599,9 +625,11 @@ export class FakeEffects implements Effects {
       : { ok: false, reason: '주입된 preflight 실패' };
   }
 
-  async publish(generation: string): Promise<void> {
+  async publish(generation: string, lease?: ApplyLease): Promise<void> {
     if (this.crashBeforeEffect === 'publish') throw new CrashInjected('before publish');
     this.clock.tick('publish:before');
+    // **되돌릴 수 없는 지점 직전.** 여기와 아래 대입 사이에 await 가 없다.
+    lease?.assertValid();
     this.publishCalls += 1;
     this.publishedGeneration = generation;
     if (this.crashAfterEffect === 'publish') throw new CrashInjected('after publish');
@@ -612,9 +640,10 @@ export class FakeEffects implements Effects {
     return this.publishedGeneration;
   }
 
-  async signalReload(): Promise<void> {
+  async signalReload(lease?: ApplyLease): Promise<void> {
     if (this.crashBeforeEffect === 'reload') throw new CrashInjected('before reload');
     this.clock.tick('reload:before');
+    lease?.assertValid();
     this.reloadSignals += 1;
     if (this.reloadTakesEffect) this.acceptingGeneration = this.publishedGeneration;
     if (this.crashAfterEffect === 'reload') throw new CrashInjected('after reload');

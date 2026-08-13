@@ -24,6 +24,7 @@ import type {
   Coordinate,
   Plane,
   PlaneProgress,
+  ApplyLease,
 } from './operation.js';
 import { isTerminalPhase, planesOf, provesActivation } from './operation.js';
 export type { ActivationEvidence, Coordinate, Plane };
@@ -123,9 +124,18 @@ export type ActiveOperation = {
   operationId: string;
   transitionId: string;
   leaderToken: string;
+  /**
+   * 이 오퍼레이션이 잡은 평면들 (8차 반례 ②).
+   *
+   * 승계할 때 저널을 보고 예약을 찾으면, **저널을 쓰기 전에 죽은 경우** 예약이 남는다.
+   * 실행권 자체가 자기가 무엇을 잡았는지 알아야 한다.
+   */
+  planes: Plane[];
+  /** 평면별 목표 epoch. 예약 슬롯을 찾는 열쇠다. */
+  epochs: Record<string, string>;
 };
 
-export type AgentState = {
+export type AgentState = StoredState & {
   /**
    * durable CAS 용 단조 버전. `save` 는 `version === 직전 + 1` 일 때만 성공한다.
    *
@@ -133,7 +143,6 @@ export type AgentState = {
    * 큐를 모르므로 둘 다 같은 상태를 읽고 각자 쓴다. 5차 검수가 그렇게 리더 토큰을
    * 12 에서 11 로 되감았다.
    */
-  version: number;
   maxLeaderToken: string;
   planes: Record<Plane, PlaneState>;
   /** epoch → 예약. 아직 활성화되지 않은 슬롯 (§6.5 staging). */
@@ -213,15 +222,30 @@ export function tupleFor(op: ApplyOperation, plane: Plane): OperationTuple {
   };
 }
 
+/**
+ * 저장소가 보는 상태 — **내용은 불투명하다** (8차 반례 ④).
+ *
+ * 전에는 `AgentState` 를 그대로 노출했다. 그러면 예약·완료캐시·저널·실행권까지 **내부
+ * 상태기계 전체가 동결 대상**이 된다. 이번 회차에 그 모양이 또 바뀐 것 자체가 증거다 —
+ * `superseded` 단계가 생기고 `activeOperation` 에 필드가 붙었다.
+ *
+ * 저장소가 알아야 하는 것은 하나뿐이다: **`version` 으로 CAS 하고 나머지는 그대로
+ * 보관했다가 그대로 돌려준다.**
+ */
+export type StoredState = {
+  /** durable CAS 용 단조 버전. `save` 는 `version === 직전 + 1` 일 때만 성공한다. */
+  readonly version: number;
+};
+
 export interface DurableStore {
-  load(): AgentState | undefined;
+  load(): StoredState | undefined;
   /**
    * **fsync 까지 끝나고 나서** resolve 해야 한다.
    *
    * `state.version` 이 저장된 것의 바로 다음이 아니면 `StoreConflict` 로 거부한다.
    * 이게 없으면 프로세스·인스턴스 간 lost update 를 막을 수단이 없다.
    */
-  save(state: AgentState): Promise<void>;
+  save(state: StoredState): Promise<void>;
 }
 
 /** 테스트용. `delayMs` 로 durable 저장을 느리게 만들어 동시성 구멍을 드러낸다. */
@@ -304,38 +328,43 @@ export class DpAgent {
 
   constructor(private readonly store: DurableStore) {}
 
+  /** 내부에서 보는 상태. 저장소에게는 불투명하지만 우리는 모양을 안다. */
+  private snapshot(): AgentState {
+    return (this.store.load() as AgentState | undefined) ?? initial();
+  }
+
   /** 지금까지 본 최대 리더 토큰. 이보다 낮은 토큰의 변이는 전부 거부된다 (§3.5). */
   maxLeaderToken(): string {
-    return (this.store.load() ?? initial()).maxLeaderToken;
+    return this.snapshot().maxLeaderToken;
   }
 
   coordinate(plane: Plane): PlaneState {
-    return { ...(this.store.load() ?? initial()).planes[plane] };
+    return { ...this.snapshot().planes[plane] };
   }
 
   /** 아직 활성화되지 않은 슬롯의 digest. 없으면 undefined. */
   stagedDigest(plane: Plane, epoch: string): string | undefined {
-    return (this.store.load() ?? initial()).reservations[plane]?.[epoch]?.stagedDigest;
+    return this.snapshot().reservations[plane]?.[epoch]?.stagedDigest;
   }
 
   /** 슬롯의 주인. 없으면 undefined. */
   reservationOwner(plane: Plane, epoch: string): OperationTuple | undefined {
-    return (this.store.load() ?? initial()).reservations[plane]?.[epoch]?.op;
+    return this.snapshot().reservations[plane]?.[epoch]?.op;
   }
 
   /** 그 좌표로 옮긴 근거. 없으면 undefined. */
   evidenceFor(plane: Plane, epoch: string): ActivationEvidence | undefined {
-    return (this.store.load() ?? initial()).activationEvidence[`${plane}:${epoch}`];
+    return this.snapshot().activationEvidence[`${plane}:${epoch}`];
   }
 
   /** 전환이 어떻게 끝났는지. 아직이면 undefined. */
   terminalOf(op: OperationTuple): TerminalKind | undefined {
-    return (this.store.load() ?? initial()).terminal[transitionKey(op)];
+    return this.snapshot().terminal[transitionKey(op)];
   }
 
   /** 진행 중인 apply 저널. 없으면 undefined. */
   readJournal(): JournalEntry | undefined {
-    return (this.store.load() ?? initial()).journal;
+    return this.snapshot().journal;
   }
 
   /**
@@ -344,7 +373,7 @@ export class DpAgent {
    */
   /** 지금 apply 경로를 쥔 오퍼레이션. 없으면 undefined. */
   activeOperation(): ActiveOperation | undefined {
-    return (this.store.load() ?? initial()).activeOperation;
+    return this.snapshot().activeOperation;
   }
 
   /**
@@ -387,6 +416,8 @@ export class DpAgent {
         operationId: op.operationId,
         transitionId: op.transitionId,
         leaderToken: first.leaderToken,
+        planes: tuples.map((t) => t.plane),
+        epochs: Object.fromEntries(tuples.map((t) => [t.plane, t.target.activationEpoch])),
       };
       return acks;
     });
@@ -411,6 +442,20 @@ export class DpAgent {
   }
 
   /**
+   * apply 실행권 (8차 반례 ①).
+   *
+   * `Effects` 구현이 되돌릴 수 없는 연산 **직전에** 이걸 확인한다. 동기 함수라
+   * 확인과 부작용 사이에 다른 코드가 끼어들 수 없다.
+   */
+  lease(op: ApplyOperation): ApplyLease {
+    const token = normalizeNumeric(op.leaderToken, 'leaderToken');
+    return {
+      leaderToken: token,
+      assertValid: () => this.assertOwnership(op),
+    };
+  }
+
+  /**
    * **부작용 앞에서** 아직 내 차례인지 확인한다 (6차 반례 ⑥).
    *
    * `drive()` 는 예약을 지나온 뒤에도 매 단계 외부 효과를 낸다. 그 사이 새 리더가
@@ -420,7 +465,7 @@ export class DpAgent {
     // **읽기만 한다.** `serial()` 을 쓰면 매 단계마다 상태가 그대로인 durable 쓰기가
     // 하나씩 생긴다 — 디스크도 낭비고 크래시 지점 계측에 의미 없는 지점이 낀다.
     // 확정 판정은 어차피 변이 연산 안에서 다시 한다. 여기서는 부작용을 **일찍** 막는다.
-    const s = this.store.load() ?? initial();
+    const s = this.snapshot();
     const token = normalizeNumeric(op.leaderToken, 'leaderToken');
     if (BigInt(token) < BigInt(s.maxLeaderToken)) {
       throw new DpRejection(
@@ -492,9 +537,8 @@ export class DpAgent {
       // 있기 때문이다. 그 창은 **CAS 로만** 닫힌다 — 밀리면 다시 읽고 **다시 판정**한다.
       // 낡은 상태로 내린 판정을 재사용하면 안 되므로 mutate 를 통째로 다시 돌린다.
       for (let attempt = 0; ; attempt += 1) {
-        const loaded = this.store.load();
-        const next = structuredClone(loaded ?? initial());
-        next.version = (loaded?.version ?? 0) + 1;
+        const loaded = this.store.load() as AgentState | undefined;
+        const next = { ...structuredClone(loaded ?? initial()), version: (loaded?.version ?? 0) + 1 };
         // 알려지지 않은 필드(다른 컴포넌트의 것)를 보존한 채로 우리 몫만 바꾼다.
         const result = mutate(next);
         try {
@@ -761,16 +805,25 @@ function acquire(s: AgentState, op: OperationTuple): Reservation {
  * 그건 실제로 일어난 일이기 때문이다.
  */
 function supersede(s: AgentState, holder: ActiveOperation): void {
+  // **실행권이 들고 있는 목록으로 반납한다** (8차 반례 ②). 저널을 보면 저널을 쓰기
+  // 전에 죽은 경우를 놓쳐 예약이 남고, 신임 작업이 `slot_taken` 으로 막힌다.
+  for (const plane of holder.planes) {
+    const epoch = holder.epochs[plane];
+    if (epoch === undefined) continue;
+    const slot = s.reservations[plane]?.[epoch];
+    if (slot === undefined) continue;
+    if (slot.op.operationId === holder.operationId && slot.op.transitionId === holder.transitionId) {
+      delete s.reservations[plane][epoch];
+    }
+  }
+
   const j = s.journal;
   const sameOp = j !== undefined
     && j.op.operationId === holder.operationId
     && j.op.transitionId === holder.transitionId;
-
-  if (sameOp && j !== undefined) {
-    for (const plane of planesOf(j.op)) {
-      const t = tupleFor(j.op, plane);
-      if (ownsSlot(s, t)) delete s.reservations[plane][t.target.activationEpoch];
-    }
+  // **종단은 덮지 않는다** (8차 반례 ②). 이미 activated 로 끝난 것을 superseded 로
+  // 바꾸면 좌표와 저널이 다른 말을 한다.
+  if (sameOp && j !== undefined && !isTerminalPhase(j.phase)) {
     s.journal = { ...j, phase: 'superseded', seq: j.seq + 1 };
   }
   delete s.activeOperation;

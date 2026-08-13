@@ -156,31 +156,24 @@ cat <<'GATES'
  ⑤ 이름만 보는 테스트  ✅ 해소. **소비자처럼 쓰는** 테스트를 넣었다 — 루트 import 만으로
                        저장소를 구현하고 드라이버를 만들고 거부를 분류한다.
 
- ─── 8차 검수: A 는 **동결 불가** ───────────────────────────────────────
+ ─── 8차 검수 다섯 지적 ────────────────────────────────────────────────
 
- ① Effects 에 펜싱이 없다                                   [타입 모양]
-    옛 publish 가 신임 게시 **뒤에** 착지한다 → current=옛, 좌표=신임.
-    부작용에 토큰/lease 를 싣거나 외부 효과를 supervisor 로 직렬화해야 한다.
+ ① Effects 에 펜싱이 없다   ✅ 해소. **검사를 부작용 구현 안으로 내렸다.**
+                             `Effects` 는 되돌릴 수 없는 연산 직전에 lease.assertValid()
+                             를 부르고 그 사이에 await 를 두지 않는다. JS 는 단일
+                             스레드라 그 구간에는 아무도 끼어들지 못한다.
+ ② 승계가 저널을 잘못 믿음  ✅ 해소. 실행권이 자기가 잡은 평면·epoch 를 들고 있다.
+                             종단으로 끝난 저널은 덮지 않는다.
+ ③ 옛 러너가 남의 저널 몰기 ✅ 해소. **drive 를 오퍼레이션에 결박했다.**
+                             저널이 남의 것으로 바뀌면 손을 뗀다.
+ ④ 저장소가 내부를 동결     ✅ 해소. DurableStore 는 불투명 payload + version CAS.
+                             AgentState·JournalEntry·Reservation 을 표면에서 뺐다.
+ ⑤ abort 가 실행권 미반납   ✅ 해소. abortConfig 가 finishOperation 까지 한다.
 
- ② 승계가 저널 유무를 잘못 믿는다                            [구현 품질]
-    reserveAll 뒤 저널 전에 죽으면 fence 가 실행권만 지우고 예약을 남긴다
-    → 신임 작업이 slot_taken. 재현했다.
+ 남은 것: exclusiveApply 가 같은 Agent 안에서 멈춘 러너 뒤에 apply 를 줄 세운다.
+          Effects 에 타임아웃이 없으면 교착한다 (프로브가 실제로 걸렸다).
 
- ③ 옛 러너가 남의 저널에 쓴다                                [구현 품질]
-    apply.ts:296 이 `next(now, …)` 로 **현재 저널**에 자기 관측을 쓴다.
-    그게 신임 오퍼레이션의 것이면 소유권 검사도 통과한다.
-
- ④ DurableStore 가 내부 상태기계 전체를 동결한다             [타입 모양]
-    AgentState 가 예약·완료캐시·저널·activeOperation 을 그대로 노출한다.
-    이번 회차에 그 모양이 또 바뀐 것 자체가 증거다.
-
- ⑤ abortConfig 가 실행권을 놓지 않는다                       [구현 품질]
-    예약은 지워도 activeOperation 이 남아 다음 작업이 operation_in_flight.
-
- + 자체 발견: exclusiveApply 가 같은 Agent 안에서 멈춘 러너 뒤에 모든 apply 를
-   줄 세운다. 승계해도 그 큐는 풀리지 않는다.
-
- → A(타입·DP ABI): **No-Go**
+ → A(타입·DP ABI): 9차 검수의 확인을 기다린다.
  → B(API·DB):      **No-Go** — 만들지 않았다.
 GATES
 

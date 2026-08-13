@@ -137,11 +137,11 @@ describe('표면만으로 실제로 구현할 수 있는가', () => {
   it('저장소를 갈아 끼울 수 있다 — DurableStore 를 밖에서 구현한다', async () => {
     /** 표면에서 가져온 타입만으로 만든 저장소. */
     class InMemory implements surface.DurableStore {
-      private state: surface.AgentState | undefined;
-      load(): surface.AgentState | undefined {
+      private state: surface.StoredState | undefined;
+      load(): surface.StoredState | undefined {
         return this.state === undefined ? undefined : structuredClone(this.state);
       }
-      async save(next: surface.AgentState): Promise<void> {
+      async save(next: surface.StoredState): Promise<void> {
         const expected = (this.state?.version ?? 0) + 1;
         // CAS 를 구현하려면 이 오류 타입이 필요하다. 없으면 정확한 저장소를 못 만든다.
         if (next.version !== expected) throw new surface.StoreConflict('버전 충돌');
@@ -190,7 +190,7 @@ describe('표면만으로 실제로 구현할 수 있는가', () => {
   });
 
   it('거부를 분류할 수 있다 — 오류 타입이 공개돼 있어야 한다', async () => {
-    let saved: surface.AgentState | undefined;
+    let saved: surface.StoredState | undefined;
     const driver = surface.LocalDataplaneDriver.create({
       store: {
         load: () => saved,

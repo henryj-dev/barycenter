@@ -15,7 +15,7 @@ import { existsSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlink
 import { basename, join } from 'node:path';
 import type { Effects, PreflightResult } from './apply.js';
 import { verifyGeneration } from './materialize.js';
-import type { ActivationEvidence } from './operation.js';
+import type { ActivationEvidence, ApplyLease } from './operation.js';
 
 export type FsEffectsOptions = {
   /** `/etc/barycenter` 에 해당. `generations/` 와 `current` 가 여기 있다. */
@@ -81,7 +81,7 @@ export class FsEffects implements Effects {
     }
   }
 
-  async publish(generation: string): Promise<void> {
+  async publish(generation: string, lease?: ApplyLease): Promise<void> {
     const dir = join(this.opts.prefix, 'generations', generation);
     // 끊어진 링크를 만들지 않는다. 게시 후 reload 가 실패하는 것보다 게시를 막는 게 낫다.
     if (!existsSync(dir)) {
@@ -96,6 +96,10 @@ export class FsEffects implements Effects {
     const tmp = `${this.link}.tmp`;
     if (existsSync(tmp)) unlinkSync(tmp);
     symlinkSync(target, tmp);
+    // **여기가 되돌릴 수 없는 지점이다** (8차 반례 ①). 확인과 rename 사이에 `await` 가
+    // 없으므로 그 구간에는 다른 코드가 끼어들지 못한다. 준비(임시 링크 생성)는 앞에서
+    // 끝냈다 — 그건 되돌릴 수 있다.
+    lease?.assertValid();
     // rename 은 원자적이다 — `current` 가 없는 순간이 생기지 않는다.
     renameSync(tmp, this.link);
   }
@@ -108,9 +112,10 @@ export class FsEffects implements Effects {
     }
   }
 
-  async signalReload(): Promise<void> {
+  async signalReload(lease?: ApplyLease): Promise<void> {
     // **신호 전에** 워터마크를 찍는다. 뒤에 찍으면 신호가 만든 오류를 놓친다.
     this.watermark = await this.errorLogLines();
+    lease?.assertValid();
     await this.opts.reload();
   }
 

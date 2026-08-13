@@ -127,6 +127,28 @@ export function provesActivation(
   return true;
 }
 
+/**
+ * apply 실행권 (8차 반례 ①).
+ *
+ * 7차까지는 러너가 부작용 **앞에서** 소유권을 확인했다. 그런데 확인과 부작용 사이에
+ * `await` 가 하나라도 있으면 그 사이에 리더가 바뀔 수 있고, 이미 시작된 부작용은
+ * 되돌릴 수 없다. 실제로 옛 `publish()` 가 신임 게시 **뒤에** 착지해서
+ * `current` 와 좌표가 갈라지는 것을 재현했다.
+ *
+ * 그래서 검사를 부작용 **구현 안으로** 내린다. `Effects` 구현은 되돌릴 수 없는
+ * 연산 **직전에** `assertValid()` 를 부르고, 그 사이에 `await` 를 두지 않아야 한다.
+ * JavaScript 는 단일 스레드이므로 그 구간에는 다른 코드가 끼어들 수 없다.
+ * 프로세스 간에는 `FileStore` 의 락이 writer 를 하나로 유지한다.
+ *
+ * **이건 계약이다.** 지키지 않는 구현은 이 결함을 그대로 갖는다.
+ */
+export type ApplyLease = {
+  /** 이 lease 를 발급한 리더 토큰. */
+  readonly leaderToken: string;
+  /** 아직 내 차례인가. 아니면 던진다. **동기 함수다** — await 를 만들지 않는다. */
+  assertValid(): void;
+};
+
 /** apply 의 결과. **평면별로** 말한다. */
 export type ApplyResult = {
   phase: ApplyPhase;
