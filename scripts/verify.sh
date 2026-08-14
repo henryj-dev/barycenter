@@ -39,6 +39,7 @@ echo " barycenter verify"
 echo "═══════════════════════════════════════════════════════════════"
 
 run "typecheck            " npx tsc --noEmit
+run "표면 (계약 고정)     " node scripts/surface.mjs --check
 run "unit                 " npm test --silent
 run "conformance (반례)   " npm run test:conformance --silent
 

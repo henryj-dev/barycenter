@@ -1,0 +1,454 @@
+# barycenter v0.1 공개 표면
+# 76 심볼 · sha256:a1a9502a1863e7e3c2ea1e5072304e1447f1172c067f8b0d5993c5d017679f00
+# 동결 카운터: 1 회차 (표면이 안 움직인 검수 회차 수)
+#
+# 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
+# 13차 검수가 준 동결 기준: 여러 적대적 회차 동안 이 파일이 변하지 않을 것.
+# 계약이 움직이면 카운터는 0 부터 다시 센다.
+
+── ALL_APPLY_PHASES
+ALL_APPLY_PHASES: readonly ApplyPhase[]
+── ActivationEvidence
+export type ActivationEvidence = {
+    acceptingGeneration: string | undefined;
+    configTestPassed?: boolean;
+    errorLogGrowth?: number;
+    masterPid?: string;
+    workersReported?: number;
+    workersExpected?: number;
+};
+── Algorithm
+export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash';
+── ApplyLease
+export type ApplyLease = {
+    readonly leaderToken: string;
+    assertValid(): void;
+};
+── ApplyOperation
+export type ApplyOperation = MutationEnvelope & {
+    planes: Partial<Record<Plane, PlaneTarget>>;
+    targetGeneration: string;
+    generationDigest: string;
+};
+── ApplyPhase
+export type ApplyPhase = 'preflight' | 'publish_intent' | 'published' | 'membership_staged' | 'reload_intent' | 'reload_observed' | 'activated' | 'partially_activated' | 'partial_exhausted' | 'failed' | 'superseded' | 'no_operation';
+── ApplyResult
+export type ApplyResult = {
+    phase: ApplyPhase;
+    progress: Record<Plane, PlaneProgress | undefined>;
+    partialTransition: boolean;
+    evidence?: ActivationEvidence;
+    failure?: string;
+};
+── Backend
+export type Backend = {
+    key: string;
+    pool: string;
+    host: string;
+    port: number;
+    weight: number;
+};
+── Coordinate
+export type Coordinate = {
+    activationEpoch: string;
+    membershipRevision: string;
+};
+── DataplaneDriver
+export interface DataplaneDriver {
+    fence(leaderToken: string): Promise<{
+        maxToken: string;
+    }>;
+    applyConfig(op: ApplyOperation): Promise<ApplyResult>;
+    recoverConfig(): Promise<ApplyResult>;
+    abortConfig(op: ApplyOperation): Promise<void>;
+    reconcileConfig(): Promise<ReconcileResult>;
+    status(): Promise<DriverStatus>;
+}
+── DecodeResult
+export type DecodeResult = {
+    ok: true;
+    model: Model;
+} | {
+    ok: false;
+    issues: ModelIssue[];
+};
+── DpRejection
+export declare class DpRejection extends Error {
+    readonly kind: RejectionKind;
+    readonly terminalState?: TerminalKind;
+    constructor(kind: RejectionKind, message: string, terminalState?: TerminalKind);
+}
+── DriverStatus
+export type DriverStatus = {
+    maxLeaderToken: string;
+    planes: Record<Plane, PlaneStatus>;
+    published: PublishedState;
+    lastEvidence: ActivationEvidence | undefined;
+};
+── DurableStore
+export interface DurableStore {
+    load(): StoredState | undefined;
+    save(state: StoredState): Promise<void>;
+}
+── Effects
+export interface Effects {
+    preflight(op: ApplyOperation): Promise<PreflightResult>;
+    publish(record: PublishRecord, lease: ApplyLease): Promise<void>;
+    observePublished(): Promise<PublishedState>;
+    signalReload(lease: ApplyLease): Promise<void>;
+    observeActivation(): Promise<ActivationEvidence | undefined>;
+}
+── FileStore
+export declare class FileStore implements DurableStore {
+    readonly path: string;
+    private tmpCounter;
+    private lockPath;
+    private nonce;
+    private constructor();
+    static open(path: string): FileStore;
+    static openReadOnly(path: string): ReadOnlyFileStore;
+    private acquire;
+    private assertOwner;
+    release(): void;
+    load(): StoredState | undefined;
+    save(state: StoredState): Promise<void>;
+}
+── FsEffects
+export declare class FsEffects implements Effects {
+    private readonly opts;
+    private watermark;
+    constructor(opts: FsEffectsOptions);
+    private get link();
+    preflight(op: ApplyOperation): Promise<PreflightResult>;
+    private get ownerPath();
+    publish(record: PublishRecord, lease: ApplyLease): Promise<void>;
+    observePublished(): Promise<PublishedState>;
+    signalReload(lease: ApplyLease): Promise<void>;
+    private errorLogLines;
+    observeActivation(): Promise<ActivationEvidence | undefined>;
+}
+── FsEffectsOptions
+export type FsEffectsOptions = {
+    prefix: string;
+    reload: () => Promise<void>;
+    probeAccepting: () => Promise<string | undefined>;
+    probeConfigTest?: () => Promise<boolean>;
+    probeErrorLogLines?: () => Promise<number>;
+    configTest?: (generation: string) => Promise<boolean>;
+};
+── GenerationError
+export declare class GenerationError extends Error {
+    readonly kind: 'generation_conflict' | 'manifest_missing' | 'digest_mismatch' | 'incomplete' | 'plane_mismatch';
+    constructor(kind: 'generation_conflict' | 'manifest_missing' | 'digest_mismatch' | 'incomplete' | 'plane_mismatch', message: string);
+}
+── GenerationManifest
+export type GenerationManifest = {
+    schema: number;
+    generation: string;
+    files: Record<string, string>;
+    digest: string;
+    planes: ('http' | 'stream')[];
+};
+── HttpAction
+export type HttpAction = {
+    kind: 'proxy';
+    pool: string;
+    websocket: boolean;
+} | {
+    kind: 'redirect';
+    to: string;
+    status: 301 | 302 | 307 | 308;
+} | {
+    kind: 'reject';
+    status: 403 | 404 | 444;
+};
+── HttpListener
+export type HttpListener = ListenerBase & {
+    protocol: 'http';
+    acceptProxyProtocol?: boolean;
+    http?: HttpProfile;
+};
+── HttpProfile
+export type HttpProfile = {
+    defaultAction?: 'reject' | {
+        pool: string;
+    };
+};
+── HttpRoute
+export type HttpRoute = {
+    key: string;
+    listener: string;
+    hosts: string[];
+    priority: number;
+    pathPrefix?: string;
+    action: HttpAction;
+};
+── Listener
+export type Listener = HttpListener | PassthroughListener | TcpListener | UdpListener;
+── ListenerBase
+type ListenerBase = {
+    key: string;
+    bind: string;
+    port: number;
+    enabled: boolean;
+};
+── ListenerProtocol
+export type ListenerProtocol = 'http' | 'tls_passthrough' | 'tcp' | 'udp';
+── LocalDataplaneDriver
+export declare class LocalDataplaneDriver implements DataplaneDriver {
+    #private;
+    private readonly agent;
+    private readonly effects;
+    private constructor();
+    static create(opts: {
+        store: DurableStore;
+        effects: Effects;
+    }): LocalDataplaneDriver;
+    fence(leaderToken: string): Promise<{
+        maxToken: string;
+    }>;
+    applyConfig(op: ApplyOperation): Promise<ApplyResult>;
+    recoverConfig(): Promise<ApplyResult>;
+    abortConfig(op: ApplyOperation): Promise<void>;
+    reconcileConfig(): Promise<ReconcileResult>;
+    status(): Promise<DriverStatus>;
+}
+── Model
+export type Model = {
+    listeners: Listener[];
+    httpRoutes: HttpRoute[];
+    passthroughRoutes: PassthroughRoute[];
+    pools: Pool[];
+    backends: Backend[];
+};
+── ModelIssue
+export type ModelIssue = {
+    code: ModelIssueCode;
+    subjects: string[];
+    message: string;
+};
+── ModelIssueCode
+export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range';
+── ModelValidationError
+export declare class ModelValidationError extends Error {
+    readonly issues: ModelIssue[];
+    constructor(issues: ModelIssue[]);
+}
+── MutationEnvelope
+export type MutationEnvelope = {
+    leaderToken: string;
+    operationId: string;
+    transitionId: string;
+    affectedPlanes: Plane[];
+};
+── PassthroughAction
+export type PassthroughAction = {
+    kind: 'proxy';
+    pool: string;
+} | {
+    kind: 'reject';
+};
+── PassthroughListener
+export type PassthroughListener = ListenerBase & {
+    protocol: 'tls_passthrough';
+    acceptProxyProtocol?: boolean;
+    onUnmatchedSni?: SniOutcome;
+    prereadTimeoutS?: number;
+};
+── PassthroughRoute
+export type PassthroughRoute = {
+    key: string;
+    listener: string;
+    snis: string[];
+    priority: number;
+    action: PassthroughAction;
+};
+── Plane
+export type Plane = 'http' | 'stream';
+── PlaneAck
+export type PlaneAck = PlaneState & {
+    plane: Plane;
+    transitionId: string;
+    cached: boolean;
+};
+── PlaneProgress
+export type PlaneProgress = 'pending' | 'reserved' | 'staged' | 'committed' | 'aborted' | 'failed';
+── PlaneState
+export type PlaneState = Coordinate & {
+    payloadDigest: string;
+};
+── PlaneStatus
+export type PlaneStatus = {
+    activationEpoch: string;
+    membershipRevision: string;
+    payloadDigest: string;
+};
+── PlaneTarget
+export type PlaneTarget = {
+    expectedCurrent: Coordinate;
+    target: Coordinate;
+    payloadDigest: string;
+};
+── Pool
+export type Pool = {
+    key: string;
+    protocolClass: ProtocolClass;
+    algorithm: Algorithm;
+    hashKey?: string;
+    sendProxyProtocol?: 'v1';
+};
+── PreflightResult
+export type PreflightResult = {
+    ok: boolean;
+    reason?: string;
+    configTestPassed?: boolean;
+};
+── ProtocolClass
+export type ProtocolClass = 'http' | 'tcp' | 'udp';
+── PublishRecord
+export type PublishRecord = {
+    generation: string;
+    leaderToken: string;
+    operationId: string;
+    transitionId: string;
+    generationDigest: string;
+};
+── PublishedState
+export type PublishedState = {
+    kind: 'none';
+} | {
+    kind: 'owned';
+    record: PublishRecord;
+} | {
+    kind: 'inconsistent';
+    generation: string | undefined;
+    record?: PublishRecord;
+};
+── RawListener
+export type RawListener = ListenerBase & {
+    protocol: ListenerProtocol;
+    defaultPool?: string;
+    acceptProxyProtocol?: boolean;
+    udp?: {
+        preset: UdpPreset;
+    };
+    http?: HttpProfile;
+    onUnmatchedSni?: SniOutcome;
+    prereadTimeoutS?: number;
+};
+── RawModel
+export type RawModel = Omit<Model, 'listeners'> & {
+    listeners: RawListener[];
+};
+── ReadOnlyFileStore
+export declare class ReadOnlyFileStore {
+    readonly path: string;
+    constructor(path: string);
+    load(): StoredState | undefined;
+}
+── ReconcileResult
+export type ReconcileResult = {
+    kind: 'no_baseline';
+} | {
+    kind: 'dirty';
+    intent: PublishRecord;
+    found: PublishedState;
+} | {
+    kind: 'converged';
+    record: PublishRecord;
+} | {
+    kind: 'repaired';
+    expected: PublishRecord;
+    found: PublishedState;
+} | {
+    kind: 'diverged';
+    expected: PublishRecord;
+    found: PublishedState;
+};
+── RejectionKind
+export type RejectionKind = 'stale_leader' | 'terminal' | 'slot_taken' | 'not_reserved' | 'tuple_mismatch' | 'stale_state' | 'coordinate_mismatch' | 'digest_mismatch' | 'epoch_not_monotonic' | 'not_staged' | 'operation_in_flight' | 'journal_conflict' | 'invalid_coordinate' | 'empty_envelope' | 'envelope_mismatch' | 'not_activated';
+── RenderCapabilities
+export type RenderCapabilities = {
+    streamRealip: boolean;
+};
+── RenderedConfig
+export type RenderedConfig = {
+    conf: string;
+    digest: string;
+    planes: ('http' | 'stream')[];
+};
+── SniOutcome
+export type SniOutcome = 'reject' | {
+    pool: string;
+};
+── StoreConflict
+export declare class StoreConflict extends Error {
+    constructor(message: string);
+}
+── StoreCorrupted
+export declare class StoreCorrupted extends Error {
+    constructor(message: string);
+}
+── StoreLockLost
+export declare class StoreLockLost extends Error {
+    constructor(message: string);
+}
+── StoreLocked
+export declare class StoreLocked extends Error {
+    readonly holderPid: number;
+    constructor(holderPid: number);
+}
+── StoredState
+export type StoredState = {
+    readonly version: number;
+    readonly payload: unknown;
+};
+── TcpListener
+export type TcpListener = ListenerBase & {
+    protocol: 'tcp';
+    defaultPool: string;
+    acceptProxyProtocol?: boolean;
+};
+── TerminalKind
+export type TerminalKind = 'activated' | 'failed' | 'aborted';
+── UdpListener
+export type UdpListener = ListenerBase & {
+    protocol: 'udp';
+    defaultPool: string;
+    udp: {
+        preset: UdpPreset;
+    };
+};
+── UdpPreset
+export type UdpPreset = 'dns' | 'wireguard' | 'game_generic' | 'custom';
+── ValidationCapabilities
+export type ValidationCapabilities = {
+    streamRealip: boolean;
+};
+── decodeModel
+export declare function decodeModel(input: unknown): DecodeResult;
+── digestOfFiles
+export declare function digestOfFiles(files: Record<string, string>, planes?: readonly ('http' | 'stream')[]): string;
+── isTerminalPhase
+isTerminalPhase: (p: ApplyPhase) => boolean
+── materializeGeneration
+export declare function materializeGeneration(opts: {
+    prefix: string;
+    generation: string;
+    files: Record<string, string>;
+    planes: ('http' | 'stream')[];
+}): GenerationManifest;
+── parseModel
+export declare function parseModel(input: unknown, caps?: ValidationCapabilities): DecodeResult;
+── provesActivation
+export declare function provesActivation(evidence: ActivationEvidence | undefined, targetGeneration: string): boolean;
+── publishedByMe
+export declare function publishedByMe(state: PublishedState, op: ApplyOperation): boolean;
+── readManifest
+export declare function readManifest(prefix: string, generation: string): GenerationManifest;
+── render
+export declare function render(model: Model, caps?: RenderCapabilities): RenderedConfig;
+── validateModel
+export declare function validateModel(model: RawModel, caps?: ValidationCapabilities): ModelIssue[];
+── verifyGeneration
+export declare function verifyGeneration(prefix: string, generation: string, expectedDigest?: string, expectedPlanes?: readonly ('http' | 'stream')[]): GenerationManifest;
