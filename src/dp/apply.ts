@@ -15,11 +15,14 @@ import {
   isTerminalPhase,
   planesOf,
   provesActivation,
+  publishedByMe,
   type ActivationEvidence,
   type ApplyOperation,
   type ApplyPhase,
   type ApplyLease,
   type ApplyResult,
+  type PublishedState,
+  type PublishRecord,
   type Plane,
   type PlaneProgress,
 } from './operation.js';
@@ -56,9 +59,14 @@ export interface Effects {
    * **되돌릴 수 없는 연산 직전에 `lease.assertValid()` 를 부르고, 그 사이에 `await` 를
    * 두지 마라** (8차 반례 ①). 준비(임시 파일 생성 등)는 그 앞에서 해도 된다.
    */
-  publish(generation: string, lease: ApplyLease): Promise<void>;
-  /** 지금 `current` symlink 가 가리키는 세대. */
-  observePublished(): Promise<string | undefined>;
+  publish(record: PublishRecord, lease: ApplyLease): Promise<void>;
+  /**
+   * 지금 게시된 것과 **그것이 누구 것인지**.
+   *
+   * 세대 이름만 돌려주면 "옛 리더가 늦게 게시한 같은 이름" 과 "내가 게시한 것" 을
+   * 구분하지 못한다 — 그래서 수렴할 수가 없다 (9차 검수 뒤 방향 전환).
+   */
+  observePublished(): Promise<PublishedState>;
   /** HUP. `publish` 와 같은 규칙을 지킨다. */
   signalReload(lease: ApplyLease): Promise<void>;
   /**
@@ -246,6 +254,9 @@ export class ApplyRunner {
       if (j.op.operationId !== bound.operationId || j.op.transitionId !== bound.transitionId) {
         return emptyResult();
       }
+      // **종단은 읽고 돌아가는 것뿐이다.** 부작용이 없으므로 소유권 검사 앞에 온다 —
+      // 종단에 닿으면 실행권을 이미 놓은 뒤라 검사가 오히려 걸린다.
+      if (isTerminalPhase(j.phase)) return resultOf(j);
       // **부작용 앞에서 매번 확인한다** (6차 반례 ⑥). 예약은 과거의 승인일 뿐이고,
       // 그 사이 새 리더가 fence 했을 수 있다.
       this.agent.assertOwnership(j.op);
@@ -271,12 +282,10 @@ export class ApplyRunner {
         }
         case 'publish_intent': {
           // 기록은 있는데 게시했는지 모른다 → 관측한다. 이미 됐으면 다시 하지 않는다.
-          const published = await this.effects.observePublished();
-          if (published !== gen) {
-            // lease 를 건넨다. **최종 검사는 부작용 구현 안에서** 되돌릴 수 없는 연산
-            // 직전에 일어난다 (8차 반례 ①) — 러너가 여기서 아무리 확인해도 그 뒤의
-            // `await` 안에서 리더가 바뀌면 소용없다.
-            await this.effects.publish(gen, this.agent.lease(j.op));
+          // **세대 이름이 아니라 소유자까지 본다.** 같은 이름이어도 남이 게시한 것이면
+          // 내 것이 아니다 — 그걸 구분하지 못하면 수렴할 수가 없다.
+          if (!publishedByMe(await this.effects.observePublished(), j.op)) {
+            await this.effects.publish(recordOf(j.op), this.agent.lease(j.op));
           }
           await ignoreConflict(this.write(next(j, { phase: 'published' })));
           break;
@@ -332,6 +341,13 @@ export class ApplyRunner {
           break;
         }
         case 'reload_observed': {
+          // **수렴 확인** (9차 뒤 방향 전환). 활성화를 인정하기 전에 게시가 아직 내
+          // 것인지 다시 본다. 늦게 착지한 옛 게시가 있으면 여기서 드러나고, 다시
+          // 게시하러 돌아간다 — 막지 못한 것을 **덮어서** 수렴시킨다.
+          if (!publishedByMe(await this.effects.observePublished(), j.op)) {
+            await ignoreConflict(this.write(next(j, { phase: 'publish_intent' })));
+            break;
+          }
           // 다시 관측한다. 저널을 쓴 사이에 세대가 또 바뀌었을 수 있다.
           const evidence = await this.observe();
           if (!provesActivation(evidence, gen)) {
@@ -476,6 +492,15 @@ async function ignoreRejection(p: Promise<unknown>): Promise<void> {
   }
 }
 
+/** 오퍼레이션이 게시하려는 것. **누가** 게시하는지까지 적는다. */
+export const recordOf = (op: ApplyOperation): PublishRecord => ({
+  generation: op.targetGeneration,
+  leaderToken: op.leaderToken,
+  operationId: op.operationId,
+  transitionId: op.transitionId,
+  generationDigest: op.generationDigest,
+});
+
 const progressOf = (op: ApplyOperation, at: PlaneProgress): Partial<Record<Plane, PlaneProgress>> =>
   Object.fromEntries(planesOf(op).map((p) => [p, at]));
 
@@ -600,7 +625,7 @@ export class FaultStore implements DurableStore {
 
 /** 관측 가능한 가짜 부작용. 시계를 공유해 크래시 지점을 함께 센다. */
 export class FakeEffects implements Effects {
-  publishedGeneration: string | undefined;
+  publishedRecord: PublishRecord | undefined;
   acceptingGeneration: string | undefined;
   publishCalls = 0;
   reloadSignals = 0;
@@ -625,19 +650,26 @@ export class FakeEffects implements Effects {
       : { ok: false, reason: '주입된 preflight 실패' };
   }
 
-  async publish(generation: string, lease?: ApplyLease): Promise<void> {
+  async publish(record: PublishRecord, lease?: ApplyLease): Promise<void> {
     if (this.crashBeforeEffect === 'publish') throw new CrashInjected('before publish');
     this.clock.tick('publish:before');
     // **되돌릴 수 없는 지점 직전.** 여기와 아래 대입 사이에 await 가 없다.
     lease?.assertValid();
     this.publishCalls += 1;
-    this.publishedGeneration = generation;
+    this.publishedRecord = record;
     if (this.crashAfterEffect === 'publish') throw new CrashInjected('after publish');
     this.clock.tick('publish:after');
   }
 
-  async observePublished(): Promise<string | undefined> {
-    return this.publishedGeneration;
+  async observePublished(): Promise<PublishedState> {
+    return this.publishedRecord === undefined
+      ? { kind: 'none' }
+      : { kind: 'owned', record: this.publishedRecord };
+  }
+
+  /** 편의 — 테스트가 세대 이름만 볼 때. */
+  get publishedGeneration(): string | undefined {
+    return this.publishedRecord?.generation;
   }
 
   async signalReload(lease?: ApplyLease): Promise<void> {
@@ -645,7 +677,7 @@ export class FakeEffects implements Effects {
     this.clock.tick('reload:before');
     lease?.assertValid();
     this.reloadSignals += 1;
-    if (this.reloadTakesEffect) this.acceptingGeneration = this.publishedGeneration;
+    if (this.reloadTakesEffect) this.acceptingGeneration = this.publishedRecord?.generation;
     if (this.crashAfterEffect === 'reload') throw new CrashInjected('after reload');
     this.clock.tick('reload:after');
   }

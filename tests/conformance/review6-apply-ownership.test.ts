@@ -181,7 +181,10 @@ describe('④ partially_activated 에서 복구가 이어받는다 (§6.2 #8)', 
     const agent = new DpAgent(new MemoryStore());
     const op = BOTH();
     const fx = new FakeEffects();
-    fx.publishedGeneration = 'gen-1';
+    fx.publishedRecord = {
+      generation: 'gen-1', leaderToken: '10', operationId: 'op-1',
+      transitionId: 't-1', generationDigest: 'sha256:gen',
+    };
     fx.acceptingGeneration = 'gen-1';
 
     await agent.reserveAll(op);

@@ -64,9 +64,16 @@ export type {
   Plane,
   PlaneProgress,
   PlaneTarget,
+  PublishedState,
+  PublishRecord,
 } from './dp/operation.js';
 
-export { ALL_APPLY_PHASES, isTerminalPhase, provesActivation } from './dp/operation.js';
+export {
+  ALL_APPLY_PHASES,
+  isTerminalPhase,
+  provesActivation,
+  publishedByMe,
+} from './dp/operation.js';
 
 export {
   LocalDataplaneDriver,

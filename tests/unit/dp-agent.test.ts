@@ -30,6 +30,7 @@ const op = (over: Partial<OperationTuple> = {}): OperationTuple => ({
   payloadDigest: 'sha256:aaa',
   // 증거는 **이 세대**에 대한 것이어야 한다 — Agent 가 직접 판정한다 (6차 반례 ②).
   targetGeneration: 'gen-1',
+  generationDigest: 'sha256:gen',
   ...over,
 });
 

@@ -28,6 +28,7 @@ const FROZEN_VALUES = [
   'ALL_APPLY_PHASES',
   'isTerminalPhase',
   'provesActivation',
+  'publishedByMe',
   // DP — 드라이버
   'LocalDataplaneDriver',
   // DP — 세대
@@ -124,8 +125,8 @@ const NOOP_EFFECTS: surface.Effects = {
     return { ok: true };
   },
   async publish() {},
-  async observePublished() {
-    return undefined;
+  async observePublished(): Promise<surface.PublishedState> {
+    return { kind: 'none' };
   },
   async signalReload() {},
   async observeActivation() {
@@ -152,8 +153,14 @@ describe('표면만으로 실제로 구현할 수 있는가', () => {
     /** 부작용도 밖에서 구현한다. */
     const effects: surface.Effects = {
       ...NOOP_EFFECTS,
-      async observePublished() {
-        return 'gen-1';
+      async observePublished(): Promise<surface.PublishedState> {
+        return {
+          kind: 'owned',
+          record: {
+            generation: 'gen-1', leaderToken: '10', operationId: 'o',
+            transitionId: 't', generationDigest: 'sha256:g',
+          },
+        };
       },
       async observeActivation() {
         return { acceptingGeneration: 'gen-1' };
@@ -186,6 +193,7 @@ describe('표면만으로 실제로 구현할 수 있는가', () => {
 
     const status: surface.DriverStatus = await driver.status();
     expect(status.planes.http.activationEpoch).toBe('1');
+    expect(status.published.kind).toBe('owned');
     expect(status.maxLeaderToken).toBe('10');
   });
 

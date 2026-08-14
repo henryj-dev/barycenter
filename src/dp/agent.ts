@@ -43,6 +43,8 @@ export type OperationTuple = {
   payloadDigest: string;
   /** 활성화할 세대. **증거 판정에 쓴다** — 이게 없으면 commit 이 증거를 검사할 수 없다. */
   targetGeneration: string;
+  /** 그 세대의 내용 digest. 이름만으로는 무엇을 활성화하는지 말하지 못한다 (§7.2). */
+  generationDigest: string;
 };
 
 export type PlaneAck = PlaneState & {
@@ -219,6 +221,7 @@ export function tupleFor(op: ApplyOperation, plane: Plane): OperationTuple {
     target: normalizeCoordinate(t.target, 'target'),
     payloadDigest: t.payloadDigest,
     targetGeneration: op.targetGeneration,
+    generationDigest: op.generationDigest,
   };
 }
 
@@ -473,9 +476,13 @@ export class DpAgent {
         `토큰 ${token} 은 이미 본 최대 토큰 ${s.maxLeaderToken} 보다 낮다`,
       );
     }
+    // **실행권이 없으면 내 차례가 아니다** (9차 반례 ③). 전에는 `holder === undefined`
+    // 를 통과시켰는데, 그러면 abort 로 실행권을 놓은 뒤에도 멈춰 있던 부작용이 착지한다.
     const holder = s.activeOperation;
-    if (holder !== undefined
-      && (holder.operationId !== op.operationId || holder.transitionId !== op.transitionId)) {
+    if (holder === undefined) {
+      throw new DpRejection('not_reserved', `${op.operationId}:${op.transitionId} 는 실행권이 없다`);
+    }
+    if (holder.operationId !== op.operationId || holder.transitionId !== op.transitionId) {
       throw new DpRejection(
         'operation_in_flight',
         `${holder.operationId}:${holder.transitionId} 가 apply 경로를 쥐고 있다`,
@@ -753,6 +760,10 @@ const canonical = (op: OperationTuple): string =>
     op.target.activationEpoch,
     op.target.membershipRevision,
     op.payloadDigest,
+    // **세대와 그 내용도 정체성이다** (9차 반례 ②). 없으면 같은 id·좌표로 다른 세대를
+    // 요청했을 때 캐시된 ACK 가 돌아가 **조용한 거짓 성공**이 된다.
+    op.targetGeneration,
+    op.generationDigest,
   ].join('|');
 
 /** 이 오퍼레이션이 그 슬롯의 주인인가. */

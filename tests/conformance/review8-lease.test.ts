@@ -19,9 +19,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
-import type { ApplyLease, ApplyOperation } from '../../src/dp/operation.js';
+import type { ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
 
 const OP = (id: string, gen = 'gen-1', o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
@@ -66,9 +66,9 @@ describe('① 옛 러너의 늦은 게시가 착지하지 못한다', () => {
 
     /** 옛 세대를 게시하려다 준비 단계에서 멈춘다. */
     class Stalling extends FakeEffects {
-      override async publish(generation: string, lease?: ApplyLease): Promise<void> {
-        if (generation === 'gen-old') await gate;
-        await super.publish(generation, lease);
+      override async publish(record: PublishRecord, lease?: ApplyLease): Promise<void> {
+        if (record.generation === 'gen-old') await gate;
+        await super.publish(record, lease);
       }
     }
 
@@ -129,7 +129,7 @@ describe('① 옛 러너의 늦은 게시가 착지하지 못한다', () => {
 
     const fx = new FakeEffects();
     await new DpAgent(store).fence('11');
-    expect(await kindOf(fx.publish('gen-1', lease))).toBe('stale_leader');
+    expect(await kindOf(fx.publish(recordOf(OP('old')), lease))).toBe('stale_leader');
     expect(fx.publishCalls, '잃은 lease 로 게시했다').toBe(0);
   });
 });

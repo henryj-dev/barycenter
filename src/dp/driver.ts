@@ -14,9 +14,15 @@
  * v0.3 에서 이 인터페이스에 붙는다 — 구현하지 않은 계약을 먼저 고정했다가 5차 검수에서
  * 깨진 것이 그것이었다.
  */
-import type { ActivationEvidence, ApplyOperation, ApplyResult, Plane } from './operation.js';
+import type {
+  ActivationEvidence,
+  ApplyOperation,
+  ApplyResult,
+  Plane,
+  PublishedState,
+} from './operation.js';
 import { planesOf } from './operation.js';
-import { DpAgent, tupleFor, type DurableStore } from './agent.js';
+import { DpAgent, DpRejection, tupleFor, type DurableStore } from './agent.js';
 import { ApplyRunner, type Effects } from './apply.js';
 
 /** 평면의 현재 좌표. */
@@ -29,8 +35,12 @@ export type PlaneStatus = {
 export type DriverStatus = {
   maxLeaderToken: string;
   planes: Record<Plane, PlaneStatus>;
-  /** 지금 `current` 가 가리키는 세대. */
-  publishedGeneration: string | undefined;
+  /**
+   * 지금 게시된 것과 **그것이 누구 것인지**.
+   *
+   * 세대 이름만 노출하면 컨트롤 플레인이 "내가 믿는 것과 실제가 갈라졌다" 를 볼 수 없다.
+   */
+  published: PublishedState;
   /** 마지막으로 관측한 활성화 증거. */
   lastEvidence: ActivationEvidence | undefined;
 };
@@ -116,12 +126,23 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   }
 
   async abortConfig(op: ApplyOperation): Promise<void> {
+    // **오퍼레이션 단위다** (9차 반례 ⑤). 평면 하나가 이미 종단이라 거부해도 나머지
+    // 정리를 멈추면 안 된다 — 부분 활성화 뒤 abort 가 그렇게 중단돼서 예약과 실행권이
+    // 남았다. 각 평면의 거부는 모아서 끝에 알린다.
+    const refused: string[] = [];
     for (const plane of planesOf(op)) {
-      await this.agent.abort(tupleFor(op, plane));
+      try {
+        await this.agent.abort(tupleFor(op, plane));
+      } catch (e) {
+        if (!(e instanceof DpRejection)) throw e;
+        refused.push(`${plane}: ${e.kind}`);
+      }
     }
-    // **실행권도 놓는다** (8차 반례 ⑤). 예약만 지우면 activeOperation 이 남아
-    // 다음 오퍼레이션이 `operation_in_flight` 로 막힌다.
-    await this.agent.finishOperation(op);
+    // 실행권은 **어떤 경우에도** 놓는다. 안 놓으면 다음 오퍼레이션이 영영 막힌다.
+    await this.agent.finishOperation(op, planesOf(op));
+    if (refused.length > 0) {
+      throw new DpRejection('terminal', `일부 평면이 이미 끝나 있었다 — ${refused.join(', ')}`);
+    }
   }
 
   async status(): Promise<DriverStatus> {
@@ -129,7 +150,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     return {
       maxLeaderToken: this.agent.maxLeaderToken(),
       planes: { http: this.agent.coordinate('http'), stream: this.agent.coordinate('stream') },
-      publishedGeneration: await this.effects.observePublished(),
+      published: await this.effects.observePublished(),
       lastEvidence: journal?.evidence,
     };
   }

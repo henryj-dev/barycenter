@@ -29,7 +29,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DpAgent } from '../../src/dp/agent.js';
 import { FileStore } from '../../src/dp/store-fs.js';
 import { ApplyRunner, CrashInjected, type Effects } from '../../src/dp/apply.js';
-import type { ActivationEvidence, ApplyLease, ApplyOperation } from '../../src/dp/operation.js';
+import type {
+  ActivationEvidence,
+  ApplyLease,
+  ApplyOperation,
+  PublishRecord,
+  PublishedState,
+} from '../../src/dp/operation.js';
 import { materializeGeneration, verifyGeneration } from '../../src/dp/materialize.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
@@ -139,19 +145,37 @@ const effects = (): Effects => {
       return { ok: false, reason: (e as Error).message };
     }
   },
-  async publish(generation, lease) {
+  async publish(record, lease) {
+    const generation = record.generation;
     const dir = `/prefix/generations/${generation}`;
     docker('exec', container, 'sh', '-c',
       `test -f ${dir}/nginx.conf || { echo "세대가 없다: ${dir}" >&2; exit 3; }`);
     // ln + mv -T. mv 는 -T 없이는 목적지 심볼릭 링크를 **따라가** 디렉토리 안으로 옮긴다.
     // 준비와 되돌릴 수 없는 교체를 나눈다 (8차 반례 ①).
     docker('exec', container, 'sh', '-c', `ln -sfn generations/${generation} /prefix/current.tmp`);
+    // **소유 기록을 먼저 쓴다** — 포인터가 먼저 바뀌면 주인 없는 세대가 관측된다.
+    docker('exec', container, 'sh', '-c',
+      `cat > /prefix/current.owner <<'OWNER'\n${JSON.stringify(record)}\nOWNER`);
     lease?.assertValid();
     docker('exec', container, 'sh', '-c', `mv -T /prefix/current.tmp /prefix/current`);
   },
-  async observePublished() {
-    const out = docker('exec', container, 'sh', '-c', 'readlink /prefix/current || true');
-    return out.length > 0 ? out.split('/').pop() : undefined;
+  async observePublished(): Promise<PublishedState> {
+    const link = docker('exec', container, 'sh', '-c', 'readlink /prefix/current || true');
+    const generation = link.length > 0 ? link.split('/').pop() : undefined;
+    const raw = docker('exec', container, 'sh', '-c', 'cat /prefix/current.owner 2>/dev/null || true');
+    let record: PublishRecord | undefined;
+    try {
+      record = raw.length > 0 ? (JSON.parse(raw) as PublishRecord) : undefined;
+    } catch {
+      record = undefined;
+    }
+    if (generation === undefined && record === undefined) return { kind: 'none' };
+    if (generation !== undefined && record !== undefined && record.generation === generation) {
+      return { kind: 'owned', record };
+    }
+    return record === undefined
+      ? { kind: 'inconsistent', generation }
+      : { kind: 'inconsistent', generation, record };
   },
   async signalReload(lease) {
     // **신호 전에** 찍는다. 뒤에 찍으면 신호가 만든 오류를 놓친다.
@@ -293,7 +317,13 @@ describe('S12 end-to-end — 실제 nginx', () => {
   it('기동 직후 gen-1 을 서빙한다 — 두 평면 다', async () => {
     expect(await probeAccepting()).toBe('gen-1');
     expect(await probeStream(), 'stream 평면이 응답하지 않는다').toBe('gen-1');
-    expect(await effects().observePublished()).toBe('gen-1');
+    // **부트스트랩 포인터는 우리 것이 아니다.** 테스트가 손으로 만든 심볼릭 링크에는
+    // 소유 기록이 없으므로 `inconsistent` 다 — 그게 맞다. 첫 apply 가 자기 이름으로
+    // 다시 게시해 수렴시킨다 (9차 뒤 방향 전환).
+    expect(await effects().observePublished()).toMatchObject({
+      kind: 'inconsistent',
+      generation: 'gen-1',
+    });
   });
 
   /**
@@ -352,7 +382,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
     ).rejects.toBeInstanceOf(CrashInjected);
 
     // 이 시점: 링크는 gen-2, 실행 중인 nginx 는 아직 gen-1
-    expect(await effects().observePublished()).toBe('gen-2');
+    expect(await effects().observePublished()).toMatchObject({ kind: 'owned', record: { generation: 'gen-2' } });
     expect(await probeAccepting()).toBe('gen-1');
 
     // 재시작한 Agent 가 이어받는다.
@@ -403,6 +433,10 @@ describe('S12 end-to-end — 실제 nginx', () => {
     const r = await new ApplyRunner(new DpAgent(store), effects()).run(OP('e2e-4', 'gen-없음'));
     expect(r.phase).toBe('failed');
     expect(await probeAccepting()).toBe('gen-1');
-    expect(await effects().observePublished()).toBe('gen-1');
+    // 게시가 일어나지 않았으므로 부트스트랩 상태 그대로다.
+    expect(await effects().observePublished()).toMatchObject({
+      kind: 'inconsistent',
+      generation: 'gen-1',
+    });
   });
 });

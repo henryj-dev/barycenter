@@ -19,8 +19,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
-import type { ApplyOperation } from '../../src/dp/operation.js';
+import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
+import type { ApplyOperation, PublishedState } from '../../src/dp/operation.js';
 
 const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
@@ -131,7 +131,7 @@ describe('승계 뒤에도 진행 중이던 작업을 이어받을 수 있다', 
     const { agent } = await stalled();
     const fx = new FakeEffects();
     // 옛 리더가 게시까지는 했다고 치자.
-    fx.publishedGeneration = 'gen-1';
+    fx.publishedRecord = { generation: 'gen-1', leaderToken: '10', operationId: 'takeover', transitionId: 'takeover', generationDigest: 'sha256:g' };
 
     await agent.fence('11');
     const same = OP({ leaderToken: '11', operationId: 'takeover', transitionId: 'takeover' });
@@ -161,7 +161,7 @@ describe('② 관측 중 리더가 바뀌어도 좌표는 안전하다', () => {
     });
 
     class Slow extends FakeEffects {
-      override async observePublished(): Promise<string | undefined> {
+      override async observePublished(): Promise<PublishedState> {
         // 루프 머리의 검사는 이미 지났다. 이 await 안에서 새 리더가 완주한다.
         await agent.fence('11');
         return super.observePublished();

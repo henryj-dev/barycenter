@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { LocalDataplaneDriver, type DataplaneDriver } from '../../src/dp/driver.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
 import {
   provesActivation,
   type ActivationEvidence,
@@ -280,13 +280,13 @@ describe('DataplaneDriver 는 구현과 함께 선다 (§9.1 · §9.2)', () => {
     const before = await driver.status();
     expect(before.maxLeaderToken).toBe('10');
     expect(before.planes.http.activationEpoch).toBe('0');
-    expect(before.publishedGeneration).toBeUndefined();
+    expect(before.published.kind).toBe('none');
 
     const result = await driver.applyConfig(BOTH());
     expect(result.phase).toBe('activated');
 
     const after = await driver.status();
-    expect(after.publishedGeneration).toBe('gen-1');
+    expect(after.published).toMatchObject({ kind: 'owned', record: { generation: 'gen-1' } });
     expect(after.planes.http.activationEpoch).toBe('1');
     expect(after.planes.stream.activationEpoch).toBe('1');
     expect(after.lastEvidence?.acceptingGeneration).toBe('gen-1');

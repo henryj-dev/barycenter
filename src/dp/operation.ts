@@ -128,6 +128,53 @@ export function provesActivation(
 }
 
 /**
+ * 게시된 것이 **누구의 것인가** (9차 검수 뒤 방향 전환).
+ *
+ * 아홉 라운드 동안 "부작용 앞에서 막는" 방식으로 아홉 번 시도했고 여섯 번 뚫렸다.
+ * 외부 효과는 **취소할 수 없고** nginx 는 리더 토큰을 모른다. 검사와 실제 착지 사이에는
+ * 어떤 식으로든 틈이 남는다 — 주입된 콜백이 그 안에서 `await` 하기만 해도 그렇다.
+ *
+ * 그래서 막는 것을 그만두고 **탐지하고 수렴시킨다.**
+ *
+ *   · 게시할 때 **누가 게시했는지 함께 적는다.**
+ *   · 관측이 세대뿐 아니라 **소유자**를 답한다.
+ *   · 리더는 자기 것이 아니면 **다시 게시한다.** 수렴할 때까지.
+ *
+ * 그러면 "늦게 착지한 옛 게시" 는 막아야 할 것이 아니라 **관측되고 덮이는 것**이 된다.
+ * 그건 테스트할 수 있다.
+ */
+export type PublishRecord = {
+  generation: string;
+  /** 게시한 리더의 토큰 (§3.5). 낮으면 옛 리더가 늦게 착지한 것이다. */
+  leaderToken: string;
+  operationId: string;
+  transitionId: string;
+  /** 세대의 내용 digest (§7.2). 이름만으로는 무엇이 게시됐는지 말하지 못한다. */
+  generationDigest: string;
+};
+
+/** 관측한 게시 상태. 부분 상태(포인터와 소유 기록 불일치)도 표현한다. */
+export type PublishedState =
+  | { kind: 'none' }
+  /** 포인터와 소유 기록이 맞는다. */
+  | { kind: 'owned'; record: PublishRecord }
+  /**
+   * 포인터는 있는데 소유 기록이 없거나 어긋난다 — 크래시 중간이거나 남이 만졌다.
+   * **정합하지 않다**고 보고 다시 게시하게 한다.
+   */
+  | { kind: 'inconsistent'; generation: string | undefined; record?: PublishRecord };
+
+/** 이 게시가 내 오퍼레이션의 것인가. */
+export function publishedByMe(state: PublishedState, op: ApplyOperation): boolean {
+  if (state.kind !== 'owned') return false;
+  const r = state.record;
+  return r.generation === op.targetGeneration
+    && r.generationDigest === op.generationDigest
+    && r.operationId === op.operationId
+    && r.transitionId === op.transitionId;
+}
+
+/**
  * apply 실행권 (8차 반례 ①).
  *
  * 7차까지는 러너가 부작용 **앞에서** 소유권을 확인했다. 그런데 확인과 부작용 사이에
@@ -204,9 +251,15 @@ export const ALL_APPLY_PHASES: readonly ApplyPhase[] = [
 ];
 
 /** 종단 단계 — 여기 들어가면 러너는 더 진행하지 않는다. */
+/**
+ * 종단 단계 — 여기 들어가면 러너는 더 진행하지 않는다.
+ *
+ * **`partially_activated` 는 여기 없다.** §6.2 #8 이 "재시도" 라고 하고 러너도 그렇게
+ * 구현했는데 이 목록에는 남아 있었다 — 문서와 코드가 갈린 자리였다. 유한 재시도를
+ * 소진하면 그때 결과를 돌려주고 끝난다.
+ */
 export const TERMINAL_PHASES: readonly ApplyPhase[] = [
   'activated',
-  'partially_activated',
   'failed',
   'superseded',
   'no_operation',

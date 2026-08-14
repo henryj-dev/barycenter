@@ -15,6 +15,15 @@ import { FsEffects } from '../../src/dp/effects-fs.js';
 
 let prefix: string;
 
+/** 게시 기록. 이제 게시는 "무엇을" 이 아니라 "누가 무엇을" 이다. */
+const rec = (generation: string) => ({
+  generation,
+  leaderToken: '10',
+  operationId: 'op',
+  transitionId: 't',
+  generationDigest: 'sha256:g',
+});
+
 const makeGeneration = (name: string): string => {
   const dir = join(prefix, 'generations', name);
   mkdirSync(dir, { recursive: true });
@@ -39,7 +48,7 @@ afterEach(() => rmSync(prefix, { recursive: true, force: true }));
 describe('게시 — 심볼릭 링크 교체', () => {
   it('current 가 세대를 가리킨다', async () => {
     makeGeneration('gen-1');
-    await effects().publish('gen-1');
+    await effects().publish(rec('gen-1'));
     expect(readlinkSync(join(prefix, 'current'))).toBe('generations/gen-1');
   });
 
@@ -47,39 +56,47 @@ describe('게시 — 심볼릭 링크 교체', () => {
     makeGeneration('gen-1');
     makeGeneration('gen-2');
     const fx = effects();
-    await fx.publish('gen-1');
-    await fx.publish('gen-2');
-    expect(await fx.observePublished()).toBe('gen-2');
-    await fx.publish('gen-1');
-    expect(await fx.observePublished()).toBe('gen-1');
+    await fx.publish(rec('gen-1'));
+    await fx.publish(rec('gen-2'));
+    expect(await fx.observePublished()).toMatchObject({ kind: 'owned', record: { generation: 'gen-2' } });
+    await fx.publish(rec('gen-1'));
+    expect(await fx.observePublished()).toMatchObject({ kind: 'owned', record: { generation: 'gen-1' } });
   });
 
   it('교체 중에도 current 가 사라지는 순간이 없다', async () => {
     makeGeneration('gen-1');
     makeGeneration('gen-2');
     const fx = effects();
-    await fx.publish('gen-1');
+    await fx.publish(rec('gen-1'));
     // rename 은 원자적이다. 임시 링크를 만들고 덮어쓰므로 중간 상태가 관측되지 않는다.
-    await fx.publish('gen-2');
+    await fx.publish(rec('gen-2'));
     expect(existsSync(join(prefix, 'current'))).toBe(true);
     // 임시 링크가 남지 않아야 한다.
     expect(existsSync(join(prefix, 'current.tmp'))).toBe(false);
   });
 
   it('없는 세대는 게시하지 않는다 — 끊어진 링크를 만들지 않는다', async () => {
-    await expect(effects().publish('gen-없음')).rejects.toThrow(/세대가 없다/);
+    await expect(effects().publish(rec('gen-없음'))).rejects.toThrow(/세대가 없다/);
     expect(existsSync(join(prefix, 'current'))).toBe(false);
   });
 
   it('nginx.conf 가 없는 세대도 거부한다', async () => {
     mkdirSync(join(prefix, 'generations', 'gen-빈'), { recursive: true });
-    await expect(effects().publish('gen-빈')).rejects.toThrow(/nginx\.conf/);
+    await expect(effects().publish(rec('gen-빈'))).rejects.toThrow(/nginx\.conf/);
   });
 });
 
 describe('관측', () => {
-  it('아직 게시 전이면 undefined', async () => {
-    expect(await effects().observePublished()).toBeUndefined();
+  it('아직 게시 전이면 none', async () => {
+    expect(await effects().observePublished()).toEqual({ kind: 'none' });
+  });
+
+  it('**소유 기록이 없으면 정합하지 않다** — 누가 게시했는지 모르는 세대는 내 것이 아니다', async () => {
+    makeGeneration('gen-1');
+    const fx = effects();
+    await fx.publish(rec('gen-1'));
+    rmSync(join(prefix, 'current.owner'));
+    expect(await fx.observePublished()).toMatchObject({ kind: 'inconsistent', generation: 'gen-1' });
   });
 
   it('활성 세대 관측은 주입된 프로브를 쓴다', async () => {

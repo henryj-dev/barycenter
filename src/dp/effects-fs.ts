@@ -11,11 +11,19 @@
  *   · 사이드카      → 유닉스 소켓 RPC
  * 여기서 고정하면 그 중 하나만 지원하는 꼴이 된다.
  */
-import { existsSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlinkSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Effects, PreflightResult } from './apply.js';
 import { verifyGeneration } from './materialize.js';
-import type { ActivationEvidence, ApplyLease } from './operation.js';
+import type { ActivationEvidence, ApplyLease, PublishRecord, PublishedState } from './operation.js';
 
 export type FsEffectsOptions = {
   /** `/etc/barycenter` 에 해당. `generations/` 와 `current` 가 여기 있다. */
@@ -81,7 +89,13 @@ export class FsEffects implements Effects {
     }
   }
 
-  async publish(generation: string, lease?: ApplyLease): Promise<void> {
+  /** 소유 기록의 경로. `current` 옆에 둔다. */
+  private get ownerPath(): string {
+    return `${this.link}.owner`;
+  }
+
+  async publish(record: PublishRecord, lease?: ApplyLease): Promise<void> {
+    const generation = record.generation;
     const dir = join(this.opts.prefix, 'generations', generation);
     // 끊어진 링크를 만들지 않는다. 게시 후 reload 가 실패하는 것보다 게시를 막는 게 낫다.
     if (!existsSync(dir)) {
@@ -99,17 +113,42 @@ export class FsEffects implements Effects {
     // **여기가 되돌릴 수 없는 지점이다** (8차 반례 ①). 확인과 rename 사이에 `await` 가
     // 없으므로 그 구간에는 다른 코드가 끼어들지 못한다. 준비(임시 링크 생성)는 앞에서
     // 끝냈다 — 그건 되돌릴 수 있다.
+    // **소유 기록을 먼저 쓴다.** 포인터가 먼저 바뀌면 "누가 게시했는지 모르는 세대" 가
+    // 관측된다. 순서를 이렇게 두면 중간 상태는 `inconsistent` 로 드러나고, 그걸 본
+    // 리더가 다시 게시해 수렴한다 (9차 뒤 방향 전환).
+    const ownerTmp = `${this.ownerPath}.tmp`;
+    if (existsSync(ownerTmp)) unlinkSync(ownerTmp);
+    writeFileSync(ownerTmp, JSON.stringify(record), 'utf8');
+    renameSync(ownerTmp, this.ownerPath);
+
     lease?.assertValid();
     // rename 은 원자적이다 — `current` 가 없는 순간이 생기지 않는다.
     renameSync(tmp, this.link);
   }
 
-  async observePublished(): Promise<string | undefined> {
+  async observePublished(): Promise<PublishedState> {
+    let generation: string | undefined;
     try {
-      return basename(readlinkSync(this.link));
+      generation = basename(readlinkSync(this.link));
     } catch {
-      return undefined;
+      generation = undefined;
     }
+
+    let record: PublishRecord | undefined;
+    try {
+      record = JSON.parse(readFileSync(this.ownerPath, 'utf8')) as PublishRecord;
+    } catch {
+      record = undefined;
+    }
+
+    if (generation === undefined && record === undefined) return { kind: 'none' };
+    // 포인터와 소유 기록이 **같은 세대를 말할 때만** 정합이다.
+    if (generation !== undefined && record !== undefined && record.generation === generation) {
+      return { kind: 'owned', record };
+    }
+    return record === undefined
+      ? { kind: 'inconsistent', generation }
+      : { kind: 'inconsistent', generation, record };
   }
 
   async signalReload(lease?: ApplyLease): Promise<void> {

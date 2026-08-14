@@ -55,6 +55,7 @@ const OP = (o: Partial<OperationTuple> = {}): OperationTuple => ({
   target: { activationEpoch: '1', membershipRevision: '1' },
   payloadDigest: 'sha256:a',
   targetGeneration: 'gen-1',
+  generationDigest: 'sha256:gen',
   ...o,
 });
 
