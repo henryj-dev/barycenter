@@ -282,7 +282,12 @@ describe('세대가 구성하는 평면을 오퍼레이션이 전부 선언해�
     expect(existsSync(join(prefix, 'current')), '평면이 어긋나는데 게시했다').toBe(false);
   });
 
-  it('렌더러가 구성한 평면을 답한다 — manifest 는 그걸 적는다', async () => {
+  /**
+   * 11차 검수: 이 테스트는 **제목이 검증 범위보다 넓었다.** `render().planes` 만 보고
+   * manifest 는 만들지도 않으면서 "manifest 는 그걸 적는다" 고 주장했다.
+   * 렌더 → materialize → 대조까지 이어서 본다.
+   */
+  it('렌더러가 구성한 평면이 manifest 로 이어지고 대조에 쓰인다', async () => {
     const { render } = await import('../../src/conf/render.js');
     const { parseModel } = await import('../../src/model/decode.js');
     const parsed = parseModel({
@@ -305,7 +310,24 @@ describe('세대가 구성하는 평면을 오퍼레이션이 전부 선언해�
       ],
     });
     expect(parsed.ok).toBe(true);
-    if (parsed.ok) expect(render(parsed.model).planes).toEqual(['http', 'stream']);
+    if (!parsed.ok) return;
+
+    const rendered = render(parsed.model);
+    expect(rendered.planes).toEqual(['http', 'stream']);
+
+    // **여기까지 와야 제목이 사실이 된다.**
+    const m = materializeGeneration({
+      prefix,
+      generation: 'gen-rendered',
+      files: { 'nginx.conf': rendered.conf },
+      planes: rendered.planes,
+    });
+    expect(readManifest(prefix, 'gen-rendered').planes).toEqual(['http', 'stream']);
+    // 그리고 그 기록이 실제 대조에 쓰인다.
+    expect(verifyGeneration(prefix, 'gen-rendered', m.digest, ['http', 'stream']).planes)
+      .toEqual(['http', 'stream']);
+    expect(kindOf(() => verifyGeneration(prefix, 'gen-rendered', m.digest, ['http'])))
+      .toBe('plane_mismatch');
   });
 });
 

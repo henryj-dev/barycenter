@@ -59,6 +59,16 @@ export interface Effects {
    * **되돌릴 수 없는 연산 직전에 `lease.assertValid()` 를 부르고, 그 사이에 `await` 를
    * 두지 마라** (8차 반례 ①). 준비(임시 파일 생성 등)는 그 앞에서 해도 된다.
    */
+  /**
+   * ⚠️ **타입이 lease 사용을 강제하지 못한다** (11차 검수).
+   *
+   * TypeScript 는 인자를 **덜 받는** 함수를 대입할 수 있게 한다. `async publish() {}` 도
+   * 이 계약을 만족한다 — lease 를 아예 안 받고 안 부른다. 내가 8차에 "필수 인자로
+   * 만들었으니 빼먹으면 타입이 잡는다" 고 적은 것은 틀렸다.
+   *
+   * 그래서 이건 **관례이지 강제가 아니다.** 정합성은 `reconcileConfig()` 의 수렴이
+   * 맡는다 — 늦게 착지한 것을 관측하고 되돌린다.
+   */
   publish(record: PublishRecord, lease: ApplyLease): Promise<void>;
   /**
    * 지금 게시된 것과 **그것이 누구 것인지**.

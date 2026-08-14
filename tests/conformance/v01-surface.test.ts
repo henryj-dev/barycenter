@@ -119,7 +119,14 @@ describe('v0.1 표면', () => {
  * 그래서 여기서는 **소비자처럼 쓴다.** 루트에서 import 한 것만으로 드라이버를 만들고
  * 저장소를 구현한다. 시그니처가 바뀌면 `tsc` 가 잡는다.
  */
-/** 아무것도 하지 않는 부작용. 표면의 타입만으로 만든다. */
+/**
+ * 아무것도 하지 않는 부작용. 표면의 타입만으로 만든다.
+ *
+ * ⚠️ **여기 `publish()` 와 `signalReload()` 가 인자를 안 받는다.** 그런데 strict
+ * typecheck 를 통과한다 — TypeScript 는 인자를 덜 받는 함수를 대입할 수 있게 한다.
+ * 즉 **lease 를 필수 인자로 만들어도 사용을 강제하지 못한다** (11차 검수).
+ * 그 사실을 여기 남겨 둔다. 정합성은 수렴(`reconcileConfig`)이 맡는다.
+ */
 const NOOP_EFFECTS: surface.Effects = {
   async preflight(): Promise<surface.PreflightResult> {
     return { ok: true };

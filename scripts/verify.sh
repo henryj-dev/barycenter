@@ -169,9 +169,11 @@ cat <<'GATES'
  ② 전역 세대 ↔ 평면 결박  ✅ 해소. 렌더러가 구성한 평면을 답하고 manifest 가 그것을
                         적는다. 게시 전 검사가 오퍼레이션의 affectedPlanes 와 대조한다 —
                         어긋나면 current 를 건드리지 않는다.
- ⑤ Effects ABI          ▲ lease 를 **필수 인자**로 만들고 owner/current 에 fsync 를
-                        넣었다. **deadline·취소는 없다** — exclusiveApply 교착이
-                        그대로 남는다.
+ ⑤ Effects ABI          ▲ owner/current 에 fsync 를 넣었다.
+                        **lease 는 타입이 강제하지 못한다** (11차) — TypeScript 는 인자를
+                        덜 받는 함수를 대입시킨다. `async publish() {}` 도 통과한다.
+                        관례이지 강제가 아니고, 정합성은 수렴이 맡는다.
+                        **deadline·취소도 없다** — exclusiveApply 교착이 남는다.
 
  그리고 내가 **테스트를 코드에 맞춰 고친 것**이 드러났다 (review7 픽스처). 되돌렸다.
 
@@ -214,7 +216,20 @@ cat <<'GATES'
  남은 것: exclusiveApply 가 같은 Agent 안에서 멈춘 러너 뒤에 apply 를 줄 세운다.
           Effects 에 타임아웃이 없으면 교착한다 (프로브가 실제로 걸렸다).
 
- → A(타입·DP ABI): 9차 검수의 확인을 기다린다.
+ ─── 11차 검수 ────────────────────────────────────────────────────────
+
+ ① reconcile 이 포인터만 되돌렸다  ✅ 해소. 활성 상태(evidence)까지 확인하고,
+                                   필요하면 HUP 을 보내고, 확인한 뒤에만 repaired.
+                                   apply 와 같은 큐에서 돈다 — 기준이 바뀌면 멈춘다.
+ ③ manifest 의 planes 변조 가능    ✅ 해소. digest 가 planes 를 덮는다.
+ ⓐ 제목이 범위보다 넓은 테스트     ✅ 고쳤다. "manifest 는 그걸 적는다" 면서 manifest 를
+                                   만들지도 않았다 — 렌더→materialize→대조까지 잇는다.
+ ② planes 가 delta 가 아니다       ❌ **남았다.** 목표에 있는 평면만 답한다.
+                                   http+stream → http 는 stream 을 없애는데 ['http'] 로
+                                   통과하고, stream 좌표가 남는다.
+ ⑤ lease 강제 불가 · deadline 없음 ❌ 남았다 (위).
+
+ → A(타입·DP ABI): **No-Go**
  → B(API·DB):      **No-Go** — 만들지 않았다.
 GATES
 

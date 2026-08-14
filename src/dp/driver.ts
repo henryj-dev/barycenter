@@ -22,7 +22,7 @@ import type {
   PublishedState,
   PublishRecord,
 } from './operation.js';
-import { planesOf } from './operation.js';
+import { planesOf, provesActivation } from './operation.js';
 import { DpAgent, DpRejection, tupleFor, type DurableStore } from './agent.js';
 import { ApplyRunner, type Effects } from './apply.js';
 
@@ -176,25 +176,54 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   }
 
   async reconcileConfig(): Promise<ReconcileResult> {
-    const expected = this.agent.lastActivated();
-    if (expected === undefined) return { kind: 'no_baseline' };
+    // **apply 와 같은 큐에서 돈다** (11차 반례 ②). 안 그러면 기준을 읽은 뒤 신임 apply 가
+    // 끼어들고, reconcile 이 옛 기준으로 그걸 덮는다.
+    return this.agent.exclusiveApply(async () => {
+      const baseline = () => this.agent.lastActivated();
+      const expected = baseline();
+      if (expected === undefined) return { kind: 'no_baseline' };
 
-    const seen = await this.effects.observePublished();
-    if (seen.kind === 'owned' && sameRecord(seen.record, expected)) {
-      return { kind: 'converged', record: expected };
-    }
+      const seen = await this.effects.observePublished();
+      const activation = await this.effects.observeActivation();
+      const pointerOk = seen.kind === 'owned' && sameRecord(seen.record, expected);
+      // **게시 상태와 활성 상태는 다르다** (11차 반례 ①). 포인터를 되돌려도 HUP 을
+      // 보내지 않으면 nginx 는 옛 설정으로 계속 돈다. 그건 수렴이 아니다.
+      const activeOk = provesActivation(activation, expected.generation);
+      if (pointerOk && activeOk) return { kind: 'converged', record: expected };
 
-    // 되돌린다. **lease 는 없다** — 이건 오퍼레이션이 아니라 복구다. 무엇으로 되돌릴지는
-    // durable 하게 기억된 것이고, 그게 여전히 정본이다.
-    await this.effects.publish(expected, {
-      leaderToken: expected.leaderToken,
-      assertValid: () => undefined,
+      // 되돌리는 사이에 기준이 바뀌었으면 우리 일이 아니다.
+      const still = baseline();
+      if (still === undefined || !sameRecord(still, expected)) {
+        return { kind: 'converged', record: still ?? expected };
+      }
+
+      if (!pointerOk) {
+        await this.effects.publish(expected, {
+          leaderToken: expected.leaderToken,
+          // 복구는 오퍼레이션이 아니다. 다만 **기준이 바뀌면 멈춘다** — 그게 이 lease 다.
+          assertValid: () => {
+            const now = baseline();
+            if (now === undefined || !sameRecord(now, expected)) {
+              throw new DpRejection('stale_leader', '되돌리는 사이 기준이 바뀌었다');
+            }
+          },
+        });
+      }
+      // 게시를 되돌렸든 이미 맞았든, **활성 상태가 아니면 신호를 보낸다.**
+      await this.effects.signalReload({
+        leaderToken: expected.leaderToken,
+        assertValid: () => undefined,
+      });
+
+      const afterPublish = await this.effects.observePublished();
+      const afterActive = await this.effects.observeActivation();
+      const ok = afterPublish.kind === 'owned'
+        && sameRecord(afterPublish.record, expected)
+        && provesActivation(afterActive, expected.generation);
+      return ok
+        ? { kind: 'repaired', expected, found: seen }
+        : { kind: 'diverged', expected, found: afterPublish };
     });
-
-    const after = await this.effects.observePublished();
-    return after.kind === 'owned' && sameRecord(after.record, expected)
-      ? { kind: 'repaired', expected, found: seen }
-      : { kind: 'diverged', expected, found: after };
   }
 
   async status(): Promise<DriverStatus> {
