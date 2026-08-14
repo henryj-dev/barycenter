@@ -420,6 +420,11 @@ function epochsOf(op: ApplyOperation): Record<string, string> {
   return out;
 }
 
+/** 오퍼레이션이 선언한 평면들. */
+function planesOfOperation(op: ApplyOperation): Plane[] {
+  return (['http', 'stream'] as const).filter((p) => op.planes[p] !== undefined);
+}
+
 /** 두 기록이 **같은 활성화 사건**인가. 세대 이름만 같아서는 안 된다. */
 function sameRecordIdentity(a: PublishRecord, b: PublishRecord): boolean {
   return a.generation === b.generation
@@ -464,6 +469,21 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
         `${what} 의 토큰 ${record.leaderToken} 이 최신 ${next.maxLeaderToken} 보다 높다`,
       );
     }
+  }
+
+  // I5 를 한 겹 더 조인다 — **새로 쓰이는** 기록은 최신 토큰이어야 한다 (14차 모델).
+  // `<= max` 만 보면 낡은 리더가 신임의 의도를 덮는 것을 못 잡는다.
+  if (before !== undefined
+    && next.lastPublishIntent !== undefined
+    && (before.lastPublishIntent === undefined
+      || before.lastPublishIntent.operationId !== next.lastPublishIntent.operationId
+      || before.lastPublishIntent.transitionId !== next.lastPublishIntent.transitionId
+      || before.lastPublishIntent.generation !== next.lastPublishIntent.generation)
+    && big(next.lastPublishIntent.leaderToken) !== max) {
+    throw new InvariantViolation(
+      'I5 intent 는 fenced',
+      `새 intent 가 토큰 ${next.lastPublishIntent.leaderToken} 으로 쓰였다 (최신 ${next.maxLeaderToken})`,
+    );
   }
 
   if (before === undefined) return;
@@ -633,6 +653,13 @@ export class DpAgent {
   /** 게시 직전에 의도를 남긴다 (12차 반례 ②). */
   recordPublishIntent(record: PublishRecord): Promise<void> {
     return this.serial((s) => {
+      // **낡은 리더는 의도조차 남기지 못한다** (14차 · 모델이 찾았다).
+      //
+      // 게시 자체는 `lease.assertValid()` 가 막는다. 그런데 의도는 그 **앞에** durable 로
+      // 내려간다. 옛 러너가 관측에서 멈춘 사이 신임이 fence 하고 자기 의도를 적어도,
+      // 옛 러너가 재개해 그걸 토큰 10 짜리로 덮었다. 바깥은 안 바뀌는데 "지금 무엇을
+      // 게시하려는 중인가" 라는 durable 기록만 거짓이 된다 — 수렴의 근거가 거짓이 된다.
+      assertLeader(s, normalizeNumeric(record.leaderToken, 'leaderToken'));
       s.lastPublishIntent = record;
     });
   }
@@ -713,6 +740,38 @@ export class DpAgent {
    *
    * 종단에 도달했는데 소유권이나 예약이 남으면 그 좌표는 영구히 잠긴다.
    */
+  /**
+   * **고아가 된 저널을 다시 잡는다** (14차 · 모델이 찾았다).
+   *
+   * 비종단 저널인데 실행권이 없는 상태가 만들어질 수 있다 — 같은 오퍼레이션을 미는 러너가
+   * 둘이면, 하나가 저널을 쓴 뒤 다른 하나가 종단에 닿아 실행권을 놓는다. 그러면 복구가
+   * `not_reserved` 로 죽고 **그 전환은 영구히 막힌다.**
+   *
+   * 복구가 할 일은 세상을 있는 그대로 다시 잡는 것이다. 예약 슬롯은 그대로 남아 있으므로
+   * 실행권만 되돌려 놓으면 이어서 밀 수 있다. **주인이 있으면 손대지 않는다.**
+   */
+  reclaimOperation(op: ApplyOperation): Promise<boolean> {
+    return this.serial((s) => {
+      if (s.activeOperation !== undefined) return false;
+      const token = normalizeNumeric(op.leaderToken, 'leaderToken');
+      assertLeader(s, token);
+      const planes = planesOfOperation(op);
+      s.activeOperation = {
+        operationId: op.operationId,
+        transitionId: op.transitionId,
+        leaderToken: token,
+        planes,
+        epochs: Object.fromEntries(
+          planes.map((plane) => [
+            plane,
+            normalizeNumeric(op.planes[plane]!.target.activationEpoch, 'activationEpoch'),
+          ]),
+        ),
+      };
+      return true;
+    });
+  }
+
   finishOperation(op: ApplyOperation, releasePlanes: Plane[] = []): Promise<void> {
     return this.serial((s) => {
       finalizeCandidate(s, op, epochsOf(op));

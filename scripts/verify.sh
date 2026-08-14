@@ -42,6 +42,7 @@ run "typecheck            " npx tsc --noEmit
 run "표면 (계약 고정)     " node scripts/surface.mjs --check
 run "unit                 " npm test --silent
 run "conformance (반례)   " npm run test:conformance --silent
+run "모델 (스케줄 생성)   " npx vitest run tests/model --silent
 
 if [ $QUICK -eq 1 ]; then
   echo "  (--quick: 도커가 필요한 묶음은 실행하지 않았다)"

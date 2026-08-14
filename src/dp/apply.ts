@@ -238,6 +238,9 @@ export class ApplyRunner {
       );
       return resultOf(j);
     }
+    // **고아가 됐으면 다시 잡는다** (14차 · 모델이 찾았다). 비종단 저널인데 실행권이
+    // 없으면 `drive` 가 `not_reserved` 로 죽고 그 전환은 영구히 막힌다.
+    await this.agent.reclaimOperation(j.op);
     return this.drive(j.op);
   }
 
