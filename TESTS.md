@@ -62,6 +62,43 @@
 `scripts/verify.sh` 의 게이트와 `STATUS.md` 에. ▲ 는 부분, ❌ 는 미해소다.
 **"해소" 라고 적으려면 뮤테이션이 잡아야 한다.**
 
+### 6. 그 반례가 어떤 종류인지 분류한다 (13차 뒤)
+
+고치기 전에 두 질문에 답한다. 답이 회차별 통계가 되고, 그게 "곡선이 수렴하는가" 를
+의견이 아니라 데이터로 만든다.
+
+**(a) 불변식 위반인가, 불변식 밖의 '점' 인가.**
+
+`assertInvariants` 가 `DpAgent.serial()` 에 걸려 있다 — 상태가 store 로 내려가는 유일한
+통로다. 반례를 재현했을 때
+
+- `InvariantViolation` 이 뜨면 → **불변식이 잡은 것이다.** 기존 451 개 테스트가 전부
+  이 그물이므로, 같은 종류의 다른 반례도 이미 막혔을 가능성이 높다.
+- 테스트 단언만 빨개지면 → **불변식 밖의 점이다.** 고치되, *왜 불변식으로 표현되지
+  않는지* 를 적는다. 표현 가능한데 안 적어 둔 것이면 불변식을 늘린다.
+
+**(b) 표면을 바꿔야 고쳐지는가, 내부만 고치면 되는가.**
+
+```
+node scripts/surface.mjs --check     계약이 움직였나
+node scripts/surface.mjs --write     옮겼다 — 카운터 0 으로 리셋
+node scripts/surface.mjs --round     한 회차가 표면을 안 건드리고 지나갔다
+```
+
+13차가 준 동결 기준이 "여러 적대적 회차 동안 표면이 안 변할 것" 이다. 내부만 고쳐서
+반례가 사라지면 카운터가 오르고, 계약을 옮겨야 하면 0 으로 돌아간다. **`--write` 는
+가볍게 누르지 않는다.**
+
+### 불변식을 늘릴 때
+
+**넣어 보고 무엇이 터지는지 본다.** 13차가 준 "terminal 이면 holder 0" 은 넣으니 86 개가
+터졌다 — 버그가 아니라 그 명제가 이 설계에서 거짓이었다(종단 저널을 먼저 쓰고 실행권을
+나중에 반납한다). 시점 불변식으로 쓸 수 없는 것은 **활성 속성**이고, 그건 conformance 가
+맡는다.
+
+그리고 **이빨을 확인한다.** 옛 버그를 재현하는 뮤테이션을 넣어 그 불변식이 실제로 터지는지
+본다. 안 터지면 공허한 불변식이다.
+
 ### 하지 말 것
 
 - **테스트를 코드에 맞춰 고치지 않는다.** 기대가 틀렸으면 왜 틀렸는지 적고 고친다.
@@ -84,6 +121,8 @@
 
 ```bash
 npm test                # 단위 — 렌더러 · 문자열 · 소켓 · 라우트 컴파일러 · capability
+npm run test:conformance # 검수 반례 — 이게 곧 불변식 테스트이기도 하다
+node scripts/surface.mjs --check   # 계약이 움직였나 (동결 카운터)
 npm run test:golden     # 렌더 산출물을 실제 엔진 nginx -t 로 검증
 npm run test:e2e        # 저널이 실제 nginx 를 수렴시키는지 (도커)
 npm run test:engine     # 엔진 사실 검증
@@ -98,12 +137,13 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 500개 통과, 게이트는 별개
+### 현재 상태 — 스위트 578개 통과, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
 | 단위 | `npm test` | **217 PASS** |
-| conformance | `npm run test:conformance` | **157 PASS** — 5차 반례(blocker 1~5) · 크래시 지점 매핑 · 6차 반례 ①~⑦ · 세대 materializer · **DESIGN↔ABI 대조** |
+| 표면 (계약 고정) | `node scripts/surface.mjs --check` | **76 심볼 고정** — 동결 카운터 1 회차 |
+| conformance | `npm run test:conformance` | **234 PASS** — 5~13차 반례 · 크래시 지점 매핑 · 세대 materializer · **DESIGN↔ABI 대조**. 단위와 합쳐 451 건이 전부 **불변식 테스트이기도 하다** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | **e2e (실제 nginx)** | `npm run test:e2e` | **14 PASS** — 저널이 실제 nginx 를 수렴시킨다 (http·stream 두 평면). 그중 6건은 **DP 컨테이너 안에서** `FsEffects` 까지 실물로 돈다 |
 
