@@ -334,6 +334,110 @@ const sameCoordinate = (a: Coordinate, b: Coordinate): boolean =>
 
 // ── Agent ────────────────────────────────────────────────────────────────
 
+/**
+ * 불변식 위반 — **상태가 깨졌다.** 거부(`DpRejection`)와 다르다.
+ *
+ * 거부는 "그 요청은 안 된다" 이고, 이건 "우리가 이미 잘못 썼다" 이다. 삼키면 안 된다.
+ */
+export class InvariantViolation extends Error {
+  constructor(readonly invariant: string, message: string) {
+    super(`불변식 위반 [${invariant}] — ${message}`);
+    this.name = 'InvariantViolation';
+  }
+}
+
+/**
+ * 상태에 대한 불변식 — **모든 durable write 앞에서 검사한다** (13차 검수).
+ *
+ * 열세 라운드 동안 반례를 하나씩 고쳤고, 그중 일곱 번은 직전 수정이 만든 구멍이었다.
+ * 점 수정이 점을 늘리기만 한 것이다. 검수의 처방은 "불변식을 먼저 명시하라" 였다.
+ *
+ * 여기 거는 이유: `serial()` 은 상태가 store 로 내려가는 **유일한 통로**다. 여기 걸면
+ * 기존 테스트 전부가 그대로 불변식 테스트가 된다 — 새 시나리오를 안 써도 된다.
+ *
+ * ── 검수가 준 다섯 중 여기 **없는 둘** ────────────────────────────────────────
+ *
+ * **I2 "동일 baseline 재관측 + 전 평면 일치만 converged"** — 상태 술어가 아니다. 외부
+ * 관측과 시간이 들어간다. `reconcileConfig` 쪽 판정이고 conformance 가 맡는다.
+ *
+ * **I4 "terminal 이면 holder 0"** — **이 설계에서는 틀린 명제다.** 넣어 보고 알았다:
+ * 86 개 테스트가 터진다. 우리는 일부러 **종단 저널을 먼저 쓰고 실행권을 나중에 반납한다**
+ * ("기록이 먼저, 반납이 나중이다" — apply.ts). 반대로 하면 자기 종단 기록이 자기 소유권
+ * 검사에 막힌다. 그래서 둘 사이에 실행권이 살아 있는 durable 상태가 **정상적으로** 존재한다.
+ *
+ * 옳은 형태는 시점 불변식이 아니라 **활성 속성**이다 — "종단이면 *언젠가* 반납된다".
+ * 그 언젠가를 보장하는 것은 `finishOperation` 과, 죽었을 때의 `recover()` 다. 그건
+ * conformance 가 이미 짚는다(6차 반례 ④ · 12차 반례 ⑤).
+ *
+ * 불변식을 적어 보지 않았으면 이걸 몰랐을 것이다. 검수가 준 다섯 중 하나는 틀렸고,
+ * 하나는 여기서 잴 수 없다. **셋만 참이다.**
+ */
+export function assertInvariants(before: AgentState | undefined, next: AgentState): void {
+  const big = (v: string): bigint => BigInt(v);
+
+  // ── I1. 최신 토큰만 변이한다 ──────────────────────────────────────────
+  const max = big(next.maxLeaderToken);
+  const holder = next.activeOperation;
+  if (holder !== undefined && big(holder.leaderToken) !== max) {
+    throw new InvariantViolation(
+      'I1 최신 토큰만 변이',
+      `실행권을 쥔 토큰 ${holder.leaderToken} 이 최신 ${next.maxLeaderToken} 과 다르다`,
+    );
+  }
+  for (const plane of ['http', 'stream'] as const) {
+    for (const [epoch, slot] of Object.entries(next.reservations[plane])) {
+      if (big(slot.op.leaderToken) > max) {
+        throw new InvariantViolation(
+          'I1 최신 토큰만 변이',
+          `${plane}:${epoch} 예약이 최신보다 높은 토큰 ${slot.op.leaderToken} 을 들고 있다`,
+        );
+      }
+    }
+  }
+
+  // ── I5. 기록된 게시는 fenced 다 ──────────────────────────────────────
+  for (const [what, record] of [
+    ['lastPublishIntent', next.lastPublishIntent],
+    ['lastActivated', next.lastActivated],
+    ['pendingActivation', next.pendingActivation],
+  ] as const) {
+    if (record !== undefined && big(record.leaderToken) > max) {
+      throw new InvariantViolation(
+        'I5 intent 는 fenced',
+        `${what} 의 토큰 ${record.leaderToken} 이 최신 ${next.maxLeaderToken} 보다 높다`,
+      );
+    }
+  }
+
+  if (before === undefined) return;
+
+  // ── I3. 넘어간 것은 되돌아가지 않는다 ────────────────────────────────
+  if (big(next.maxLeaderToken) < big(before.maxLeaderToken)) {
+    throw new InvariantViolation(
+      'I3 되돌아가지 않는다',
+      `리더 토큰이 ${before.maxLeaderToken} 에서 ${next.maxLeaderToken} 으로 되감겼다`,
+    );
+  }
+  for (const plane of ['http', 'stream'] as const) {
+    const was = big(before.planes[plane].activationEpoch);
+    const now = big(next.planes[plane].activationEpoch);
+    if (now < was) {
+      throw new InvariantViolation(
+        'I3 되돌아가지 않는다',
+        `${plane} 좌표가 ${was} 에서 ${now} 로 되돌아갔다 — commit 은 취소되지 않는다`,
+      );
+    }
+  }
+  const wasSeq = before.journal?.seq;
+  const nowSeq = next.journal?.seq;
+  if (wasSeq !== undefined && nowSeq !== undefined && nowSeq < wasSeq) {
+    throw new InvariantViolation(
+      'I3 되돌아가지 않는다',
+      `저널 seq 가 ${wasSeq} 에서 ${nowSeq} 로 되감겼다`,
+    );
+  }
+}
+
 export class DpAgent {
   /** 직렬화 큐. 임계구역이 하나씩만 돌게 만든다. */
   private tail: Promise<unknown> = Promise.resolve();
@@ -652,6 +756,8 @@ export class DpAgent {
         const next = structuredClone((stored?.payload as AgentState | undefined) ?? initial());
         // 알려지지 않은 필드(다른 컴포넌트의 것)를 보존한 채로 우리 몫만 바꾼다.
         const result = mutate(next);
+        // **상태가 store 로 내려가는 유일한 통로다.** 여기서 불변식을 본다 (13차 검수).
+        assertInvariants(stored?.payload as AgentState | undefined, next);
         try {
           // §3.5 — 토큰과 좌표는 side effect 를 인정하기 **전에** durable 해야 한다.
           await this.store.save({ version: (stored?.version ?? 0) + 1, payload: next });
