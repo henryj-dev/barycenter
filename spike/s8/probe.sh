@@ -78,6 +78,25 @@ body_until() {
   done
   echo "$got"
 }
+# **한 번 맞는 것으로는 부족하다.** HUP 뒤 옛 워커가 드레이닝하는 동안에는 새 워커와
+# 옛 워커가 번갈아 답한다 — `body_until` 이 새 워커의 첫 응답을 보고 통과한 직후에도
+# 다음 요청이 옛 세대를 받을 수 있다. 실제로 S8.gc_traffic 이 그렇게 간헐로 깨졌다
+# (기대 gen1, 실제 gen3). 연속으로 같은 답이 나와야 전환이 끝난 것이다.
+body_settled() {
+  local want="$1" hits=0 i=0 got=""
+  while [ $i -lt 60 ]; do
+    got=$(body)
+    if [ "$got" = "$want" ]; then
+      hits=$((hits+1))
+      [ $hits -ge 5 ] && { echo "$got"; return; }
+    else
+      hits=0
+    fi
+    sleep 0.1; i=$((i+1))
+  done
+  echo "$got"
+}
+
 served()  { echo | timeout 5 openssl s_client -connect 127.0.0.1:8443 2>/dev/null \
               | openssl x509 -noout -subject 2>/dev/null | grep -o 'gen[0-9]*\.example\.com'; }
 body()    { curl -s --max-time 3 http://127.0.0.1:8080/ 2>/dev/null; }
@@ -182,7 +201,7 @@ echo "[GC] 현재 세대의 인증서를 지우면 어떻게 되는가 (§8.4 GC
 publish 1; hup
 # **지우기 전에 세대가 실제로 활성화된 것을 확인한다.** 안 그러면 옛 세대를 지운 뒤
 # 엉뚱한 것을 재는 셈이 된다.
-body_until gen1 >/dev/null
+body_settled gen1 >/dev/null
 mv "$P/generations/1/certs" "$P/generations/1/certs.gone"
 alive=$(body)
 [ "$alive" = gen1 ] \

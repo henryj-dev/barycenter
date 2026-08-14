@@ -199,6 +199,15 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   async #reconcileOnce(rounds = 3): Promise<ReconcileResult> {
     for (let i = 0; i < rounds; i += 1) {
       const expected = this.agent.lastActivated();
+      // **옛 리더의 기준으로는 되돌리지 않는다** (13차 반례 ①).
+      //
+      // 여기는 리더 토큰을 전혀 보지 않고 있었다. 그래서 신임이 fence 하고 자기 세대를
+      // 게시한 뒤에도, 옛 드라이버의 reconcile 한 번이 그걸 옛 세대로 덮었다.
+      // `exclusiveApply` 는 **인스턴스 안의** 큐라 두 리더 사이에서는 아무것도 막지 못한다.
+      // 막을 수 있는 것은 durable 한 토큰뿐이다.
+      if (expected !== undefined && BigInt(expected.leaderToken) < BigInt(this.agent.maxLeaderToken())) {
+        return { kind: 'diverged', expected, found: await this.#observe() };
+      }
       if (expected === undefined) {
         const intent = this.agent.lastPublishIntent();
         if (intent === undefined) return { kind: 'no_baseline' };
@@ -239,8 +248,19 @@ export class LocalDataplaneDriver implements DataplaneDriver {
         : { kind: 'diverged', expected, found: afterPublish };
     }
     // 기준이 계속 바뀐다 — 지금은 우리 차례가 아니다.
+    //
+    // **여기서 `converged` 를 돌려주고 있었다** (13차 반례 ④). 아무것도 관측하지 않은
+    // 채로. "우리 차례가 아니다" 와 "수렴했다" 는 완전히 다른 말이고, 후자는 호출자가
+    // 손을 떼도 된다는 뜻이다. 관측 한 번으로 답을 만들고, 확인되지 않으면 갈라졌다고
+    // 말한다 — 다시 부르면 된다.
     const now = this.agent.lastActivated();
-    return now === undefined ? { kind: 'no_baseline' } : { kind: 'converged', record: now };
+    if (now === undefined) return { kind: 'no_baseline' };
+    const found = await this.#observe();
+    const activation = await this.#budget(() => this.effects.observeActivation());
+    const ok = found.kind === 'owned'
+      && sameRecord(found.record, now)
+      && provesActivation(activation, now.generation);
+    return ok ? { kind: 'converged', record: now } : { kind: 'diverged', expected: now, found };
   }
 
   #stillBaseline(expected: PublishRecord): boolean {
