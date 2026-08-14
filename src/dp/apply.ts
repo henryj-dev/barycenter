@@ -227,9 +227,15 @@ export class ApplyRunner {
     if (j === undefined) return emptyResult();
     if (isTerminalPhase(j.phase)) {
       // 종단 기록 뒤 반납 전에 죽었을 수 있다. 여기서 마저 놓는다 (멱등).
+      //
+      // **승격도 여기서 마저 한다** (14차). 13차 ② 를 고치면서 승격을 `finishOperation`
+      // 안으로 접었는데, 이 경로에 `promote` 를 안 넘기고 있었다. 그래서 `activated`
+      // 저널을 쓰고 반납 전에 죽으면 복구가 기준을 **승격하지 않고 지웠다** — 활성화는
+      // 일어났는데 되돌릴 곳이 없다고 답하게 된다.
       await this.agent.finishOperation(
         j.op,
         planesOf(j.op).filter((p) => j.progress?.[p] !== 'committed'),
+        { promote: j.phase === 'activated' },
       );
       return resultOf(j);
     }
