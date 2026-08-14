@@ -80,6 +80,7 @@ export {
   type DataplaneDriver,
   type DriverStatus,
   type PlaneStatus,
+  type ReconcileResult,
 } from './dp/driver.js';
 
 /** 세대를 원자적으로 만들고 활성화 직전에 대조한다 (§7.2). */

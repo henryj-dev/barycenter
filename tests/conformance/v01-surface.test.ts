@@ -191,6 +191,10 @@ describe('표면만으로 실제로 구현할 수 있는가', () => {
     const result: surface.ApplyResult = await driver.applyConfig(op);
     expect(result.phase).toBe('activated');
 
+    // 수렴은 표면의 일부다 — 컨트롤 플레인이 주기적으로 불러야 한다.
+    const reconciled: surface.ReconcileResult = await driver.reconcileConfig();
+    expect(reconciled.kind).toBe('converged');
+
     const status: surface.DriverStatus = await driver.status();
     expect(status.planes.http.activationEpoch).toBe('1');
     expect(status.published.kind).toBe('owned');

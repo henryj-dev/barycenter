@@ -233,3 +233,159 @@ describe('⑤ abort 는 오퍼레이션 단위다', () => {
     expect(agent.activeOperation(), '실행권이 남아 다음 작업이 막힌다').toBeUndefined();
   });
 });
+
+// ── 종단 뒤에도 도는 수렴 (10차 검수 ①) ────────────────────────────────
+//
+// 러너는 유한하다. `activated` 로 끝나면 더 보지 않는데, 옛 writer 는 그 뒤에도 착지할
+// 수 있다. 10차 검수의 판정이 그것이었다 — "유한 러너가 옛 writer 보다 먼저 종단하므로
+// 덮여서 수렴한다는 보장이 없다."
+
+describe('reconcile — 활성화가 끝난 뒤에도 갈라짐을 되돌린다', () => {
+  const mine = OP('mine', 'gen-1');
+
+  async function activated() {
+    const { LocalDataplaneDriver } = await import('../../src/dp/driver.js');
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    expect((await driver.applyConfig(mine)).phase).toBe('activated');
+    return { driver, fx };
+  }
+
+  it('정합하면 아무것도 하지 않는다', async () => {
+    const { driver, fx } = await activated();
+    const before = fx.publishCalls;
+    expect((await driver.reconcileConfig()).kind).toBe('converged');
+    expect(fx.publishCalls, '정합한데 다시 게시했다').toBe(before);
+  });
+
+  it('**활성화가 끝난 뒤 옛 게시가 착지해도 되돌린다**', async () => {
+    const { driver, fx } = await activated();
+    // 러너는 이미 끝났다. 그 뒤에 옛 리더의 게시가 착지한다.
+    fx.publishedRecord = {
+      generation: 'gen-옛',
+      leaderToken: '9',
+      operationId: '옛-리더',
+      transitionId: '옛-리더',
+      generationDigest: 'sha256:gen-옛',
+    };
+
+    const r = await driver.reconcileConfig();
+    expect(r.kind, '갈라졌는데 되돌리지 않았다').toBe('repaired');
+    expect(fx.publishedRecord).toMatchObject({ generation: 'gen-1', operationId: 'mine' });
+  });
+
+  it('소유 기록이 사라진 상태도 되돌린다', async () => {
+    const { driver, fx } = await activated();
+    fx.publishedRecord = undefined;
+    expect((await driver.reconcileConfig()).kind).toBe('repaired');
+    expect(fx.publishedRecord).toMatchObject({ operationId: 'mine' });
+  });
+
+  it('되돌렸는데도 갈라져 있으면 **그렇게 보고한다**', async () => {
+    const { LocalDataplaneDriver } = await import('../../src/dp/driver.js');
+    const store = new MemoryStore();
+
+    /** 활성화가 끝난 **뒤부터** 옛 writer 가 쓰는 족족 덮는다. */
+    class Fighting extends FakeEffects {
+      fighting = false;
+      override async publish(record: PublishRecord) {
+        await super.publish(record);
+        if (this.fighting) {
+          this.publishedRecord = {
+            generation: 'gen-옛',
+            leaderToken: '9',
+            operationId: '옛-리더',
+            transitionId: '옛-리더',
+            generationDigest: 'sha256:gen-옛',
+          };
+        }
+      }
+    }
+    const fx = new Fighting();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    expect((await driver.applyConfig(mine)).phase).toBe('activated');
+
+    fx.fighting = true;
+    fx.publishedRecord = {
+      generation: 'gen-옛',
+      leaderToken: '9',
+      operationId: '옛-리더',
+      transitionId: '옛-리더',
+      generationDigest: 'sha256:gen-옛',
+    };
+
+    const r = await driver.reconcileConfig();
+    // **조용히 성공했다고 하면 안 된다.** 옛 writer 가 멈추는 것은 리더 선출의 몫이고,
+    // 여기서 할 수 있는 것은 갈라짐을 드러내는 것뿐이다.
+    expect(r.kind).toBe('diverged');
+  });
+
+  it('활성화한 적이 없으면 되돌릴 기준도 없다', async () => {
+    const { LocalDataplaneDriver } = await import('../../src/dp/driver.js');
+    const driver = LocalDataplaneDriver.create({
+      store: new MemoryStore(),
+      effects: new FakeEffects(),
+    });
+    expect((await driver.reconcileConfig()).kind).toBe('no_baseline');
+  });
+});
+
+// ── 10차의 토큰 비교 둘 ─────────────────────────────────────────────────
+//
+// **또 고치고 반례를 고정하지 않았다.** 뮤테이션이 둘 다 놓쳤고, 이 블록을 넣고서야
+// 잡혔다. 세 라운드 연속 같은 실수라 여기 적어 둔다 — 고치는 것과 고정하는 것은
+// 다른 일이다.
+
+describe('④ publishedByMe 는 리더 토큰까지 본다', () => {
+  it('같은 오퍼레이션 id 라도 옛 토큰의 기록은 내 것이 아니다', () => {
+    const op = OP('same', 'gen-1', { leaderToken: '11' });
+    const stale: PublishRecord = { ...recordOf(op), leaderToken: '9' };
+
+    expect(publishedByMe({ kind: 'owned', record: recordOf(op) }, op)).toBe(true);
+    expect(
+      publishedByMe({ kind: 'owned', record: stale }, op),
+      '토큰을 빼면 옛 리더의 기록을 내 것으로 센다',
+    ).toBe(false);
+  });
+
+  it('러너가 그 차이를 보고 다시 게시한다', async () => {
+    const agent = new DpAgent(new MemoryStore());
+    const fx = new FakeEffects();
+    const op = OP('same', 'gen-1', { leaderToken: '11' });
+    // 옛 리더가 같은 id·같은 세대로 남긴 기록. 토큰만 다르다.
+    fx.publishedRecord = { ...recordOf(op), leaderToken: '9' };
+
+    await agent.fence('11');
+    const r = await new ApplyRunner(agent, fx, FAST).run(op);
+
+    expect(r.phase).toBe('activated');
+    expect(fx.publishedRecord?.leaderToken, '옛 토큰의 기록이 그대로 남았다').toBe('11');
+    expect(fx.publishCalls).toBeGreaterThan(0);
+  });
+});
+
+describe('③ 낡은 abort 가 신임 실행권을 지우지 못한다', () => {
+  it('같은 id 라도 토큰이 다르면 남의 실행권이다', async () => {
+    const { LocalDataplaneDriver } = await import('../../src/dp/driver.js');
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+
+    // 신임 리더가 같은 id 로 실행권을 잡았다.
+    const fresh = OP('same', 'gen-1', { leaderToken: '11' });
+    await agent.fence('11');
+    await agent.reserveAll(fresh);
+    expect(agent.activeOperation()?.leaderToken).toBe('11');
+
+    // 옛 리더의 abort 가 뒤늦게 도착한다 — 같은 id, 낡은 토큰.
+    const stale = OP('same', 'gen-1', { leaderToken: '10' });
+    await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .abortConfig(stale)
+      .catch(() => undefined);
+
+    expect(
+      agent.activeOperation()?.leaderToken,
+      '낡은 abort 가 신임 실행권을 지웠다 — 진행 중인 작업이 통째로 풀린다',
+    ).toBe('11');
+  });
+});

@@ -1954,6 +1954,15 @@ export interface DataplaneDriver {
    */
   abortConfig(op: ApplyOperation): Promise<void>;
 
+  /**
+   * **종단 뒤에도 도는 수렴** (10차 검수).
+   *
+   * 러너는 유한하다 — `activated` 로 끝나면 더 보지 않는다. 그런데 옛 writer 는 그
+   * 뒤에도 착지할 수 있다. 컨트롤 플레인이 이걸 주기적으로 불러야 "덮여서 수렴한다" 가
+   * 성립한다. **전제**: 옛 writer 가 언젠가는 멈춘다 — 그건 리더 선출의 몫이다.
+   */
+  reconcileConfig(): Promise<ReconcileResult>;
+
   status(): Promise<DriverStatus>;
 }
 ```

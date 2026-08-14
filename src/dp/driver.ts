@@ -20,10 +20,18 @@ import type {
   ApplyResult,
   Plane,
   PublishedState,
+  PublishRecord,
 } from './operation.js';
 import { planesOf } from './operation.js';
 import { DpAgent, DpRejection, tupleFor, type DurableStore } from './agent.js';
 import { ApplyRunner, type Effects } from './apply.js';
+
+const sameRecord = (a: PublishRecord, b: PublishRecord): boolean =>
+  a.generation === b.generation
+  && a.generationDigest === b.generationDigest
+  && a.operationId === b.operationId
+  && a.transitionId === b.transitionId
+  && a.leaderToken === b.leaderToken;
 
 /** 평면의 현재 좌표. */
 export type PlaneStatus = {
@@ -81,8 +89,30 @@ export interface DataplaneDriver {
   abortConfig(op: ApplyOperation): Promise<void>;
 
   /** 지금 상태. 읽기 전용이라 봉투가 필요 없다. */
+  /**
+   * **종단 뒤에도 도는 수렴** (10차 검수).
+   *
+   * 러너는 유한하다 — `activated` 로 끝나면 더 보지 않는다. 그런데 옛 writer 는 그
+   * 뒤에도 착지할 수 있고, 그러면 `current` 가 조용히 옛 세대를 가리킨 채 남는다.
+   * 컨트롤 플레인이 이걸 주기적으로 불러야 "덮여서 수렴한다" 가 성립한다.
+   *
+   * **전제.** 옛 writer 가 언젠가는 멈춘다. 영원히 살아 있는 옛 리더와는 서로 덮어쓰기만
+   * 반복한다 — 그건 리더 선출이 보장할 몫이지 여기서 할 수 있는 일이 아니다.
+   */
+  reconcileConfig(): Promise<ReconcileResult>;
+
   status(): Promise<DriverStatus>;
 }
+
+export type ReconcileResult =
+  /** 되돌릴 기준이 없다 — 아직 아무것도 활성화하지 않았다. */
+  | { kind: 'no_baseline' }
+  /** 게시가 기준과 같다. 아무것도 하지 않았다. */
+  | { kind: 'converged'; record: PublishRecord }
+  /** 갈라져 있었고 다시 게시했다. */
+  | { kind: 'repaired'; expected: PublishRecord; found: PublishedState }
+  /** 다시 게시했는데도 기준과 다르다 — 옛 writer 가 아직 살아 있다. */
+  | { kind: 'diverged'; expected: PublishRecord; found: PublishedState };
 
 // ── 참조 구현 ────────────────────────────────────────────────────────────
 
@@ -143,6 +173,28 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     if (refused.length > 0) {
       throw new DpRejection('terminal', `일부 평면이 이미 끝나 있었다 — ${refused.join(', ')}`);
     }
+  }
+
+  async reconcileConfig(): Promise<ReconcileResult> {
+    const expected = this.agent.lastActivated();
+    if (expected === undefined) return { kind: 'no_baseline' };
+
+    const seen = await this.effects.observePublished();
+    if (seen.kind === 'owned' && sameRecord(seen.record, expected)) {
+      return { kind: 'converged', record: expected };
+    }
+
+    // 되돌린다. **lease 는 없다** — 이건 오퍼레이션이 아니라 복구다. 무엇으로 되돌릴지는
+    // durable 하게 기억된 것이고, 그게 여전히 정본이다.
+    await this.effects.publish(expected, {
+      leaderToken: expected.leaderToken,
+      assertValid: () => undefined,
+    });
+
+    const after = await this.effects.observePublished();
+    return after.kind === 'owned' && sameRecord(after.record, expected)
+      ? { kind: 'repaired', expected, found: seen }
+      : { kind: 'diverged', expected, found: after };
   }
 
   async status(): Promise<DriverStatus> {

@@ -168,10 +168,13 @@ export type PublishedState =
 export function publishedByMe(state: PublishedState, op: ApplyOperation): boolean {
   if (state.kind !== 'owned') return false;
   const r = state.record;
+  // **토큰까지 본다** (10차 반례 ④). 없으면 옛 리더가 같은 id 로 남긴 기록을 내 것으로
+  // 센다 — 수렴의 근거가 "누가 게시했는가" 인데 그 "누가" 에서 리더를 빼면 안 된다.
   return r.generation === op.targetGeneration
     && r.generationDigest === op.generationDigest
     && r.operationId === op.operationId
-    && r.transitionId === op.transitionId;
+    && r.transitionId === op.transitionId
+    && r.leaderToken === op.leaderToken;
 }
 
 /**

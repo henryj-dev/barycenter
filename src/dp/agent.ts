@@ -25,6 +25,7 @@ import type {
   Plane,
   PlaneProgress,
   ApplyLease,
+  PublishRecord,
 } from './operation.js';
 import { isTerminalPhase, planesOf, provesActivation } from './operation.js';
 export type { ActivationEvidence, Coordinate, Plane };
@@ -167,6 +168,14 @@ export type AgentState = {
    * **전역**이라, 서로 다른 슬롯을 잡은 두 오퍼레이션이 같은 nginx 를 동시에 흔들 수 있다.
    */
   activeOperation?: ActiveOperation;
+  /**
+   * 마지막으로 **활성화를 인정한** 게시 (10차 검수).
+   *
+   * 러너는 유한하다 — 종단에 닿으면 끝난다. 그런데 옛 writer 는 그 뒤에도 착지할 수
+   * 있다. 그러면 "덮여서 수렴한다" 는 주장이 성립하지 않는다. 수렴을 보장하려면
+   * **종단 뒤에도 도는 무언가**가 있어야 하고, 그러려면 무엇으로 되돌릴지를 기억해야 한다.
+   */
+  lastActivated?: PublishRecord;
   /**
    * 진행 중인 apply 오퍼레이션의 저널 (§6.2).
    *
@@ -361,6 +370,11 @@ export class DpAgent {
     return this.snapshot().reservations[plane]?.[epoch]?.op;
   }
 
+  /** 마지막으로 활성화를 인정한 게시. reconcile 의 기준이다. */
+  lastActivated(): PublishRecord | undefined {
+    return this.snapshot().lastActivated;
+  }
+
   /** 그 좌표로 옮긴 근거. 없으면 undefined. */
   evidenceFor(plane: Plane, epoch: string): ActivationEvidence | undefined {
     return this.snapshot().activationEvidence[`${plane}:${epoch}`];
@@ -443,8 +457,12 @@ export class DpAgent {
         const t = tupleFor(op, plane);
         if (ownsSlot(s, t)) delete s.reservations[plane][t.target.activationEpoch];
       }
+      // **토큰까지 일치할 때만 놓는다** (10차 반례 ③). id 만 비교하면 낡은 리더의
+      // 뒤늦은 abort 가 같은 id 를 쓰는 **신임 실행권**을 지운다.
       const holder = s.activeOperation;
-      if (holder?.operationId === op.operationId && holder.transitionId === op.transitionId) {
+      if (holder?.operationId === op.operationId
+        && holder.transitionId === op.transitionId
+        && holder.leaderToken === normalizeNumeric(op.leaderToken, 'leaderToken')) {
         delete s.activeOperation;
       }
     });
@@ -671,6 +689,14 @@ export class DpAgent {
 
       s.planes[op.plane] = { ...op.target, payloadDigest: op.payloadDigest };
       s.activationEvidence[`${op.plane}:${op.target.activationEpoch}`] = evidence;
+      // 무엇을 활성화했는지 기억한다 — reconcile 이 이걸로 되돌린다.
+      s.lastActivated = {
+        generation: op.targetGeneration,
+        leaderToken: op.leaderToken,
+        operationId: op.operationId,
+        transitionId: op.transitionId,
+        generationDigest: op.generationDigest,
+      };
       finish(s, op, 'activated');
       return record(s, op, 'commit', s.planes[op.plane]);
     });

@@ -127,19 +127,36 @@ describe('같은 리더의 재-fence 는 자기 작업을 죽이지 않는다', 
 });
 
 describe('승계 뒤에도 진행 중이던 작업을 이어받을 수 있다', () => {
-  it('새 리더가 같은 세대로 다시 내면 관측으로 수렴한다', async () => {
+  /**
+   * ⚠️ **이 테스트는 한때 조작돼 있었다.**
+   *
+   * 수렴 방식으로 바꾸면서 픽스처를 `operationId: 'takeover'` 로 고쳤다 — 즉 "옛 리더가
+   * 게시했다" 가 아니라 "**내가 이미 게시했다**" 로 바꿔 놓고 "다시 게시하지 않는다" 를
+   * 통과시켰다. 코드에 맞춰 테스트를 고친 것이다. 10차 검수가 그걸 지적했다.
+   *
+   * 사실로 되돌린다. 옛 리더의 게시는 **내 것이 아니고**, 그래서 새 리더는 **다시
+   * 게시한다.** 그게 수렴이다.
+   */
+  it('새 리더는 옛 리더의 게시를 자기 것으로 덮는다', async () => {
     const { agent } = await stalled();
     const fx = new FakeEffects();
-    // 옛 리더가 게시까지는 했다고 치자.
-    fx.publishedRecord = { generation: 'gen-1', leaderToken: '10', operationId: 'takeover', transitionId: 'takeover', generationDigest: 'sha256:g' };
+    // 옛 리더(토큰 10, 자기 오퍼레이션)가 게시까지는 했다.
+    fx.publishedRecord = {
+      generation: 'gen-1',
+      leaderToken: '10',
+      operationId: 'op-1',
+      transitionId: 't-1',
+      generationDigest: 'sha256:g',
+    };
 
     await agent.fence('11');
-    const same = OP({ leaderToken: '11', operationId: 'takeover', transitionId: 'takeover' });
-    const r = await new ApplyRunner(agent, fx, FAST).run(same);
+    const mine = OP({ leaderToken: '11', operationId: 'takeover', transitionId: 'takeover' });
+    const r = await new ApplyRunner(agent, fx, FAST).run(mine);
 
     expect(r.phase).toBe('activated');
-    // 이미 게시돼 있었으므로 다시 게시하지 않는다 (§6.2 — 관측이 먼저다).
-    expect(fx.publishCalls, '이미 게시된 것을 다시 게시했다').toBe(0);
+    expect(fx.publishCalls, '남의 게시를 그대로 두고 활성화로 끝냈다').toBeGreaterThan(0);
+    expect(fx.publishedRecord?.operationId).toBe('takeover');
+    expect(fx.publishedRecord?.leaderToken).toBe('11');
   });
 });
 
