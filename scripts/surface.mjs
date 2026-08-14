@@ -95,6 +95,32 @@ function collectSurface(dtsDir) {
     ts.forEachChild(node, inner);
   };
 
+  /**
+   * **private 멤버는 표면이 아니다** (14차 검수).
+   *
+   * `.d.ts` 는 `private tmpCounter;` 같은 줄을 남긴다 — 배치를 보존해야 하기 때문이다.
+   * 그런데 소비자는 그걸 부를 수 없다. 해시에 넣으면 **이름만 바꿔도 동결 카운터가
+   * 0 으로 리셋된다.** 실제 호환성 비용을 과대평가하는 것이고, 그러면 이 숫자가 재는
+   * 것이 계약이 아니라 리팩터링 빈도가 된다.
+   */
+  const strip = (declaration) => {
+    if (!ts.isClassDeclaration(declaration)) return declaration;
+    const visible = declaration.members.filter((m) => {
+      const mods = ts.canHaveModifiers(m) ? (ts.getModifiers(m) ?? []) : [];
+      if (mods.some((mod) => mod.kind === ts.SyntaxKind.PrivateKeyword)) return false;
+      // `#name` 형태도 부를 수 없다.
+      return !(m.name !== undefined && ts.isPrivateIdentifier(m.name));
+    });
+    return ts.factory.updateClassDeclaration(
+      declaration,
+      declaration.modifiers,
+      declaration.name,
+      declaration.typeParameters,
+      declaration.heritageClauses,
+      visible,
+    );
+  };
+
   const take = (name, symbol) => {
     const declarations = declarationsOf(symbol);
     for (const declaration of declarations) {
@@ -105,7 +131,7 @@ function collectSurface(dtsDir) {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      const text = printer.printNode(ts.EmitHint.Unspecified, declaration, file);
+      const text = printer.printNode(ts.EmitHint.Unspecified, strip(declaration), file);
       const bucket = collected.get(name) ?? [];
       bucket.push(text);
       collected.set(name, bucket);
