@@ -169,11 +169,10 @@ cat <<'GATES'
  ② 전역 세대 ↔ 평면 결박  ✅ 해소. 렌더러가 구성한 평면을 답하고 manifest 가 그것을
                         적는다. 게시 전 검사가 오퍼레이션의 affectedPlanes 와 대조한다 —
                         어긋나면 current 를 건드리지 않는다.
- ⑤ Effects ABI          ▲ owner/current 에 fsync 를 넣었다.
+ ⑤ Effects ABI          ▲ owner/current fsync · 부작용 예산(deadline).
                         **lease 는 타입이 강제하지 못한다** (11차) — TypeScript 는 인자를
                         덜 받는 함수를 대입시킨다. `async publish() {}` 도 통과한다.
                         관례이지 강제가 아니고, 정합성은 수렴이 맡는다.
-                        **deadline·취소도 없다** — exclusiveApply 교착이 남는다.
 
  그리고 내가 **테스트를 코드에 맞춰 고친 것**이 드러났다 (review7 픽스처). 되돌렸다.
 
@@ -227,7 +226,10 @@ cat <<'GATES'
  ② planes 가 delta 가 아니다       ✅ 해소. **설정 apply 는 항상 두 평면을 선언한다.**
                                    하나의 nginx.conf 가 둘을 지배하므로 비게 되는 평면도
                                    전환이다. manifest 대조는 포함 관계로 바꿨다.
- ⑤ lease 강제 불가 · deadline 없음 ❌ 남았다 (위).
+ ⑤ deadline · 취소 · 교착        ✅ 부작용에 **예산**을 씌웠다. 넘기면 기다림을 끊고
+                                   실패로 확정한다 — 그러면 exclusiveApply 가 풀린다.
+                                   버려진 부작용은 수렴이 맡는다.
+                                   **lease 는 타입이 강제하지 못한다** — 남는다.
 
  → A(타입·DP ABI): **No-Go**
  → B(API·DB):      **No-Go** — 만들지 않았다.

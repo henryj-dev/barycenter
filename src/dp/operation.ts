@@ -214,6 +214,8 @@ export type ApplyResult = {
    */
   partialTransition: boolean;
   evidence?: ActivationEvidence;
+  /** 실패했다면 왜. 조용히 실패하지 않는다. */
+  failure?: string;
 };
 
 /** §6.2 의 apply 단계. */

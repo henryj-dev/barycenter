@@ -108,12 +108,32 @@ export type PollPolicy = {
   attempts: number;
   intervalMs: number;
   sleep: (ms: number) => Promise<void>;
+  /**
+   * 부작용 하나에 주는 예산 (11차 반례 ⑤).
+   *
+   * **취소는 못 한다.** Promise 는 취소되지 않고, 이미 나간 `docker exec` 나 `kill` 도
+   * 되돌릴 수 없다. 할 수 있는 것은 **기다림을 끊고 실패로 확정하는 것**이다.
+   * 그러면 러너가 끝나고 `exclusiveApply` 가 풀린다 — 안 그러면 멈춘 러너 하나가
+   * 그 뒤의 모든 apply 를 줄 세운다.
+   *
+   * 버려진 부작용이 뒤늦게 착지하는 문제는 수렴(`reconcileConfig`)이 맡는다.
+   */
+  effectTimeoutMs: number;
 };
+
+export class EffectTimeout extends Error {
+  constructor(readonly effect: string, readonly budgetMs: number) {
+    super(`부작용 '${effect}' 가 예산 ${budgetMs}ms 안에 끝나지 않았다`);
+    this.name = 'EffectTimeout';
+  }
+}
 
 const DEFAULT_POLL: PollPolicy = {
   attempts: 25,
   intervalMs: 100,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  // S7 의 판정 예산(< 3s)보다 넉넉하되 유한하다.
+  effectTimeoutMs: 10_000,
 };
 
 export class ApplyRunner {
@@ -136,6 +156,24 @@ export class ApplyRunner {
 
   phases(): Phase[] {
     return this.history;
+  }
+
+  /** 부작용에 예산을 씌운다. 넘기면 기다림을 끊는다 (11차 반례 ⑤). */
+  private budget<T>(effect: string, run: () => Promise<T>): Promise<T> {
+    const ms = this.poll.effectTimeoutMs;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new EffectTimeout(effect, ms)), ms);
+      run().then(
+        (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      );
+    });
   }
 
   /**
@@ -212,7 +250,7 @@ export class ApplyRunner {
   /** 관측 실패는 "모른다" 지 "실패" 가 아니다 — 상태기계가 재시도로 판정한다. */
   private async observe(): Promise<ActivationEvidence | undefined> {
     try {
-      return await this.effects.observeActivation();
+      return await this.budget('observeActivation', () => this.effects.observeActivation());
     } catch {
       return undefined;
     }
@@ -255,6 +293,18 @@ export class ApplyRunner {
    * 저널의 op 를 기준으로 보기 때문이다.
    */
   private async driveInner(bound: ApplyOperation): Promise<ApplyResult> {
+    try {
+      return await this.driveLoop(bound);
+    } catch (e) {
+      if (!(e instanceof EffectTimeout)) throw e;
+      // **예산을 넘긴 것은 실패다.** 매달린 채로 두면 뒤의 모든 apply 가 줄 선다.
+      const j = this.agent.readJournal();
+      if (j !== undefined) await this.failAll(j, e.message);
+      return { ...resultOf(this.agent.readJournal() ?? j!), failure: e.message };
+    }
+  }
+
+  private async driveLoop(bound: ApplyOperation): Promise<ApplyResult> {
     // 절대 상한. 논리 오류가 프로세스를 매달면 안 된다.
     const HARD_LIMIT = 64;
     for (let guard = 0; ; guard += 1) {
@@ -281,7 +331,7 @@ export class ApplyRunner {
       switch (j.phase) {
         case 'preflight': {
           // **게시 앞이다.** 여기서 걸리면 current 는 그대로고 nginx 도 그대로다.
-          const check = await this.effects.preflight(j.op);
+          const check = await this.budget('preflight', () => this.effects.preflight(j.op));
           this.agent.assertOwnership(j.op);
           if (!check.ok) {
             await this.failAll(j, check.reason ?? '게시 전 검사 실패');
@@ -294,8 +344,9 @@ export class ApplyRunner {
           // 기록은 있는데 게시했는지 모른다 → 관측한다. 이미 됐으면 다시 하지 않는다.
           // **세대 이름이 아니라 소유자까지 본다.** 같은 이름이어도 남이 게시한 것이면
           // 내 것이 아니다 — 그걸 구분하지 못하면 수렴할 수가 없다.
-          if (!publishedByMe(await this.effects.observePublished(), j.op)) {
-            await this.effects.publish(recordOf(j.op), this.agent.lease(j.op));
+          const seenPub = await this.budget('observePublished', () => this.effects.observePublished());
+          if (!publishedByMe(seenPub, j.op)) {
+            await this.budget('publish', () => this.effects.publish(recordOf(j.op), this.agent.lease(j.op)));
           }
           await ignoreConflict(this.write(next(j, { phase: 'published' })));
           break;
@@ -335,7 +386,7 @@ export class ApplyRunner {
             if (e instanceof DpRejection && e.kind === 'journal_conflict') break;
             throw e;
           }
-          await this.effects.signalReload(this.agent.lease(j.op));
+          await this.budget('signalReload', () => this.effects.signalReload(this.agent.lease(j.op)));
           const after = await this.awaitActivation(gen);
           if (after !== undefined) {
             // **내 저널에만 쓴다** (8차 반례 ③). 전에는 `readJournal()` 이 돌려주는
@@ -354,7 +405,9 @@ export class ApplyRunner {
           // **수렴 확인** (9차 뒤 방향 전환). 활성화를 인정하기 전에 게시가 아직 내
           // 것인지 다시 본다. 늦게 착지한 옛 게시가 있으면 여기서 드러나고, 다시
           // 게시하러 돌아간다 — 막지 못한 것을 **덮어서** 수렴시킨다.
-          if (!publishedByMe(await this.effects.observePublished(), j.op)) {
+          const stillMine = await this.budget('observePublished', () =>
+            this.effects.observePublished());
+          if (!publishedByMe(stillMine, j.op)) {
             await ignoreConflict(this.write(next(j, { phase: 'publish_intent' })));
             break;
           }
