@@ -105,8 +105,15 @@ export interface DataplaneDriver {
 }
 
 export type ReconcileResult =
-  /** 되돌릴 기준이 없다 — 아직 아무것도 활성화하지 않았다. */
+  /** 되돌릴 기준이 없다 — 게시한 적도 활성화한 적도 없다. */
   | { kind: 'no_baseline' }
+  /**
+   * **게시는 나갔는데 활성화하지 못했다** (12차 반례 ②).
+   *
+   * 무엇으로 되돌려야 하는지 DP 는 모른다 — 그 게시가 좋은 것인지 판단할 근거가 없다.
+   * 조용히 `no_baseline` 이라고 답하는 대신 이 상태를 드러내고 컨트롤 플레인이 정하게 한다.
+   */
+  | { kind: 'dirty'; intent: PublishRecord; found: PublishedState }
   /** 게시가 기준과 같다. 아무것도 하지 않았다. */
   | { kind: 'converged'; record: PublishRecord }
   /** 갈라져 있었고 다시 게시했다. */
@@ -139,7 +146,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     return new LocalDataplaneDriver(new DpAgent(opts.store), opts.effects);
   }
 
-  private runner(): ApplyRunner {
+  #runner(): ApplyRunner {
     return new ApplyRunner(this.agent, this.effects);
   }
 
@@ -148,11 +155,11 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   }
 
   applyConfig(op: ApplyOperation): Promise<ApplyResult> {
-    return this.runner().run(op);
+    return this.#runner().run(op);
   }
 
   recoverConfig(): Promise<ApplyResult> {
-    return this.runner().recover();
+    return this.#runner().recover();
   }
 
   async abortConfig(op: ApplyOperation): Promise<void> {
@@ -169,6 +176,11 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       }
     }
     // 실행권은 **어떤 경우에도** 놓는다. 안 놓으면 다음 오퍼레이션이 영영 막힌다.
+    // **holder 가 잡은 평면 전부**를 기준으로 정리한다 (12차 반례 ④) — 넘어온 op 가
+    // 한 평면만 담고 있으면 나머지 예약이 고아가 되고 다음 apply 가 slot_taken 된다.
+    // **순서가 중요하다.** `finishOperation` 이 먼저 실행권을 지우면 그 뒤의 정리가
+    // 무엇을 잡았는지 모르게 된다 — 실행권이 그 목록을 들고 있기 때문이다.
+    await this.agent.releaseHolderSlots(op);
     await this.agent.finishOperation(op, planesOf(op));
     if (refused.length > 0) {
       throw new DpRejection('terminal', `일부 평면이 이미 끝나 있었다 — ${refused.join(', ')}`);
@@ -176,53 +188,79 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   }
 
   async reconcileConfig(): Promise<ReconcileResult> {
-    // **apply 와 같은 큐에서 돈다** (11차 반례 ②). 안 그러면 기준을 읽은 뒤 신임 apply 가
-    // 끼어들고, reconcile 이 옛 기준으로 그걸 덮는다.
-    return this.agent.exclusiveApply(async () => {
-      const baseline = () => this.agent.lastActivated();
-      const expected = baseline();
-      if (expected === undefined) return { kind: 'no_baseline' };
+    // **apply 와 같은 큐에서 돈다** (11차 반례 ②).
+    return this.agent.exclusiveApply(() => this.#reconcileOnce());
+  }
 
-      const seen = await this.effects.observePublished();
-      const activation = await this.effects.observeActivation();
+  /**
+   * 한 바퀴 돈다. **기준이 바뀌면 처음부터 다시 본다** (12차 반례 ③) — 전에는 바뀐
+   * 기준을 관측도 안 하고 `converged` 라고 답했다. 유한하게 돈다.
+   */
+  async #reconcileOnce(rounds = 3): Promise<ReconcileResult> {
+    for (let i = 0; i < rounds; i += 1) {
+      const expected = this.agent.lastActivated();
+      if (expected === undefined) {
+        const intent = this.agent.lastPublishIntent();
+        if (intent === undefined) return { kind: 'no_baseline' };
+        return { kind: 'dirty', intent, found: await this.#observe() };
+      }
+
+      const seen = await this.#observe();
+      const activation = await this.#budget(() => this.effects.observeActivation());
       const pointerOk = seen.kind === 'owned' && sameRecord(seen.record, expected);
-      // **게시 상태와 활성 상태는 다르다** (11차 반례 ①). 포인터를 되돌려도 HUP 을
-      // 보내지 않으면 nginx 는 옛 설정으로 계속 돈다. 그건 수렴이 아니다.
       const activeOk = provesActivation(activation, expected.generation);
       if (pointerOk && activeOk) return { kind: 'converged', record: expected };
 
-      // 되돌리는 사이에 기준이 바뀌었으면 우리 일이 아니다.
-      const still = baseline();
-      if (still === undefined || !sameRecord(still, expected)) {
-        return { kind: 'converged', record: still ?? expected };
-      }
+      if (!this.#stillBaseline(expected)) continue; // 기준이 바뀌었다 — 다시 본다
 
       if (!pointerOk) {
-        await this.effects.publish(expected, {
+        await this.#budget(() => this.effects.publish(expected, {
           leaderToken: expected.leaderToken,
-          // 복구는 오퍼레이션이 아니다. 다만 **기준이 바뀌면 멈춘다** — 그게 이 lease 다.
           assertValid: () => {
-            const now = baseline();
-            if (now === undefined || !sameRecord(now, expected)) {
+            if (!this.#stillBaseline(expected)) {
               throw new DpRejection('stale_leader', '되돌리는 사이 기준이 바뀌었다');
             }
           },
-        });
+        }));
       }
-      // 게시를 되돌렸든 이미 맞았든, **활성 상태가 아니면 신호를 보낸다.**
-      await this.effects.signalReload({
+      await this.#budget(() => this.effects.signalReload({
         leaderToken: expected.leaderToken,
         assertValid: () => undefined,
-      });
+      }));
 
-      const afterPublish = await this.effects.observePublished();
-      const afterActive = await this.effects.observeActivation();
+      if (!this.#stillBaseline(expected)) continue;
+      const afterPublish = await this.#observe();
+      const afterActive = await this.#budget(() => this.effects.observeActivation());
       const ok = afterPublish.kind === 'owned'
         && sameRecord(afterPublish.record, expected)
         && provesActivation(afterActive, expected.generation);
       return ok
         ? { kind: 'repaired', expected, found: seen }
         : { kind: 'diverged', expected, found: afterPublish };
+    }
+    // 기준이 계속 바뀐다 — 지금은 우리 차례가 아니다.
+    const now = this.agent.lastActivated();
+    return now === undefined ? { kind: 'no_baseline' } : { kind: 'converged', record: now };
+  }
+
+  #stillBaseline(expected: PublishRecord): boolean {
+    const now = this.agent.lastActivated();
+    return now !== undefined && sameRecord(now, expected);
+  }
+
+  #observe(): Promise<PublishedState> {
+    return this.#budget(() => this.effects.observePublished());
+  }
+
+  /** 수렴에도 예산을 씌운다 (12차 반례 ③) — 안 그러면 같은 큐가 다시 교착한다. */
+  #budget<T>(run: () => Promise<T>): Promise<T> {
+    const ms = 10_000;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new DpRejection('stale_state', `수렴 예산 ${ms}ms 초과`)), ms);
+      run().then(
+        (v) => { clearTimeout(timer); resolve(v); },
+        (e) => { clearTimeout(timer); reject(e); },
+      );
     });
   }
 

@@ -229,6 +229,8 @@ export type ApplyPhase =
   | 'reload_observed'
   | 'activated'
   | 'partially_activated'
+  /** partial 재시도를 소진했다. **종단이다** (12차 반례 ⑤). */
+  | 'partial_exhausted'
   | 'failed'
   /** 더 높은 리더 토큰이 들어와 소유권이 끊겼다 (§3.5). */
   | 'superseded'
@@ -250,6 +252,7 @@ export const ALL_APPLY_PHASES: readonly ApplyPhase[] = [
   'reload_observed',
   'activated',
   'partially_activated',
+  'partial_exhausted',
   'failed',
   'superseded',
   'no_operation',
@@ -265,6 +268,7 @@ export const ALL_APPLY_PHASES: readonly ApplyPhase[] = [
  */
 export const TERMINAL_PHASES: readonly ApplyPhase[] = [
   'activated',
+  'partial_exhausted',
   'failed',
   'superseded',
   'no_operation',

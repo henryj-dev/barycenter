@@ -177,6 +177,14 @@ export type AgentState = {
    */
   lastActivated?: PublishRecord;
   /**
+   * 마지막으로 **게시한** 것 — 활성화까지 갔는지는 모른다 (12차 반례 ②).
+   *
+   * `lastActivated` 는 commit 에서만 생긴다. 그래서 최초 apply 가 게시만 하고 끊기면
+   * reconcile 이 영영 `no_baseline` 이었다 — 게시는 나갔는데 되돌릴 기준이 없다고
+   * 답하는 것은 거짓이다. 활성화하지 못한 게시가 있다는 사실 자체를 드러내야 한다.
+   */
+  lastPublishIntent?: PublishRecord;
+  /**
    * 진행 중인 apply 오퍼레이션의 저널 (§6.2).
    *
    * **여기 있어야 한다.** 저널과 멤버십 좌표가 서로 다른 소유자를 가지면 같은 store 를
@@ -373,6 +381,54 @@ export class DpAgent {
   /** 마지막으로 활성화를 인정한 게시. reconcile 의 기준이다. */
   lastActivated(): PublishRecord | undefined {
     return this.snapshot().lastActivated;
+  }
+
+  /** 마지막으로 게시한 것. 활성화까지 갔는지는 모른다. */
+  lastPublishIntent(): PublishRecord | undefined {
+    return this.snapshot().lastPublishIntent;
+  }
+
+  /**
+   * 실행권이 들고 있는 **모든** 슬롯을 반납한다 (12차 반례 ④).
+   *
+   * `finishOperation` 은 넘어온 오퍼레이션이 담은 평면만 본다. 그런데 abort 가 한
+   * 평면만 담아 오면 나머지가 고아로 남는다 — 실행권이 자기가 무엇을 잡았는지 알므로
+   * 그걸로 지운다.
+   */
+  releaseHolderSlots(op: ApplyOperation): Promise<void> {
+    return this.serial((s) => {
+      const holder = s.activeOperation;
+      const owner = holder ?? {
+        operationId: op.operationId,
+        transitionId: op.transitionId,
+        leaderToken: normalizeNumeric(op.leaderToken, 'leaderToken'),
+        planes: [] as Plane[],
+        epochs: {} as Record<string, string>,
+      };
+      // **토큰까지 본다.** 9차 반례 ③ 과 같은 함정이다 — id 만 비교하면 낡은 abort 가
+      // 같은 id 를 쓰는 신임 실행권의 슬롯을 지운다. 그 테스트가 이 회귀를 잡았다.
+      if (owner.operationId !== op.operationId
+        || owner.transitionId !== op.transitionId
+        || owner.leaderToken !== normalizeNumeric(op.leaderToken, 'leaderToken')) {
+        return;
+      }
+      for (const plane of owner.planes) {
+        const epoch = owner.epochs[plane];
+        if (epoch === undefined) continue;
+        const slot = s.reservations[plane]?.[epoch];
+        if (slot?.op.operationId === op.operationId && slot.op.transitionId === op.transitionId) {
+          delete s.reservations[plane][epoch];
+        }
+      }
+      if (holder !== undefined) delete s.activeOperation;
+    });
+  }
+
+  /** 게시 직전에 의도를 남긴다 (12차 반례 ②). */
+  recordPublishIntent(record: PublishRecord): Promise<void> {
+    return this.serial((s) => {
+      s.lastPublishIntent = record;
+    });
   }
 
   /** 그 좌표로 옮긴 근거. 없으면 undefined. */

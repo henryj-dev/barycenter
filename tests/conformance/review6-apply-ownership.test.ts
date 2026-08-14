@@ -215,10 +215,14 @@ describe('④ partially_activated 에서 복구가 이어받는다 (§6.2 #8)', 
     return { agent, op, fx };
   }
 
-  it('한 평면만 넘어가면 partially_activated 로 보고한다', async () => {
+  /**
+   * 12차 뒤 계약이 바뀌었다. partial 은 **유한 재시도**를 거쳐 `partial_exhausted` 로
+   * 닫힌다 — 비종단으로 두면서 실행권만 풀면 두 번째 복구가 `not_reserved` 로 죽었다.
+   */
+  it('한 평면만 넘어가면 부분 전환으로 보고하고 유한 재시도 뒤 닫힌다', async () => {
     const { agent, fx } = await halfway();
     const r = await new ApplyRunner(agent, fx, FAST).recover();
-    expect(r.phase).toBe('partially_activated');
+    expect(r.phase).toBe('partial_exhausted');
     expect(r.partialTransition).toBe(true);
     expect(r.progress.http).toBe('committed');
     expect(r.progress.stream).not.toBe('committed');

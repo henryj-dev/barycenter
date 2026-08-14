@@ -37,6 +37,27 @@ let prefix: string;
 let container: string;
 let bundle: string;
 
+/**
+ * 앞선 실패가 남긴 컨테이너를 치운다.
+ *
+ * verify 전체 실행에서 e2e 가 **간헐적으로** 죽는 것을 두 번 봤다. 원인은 매번 같았다 —
+ * 앞선 실패가 컨테이너를 남겨 포트를 잡고 있었고, 다음 `docker run` 이 거기서 깨졌다.
+ * 재실행하면 통과하니 원인을 찾기 전까지는 "그냥 다시 돌리면 된다" 로 넘어가게 된다.
+ * **간헐적으로 깨지는 테스트는 없느니만 못하다.**
+ */
+function reapStrays(): void {
+  try {
+    const names = execFileSync('docker', ['ps', '-aq', '--filter', `name=bary-inc-`], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString().trim();
+    if (names.length > 0) {
+      execFileSync('docker', ['rm', '-f', ...names.split('\n')], { stdio: 'ignore' });
+    }
+  } catch {
+    /* 도커가 없으면 beforeAll 이 따로 알린다 */
+  }
+}
+
 const docker = (...args: string[]): string =>
   execFileSync('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
 
@@ -212,6 +233,7 @@ describe('DP Agent 를 컨테이너 안에서 돌린다 — FsEffects 실물 경
   }, 180_000);
 
   beforeEach(async () => {
+    reapStrays();
     prefix = mkdtempSync(join(tmpdir(), 'bary-inc-'));
     mkdirSync(join(prefix, 'generations'), { recursive: true });
     mkdirSync(join(prefix, 'logs'), { recursive: true });

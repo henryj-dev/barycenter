@@ -298,9 +298,20 @@ export class ApplyRunner {
     } catch (e) {
       if (!(e instanceof EffectTimeout)) throw e;
       // **예산을 넘긴 것은 실패다.** 매달린 채로 두면 뒤의 모든 apply 가 줄 선다.
+      //
+      // 다만 **자기 것만 정리한다** (12차 반례 ①). 기다리는 사이 신임 오퍼레이션이
+      // 저널을 열었을 수 있고, 그걸 failAll 하면 진행 중인 남의 일을 망가뜨린다.
+      // 11차에 넣은 deadline 이 만든 구멍이다 — 고치면서 또 열었다.
       const j = this.agent.readJournal();
-      if (j !== undefined) await this.failAll(j, e.message);
-      return { ...resultOf(this.agent.readJournal() ?? j!), failure: e.message };
+      const mine = j !== undefined
+        && j.op.operationId === bound.operationId
+        && j.op.transitionId === bound.transitionId;
+      if (mine && j !== undefined) {
+        await this.failAll(j, e.message);
+        return { ...resultOf(this.agent.readJournal() ?? j), failure: e.message };
+      }
+      // 남의 것이면 손대지 않고 물러난다. 내 실패는 내 결과에만 적는다.
+      return { ...emptyResult(), failure: e.message };
     }
   }
 
@@ -346,6 +357,9 @@ export class ApplyRunner {
           // 내 것이 아니다 — 그걸 구분하지 못하면 수렴할 수가 없다.
           const seenPub = await this.budget('observePublished', () => this.effects.observePublished());
           if (!publishedByMe(seenPub, j.op)) {
+            // **게시 앞에 의도를 남긴다** (12차 반례 ②). 게시만 하고 끊기면 활성화 기준이
+            // 없어 reconcile 이 손을 놓는다 — 그 상태를 드러낼 수 있어야 한다.
+            await this.agent.recordPublishIntent(recordOf(j.op));
             await this.budget('publish', () => this.effects.publish(recordOf(j.op), this.agent.lease(j.op)));
           }
           await ignoreConflict(this.write(next(j, { phase: 'published' })));
@@ -455,11 +469,15 @@ export class ApplyRunner {
           if (j.reloadAttempts >= RELOAD_ATTEMPT_LIMIT + PARTIAL_RETRY_LIMIT) {
             // 더는 못 민다. **소유권과 남은 예약을 반납하고** 끝낸다 — 안 그러면 그
             // 좌표가 영구히 잠긴다 (6차 반례 ④).
+            //
+            // 그리고 **저널을 종단으로 닫는다** (12차 반례 ⑤). 비종단으로 두면서
+            // 실행권만 풀면, 두 번째 복구가 다시 밀려다 `not_reserved` 로 죽는다.
+            await ignoreConflict(this.write(next(j, { phase: 'partial_exhausted' })));
             await this.agent.finishOperation(
               j.op,
               planesOf(j.op).filter((p) => j.progress?.[p] !== 'committed'),
             );
-            return resultOf(j);
+            return resultOf(this.agent.readJournal() ?? j);
           }
           const stuck = planesOf(j.op).filter((p) => j.progress?.[p] !== 'committed');
           if (stuck.length === 0) {
@@ -472,6 +490,7 @@ export class ApplyRunner {
           break;
         }
         case 'activated':
+        case 'partial_exhausted':
         case 'failed':
         case 'no_operation':
           return resultOf(j);
@@ -595,7 +614,7 @@ function resultOf(j: JournalEntry): ApplyResult {
   return {
     phase: j.phase,
     progress: { http: progress.http, stream: progress.stream },
-    partialTransition: j.phase === 'partially_activated',
+    partialTransition: j.phase === 'partially_activated' || j.phase === 'partial_exhausted',
     ...(j.evidence ? { evidence: j.evidence } : {}),
   };
 }
@@ -680,6 +699,10 @@ export function classifyWrite(before: AgentState | undefined, next: AgentState):
     return `journal:${next.journal?.phase ?? 'none'}:update`;
   }
   // apply 경로를 놓는 쓰기 (6차 반례 ④). 이것도 이름이 있어야 계측에서 안 사라진다.
+  if (prev.lastPublishIntent?.generation !== next.lastPublishIntent?.generation
+    || prev.lastPublishIntent?.operationId !== next.lastPublishIntent?.operationId) {
+    return 'publish_intent_recorded';
+  }
   if (prev.activeOperation !== undefined && next.activeOperation === undefined) return 'finish';
   if (prev.activeOperation === undefined && next.activeOperation !== undefined) return 'claim';
   return 'noop';

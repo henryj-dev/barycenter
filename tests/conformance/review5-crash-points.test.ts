@@ -67,6 +67,8 @@ const NORMAL_PATH = [
   // 게시 **앞의** 검사 (§6.2 #2). 여기서 걸리면 current 도 nginx 도 그대로다.
   'journal:preflight',
   'journal:publish_intent',
+  // 게시 **앞에** 의도를 남긴다 (12차 반례 ②) — 게시만 하고 끊긴 상태를 드러내기 위해.
+  'publish_intent_recorded',
   'publish',
   'journal:published',
   'stage:http',

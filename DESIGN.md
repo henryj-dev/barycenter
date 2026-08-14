@@ -909,7 +909,8 @@ apply 경로를 영영 못 잡는다 — 옛 오퍼레이션을 `abort` 하려 �
 | `reload_intent` | HUP 을 보내겠다고 기록함 | 증거가 활성화를 증명 |
 | `reload_observed` | 활성화가 증명됨 | 전 평면 commit |
 | `activated` | 전 평면이 목표 좌표 | 종단 |
-| `partially_activated` | 일부 평면만 넘어감 | **비종단** — 유한 재시도 후 종단 |
+| `partially_activated` | 일부 평면만 넘어감 | **비종단** — 유한 재시도 |
+| `partial_exhausted` | 재시도를 소진했는데도 일부 평면만 넘어갔다 | 종단 |
 | `failed` | reload 상한 초과 또는 preflight 실패 | 종단 |
 | `superseded` | 더 높은 리더 토큰이 들어와 소유권이 끊겼다 (§3.5) | 종단 |
 
