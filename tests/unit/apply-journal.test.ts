@@ -270,7 +270,7 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
     const store = new MemoryStore();
     const agent = agentOn(store);
     await new ApplyRunner(agent, new FakeEffects(), FAST).run(OP);
-    const state = store.load()!;
+    const state = store.load()!.payload as { journal?: { phase: string }; planes: { http: { activationEpoch: string } } };
     expect(state.journal?.phase).toBe<Phase>('activated');
     expect(state.planes.http.activationEpoch).toBe('1');
   });

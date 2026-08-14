@@ -251,3 +251,71 @@ describe('표면이 실제로 쓸 만한가 — 목록만 맞추면 의미가 �
     expect(surface.provesActivation({ acceptingGeneration: 'g', errorLogGrowth: 1 }, 'g')).toBe(false);
   });
 });
+
+// ── 저장소가 정말 불투명한가 (9차 반례 ④) ──────────────────────────────
+
+describe('불투명 저장소 — 내용을 모르는 구현이 실제로 돈다', () => {
+  /**
+   * 9차 검수 ④: "불투명" 이라 적어 놓고 실제로는 `AgentState` 의 모양을 요구했다.
+   * `{version}` 만 보관하는 정직한 구현이 두 번째 쓰기에서 TypeError 를 냈다.
+   *
+   * 그래서 **내용을 문자열로 직렬화해 보관하는** 저장소로 시험한다. 모양을 안다면
+   * 이렇게 만들 수 없다.
+   */
+  it('payload 를 문자열로 말아 두는 저장소로도 전체가 돈다', async () => {
+    let blob: string | undefined;
+    let version = 0;
+
+    const store: surface.DurableStore = {
+      load() {
+        return blob === undefined ? undefined : { version, payload: JSON.parse(blob) };
+      },
+      async save(next) {
+        if (next.version !== version + 1) throw new surface.StoreConflict('버전 충돌');
+        // **해석하지 않는다.** 통째로 문자열이 된다.
+        blob = JSON.stringify(next.payload);
+        version = next.version;
+      },
+    };
+
+    const driver = surface.LocalDataplaneDriver.create({
+      store,
+      effects: {
+        ...NOOP_EFFECTS,
+        async observePublished(): Promise<surface.PublishedState> {
+          return published;
+        },
+        async publish(record) {
+          published = { kind: 'owned', record };
+        },
+        async observeActivation() {
+          return { acceptingGeneration: 'gen-1' };
+        },
+      },
+    });
+    let published: surface.PublishedState = { kind: 'none' };
+
+    await driver.fence('10');
+    const result = await driver.applyConfig({
+      leaderToken: '10',
+      operationId: 'o',
+      transitionId: 't',
+      affectedPlanes: ['http'],
+      targetGeneration: 'gen-1',
+      generationDigest: 'sha256:g',
+      planes: {
+        http: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:h',
+        },
+      },
+    });
+
+    expect(result.phase).toBe('activated');
+    expect((await driver.status()).planes.http.activationEpoch).toBe('1');
+    // 저장소는 끝까지 내용을 몰랐다.
+    expect(typeof blob).toBe('string');
+    expect(version).toBeGreaterThan(1);
+  });
+});

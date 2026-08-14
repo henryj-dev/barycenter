@@ -324,7 +324,7 @@ describe('5차 검수 반례', () => {
     await a.fence('20');
     // b 가 자기 기억으로 덮어쓰면 최대 토큰이 되감긴다 — 펜싱이 통째로 무너진다.
     await expect(b.fence('11')).rejects.toThrow();
-    expect(store.load()?.maxLeaderToken).toBe('20');
+    expect((store.load()?.payload as { maxLeaderToken: string } | undefined)?.maxLeaderToken).toBe('20');
   });
 
   it('한 인스턴스가 다른 컴포넌트의 durable 상태를 지우지 못한다', async () => {
@@ -333,13 +333,17 @@ describe('5차 검수 반례', () => {
     await agentFirst.fence('10');
     // 그 사이 다른 컴포넌트가 같은 store 에 무언가를 썼다.
     // 남의 쓰기도 CAS 를 지킨다 — 버전을 올려야 저장된다.
+    // 저장소는 payload 를 해석하지 않으므로 그 안에 무엇을 넣든 보존돼야 한다.
     const loaded = store.load()!;
-    const withExtra = { ...loaded, version: loaded.version + 1, journal: { marker: 'keep-me' } };
+    const withExtra = {
+      version: loaded.version + 1,
+      payload: { ...(loaded.payload as Record<string, unknown>), journal: { marker: 'keep-me' } },
+    };
     await store.save(withExtra as never);
     // 이제 agent 가 다시 쓴다. 자기 기억으로 덮으면 남의 것이 날아간다.
     await agentFirst.fence('11');
     expect(
-      (store.load() as Record<string, unknown> | undefined)?.['journal'],
+      (store.load()?.payload as Record<string, unknown> | undefined)?.['journal'],
       '다른 컴포넌트의 상태를 날렸다',
     ).toBeDefined();
   });

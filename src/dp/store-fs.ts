@@ -29,7 +29,7 @@ import {
 } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import type { AgentState, DurableStore } from './agent.js';
+import type { DurableStore, StoredState } from './agent.js';
 import { StoreConflict } from './agent.js';
 
 /** 저장 형식이 바뀌면 올린다. 모르는 버전은 읽지 않는다. */
@@ -67,7 +67,7 @@ type LockRecord = { pid: number; nonce: string };
 export class ReadOnlyFileStore {
   constructor(readonly path: string) {}
 
-  load(): AgentState | undefined {
+  load(): StoredState | undefined {
     return readState(this.path);
   }
 }
@@ -75,10 +75,10 @@ export class ReadOnlyFileStore {
 type Envelope = {
   schema: number;
   checksum: string;
-  state: AgentState;
+  state: StoredState;
 };
 
-const digestOf = (state: AgentState): string =>
+const digestOf = (state: StoredState): string =>
   `sha256:${createHash('sha256').update(JSON.stringify(state), 'utf8').digest('hex')}`;
 
 /** 디렉토리 엔트리를 디스크에 내린다. rename 만으로는 부족하다. */
@@ -200,11 +200,11 @@ export class FileStore implements DurableStore {
     }
   }
 
-  load(): AgentState | undefined {
+  load(): StoredState | undefined {
     return readState(this.path);
   }
 
-  async save(state: AgentState): Promise<void> {
+  async save(state: StoredState): Promise<void> {
     // **쓰기마다 주인인지 확인한다** (6차 반례 ⑤). `open()` 경쟁만으로는 부족하다 —
     // 놓은 핸들도, 회수당한 핸들도 계속 쓸 수 있었다.
     this.assertOwner();
@@ -235,7 +235,7 @@ export class FileStore implements DurableStore {
   }
 }
 
-function readState(path: string): AgentState | undefined {
+function readState(path: string): StoredState | undefined {
   if (!existsSync(path)) return undefined;
 
   let raw: string;

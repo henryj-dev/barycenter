@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { DpAgent, StoreConflict, type AgentState } from '../../src/dp/agent.js';
+import { DpAgent, StoreConflict, type StoredState } from '../../src/dp/agent.js';
 import { FileStore, StoreCorrupted, StoreLocked } from '../../src/dp/store-fs.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -77,18 +77,20 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const state = (over: Partial<AgentState> = {}): AgentState => ({
-  version: 1,
-  maxLeaderToken: '7',
-  planes: {
-    http: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
-    stream: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+/** 저장소가 보는 것은 **봉투**다. 내용은 해석하지 않는다 (9차 반례 ④). */
+const state = (over: { version?: number; maxLeaderToken?: string } = {}): StoredState => ({
+  version: over.version ?? 1,
+  payload: {
+    maxLeaderToken: over.maxLeaderToken ?? '7',
+    planes: {
+      http: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+      stream: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+    },
+    reservations: { http: {}, stream: {} },
+    completed: {},
+    terminal: {},
+    activationEvidence: {},
   },
-  reservations: { http: {}, stream: {} },
-  completed: {},
-  terminal: {},
-  activationEvidence: {},
-  ...over,
 });
 
 const rejectionOf = async (p: Promise<unknown>): Promise<string> => {
@@ -109,7 +111,7 @@ describe('왕복', () => {
 
   it('저장한 것을 그대로 읽는다', async () => {
     await store.save(state());
-    expect(store.load()?.maxLeaderToken).toBe('7');
+    expect((store.load()?.payload as {maxLeaderToken:string} | undefined)?.maxLeaderToken).toBe('7');
   });
 
   it('임시 파일을 남기지 않는다', async () => {
@@ -126,7 +128,7 @@ describe('손상은 빈 것이 아니다 — 여기서 undefined 를 돌려주�
   it('체크섬이 안 맞으면 던진다', async () => {
     await store.save(state());
     const raw = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, unknown>;
-    (raw['state'] as AgentState).maxLeaderToken = '0'; // 옛 리더가 되살아나는 변조
+    ((raw['state'] as StoredState).payload as { maxLeaderToken: string }).maxLeaderToken = '0'; // 옛 리더가 되살아나는 변조
     writeFileSync(statePath, JSON.stringify(raw), 'utf8');
 
     expect(() => store.load()).toThrow(StoreCorrupted);
@@ -171,7 +173,7 @@ describe('버전 CAS', () => {
     await expect(store.save(state({ version: 1, maxLeaderToken: '9' }))).rejects.toBeInstanceOf(
       StoreConflict,
     );
-    expect(store.load()?.maxLeaderToken, '거부됐는데 내용이 바뀌었다').toBe('7');
+    expect((store.load()?.payload as {maxLeaderToken:string} | undefined)?.maxLeaderToken, '거부됐는데 내용이 바뀌었다').toBe('7');
   });
 
   // 제목을 실제로 검증하는 것에 맞췄다. 처음엔 "임시 파일조차 만들지 않는다" 라고 썼는데,
@@ -239,7 +241,7 @@ describe('Agent 가 실제 파일 위에서 돈다', () => {
     await agent.fence('11');
     await agent.fence('12');
     expect(store.load()?.version).toBe(3);
-    expect(store.load()?.maxLeaderToken).toBe('12');
+    expect((store.load()?.payload as {maxLeaderToken:string} | undefined)?.maxLeaderToken).toBe('12');
   });
 
   it('디렉토리가 없어도 만든다', () => {

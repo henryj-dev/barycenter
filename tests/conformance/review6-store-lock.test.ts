@@ -27,7 +27,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { DpAgent, type AgentState } from '../../src/dp/agent.js';
+import { DpAgent, type StoredState } from '../../src/dp/agent.js';
 import { FileStore, ReadOnlyFileStore, StoreLocked } from '../../src/dp/store-fs.js';
 
 let dir: string;
@@ -39,18 +39,20 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const state = (over: Partial<AgentState> = {}): AgentState => ({
-  version: 1,
-  maxLeaderToken: '7',
-  planes: {
-    http: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
-    stream: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+/** 저장소가 보는 것은 **봉투**다. 내용은 해석하지 않는다 (9차 반례 ④). */
+const state = (over: { version?: number; maxLeaderToken?: string } = {}): StoredState => ({
+  version: over.version ?? 1,
+  payload: {
+    maxLeaderToken: over.maxLeaderToken ?? '7',
+    planes: {
+      http: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+      stream: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+    },
+    reservations: { http: {}, stream: {} },
+    completed: {},
+    terminal: {},
+    activationEvidence: {},
   },
-  reservations: { http: {}, stream: {} },
-  completed: {},
-  terminal: {},
-  activationEvidence: {},
-  ...over,
 });
 
 const nameOf = async (p: Promise<unknown>): Promise<string> => {
@@ -69,7 +71,7 @@ describe('정상 경로', () => {
     const s = FileStore.open(path);
     try {
       await s.save(state());
-      expect(s.load()?.maxLeaderToken).toBe('7');
+      expect((s.load()?.payload as {maxLeaderToken:string} | undefined)?.maxLeaderToken).toBe('7');
     } finally {
       s.release();
     }
@@ -83,7 +85,7 @@ describe('정상 경로', () => {
     const b = FileStore.open(path);
     try {
       await b.save(state({ version: 2, maxLeaderToken: '8' }));
-      expect(b.load()?.maxLeaderToken).toBe('8');
+      expect((b.load()?.payload as {maxLeaderToken:string} | undefined)?.maxLeaderToken).toBe('8');
     } finally {
       b.release();
     }
@@ -104,7 +106,7 @@ describe('(a) 락 없이는 쓸 수 없다', () => {
     const owner = FileStore.open(path);
     try {
       await owner.save(state());
-      expect(FileStore.openReadOnly(path).load()?.maxLeaderToken).toBe('7');
+      expect((FileStore.openReadOnly(path).load()?.payload as { maxLeaderToken: string }).maxLeaderToken).toBe('7');
     } finally {
       owner.release();
     }
@@ -130,7 +132,7 @@ describe('(b) 놓은 핸들은 더 못 쓴다', () => {
     try {
       await b.save(state({ version: 2, maxLeaderToken: '8' }));
       await a.save(state({ version: 3, maxLeaderToken: '99' })).catch(() => undefined);
-      expect(b.load()?.maxLeaderToken, '놓은 핸들이 덮어썼다').toBe('8');
+      expect((b.load()?.payload as {maxLeaderToken:string} | undefined)?.maxLeaderToken, '놓은 핸들이 덮어썼다').toBe('8');
     } finally {
       b.release();
     }
@@ -224,7 +226,7 @@ describe('Agent 도 락을 잃으면 멈춘다', () => {
     try {
       // 여기서 조용히 성공하면 두 프로세스가 같은 상태를 각자 옮긴다.
       expect(await nameOf(agent.fence('11'))).toBe('StoreLockLost');
-      expect(a.load()?.maxLeaderToken, '뺏긴 뒤에도 상태를 바꿨다').toBe('10');
+      expect((a.load()?.payload as {maxLeaderToken:string} | undefined)?.maxLeaderToken, '뺏긴 뒤에도 상태를 바꿨다').toBe('10');
     } finally {
       b.release();
     }

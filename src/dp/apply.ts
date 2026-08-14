@@ -10,7 +10,7 @@
  * 생기고, 안 하면 미전송이 멈춘다. → **exactly-once 를 버리고 bounded duplicate 를
  * 허용한다.** 대신 관측을 먼저 하고, 재전송에는 상한을 둔다.
  */
-import type { AgentState, DpAgent, DurableStore, JournalEntry } from './agent.js';
+import type { AgentState, DpAgent, DurableStore, JournalEntry, StoredState } from './agent.js';
 import {
   isTerminalPhase,
   planesOf,
@@ -556,7 +556,6 @@ export class CrashClock {
 export function classifyWrite(before: AgentState | undefined, next: AgentState): string {
   // 첫 쓰기도 이름을 가져야 한다. `undefined` 를 특별 취급하면 최초 예약이 이름을 잃는다.
   const prev: AgentState = before ?? {
-    version: 0,
     maxLeaderToken: '0',
     planes: {
       http: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
@@ -612,11 +611,14 @@ export class FaultStore implements DurableStore {
     private readonly inner: DurableStore,
     private readonly clock: CrashClock,
   ) {}
-  load(): AgentState | undefined {
-    return this.inner.load() as AgentState | undefined;
+  load(): StoredState | undefined {
+    return this.inner.load();
   }
-  async save(state: AgentState): Promise<void> {
-    const label = classifyWrite(this.inner.load() as AgentState | undefined, state);
+  async save(state: StoredState): Promise<void> {
+    const label = classifyWrite(
+      this.inner.load()?.payload as AgentState | undefined,
+      state.payload as AgentState,
+    );
     this.clock.tick(`${label}:before`);
     await this.inner.save(state);
     this.clock.tick(`${label}:after`);

@@ -174,7 +174,9 @@ cat <<'GATES'
  ② 조용한 거짓 성공   ✅ 정본 튜플에 targetGeneration · generationDigest 를 넣었다.
  ③ 실행권 없는 lease  ✅ holder 가 없으면 lease 는 무효다.
  ⑤ 부분 abort 중단    ✅ 오퍼레이션 단위로 정리하고 실행권은 어떤 경우에도 놓는다.
- ④ 불투명 저장소      ❌ 남았다. {version} 만 보관하는 구현은 아직 깨진다.
+ ④ 불투명 저장소      ✅ 해소. StoredState = {version, payload}. 저장소는 payload 를
+                      해석하지 않는다 — payload 를 문자열로 말아 두는 구현으로도
+                      전체가 도는 것을 확인했다.
 
  ─── 8차 검수 다섯 지적 ────────────────────────────────────────────────
 

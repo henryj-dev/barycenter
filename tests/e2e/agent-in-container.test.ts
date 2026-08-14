@@ -323,10 +323,11 @@ describe('DP Agent 를 컨테이너 안에서 돌린다 — FsEffects 실물 경
     expect(existsSync(statePath), '상태 파일이 없다').toBe(true);
     const saved = JSON.parse(readFileSync(statePath, 'utf8')) as {
       schema: number;
-      state: { planes: { http: { activationEpoch: string } } };
+      state: { version: number; payload: { planes: { http: { activationEpoch: string } } } };
     };
     expect(saved.schema).toBe(1);
-    expect(saved.state.planes.http.activationEpoch).toBe('1');
+    // 저장소는 payload 를 해석하지 않는다 — 봉투 안에 그대로 들어 있다 (9차 반례 ④).
+    expect(saved.state.payload.planes.http.activationEpoch).toBe('1');
 
     // 새 프로세스가 같은 파일을 열어 다음 세대로 간다. epoch 가 이어져야 한다.
     const next = runAgent('gen-3', 'inc-5', '2');

@@ -52,7 +52,32 @@ EOF
 }
 
 publish() { ln -sfn "generations/$1" "$P/current.tmp" && mv -T "$P/current.tmp" "$P/current"; }
-hup()     { kill -HUP "$(cat $P/logs/nginx.pid)"; sleep 0.8; }
+hup()     { kill -HUP "$(cat $P/logs/nginx.pid)"; }
+
+# **고정 sleep 은 거짓 실패를 만든다.** HUP 직후 바로 관측하면 옛 워커가 답할 수 있고,
+# 그러면 느린 머신에서 간헐적으로 깨진다 — 실제로 그렇게 한 번 깨졌다.
+# 조건이 참이 될 때까지 기다리되 예산을 둔다. 예산을 넘기면 마지막 값을 그대로 돌려주므로
+# 진짜 실패는 여전히 실패로 드러난다.
+served_until() {
+  local want="$1" got="" i=0
+  while [ $i -lt 30 ]; do
+    got=$(served)
+    [ "$got" = "$want" ] && { echo "$got"; return; }
+    sleep 0.1; i=$((i+1))
+  done
+  echo "$got"
+}
+
+# HTTP 본문도 같은 이유로 폴링한다.
+body_until() {
+  local want="$1" got="" i=0
+  while [ $i -lt 30 ]; do
+    got=$(body)
+    [ "$got" = "$want" ] && { echo "$got"; return; }
+    sleep 0.1; i=$((i+1))
+  done
+  echo "$got"
+}
 served()  { echo | timeout 5 openssl s_client -connect 127.0.0.1:8443 2>/dev/null \
               | openssl x509 -noout -subject 2>/dev/null | grep -o 'gen[0-9]*\.example\.com'; }
 body()    { curl -s --max-time 3 http://127.0.0.1:8080/ 2>/dev/null; }
@@ -93,14 +118,14 @@ s=$(served)
                             || bad S8.initial "기대 gen1, 실제 '$s'"
 
 publish 2; hup
-s=$(served)
+s=$(served_until gen2.example.com)
 [ "$s" = gen2.example.com ] && ok S8.renew "세대 전환 후 갱신된 인증서를 제시한다 ($s)" \
                             || bad S8.renew "기대 gen2, 실제 '$s'"
 [ "$(body)" = gen2 ] && ok S8.swap "symlink 교체 + HUP 으로 새 세대의 conf 가 로드된다" \
                      || bad S8.swap "conf 가 바뀌지 않았다: $(body)"
 
 publish 1; hup
-s=$(served)
+s=$(served_until gen1.example.com)
 [ "$s" = gen1.example.com ] \
   && ok S8.rollback "**롤백이 그 시점의 key/chain 을 정확히 복원한다** ($s)" \
   || bad S8.rollback "롤백 후 기대 gen1, 실제 '$s' — 세대 결박이 동작하지 않는다"
@@ -113,20 +138,22 @@ cp "$P/generations/1/certs/"*.pem "$P/mutable-certs/"
 gen 3 "../../mutable-certs"
 gen 4 "../../mutable-certs"          # 내용이 같은 다음 세대 — conf 만 보면 구분되지 않는다
 publish 3; hup
-s=$(served)
+s=$(served_until gen1.example.com)
 [ "$s" = gen1.example.com ] && ok S8.mutable_initial "mutable 경로에서도 처음엔 gen1 인증서 ($s)" \
                             || bad S8.mutable_initial "기대 gen1, 실제 '$s'"
 
 # 갱신 — 같은 경로를 덮어쓴다
 cp "$P/generations/2/certs/"*.pem "$P/mutable-certs/"
 publish 4; hup
-s=$(served)
+s=$(served_until gen2.example.com)
 [ "$s" = gen2.example.com ] && ok S8.mutable_renew "갱신 후 gen2 인증서 ($s)" \
                             || bad S8.mutable_renew "기대 gen2, 실제 '$s'"
 
 # 롤백 — conf 는 되돌아가지만 인증서 파일은 이미 덮였다
 publish 3; hup
-s=$(served)
+# 여기서는 **바뀌지 않는 것**을 기대한다 (mutable 경로라 롤백이 안 된다).
+# 그래도 폴링으로 안정될 때까지 기다린 뒤 판정한다.
+s=$(served_until gen2.example.com)
 if [ "$s" = gen2.example.com ]; then
   ok S8.mutable_broken "**롤백해도 갱신된 인증서가 그대로 나온다** ($s) — v0/v1 설계로는 TLS 를 되돌릴 수 없음을 확인"
 elif [ "$s" = gen1.example.com ]; then
@@ -153,6 +180,9 @@ fi
 echo ""
 echo "[GC] 현재 세대의 인증서를 지우면 어떻게 되는가 (§8.4 GC root 의 근거)"
 publish 1; hup
+# **지우기 전에 세대가 실제로 활성화된 것을 확인한다.** 안 그러면 옛 세대를 지운 뒤
+# 엉뚱한 것을 재는 셈이 된다.
+body_until gen1 >/dev/null
 mv "$P/generations/1/certs" "$P/generations/1/certs.gone"
 alive=$(body)
 [ "$alive" = gen1 ] \

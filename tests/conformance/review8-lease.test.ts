@@ -252,15 +252,21 @@ describe('⑤ abortConfig 는 실행권까지 놓는다', () => {
 // ── ④ 저장소는 내부를 모른다 ────────────────────────────────────────────
 
 describe('④ DurableStore 는 내부 상태기계를 동결하지 않는다', () => {
-  it('저장소는 version 만 알면 된다', async () => {
-    const seen: Array<Record<string, unknown>> = [];
+  /**
+   * 9차 검수 ④ — 전에는 "불투명" 이라 적어 놓고 실제로는 `AgentState` 의 모양을
+   * 요구했다. `{version}` 만 보관하는 정직한 구현은 두 번째 쓰기에서 깨졌다.
+   * 이제 저장소가 보는 것은 **봉투**뿐이다: 버전과, 해석하지 않는 payload.
+   */
+  it('저장소는 version 과 불투명 payload 만 안다', async () => {
+    const seen: Array<{ version: number; payload: unknown }> = [];
     const store = {
-      state: undefined as { version: number } | undefined,
+      state: undefined as { version: number; payload: unknown } | undefined,
       load() {
         return this.state;
       },
-      async save(next: { version: number }) {
-        seen.push(next as Record<string, unknown>);
+      async save(next: { version: number; payload: unknown }) {
+        // **내용을 들여다보지 않는다.** 버전만 보고 그대로 보관한다.
+        seen.push({ version: next.version, payload: next.payload });
         this.state = next;
       },
     };
@@ -270,7 +276,7 @@ describe('④ DurableStore 는 내부 상태기계를 동결하지 않는다', (
     await agent.fence('11');
 
     // 저장소가 본 것은 버전이 하나씩 오르는 불투명한 값뿐이다.
-    expect(seen.map((s) => s['version'])).toEqual([1, 2]);
+    expect(seen.map((s) => s.version)).toEqual([1, 2]);
     // 그리고 그것을 그대로 돌려주면 Agent 가 이어서 쓴다.
     expect(agent.maxLeaderToken()).toBe('11');
   });

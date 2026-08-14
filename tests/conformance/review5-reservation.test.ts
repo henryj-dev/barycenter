@@ -85,7 +85,7 @@ describe('① 낮은 리더 토큰은 side effect 앞에서 막힌다 (§3.5)', 
     // **이 세 줄이 계약이다.** 판정이 stale_leader 여도 부작용이 남으면 위반이다.
     expect(effects.publishCalls, 'current 를 이미 옮겼다').toBe(0);
     expect(effects.reloadSignals, 'HUP 을 보냈다').toBe(0);
-    expect(store.load()?.journal, '저널을 남겼다').toBeUndefined();
+    expect((store.load()?.payload as { journal?: { phase: string; op: { operationId: string } } } | undefined)?.journal, '저널을 남겼다').toBeUndefined();
     expect(agent.coordinate('http').activationEpoch).toBe('0');
   });
 
@@ -118,7 +118,7 @@ describe('② 남의 오퍼레이션이 내 저널을 덮지 못한다 (§6.2)',
     ).toBe('not_reserved');
 
     // 저널이 B 의 종단 상태 그대로여야 한다.
-    expect(store.load()?.journal?.op.operationId ?? 'B(정리됨)').not.toBe('A');
+    expect((store.load()?.payload as { journal?: { phase: string; op: { operationId: string } } } | undefined)?.journal?.op.operationId ?? 'B(정리됨)').not.toBe('A');
   });
 });
 
@@ -132,7 +132,7 @@ describe('③ 두 인스턴스가 토큰을 되감지 못한다 (§3.5)', () => 
     const b = new DpAgent(store);
 
     await Promise.allSettled([a.fence('12'), b.fence('11')]);
-    expect(store.load()?.maxLeaderToken, '낮은 토큰이 높은 토큰을 덮었다').toBe('12');
+    expect((store.load()?.payload as { maxLeaderToken: string } | undefined)?.maxLeaderToken, '낮은 토큰이 높은 토큰을 덮었다').toBe('12');
   });
 
   it('교차 실행에서도 낮은 토큰의 apply 는 살아남지 못한다', async () => {
@@ -145,7 +145,7 @@ describe('③ 두 인스턴스가 토큰을 되감지 못한다 (§3.5)', () => 
       low.reserve(OP({ leaderToken: '11' })),
     ]);
     // 낮은 쪽이 이겼더라도 durable 토큰은 20 이어야 하고,
-    expect(store.load()?.maxLeaderToken).toBe('20');
+    expect((store.load()?.payload as { maxLeaderToken: string } | undefined)?.maxLeaderToken).toBe('20');
     // 예약이 남았다면 그건 20 이 오기 전에 끝난 것이므로, 이후 stage 는 막혀야 한다.
     if (results[1]?.status === 'fulfilled') {
       expect(await kindOf(low.stage(OP({ leaderToken: '11' }), null))).toBe('stale_leader');

@@ -137,7 +137,7 @@ export type ActiveOperation = {
   epochs: Record<string, string>;
 };
 
-export type AgentState = StoredState & {
+export type AgentState = {
   /**
    * durable CAS 용 단조 버전. `save` 는 `version === 직전 + 1` 일 때만 성공한다.
    *
@@ -238,6 +238,13 @@ export function tupleFor(op: ApplyOperation, plane: Plane): OperationTuple {
 export type StoredState = {
   /** durable CAS 용 단조 버전. `save` 는 `version === 직전 + 1` 일 때만 성공한다. */
   readonly version: number;
+  /**
+   * **저장소는 이걸 해석하지 않는다.** 그대로 보관했다 그대로 돌려주면 된다.
+   *
+   * 9차 검수: `AgentState` 를 그대로 노출하면 `{version}` 만 보관하는 정직한 구현이
+   * 두 번째 쓰기에서 깨진다. 불투명하다고 적어 놓고 실제로는 모양을 요구하고 있었다.
+   */
+  readonly payload: unknown;
 };
 
 export interface DurableStore {
@@ -253,12 +260,12 @@ export interface DurableStore {
 
 /** 테스트용. `delayMs` 로 durable 저장을 느리게 만들어 동시성 구멍을 드러낸다. */
 export class MemoryStore implements DurableStore {
-  private state: AgentState | undefined;
+  private state: StoredState | undefined;
   constructor(private readonly delayMs = 0) {}
-  load(): AgentState | undefined {
+  load(): StoredState | undefined {
     return this.state === undefined ? undefined : structuredClone(this.state);
   }
-  async save(state: AgentState): Promise<void> {
+  async save(state: StoredState): Promise<void> {
     // 지연은 **검사 앞**에 둔다. 그래야 둘 다 load 를 통과한 뒤 CAS 에서 갈린다 —
     // 그게 실제 fsync 가 만드는 창이다.
     if (this.delayMs > 0) await new Promise((r) => setTimeout(r, this.delayMs));
@@ -273,7 +280,6 @@ export class MemoryStore implements DurableStore {
 const ZERO: PlaneState = { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' };
 
 const initial = (): AgentState => ({
-  version: 0,
   maxLeaderToken: '0',
   planes: { http: { ...ZERO }, stream: { ...ZERO } },
   reservations: { http: {}, stream: {} },
@@ -333,7 +339,7 @@ export class DpAgent {
 
   /** 내부에서 보는 상태. 저장소에게는 불투명하지만 우리는 모양을 안다. */
   private snapshot(): AgentState {
-    return (this.store.load() as AgentState | undefined) ?? initial();
+    return (this.store.load()?.payload as AgentState | undefined) ?? initial();
   }
 
   /** 지금까지 본 최대 리더 토큰. 이보다 낮은 토큰의 변이는 전부 거부된다 (§3.5). */
@@ -544,13 +550,13 @@ export class DpAgent {
       // 있기 때문이다. 그 창은 **CAS 로만** 닫힌다 — 밀리면 다시 읽고 **다시 판정**한다.
       // 낡은 상태로 내린 판정을 재사용하면 안 되므로 mutate 를 통째로 다시 돌린다.
       for (let attempt = 0; ; attempt += 1) {
-        const loaded = this.store.load() as AgentState | undefined;
-        const next = { ...structuredClone(loaded ?? initial()), version: (loaded?.version ?? 0) + 1 };
+        const stored = this.store.load();
+        const next = structuredClone((stored?.payload as AgentState | undefined) ?? initial());
         // 알려지지 않은 필드(다른 컴포넌트의 것)를 보존한 채로 우리 몫만 바꾼다.
         const result = mutate(next);
         try {
           // §3.5 — 토큰과 좌표는 side effect 를 인정하기 **전에** durable 해야 한다.
-          await this.store.save(next);
+          await this.store.save({ version: (stored?.version ?? 0) + 1, payload: next });
           return result;
         } catch (e) {
           if (!(e instanceof StoreConflict) || attempt >= CAS_RETRY_LIMIT) throw e;
