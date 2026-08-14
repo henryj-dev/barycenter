@@ -27,7 +27,7 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
   operationId: 'op-1',
   transitionId: 't-1',
-  affectedPlanes: ['http'],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: 'gen-1',
   generationDigest: 'sha256:gen',
   planes: {
@@ -35,6 +35,11 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
       target: { activationEpoch: '1', membershipRevision: '1' },
       payloadDigest: 'sha256:h',
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:s',
     },
   },
   ...o,
@@ -119,8 +124,13 @@ describe('두 평면은 한 오퍼레이션으로 함께 넘어간다 (§3.4)', 
     const pre = OP({
       operationId: 'pre',
       transitionId: 'pre',
-      affectedPlanes: ['stream'],
+      affectedPlanes: ['http', 'stream'],
       planes: {
+        http: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:pre-h',
+        },
         stream: {
           expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
           target: { activationEpoch: '1', membershipRevision: '1' },
@@ -131,7 +141,7 @@ describe('두 평면은 한 오퍼레이션으로 함께 넘어간다 (§3.4)', 
     await new ApplyRunner(agent, new FakeEffects(), FAST).run(pre);
 
     const effects = new FakeEffects();
-    // stream 은 이미 (1,1) 인데 BOTH 는 (0,0) 을 기대한다 → 좌표 CAS 에서 막힌다.
+    // 두 평면이 이미 (1,1) 인데 BOTH 는 (0,0) 을 기대한다 → 좌표 CAS 에서 막힌다.
     expect(await kindOf(new ApplyRunner(agent, effects, FAST).run(BOTH())))
       .toBe('coordinate_mismatch');
     expect(effects.publishCalls, '한 평면이 막혔는데 게시했다').toBe(0);
@@ -140,7 +150,9 @@ describe('두 평면은 한 오퍼레이션으로 함께 넘어간다 (§3.4)', 
     // `stagedDigest` 로는 못 잡는다. 예약만 하고 stage 는 안 했으므로 어느 쪽이든
     // undefined 다 — 슬롯의 **주인**을 봐야 한다.
     expect(agent.reservationOwner('http', '1'), 'http 예약이 반납되지 않았다').toBeUndefined();
-    expect(agent.coordinate('http').activationEpoch).toBe('0');
+    // pre 가 두 평면을 모두 옮겼으므로 좌표는 1 이다. 중요한 것은 **BOTH 가 아무것도
+    // 바꾸지 못했다**는 것 — 부작용도 예약도 없다.
+    expect(agent.coordinate('http').activationEpoch).toBe('1');
   });
 
   it('실패하면 두 평면 다 옛 좌표에 남는다 — 부분 전환이 아니다', async () => {
@@ -250,7 +262,9 @@ describe('설정 경로도 리더 토큰을 지난다 (§9.1.1 blocker 3)', () =
     const effects = new FakeEffects();
     // stream 을 건드린다고 해 놓고 목표를 안 실었다.
     expect(
-      await kindOf(new ApplyRunner(agent, effects, FAST).run(OP({ affectedPlanes: ['http', 'stream'] }))),
+      await kindOf(new ApplyRunner(agent, effects, FAST).run(
+        OP({ affectedPlanes: ['http', 'stream'], planes: { http: OP().planes.http! } }),
+      )),
     ).toBe('envelope_mismatch');
     expect(effects.publishCalls).toBe(0);
   });

@@ -81,7 +81,7 @@ const op = {
   leaderToken: '10',
   operationId,
   transitionId: operationId + '-t',
-  affectedPlanes: ['http'],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: generation,
   generationDigest: digest,
   planes: {
@@ -89,6 +89,12 @@ const op = {
       expectedCurrent: { activationEpoch: prev, membershipRevision: prev },
       target: { activationEpoch: epoch, membershipRevision: epoch },
       payloadDigest: 'sha256:' + generation,
+    },
+    // 설정 apply 는 두 평면을 모두 옮긴다 (11차 반례 ②).
+    stream: {
+      expectedCurrent: { activationEpoch: prev, membershipRevision: prev },
+      target: { activationEpoch: epoch, membershipRevision: epoch },
+      payloadDigest: 'sha256:' + generation + '-s',
     },
   },
 };

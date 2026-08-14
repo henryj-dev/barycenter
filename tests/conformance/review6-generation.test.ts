@@ -136,7 +136,7 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
   operationId: 'op-1',
   transitionId: 't-1',
-  affectedPlanes: ['http'],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: 'gen-1',
   generationDigest: 'sha256:채워짐',
   planes: {
@@ -144,6 +144,11 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
       target: { activationEpoch: '1', membershipRevision: '1' },
       payloadDigest: 'sha256:h',
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:s',
     },
   },
   ...o,
@@ -259,34 +264,50 @@ describe('세대가 구성하는 평면을 오퍼레이션이 전부 선언해�
       .toBe('plane_mismatch');
   });
 
-  it('없는 평면을 선언해도 거부된다', () => {
+  /**
+   * 11차 뒤 규칙이 **포함 관계**로 바뀌었다. 설정 apply 는 항상 두 평면을 선언하고,
+   * 세대는 그중 일부만 구성할 수 있다 — 비는 평면도 전환이기 때문이다.
+   * 반대 방향(세대가 구성하는데 선언 안 함)만 거부한다.
+   */
+  it('세대보다 넓게 선언하는 것은 허용된다 — 비는 평면도 전환이다', () => {
     const m = materializeGeneration({
       prefix, generation: 'gen-http', files: FILES, planes: ['http'],
     });
-    expect(kindOf(() => verifyGeneration(prefix, 'gen-http', m.digest, ['http', 'stream'])))
-      .toBe('plane_mismatch');
+    expect(verifyGeneration(prefix, 'gen-http', m.digest, ['http', 'stream']).planes)
+      .toEqual(['http']);
   });
 
-  it('게시 전 검사가 그것을 막는다 — current 를 건드리지 않는다', async () => {
+  /**
+   * 11차 뒤로 **러너에서는 이 경로에 닿지 않는다.** 설정 apply 가 두 평면을 모두
+   * 선언하도록 `assertEnvelope` 가 먼저 막기 때문이다 (`review11-reconcile`).
+   *
+   * 그래도 `verifyGeneration` 의 검사는 남긴다 — 러너를 거치지 않는 호출자가 있고,
+   * 한 층이 막는다고 다른 층을 비우면 그 층을 우회하는 경로가 생긴다.
+   */
+  it('한 평면만 선언한 오퍼레이션은 **게시 앞에서** 막힌다', async () => {
     const m = materializeGeneration({
       prefix, generation: 'gen-both', files: BOTH_FILES, planes: ['http', 'stream'],
     });
     const agent = new DpAgent(new MemoryStore());
-    const r = await new ApplyRunner(
-      agent,
-      new FsEffects({ prefix, reload: async () => undefined, probeAccepting: async () => 'gen-both' }),
-      FAST,
-    ).run(OP({ targetGeneration: 'gen-both', generationDigest: m.digest })); // affectedPlanes: ['http']
-
-    expect(r.phase).toBe('failed');
+    let kind = '통과';
+    try {
+      await new ApplyRunner(
+        agent,
+        new FsEffects({ prefix, reload: async () => undefined, probeAccepting: async () => 'gen-both' }),
+        FAST,
+      ).run(OP({
+        targetGeneration: 'gen-both',
+        generationDigest: m.digest,
+        affectedPlanes: ['http'],
+        planes: { http: OP().planes.http! },
+      }));
+    } catch (e) {
+      kind = (e as { kind?: string }).kind ?? (e as Error).name;
+    }
+    expect(kind).toBe('envelope_mismatch');
     expect(existsSync(join(prefix, 'current')), '평면이 어긋나는데 게시했다').toBe(false);
   });
 
-  /**
-   * 11차 검수: 이 테스트는 **제목이 검증 범위보다 넓었다.** `render().planes` 만 보고
-   * manifest 는 만들지도 않으면서 "manifest 는 그걸 적는다" 고 주장했다.
-   * 렌더 → materialize → 대조까지 이어서 본다.
-   */
   it('렌더러가 구성한 평면이 manifest 로 이어지고 대조에 쓰인다', async () => {
     const { render } = await import('../../src/conf/render.js');
     const { parseModel } = await import('../../src/model/decode.js');

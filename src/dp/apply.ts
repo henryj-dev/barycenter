@@ -455,6 +455,23 @@ function assertEnvelope(op: ApplyOperation): void {
   if (op.affectedPlanes.length === 0) {
     throw new DpRejection('empty_envelope', '봉투가 어떤 평면도 말하지 않았다');
   }
+
+  // **설정 전환은 항상 두 평면을 옮긴다** (11차 반례 ②).
+  //
+  // 하나의 `nginx.conf` 가 http 와 stream 을 함께 지배한다. 세대를 활성화하면 두 평면이
+  // 같이 바뀐다 — 한쪽이 **비게 되더라도 그것 역시 전환**이다. 전에는 목표에 있는
+  // 평면만 선언하면 통과했고, 그래서 `http+stream → http` 가 stream 을 없애면서도
+  // stream 좌표를 옛 값으로 남겼다. 설정은 바뀌었는데 컨트롤 플레인은 모른다.
+  const covers = new Set(op.affectedPlanes);
+  for (const plane of ['http', 'stream'] as const) {
+    if (!covers.has(plane)) {
+      throw new DpRejection(
+        'envelope_mismatch',
+        `설정 apply 는 두 평면을 모두 선언해야 한다 — '${plane}' 가 빠졌다. ` +
+          `하나의 nginx.conf 가 둘을 함께 바꾸므로, 비게 되는 평면도 좌표를 옮겨야 한다`,
+      );
+    }
+  }
   const declared = new Set(op.affectedPlanes);
   const carried = new Set(Object.keys(op.planes) as Plane[]);
   for (const p of declared) {

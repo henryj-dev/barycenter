@@ -224,9 +224,9 @@ cat <<'GATES'
  ③ manifest 의 planes 변조 가능    ✅ 해소. digest 가 planes 를 덮는다.
  ⓐ 제목이 범위보다 넓은 테스트     ✅ 고쳤다. "manifest 는 그걸 적는다" 면서 manifest 를
                                    만들지도 않았다 — 렌더→materialize→대조까지 잇는다.
- ② planes 가 delta 가 아니다       ❌ **남았다.** 목표에 있는 평면만 답한다.
-                                   http+stream → http 는 stream 을 없애는데 ['http'] 로
-                                   통과하고, stream 좌표가 남는다.
+ ② planes 가 delta 가 아니다       ✅ 해소. **설정 apply 는 항상 두 평면을 선언한다.**
+                                   하나의 nginx.conf 가 둘을 지배하므로 비게 되는 평면도
+                                   전환이다. manifest 대조는 포함 관계로 바꿨다.
  ⑤ lease 강제 불가 · deadline 없음 ❌ 남았다 (위).
 
  → A(타입·DP ABI): **No-Go**

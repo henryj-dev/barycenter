@@ -184,7 +184,7 @@ describe('표면만으로 실제로 구현할 수 있는가', () => {
       leaderToken: '10',
       operationId: 'o',
       transitionId: 't',
-      affectedPlanes: ['http'],
+      affectedPlanes: ['http', 'stream'],
       targetGeneration: 'gen-1',
       generationDigest: 'sha256:g',
       planes: {
@@ -192,6 +192,11 @@ describe('표면만으로 실제로 구현할 수 있는가', () => {
           expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
           target: { activationEpoch: '1', membershipRevision: '1' },
           payloadDigest: 'sha256:h',
+        },
+        stream: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:s',
         },
       },
     };
@@ -311,7 +316,7 @@ describe('불투명 저장소 — 내용을 모르는 구현이 실제로 돈다
       leaderToken: '10',
       operationId: 'o',
       transitionId: 't',
-      affectedPlanes: ['http'],
+      affectedPlanes: ['http', 'stream'],
       targetGeneration: 'gen-1',
       generationDigest: 'sha256:g',
       planes: {
@@ -319,6 +324,11 @@ describe('불투명 저장소 — 내용을 모르는 구현이 실제로 돈다
           expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
           target: { activationEpoch: '1', membershipRevision: '1' },
           payloadDigest: 'sha256:h',
+        },
+        stream: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:s',
         },
       },
     });

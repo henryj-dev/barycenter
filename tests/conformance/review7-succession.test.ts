@@ -26,7 +26,7 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
   operationId: 'op-1',
   transitionId: 't-1',
-  affectedPlanes: ['http'],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: 'gen-1',
   generationDigest: 'sha256:g',
   planes: {
@@ -34,6 +34,11 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
       target: { activationEpoch: '1', membershipRevision: '1' },
       payloadDigest: 'sha256:h',
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:s',
     },
   },
   ...o,

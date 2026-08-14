@@ -26,7 +26,7 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
   operationId: 'op-1',
   transitionId: 't-1',
-  affectedPlanes: ['http'],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: 'gen-1',
   generationDigest: 'sha256:gen',
   planes: {
@@ -34,6 +34,11 @@ const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
       target: { activationEpoch: '1', membershipRevision: '1' },
       payloadDigest: 'sha256:h',
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:s',
     },
   },
   ...o,
@@ -146,13 +151,18 @@ describe('③ 같은 오퍼레이션을 동시에 여러 번 보내도 HUP 은 �
       targetGeneration: 'gen-B',
       generationDigest: 'sha256:gen',
       planes: {
+        http: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:B-h',
+        },
         stream: {
           expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
           target: { activationEpoch: '1', membershipRevision: '1' },
           payloadDigest: 'sha256:B',
         },
       },
-      affectedPlanes: ['stream'],
+      affectedPlanes: ['http', 'stream'],
     });
 
     // A 를 게시 직전까지 진행시킨 뒤 B 를 넣는다.
@@ -168,8 +178,13 @@ describe('③ 같은 오퍼레이션을 동시에 여러 번 보내도 HUP 은 �
     // 뮤테이션으로 확인해 보니 소유권 검사를 빼도 이 테스트가 통과했다. B 가 예약을
     // 훔친 뒤 다른 지점에서 막혔을 뿐이었다.
     expect(agent.activeOperation()?.operationId, 'apply 경로의 주인이 바뀌었다').toBe('A');
-    expect(agent.reservationOwner('stream', '1'), '끼어든 오퍼레이션이 예약을 가져갔다')
-      .toBeUndefined();
+    // A 가 두 평면을 다 쥐고 있으므로 B 는 어느 슬롯도 못 가져간다.
+    for (const plane of ['http', 'stream'] as const) {
+      expect(
+        agent.reservationOwner(plane, '1')?.operationId,
+        `끼어든 오퍼레이션이 ${plane} 예약을 가져갔다`,
+      ).toBe('A');
+    }
   });
 });
 
@@ -225,8 +240,13 @@ describe('④ partially_activated 에서 복구가 이어받는다 (§6.2 #8)', 
     const retry = OP({
       operationId: 'retry',
       transitionId: 'retry',
-      affectedPlanes: ['stream'],
+      affectedPlanes: ['http', 'stream'],
       planes: {
+        http: {
+          expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },
+          target: { activationEpoch: '2', membershipRevision: '2' },
+          payloadDigest: 'sha256:retry-h',
+        },
         stream: {
           expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
           target: { activationEpoch: '1', membershipRevision: '1' },
@@ -235,7 +255,8 @@ describe('④ partially_activated 에서 복구가 이어받는다 (§6.2 #8)', 
       },
     });
     const ack = await agent.reserveAll(retry);
-    expect(ack.length).toBe(1);
+    // 설정 apply 는 두 평면을 선언한다 (11차 반례 ②).
+    expect(ack.length).toBe(2);
   });
 
   it('전역 소유권도 반납된다 — 다음 apply 가 막히면 안 된다', async () => {
@@ -379,6 +400,11 @@ describe('앞선 오퍼레이션의 종단 저널이 다음 것을 막지 않는
             expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },
             target: { activationEpoch: '2', membershipRevision: '2' },
             payloadDigest: 'sha256:B',
+          },
+          stream: {
+            expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },
+            target: { activationEpoch: '2', membershipRevision: '2' },
+            payloadDigest: 'sha256:B-s',
           },
         },
       }),

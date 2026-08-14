@@ -23,7 +23,7 @@ const OP = (id: string, gen: string, o: Partial<ApplyOperation> = {}): ApplyOper
   leaderToken: '10',
   operationId: id,
   transitionId: id,
-  affectedPlanes: ['http'],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: gen,
   generationDigest: `sha256:${gen}`,
   planes: {
@@ -31,6 +31,11 @@ const OP = (id: string, gen: string, o: Partial<ApplyOperation> = {}): ApplyOper
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
       target: { activationEpoch: '1', membershipRevision: '1' },
       payloadDigest: 'sha256:h',
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:s',
     },
   },
   ...o,
@@ -109,6 +114,11 @@ describe('② reconcile 이 신임 apply 를 덮어쓰지 않는다', () => {
                   target: { activationEpoch: '2', membershipRevision: '2' },
                   payloadDigest: 'sha256:h',
                 },
+                stream: {
+                  expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },
+                  target: { activationEpoch: '2', membershipRevision: '2' },
+                  payloadDigest: 'sha256:s',
+                },
               },
             }),
           );
@@ -165,5 +175,56 @@ describe('③ manifest 의 평면 기록도 digest 가 덮는다', () => {
     } finally {
       rmSync(prefix, { recursive: true, force: true });
     }
+  });
+});
+
+// ── ② 설정 전환은 항상 두 평면을 옮긴다 ────────────────────────────────
+
+describe('② planes 는 delta 여야 한다 — 없어지는 평면도 전환이다', () => {
+  /**
+   * `render().planes` 는 **목표에 있는** 평면을 답한다. 그래서 `http+stream → http`
+   * 전환은 stream 을 **없애는데도** `['http']` 로 통과하고, stream 좌표는 옛 값으로
+   * 남는다 — 설정은 바뀌었는데 컨트롤 플레인은 모른다.
+   *
+   * 답은 하나다. **하나의 `nginx.conf` 가 두 평면을 지배한다.** 세대를 활성화하면
+   * 두 평면이 함께 바뀐다 — 한쪽이 비게 되더라도 그것 역시 전환이다.
+   * 그러므로 설정 apply 는 **항상 두 평면을 선언한다.**
+   */
+  it('한 평면만 선언한 설정 apply 는 거부된다', async () => {
+    const agent = new DpAgent(new MemoryStore());
+    const fx = new FakeEffects();
+    let kind = '통과';
+    try {
+      await new ApplyRunner(agent, fx, FAST).run(
+        OP('half', 'gen-1', { affectedPlanes: ['http'], planes: { http: OP('x', 'gen-1').planes.http! } }),
+      );
+    } catch (e) {
+      kind = (e as { kind?: string }).kind ?? (e as Error).name;
+    }
+    expect(kind, '한 평면만 선언했는데 통과했다 — 나머지 좌표가 옛 값으로 남는다')
+      .toBe('envelope_mismatch');
+    expect(fx.publishCalls).toBe(0);
+  });
+
+  it('두 평면을 선언하면 통과한다 — 막는 것만 하는 게 아니다', async () => {
+    const agent = new DpAgent(new MemoryStore());
+    const both = OP('both', 'gen-1', {
+      affectedPlanes: ['http', 'stream'],
+      planes: {
+        http: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:h',
+        },
+        stream: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:s',
+        },
+      },
+    });
+    const r = await new ApplyRunner(agent, new FakeEffects(), FAST).run(both);
+    expect(r.phase).toBe('activated');
+    expect(agent.coordinate('stream').activationEpoch, 'stream 좌표가 안 움직였다').toBe('1');
   });
 });

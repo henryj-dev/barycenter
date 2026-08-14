@@ -27,7 +27,7 @@ const OP = (id: string, gen = 'gen-1', o: Partial<ApplyOperation> = {}): ApplyOp
   leaderToken: '10',
   operationId: id,
   transitionId: id,
-  affectedPlanes: ['http'],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: gen,
   generationDigest: 'sha256:g',
   planes: {
@@ -35,6 +35,11 @@ const OP = (id: string, gen = 'gen-1', o: Partial<ApplyOperation> = {}): ApplyOp
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
       target: { activationEpoch: '1', membershipRevision: '1' },
       payloadDigest: 'sha256:h',
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:s',
     },
   },
   ...o,
@@ -148,7 +153,8 @@ describe('② 승계는 실행권이 든 목록으로 반납한다', () => {
 
     expect(newAgent.reservationOwner('http', '1'), '저널이 없다고 예약을 놓쳤다').toBeUndefined();
     const acks = await newAgent.reserveAll(OP('new', 'gen-1', { leaderToken: '11' }));
-    expect(acks.length).toBe(1);
+    // 설정 apply 는 두 평면을 선언하므로 ACK 도 둘이다 (11차 반례 ②).
+    expect(acks.length).toBe(2);
   });
 
   /**

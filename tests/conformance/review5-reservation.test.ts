@@ -34,14 +34,19 @@ const APPLY = (op: OperationTuple, generation = 'gen-1'): ApplyOperation => ({
   leaderToken: op.leaderToken,
   operationId: op.operationId,
   transitionId: op.transitionId,
-  affectedPlanes: [op.plane],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: generation,
   generationDigest: 'sha256:gen',
   planes: {
-    [op.plane]: {
+    http: {
       expectedCurrent: op.expectedCurrent,
       target: op.target,
       payloadDigest: op.payloadDigest,
+    },
+    stream: {
+      expectedCurrent: op.expectedCurrent,
+      target: op.target,
+      payloadDigest: `${op.payloadDigest}-s`,
     },
   },
 });

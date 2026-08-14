@@ -930,7 +930,7 @@ apply 경로를 영영 못 잡는다 — 옛 오퍼레이션을 `abort` 하려 �
 |---|---|
 | `leaderToken` | §3.5 — DP Agent 가 이걸로 옛 리더를 걸러낸다 |
 | `operationId` / `transitionId` | 멱등 재시도 키 |
-| `affectedPlanes` | 이 오퍼레이션이 건드리는 평면. **비어 있으면 거부** |
+| `affectedPlanes` | 이 오퍼레이션이 건드리는 평면. **설정 apply 는 항상 둘 다** — 하나의 `nginx.conf` 가 http·stream 을 함께 지배하므로 비게 되는 평면도 전환이다 |
 | `planes[plane]` | `{expectedCurrent, target, payloadDigest}` — 평면별 좌표 CAS |
 | `targetGeneration` | 활성화할 세대 이름 |
 | `generationDigest` | 그 세대의 **내용** digest (§7.2). 이름은 내용을 말하지 못한다 |

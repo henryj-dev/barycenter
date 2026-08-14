@@ -197,13 +197,16 @@ export function verifyGeneration(
 ): GenerationManifest {
   const manifest = readManifest(prefix, generation);
   if (expectedPlanes !== undefined) {
-    const want = [...expectedPlanes].sort().join(',');
-    const got = [...manifest.planes].sort().join(',');
-    if (want !== got) {
+    // **포함 관계다** (11차 반례 ②). 설정 apply 는 항상 두 평면을 선언하고, 세대는
+    // 그중 일부만 구성할 수 있다 — 비는 평면도 전환이기 때문이다. 반대로 세대가
+    // 구성하는데 선언하지 않은 평면이 있으면 그 좌표가 옛 값으로 남는다.
+    const declared = new Set(expectedPlanes);
+    const missing = manifest.planes.filter((p) => !declared.has(p));
+    if (missing.length > 0) {
       throw new GenerationError(
         'plane_mismatch',
-        `세대 '${generation}' 는 [${got}] 를 구성하는데 오퍼레이션은 [${want}] 만 말한다 — ` +
-          `선언하지 않은 평면의 좌표가 옛 값으로 남는다`,
+        `세대 '${generation}' 는 [${manifest.planes.join(',')}] 를 구성하는데 오퍼레이션은 ` +
+          `[${[...expectedPlanes].join(',')}] 만 말한다 — [${missing.join(',')}] 의 좌표가 옛 값으로 남는다`,
       );
     }
   }

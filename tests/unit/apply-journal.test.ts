@@ -31,7 +31,7 @@ const OP: ApplyOperation = {
   leaderToken: '10',
   operationId: 'op-1',
   transitionId: 't-1',
-  affectedPlanes: ['http'],
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: TARGET,
   generationDigest: 'sha256:gen',
   planes: {
@@ -39,6 +39,11 @@ const OP: ApplyOperation = {
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
       target: { activationEpoch: '1', membershipRevision: '1' },
       payloadDigest: 'sha256:gen2',
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:s',
     },
   },
 };
