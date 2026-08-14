@@ -224,3 +224,50 @@ describe('⑤ partial 재시도를 소진해도 복구가 깨지지 않는다', 
     ).toBe('partial_exhausted');
   });
 });
+
+// ── 13차 반례 ② — 부분 활성화는 기준이 아니다 ──────────────────────────
+
+describe('⑥ partial 은 수렴 기준이 되지 못한다 (13차)', () => {
+  /**
+   * `lastActivated` 를 **평면별 commit 마다** 갱신하고 있었다. 그래서 http 만 넘어간
+   * 상태에서도 기준이 생기고, reconcile 이 `converged` 라고 답했다 —
+   * **실제 좌표는 `http=1 / stream=0`** 인데.
+   *
+   * 기준은 **오퍼레이션 단위**여야 한다. 전 평면이 넘어갔을 때만 "여기로 되돌린다" 고
+   * 말할 수 있다.
+   */
+  it('한 평면만 넘어간 상태를 converged 라고 하지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('half');
+    const fx = new FakeEffects();
+    fx.publishedRecord = {
+      generation: 'gen-1', leaderToken: '10', operationId: 'half',
+      transitionId: 'half', generationDigest: 'sha256:gen-1',
+    };
+    fx.acceptingGeneration = 'gen-1';
+
+    await agent.reserveAll(op);
+    await agent.stage(tupleFor(op, 'http'), null);   // stream 은 stage 하지 않는다
+    await agent.writeJournal({
+      op, phase: 'reload_observed', reloadAttempts: 9, seq: 1,
+      progress: { http: 'staged', stream: 'reserved' },
+    });
+
+    const r = await new ApplyRunner(agent, fx, FAST).recover();
+    expect(r.phase).toBe('partial_exhausted');
+    expect(agent.coordinate('http').activationEpoch).toBe('1');
+    expect(agent.coordinate('stream').activationEpoch, '부분 활성화 상태를 만들지 못했다').toBe('0');
+
+    const rec = await LocalDataplaneDriver.create({ store, effects: fx }).reconcileConfig();
+    expect(rec.kind, '한 평면만 넘어갔는데 수렴했다고 답했다').not.toBe('converged');
+  });
+
+  it('전 평면이 넘어가면 기준이 된다 — 막는 것만 하는 게 아니다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    expect((await driver.applyConfig(OP('full'))).phase).toBe('activated');
+    expect((await driver.reconcileConfig()).kind).toBe('converged');
+  });
+});

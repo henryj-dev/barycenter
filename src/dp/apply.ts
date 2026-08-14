@@ -460,7 +460,8 @@ export class ApplyRunner {
           await ignoreConflict(this.write(next(j, { phase, progress, evidence: evidence! })));
           if (phase !== 'partially_activated') {
             const stuck = planesOf(j.op).filter((p) => progress[p] !== 'committed');
-            await this.agent.finishOperation(j.op, stuck);
+            // **전 평면이 넘어갔을 때만** 수렴 기준으로 올린다 (13차 반례 ②).
+            await this.agent.finishOperation(j.op, stuck, { promote: phase === 'activated' });
           }
           break;
         }

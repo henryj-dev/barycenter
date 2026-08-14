@@ -185,6 +185,11 @@ export type AgentState = {
    */
   lastPublishIntent?: PublishRecord;
   /**
+   * 평면 하나가 넘어갈 때마다 여기 적힌다. **아직 기준이 아니다** (13차 반례 ②).
+   * 전 평면이 넘어가야 `lastActivated` 로 올라간다.
+   */
+  pendingActivation?: PublishRecord;
+  /**
    * 진행 중인 apply 오퍼레이션의 저널 (§6.2).
    *
    * **여기 있어야 한다.** 저널과 멤버십 좌표가 서로 다른 소유자를 가지면 같은 store 를
@@ -507,8 +512,27 @@ export class DpAgent {
    *
    * 종단에 도달했는데 소유권이나 예약이 남으면 그 좌표는 영구히 잠긴다.
    */
-  finishOperation(op: ApplyOperation, releasePlanes: Plane[] = []): Promise<void> {
+  finishOperation(
+    op: ApplyOperation,
+    releasePlanes: Plane[] = [],
+    opts: { promote?: boolean } = {},
+  ): Promise<void> {
     return this.serial((s) => {
+      // **전 평면이 넘어갔을 때만** 수렴 기준을 올린다 (13차 반례 ②).
+      //
+      // 반납과 **같은 임계 구간**에서 한다. 따로 쓰면 크래시 지점이 하나 늘고, 그
+      // 사이에 죽으면 부분 활성화가 기준으로 남는다. 여기서 못 올리고 죽어도
+      // `recover()` 가 종단 저널을 보고 다시 반납하면서 올린다.
+      // id 대조는 **방어적이다** — 모든 commit 이 `pendingActivation` 을 덮어쓰므로
+      // 지금 구조에서는 남의 것이 남아 있을 수 없다. 뮤테이션으로 확인했고, 이 검사를
+      // 없애도 테스트가 빨개지지 않는다. 리팩터링이 그 전제를 깨면 여기가 막는다.
+      const pending = s.pendingActivation;
+      if (pending !== undefined
+        && pending.operationId === op.operationId
+        && pending.transitionId === op.transitionId) {
+        if (opts.promote === true) s.lastActivated = pending;
+        delete s.pendingActivation;
+      }
       for (const plane of releasePlanes) {
         const t = tupleFor(op, plane);
         if (ownsSlot(s, t)) delete s.reservations[plane][t.target.activationEpoch];
@@ -746,7 +770,12 @@ export class DpAgent {
       s.planes[op.plane] = { ...op.target, payloadDigest: op.payloadDigest };
       s.activationEvidence[`${op.plane}:${op.target.activationEpoch}`] = evidence;
       // 무엇을 활성화했는지 기억한다 — reconcile 이 이걸로 되돌린다.
-      s.lastActivated = {
+      //
+      // **오퍼레이션 단위다** (13차 반례 ②). 전에는 평면별 commit 마다 갱신했고, 그래서
+      // http 만 넘어간 상태에서도 기준이 생겨 reconcile 이 `converged` 라고 답했다 —
+      // 실제 좌표는 http=1 / stream=0 인데. 전 평면이 넘어갔을 때만 "여기로 되돌린다"
+      // 고 말할 수 있다.
+      s.pendingActivation = {
         generation: op.targetGeneration,
         leaderToken: op.leaderToken,
         operationId: op.operationId,
