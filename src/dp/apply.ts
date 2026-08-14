@@ -52,7 +52,7 @@ export interface Effects {
    * 세대의 바이트가 오퍼레이션이 말한 digest 와 같은지, 엔진이 그 설정을 받아들이는지
    * 본다. 여기서 막지 못하면 잘못된 설정이 `current` 를 거쳐 HUP 까지 간다.
    */
-  preflight(generation: string, expectedDigest: string): Promise<PreflightResult>;
+  preflight(op: ApplyOperation): Promise<PreflightResult>;
   /**
    * 세대를 활성 포인터로 만든다.
    *
@@ -271,7 +271,7 @@ export class ApplyRunner {
       switch (j.phase) {
         case 'preflight': {
           // **게시 앞이다.** 여기서 걸리면 current 는 그대로고 nginx 도 그대로다.
-          const check = await this.effects.preflight(gen, j.op.generationDigest);
+          const check = await this.effects.preflight(j.op);
           this.agent.assertOwnership(j.op);
           if (!check.ok) {
             await this.failAll(j, check.reason ?? '게시 전 검사 실패');
@@ -645,18 +645,18 @@ export class FakeEffects implements Effects {
   preflightOk = true;
   preflightCalls = 0;
 
-  async preflight(_generation: string, _expectedDigest: string): Promise<PreflightResult> {
+  async preflight(_op: ApplyOperation): Promise<PreflightResult> {
     this.preflightCalls += 1;
     return this.preflightOk
       ? { ok: true, configTestPassed: true }
       : { ok: false, reason: '주입된 preflight 실패' };
   }
 
-  async publish(record: PublishRecord, lease?: ApplyLease): Promise<void> {
+  async publish(record: PublishRecord, lease: ApplyLease): Promise<void> {
     if (this.crashBeforeEffect === 'publish') throw new CrashInjected('before publish');
     this.clock.tick('publish:before');
     // **되돌릴 수 없는 지점 직전.** 여기와 아래 대입 사이에 await 가 없다.
-    lease?.assertValid();
+    lease.assertValid();
     this.publishCalls += 1;
     this.publishedRecord = record;
     if (this.crashAfterEffect === 'publish') throw new CrashInjected('after publish');
@@ -674,10 +674,10 @@ export class FakeEffects implements Effects {
     return this.publishedRecord?.generation;
   }
 
-  async signalReload(lease?: ApplyLease): Promise<void> {
+  async signalReload(lease: ApplyLease): Promise<void> {
     if (this.crashBeforeEffect === 'reload') throw new CrashInjected('before reload');
     this.clock.tick('reload:before');
-    lease?.assertValid();
+    lease.assertValid();
     this.reloadSignals += 1;
     if (this.reloadTakesEffect) this.acceptingGeneration = this.publishedRecord?.generation;
     if (this.crashAfterEffect === 'reload') throw new CrashInjected('after reload');

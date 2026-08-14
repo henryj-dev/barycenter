@@ -137,7 +137,7 @@ http {
  * 써 뒀을 뿐이다." 손으로 쓴 디렉토리는 manifest 가 없어서 이제 게시 전 검사에 막힌다.
  */
 function makeGeneration(name: string): void {
-  const m = materializeGeneration({ prefix, generation: name, files: { 'nginx.conf': CONF(name) } });
+  const m = materializeGeneration({ prefix, generation: name, files: { 'nginx.conf': CONF(name) }, planes: ['http'] });
   GENERATION_DIGESTS.set(name, m.digest);
 }
 
@@ -161,7 +161,7 @@ http {
     server { listen ${busyPort}; }
 }
 `;
-  const m = materializeGeneration({ prefix, generation: name, files: { 'nginx.conf': conf } });
+  const m = materializeGeneration({ prefix, generation: name, files: { 'nginx.conf': conf }, planes: ['http'] });
   GENERATION_DIGESTS.set(name, m.digest);
 }
 

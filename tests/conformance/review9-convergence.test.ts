@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
 import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
 import { publishedByMe } from '../../src/dp/operation.js';
-import type { ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
+import type { ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
 
 const OP = (id: string, gen: string, o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
@@ -289,8 +289,8 @@ describe('reconcile — 활성화가 끝난 뒤에도 갈라짐을 되돌린다'
     /** 활성화가 끝난 **뒤부터** 옛 writer 가 쓰는 족족 덮는다. */
     class Fighting extends FakeEffects {
       fighting = false;
-      override async publish(record: PublishRecord) {
-        await super.publish(record);
+      override async publish(record: PublishRecord, lease: ApplyLease) {
+        await super.publish(record, lease);
         if (this.fighting) {
           this.publishedRecord = {
             generation: 'gen-옛',

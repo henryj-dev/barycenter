@@ -16,6 +16,9 @@ import { FsEffects } from '../../src/dp/effects-fs.js';
 let prefix: string;
 
 /** 게시 기록. 이제 게시는 "무엇을" 이 아니라 "누가 무엇을" 이다. */
+/** 항상 유효한 lease. 이 스위트는 lease 자체가 아니라 파일 조작을 본다. */
+const LEASE = { leaderToken: '10', assertValid: () => undefined };
+
 const rec = (generation: string) => ({
   generation,
   leaderToken: '10',
@@ -48,7 +51,7 @@ afterEach(() => rmSync(prefix, { recursive: true, force: true }));
 describe('게시 — 심볼릭 링크 교체', () => {
   it('current 가 세대를 가리킨다', async () => {
     makeGeneration('gen-1');
-    await effects().publish(rec('gen-1'));
+    await effects().publish(rec('gen-1'), LEASE);
     expect(readlinkSync(join(prefix, 'current'))).toBe('generations/gen-1');
   });
 
@@ -56,10 +59,10 @@ describe('게시 — 심볼릭 링크 교체', () => {
     makeGeneration('gen-1');
     makeGeneration('gen-2');
     const fx = effects();
-    await fx.publish(rec('gen-1'));
-    await fx.publish(rec('gen-2'));
+    await fx.publish(rec('gen-1'), LEASE);
+    await fx.publish(rec('gen-2'), LEASE);
     expect(await fx.observePublished()).toMatchObject({ kind: 'owned', record: { generation: 'gen-2' } });
-    await fx.publish(rec('gen-1'));
+    await fx.publish(rec('gen-1'), LEASE);
     expect(await fx.observePublished()).toMatchObject({ kind: 'owned', record: { generation: 'gen-1' } });
   });
 
@@ -67,22 +70,22 @@ describe('게시 — 심볼릭 링크 교체', () => {
     makeGeneration('gen-1');
     makeGeneration('gen-2');
     const fx = effects();
-    await fx.publish(rec('gen-1'));
+    await fx.publish(rec('gen-1'), LEASE);
     // rename 은 원자적이다. 임시 링크를 만들고 덮어쓰므로 중간 상태가 관측되지 않는다.
-    await fx.publish(rec('gen-2'));
+    await fx.publish(rec('gen-2'), LEASE);
     expect(existsSync(join(prefix, 'current'))).toBe(true);
     // 임시 링크가 남지 않아야 한다.
     expect(existsSync(join(prefix, 'current.tmp'))).toBe(false);
   });
 
   it('없는 세대는 게시하지 않는다 — 끊어진 링크를 만들지 않는다', async () => {
-    await expect(effects().publish(rec('gen-없음'))).rejects.toThrow(/세대가 없다/);
+    await expect(effects().publish(rec('gen-없음'), LEASE)).rejects.toThrow(/세대가 없다/);
     expect(existsSync(join(prefix, 'current'))).toBe(false);
   });
 
   it('nginx.conf 가 없는 세대도 거부한다', async () => {
     mkdirSync(join(prefix, 'generations', 'gen-빈'), { recursive: true });
-    await expect(effects().publish(rec('gen-빈'))).rejects.toThrow(/nginx\.conf/);
+    await expect(effects().publish(rec('gen-빈'), LEASE)).rejects.toThrow(/nginx\.conf/);
   });
 });
 
@@ -94,7 +97,7 @@ describe('관측', () => {
   it('**소유 기록이 없으면 정합하지 않다** — 누가 게시했는지 모르는 세대는 내 것이 아니다', async () => {
     makeGeneration('gen-1');
     const fx = effects();
-    await fx.publish(rec('gen-1'));
+    await fx.publish(rec('gen-1'), LEASE);
     rmSync(join(prefix, 'current.owner'));
     expect(await fx.observePublished()).toMatchObject({ kind: 'inconsistent', generation: 'gen-1' });
   });
@@ -112,7 +115,7 @@ describe('관측', () => {
       probeErrorLogLines: async () => lines,
     });
     // 신호를 보내면 그 시점이 워터마크가 된다.
-    await fx.signalReload();
+    await fx.signalReload(LEASE);
     lines = 8;
     const e = await fx.observeActivation();
     expect(e?.configTestPassed).toBe(true);
@@ -138,7 +141,7 @@ describe('관측', () => {
 describe('reload 전송', () => {
   it('주입된 전송을 호출한다', async () => {
     let sent = 0;
-    await effects({ reload: async () => void (sent += 1) }).signalReload();
+    await effects({ reload: async () => void (sent += 1) }).signalReload(LEASE);
     expect(sent).toBe(1);
   });
 
@@ -148,6 +151,6 @@ describe('reload 전송', () => {
         throw new Error('컨테이너 없음');
       },
     });
-    await expect(fx.signalReload()).rejects.toThrow(/컨테이너 없음/);
+    await expect(fx.signalReload(LEASE)).rejects.toThrow(/컨테이너 없음/);
   });
 });

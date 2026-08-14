@@ -60,6 +60,8 @@ function makeGeneration(name: string): void {
   const manifest = materializeGeneration({
     prefix,
     generation: name,
+    // 이 세대는 http 와 stream 을 **함께** 구성한다 (10차 반례 ②).
+    planes: ['http', 'stream'],
     files: {
       'nginx.conf': `daemon off;
 error_log /prefix/logs/error.log warn;
@@ -136,10 +138,10 @@ const effects = (): Effects => {
   // HUP 을 보낸 시점의 워터마크. 그 이후 증가분만 이 전환의 것이다 (§6.3).
   let watermark: number | undefined;
   return {
-  async preflight(generation, expectedDigest) {
+  async preflight(op) {
     // 실제 파일을 다시 읽어 대조한다 — 호스트에서 돌지만 같은 바이트를 본다.
     try {
-      verifyGeneration(prefix, generation, expectedDigest);
+      verifyGeneration(prefix, op.targetGeneration, op.generationDigest, op.affectedPlanes);
       return { ok: true };
     } catch (e) {
       return { ok: false, reason: (e as Error).message };
@@ -200,14 +202,22 @@ const OP = (n: string, generation: string): ApplyOperation => ({
   leaderToken: '10',
   operationId: n,
   transitionId: `${n}-t`,
-  affectedPlanes: ['http'],
+  // **두 평면을 선언한다.** 이 세대들의 nginx.conf 는 http 와 stream 을 함께 구성하므로
+  // 한 평면만 선언하면 게시 전 검사가 plane_mismatch 로 막는다 (10차 반례 ②).
+  // 실제로 그 검사가 이 파일을 잡았다.
+  affectedPlanes: ['http', 'stream'],
   targetGeneration: generation,
   generationDigest: GENERATION_DIGESTS.get(generation) ?? 'sha256:없는세대',
   planes: {
     http: {
       expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
       target: { activationEpoch: '1', membershipRevision: '1' },
-      payloadDigest: `sha256:${n}`,
+      payloadDigest: `sha256:${n}-h`,
+    },
+    stream: {
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: `sha256:${n}-s`,
     },
   },
 });

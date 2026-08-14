@@ -36,7 +36,7 @@ beforeEach(() => {
 afterEach(() => rmSync(prefix, { recursive: true, force: true }));
 
 const FILES = { 'nginx.conf': 'events {}\nhttp { server { listen 80; } }\n' };
-const make = (generation: string, files = FILES) => materializeGeneration({ prefix, generation, files });
+const make = (generation: string, files = FILES) => materializeGeneration({ prefix, generation, files, planes: ['http'] });
 
 const kindOf = (fn: () => unknown): string => {
   try {
@@ -218,5 +218,140 @@ describe('게시 전 검사가 실제로 게시를 막는다 (§6.2 #2)', () => 
     expect(fx.preflightCalls).toBe(1);
     expect(fx.publishCalls, 'preflight 가 막았는데 게시했다').toBe(0);
     expect(fx.reloadSignals).toBe(0);
+  });
+});
+
+// ── 세대와 평면의 결박 (10차 반례 ②) ───────────────────────────────────
+
+describe('세대가 구성하는 평면을 오퍼레이션이 전부 선언해야 한다', () => {
+  /**
+   * 하나의 `nginx.conf` 가 http 와 stream 을 **함께** 바꾼다. 그런데 apply 는 평면별로
+   * 좌표를 옮기므로, 오퍼레이션이 한 평면만 선언하면 나머지 평면은 **설정은 활성화되고
+   * 좌표는 옛 값**으로 남는다. 조용한 갈라짐이다.
+   *
+   * 그래서 manifest 가 어느 평면을 구성하는지 적고, 게시 전에 대조한다.
+   */
+  const BOTH_FILES = {
+    'nginx.conf': 'events {}\nhttp { server { listen 80; } }\nstream { server { listen 9000; proxy_pass p; } }\n',
+  };
+
+  it('manifest 가 평면을 기록한다', () => {
+    const m = materializeGeneration({
+      prefix, generation: 'gen-both', files: BOTH_FILES, planes: ['http', 'stream'],
+    });
+    expect(m.planes).toEqual(['http', 'stream']);
+    expect(readManifest(prefix, 'gen-both').planes).toEqual(['http', 'stream']);
+  });
+
+  it('선언한 평면이 맞으면 통과한다 — 막는 것만 하는 게 아니다', () => {
+    const m = materializeGeneration({
+      prefix, generation: 'gen-both', files: BOTH_FILES, planes: ['http', 'stream'],
+    });
+    expect(verifyGeneration(prefix, 'gen-both', m.digest, ['http', 'stream']).planes)
+      .toEqual(['http', 'stream']);
+  });
+
+  it('**한 평면만 선언하면 거부된다** — stream 좌표가 옛 값으로 남는다', () => {
+    const m = materializeGeneration({
+      prefix, generation: 'gen-both', files: BOTH_FILES, planes: ['http', 'stream'],
+    });
+    expect(kindOf(() => verifyGeneration(prefix, 'gen-both', m.digest, ['http'])))
+      .toBe('plane_mismatch');
+  });
+
+  it('없는 평면을 선언해도 거부된다', () => {
+    const m = materializeGeneration({
+      prefix, generation: 'gen-http', files: FILES, planes: ['http'],
+    });
+    expect(kindOf(() => verifyGeneration(prefix, 'gen-http', m.digest, ['http', 'stream'])))
+      .toBe('plane_mismatch');
+  });
+
+  it('게시 전 검사가 그것을 막는다 — current 를 건드리지 않는다', async () => {
+    const m = materializeGeneration({
+      prefix, generation: 'gen-both', files: BOTH_FILES, planes: ['http', 'stream'],
+    });
+    const agent = new DpAgent(new MemoryStore());
+    const r = await new ApplyRunner(
+      agent,
+      new FsEffects({ prefix, reload: async () => undefined, probeAccepting: async () => 'gen-both' }),
+      FAST,
+    ).run(OP({ targetGeneration: 'gen-both', generationDigest: m.digest })); // affectedPlanes: ['http']
+
+    expect(r.phase).toBe('failed');
+    expect(existsSync(join(prefix, 'current')), '평면이 어긋나는데 게시했다').toBe(false);
+  });
+
+  it('렌더러가 구성한 평면을 답한다 — manifest 는 그걸 적는다', async () => {
+    const { render } = await import('../../src/conf/render.js');
+    const { parseModel } = await import('../../src/model/decode.js');
+    const parsed = parseModel({
+      listeners: [
+        { key: 'lh', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true },
+        { key: 'lt', protocol: 'tcp', bind: '0.0.0.0', port: 9000, enabled: true, defaultPool: 'p' },
+      ],
+      httpRoutes: [{
+        key: 'r', listener: 'lh', hosts: ['a.example'], priority: 1,
+        action: { kind: 'proxy', pool: 'ph', websocket: false },
+      }],
+      passthroughRoutes: [],
+      pools: [
+        { key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' },
+        { key: 'ph', protocolClass: 'http', algorithm: 'round_robin' },
+      ],
+      backends: [
+        { key: 'b', pool: 'p', host: '10.0.0.1', port: 80, weight: 1 },
+        { key: 'bh', pool: 'ph', host: '10.0.0.2', port: 80, weight: 1 },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(render(parsed.model).planes).toEqual(['http', 'stream']);
+  });
+});
+
+// ── 실물 부작용도 lease 를 지킨다 ──────────────────────────────────────
+
+describe('FsEffects 도 lease 를 확인한다 — FakeEffects 로만 보면 놓친다', () => {
+  /**
+   * lease 계약을 `FakeEffects` 로만 시험하고 있었다. 그건 테스트 도구고, 실제로 파일을
+   * 만지는 것은 `FsEffects` 다. 뮤테이션이 그 구멍을 드러냈다 — `FsEffects` 의 검사를
+   * 지워도 conformance 가 전부 통과했다.
+   */
+  const invalid = { leaderToken: '10', assertValid: () => { throw new Error('lease 를 잃었다'); } };
+  const valid = { leaderToken: '10', assertValid: () => undefined };
+
+  it('잃은 lease 로는 심볼릭 링크를 바꾸지 못한다', async () => {
+    const m = make('gen-1');
+    const fx = new FsEffects({ prefix, reload: async () => undefined, probeAccepting: async () => undefined });
+
+    await expect(fx.publish({
+      generation: 'gen-1', leaderToken: '10', operationId: 'o',
+      transitionId: 't', generationDigest: m.digest,
+    }, invalid)).rejects.toThrow();
+
+    expect(existsSync(join(prefix, 'current')), 'lease 를 잃었는데 게시했다').toBe(false);
+  });
+
+  it('유효한 lease 로는 게시된다 — 막는 것만 하는 게 아니다', async () => {
+    const m = make('gen-1');
+    const fx = new FsEffects({ prefix, reload: async () => undefined, probeAccepting: async () => undefined });
+
+    await fx.publish({
+      generation: 'gen-1', leaderToken: '10', operationId: 'o',
+      transitionId: 't', generationDigest: m.digest,
+    }, valid);
+
+    expect(await fx.observePublished()).toMatchObject({ kind: 'owned', record: { generation: 'gen-1' } });
+  });
+
+  it('잃은 lease 로는 HUP 도 못 보낸다', async () => {
+    let signals = 0;
+    const fx = new FsEffects({
+      prefix,
+      reload: async () => void (signals += 1),
+      probeAccepting: async () => undefined,
+    });
+    await expect(fx.signalReload(invalid)).rejects.toThrow();
+    expect(signals, 'lease 를 잃었는데 HUP 을 보냈다').toBe(0);
   });
 });

@@ -12,7 +12,11 @@
  * 여기서 고정하면 그 중 하나만 지원하는 꼴이 된다.
  */
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
+  openSync,
+  writeSync,
   readFileSync,
   readlinkSync,
   renameSync,
@@ -23,7 +27,13 @@ import {
 import { basename, join } from 'node:path';
 import type { Effects, PreflightResult } from './apply.js';
 import { verifyGeneration } from './materialize.js';
-import type { ActivationEvidence, ApplyLease, PublishRecord, PublishedState } from './operation.js';
+import type {
+  ActivationEvidence,
+  ApplyLease,
+  ApplyOperation,
+  PublishRecord,
+  PublishedState,
+} from './operation.js';
 
 export type FsEffectsOptions = {
   /** `/etc/barycenter` 에 해당. `generations/` 와 `current` 가 여기 있다. */
@@ -55,6 +65,27 @@ export type FsEffectsOptions = {
   configTest?: (generation: string) => Promise<boolean>;
 };
 
+/** 내용을 fsync 하고 닫는다. rename 이 먼저 보이면 빈 파일이 정본이 된다. */
+function writeFileDurable(path: string, body: string): void {
+  const fd = openSync(path, 'w');
+  try {
+    writeSync(fd, body, 0, 'utf8');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** 디렉토리 엔트리를 디스크에 내린다. rename 만으로는 부족하다. */
+function fsyncDir(path: string): void {
+  const fd = openSync(path, 'r');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export class FsEffects implements Effects {
   /** HUP 을 보낸 시점의 error log 줄 수. 그 이후 증가분만 이 전환의 것이다. */
   private watermark: number | undefined;
@@ -71,9 +102,12 @@ export class FsEffects implements Effects {
    * **디스크의 바이트를 다시 읽어 대조한다.** manifest 만 믿으면 manifest 만 맞고 내용이
    * 바뀐 세대를 활성화한다.
    */
-  async preflight(generation: string, expectedDigest: string): Promise<PreflightResult> {
+  async preflight(op: ApplyOperation): Promise<PreflightResult> {
+    const generation = op.targetGeneration;
     try {
-      verifyGeneration(this.opts.prefix, generation, expectedDigest);
+      // **평면까지 대조한다** (10차 반례 ②). 세대가 stream 도 구성하는데 오퍼레이션이
+      // http 만 말하면, stream 설정은 활성화되고 좌표만 옛 값으로 남는다.
+      verifyGeneration(this.opts.prefix, generation, op.generationDigest, op.affectedPlanes);
     } catch (e) {
       return { ok: false, reason: (e as Error).message };
     }
@@ -94,7 +128,7 @@ export class FsEffects implements Effects {
     return `${this.link}.owner`;
   }
 
-  async publish(record: PublishRecord, lease?: ApplyLease): Promise<void> {
+  async publish(record: PublishRecord, lease: ApplyLease): Promise<void> {
     const generation = record.generation;
     const dir = join(this.opts.prefix, 'generations', generation);
     // 끊어진 링크를 만들지 않는다. 게시 후 reload 가 실패하는 것보다 게시를 막는 게 낫다.
@@ -118,12 +152,16 @@ export class FsEffects implements Effects {
     // 리더가 다시 게시해 수렴한다 (9차 뒤 방향 전환).
     const ownerTmp = `${this.ownerPath}.tmp`;
     if (existsSync(ownerTmp)) unlinkSync(ownerTmp);
-    writeFileSync(ownerTmp, JSON.stringify(record), 'utf8');
+    writeFileDurable(ownerTmp, JSON.stringify(record));
     renameSync(ownerTmp, this.ownerPath);
+    fsyncDir(this.opts.prefix);
 
-    lease?.assertValid();
+    lease.assertValid();
     // rename 은 원자적이다 — `current` 가 없는 순간이 생기지 않는다.
     renameSync(tmp, this.link);
+    // **디렉토리 엔트리도 내린다** (10차 반례 ⑤). rename 만 하면 전원이 끊겼을 때
+    // 포인터와 소유 기록의 순서가 뒤집힐 수 있다.
+    fsyncDir(this.opts.prefix);
   }
 
   async observePublished(): Promise<PublishedState> {
@@ -151,10 +189,10 @@ export class FsEffects implements Effects {
       : { kind: 'inconsistent', generation, record };
   }
 
-  async signalReload(lease?: ApplyLease): Promise<void> {
+  async signalReload(lease: ApplyLease): Promise<void> {
     // **신호 전에** 워터마크를 찍는다. 뒤에 찍으면 신호가 만든 오류를 놓친다.
     this.watermark = await this.errorLogLines();
-    lease?.assertValid();
+    lease.assertValid();
     await this.opts.reload();
   }
 

@@ -121,12 +121,18 @@ longest-prefix · `default_server` 부재 시 첫 server 로 감).
 본다. 늦게 착지한 옛 게시는 막아야 할 것이 아니라 **관측되고 덮이는 것**이 된다.
 `status()` 가 갈라짐을 드러내므로 컨트롤 플레인이 판단할 수 있다.
 
-### 10차 검수가 남긴 것
+### 10차 검수 — 처리했다
 
-| | 문제 | 성격 |
-|---|---|---|
-| ② | 하나의 `nginx.conf` 가 두 평면을 바꾸는데 `affectedPlanes:['http']` 만으로 apply 할 수 있다. stream 설정도 활성화되지만 stream 좌표는 옛 값이다 | 타입 모양 |
-| ⑤ | `Effects` 의 `lease` 가 선택 인자다. deadline·취소가 없다. owner/current 경로에 fsync 가 없다 | 타입 모양 + 구현 |
+| | 처리 |
+|---|---|
+| ① 종단 뒤 재검증 없음 | ✅ `reconcileConfig()` — 활성화가 끝난 뒤에도 갈라짐을 되돌린다 |
+| ② 세대 ↔ 평면 미결박 | ✅ 렌더러가 구성한 평면을 답하고 manifest 가 기록. 게시 전 대조 |
+| ③ 낡은 abort | ✅ 실행권 해제가 토큰까지 본다 |
+| ④ `publishedByMe` 토큰 | ✅ 같은 id 라도 옛 토큰의 기록은 내 것이 아니다 |
+| ⑤ `Effects` ABI | ▲ lease 를 **필수 인자**로, owner/current 에 fsync. **deadline·취소는 없다** |
+
+**평면 결박이 내 e2e 를 잡았다.** 세대는 http·stream 을 함께 구성하는데 오퍼레이션은
+http 만 선언하고 있었다 — `plane_mismatch` 로 막혔다. 정확히 그 검사가 잡으려던 것이다.
 
 **그리고 내가 테스트를 코드에 맞춰 고친 것이 드러났다.** 수렴 방식으로 바꾸면서
 `review7` 픽스처를 "옛 리더가 게시했다" 에서 "내가 이미 게시했다" 로 바꿔 놓고

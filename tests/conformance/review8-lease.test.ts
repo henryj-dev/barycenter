@@ -66,7 +66,7 @@ describe('① 옛 러너의 늦은 게시가 착지하지 못한다', () => {
 
     /** 옛 세대를 게시하려다 준비 단계에서 멈춘다. */
     class Stalling extends FakeEffects {
-      override async publish(record: PublishRecord, lease?: ApplyLease): Promise<void> {
+      override async publish(record: PublishRecord, lease: ApplyLease): Promise<void> {
         if (record.generation === 'gen-old') await gate;
         await super.publish(record, lease);
       }
@@ -207,7 +207,7 @@ describe('③ 관측 결과는 내 저널에만 쓴다', () => {
         // `awaitActivation` 안이다. 신임이 실행권과 저널을 **쥔 채로** 진행 중이다.
         return { acceptingGeneration: 'gen-1', errorLogGrowth: 0, masterPid: '옛-러너' };
       }
-      override async signalReload(lease?: ApplyLease) {
+      override async signalReload(lease: ApplyLease) {
         await super.signalReload(lease);
         // 승계하고 신임이 자기 저널을 연다 — 아직 끝나지 않았다.
         await newAgent.fence('11');

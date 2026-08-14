@@ -43,7 +43,18 @@ import type {
   UdpPreset,
 } from '../model/provisional.js';
 
-export type RenderedConfig = { conf: string; digest: string };
+export type RenderedConfig = {
+  conf: string;
+  digest: string;
+  /**
+   * 이 설정이 **실제로 구성하는 평면들** (10차 반례 ②).
+   *
+   * 하나의 `nginx.conf` 가 http 와 stream 을 함께 바꾼다. 그런데 apply 는 평면별
+   * 좌표를 옮기므로, 어느 평면을 건드리는지 모르면 "stream 설정도 활성화됐는데
+   * stream 좌표는 옛 값" 인 상태가 조용히 생긴다.
+   */
+  planes: ('http' | 'stream')[];
+};
 
 /**
  * 렌더에 영향을 주는 엔진 capability.
@@ -511,5 +522,8 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
 
   const conf = serialize(top);
   const digest = createHash('sha256').update(conf, 'utf8').digest('hex');
-  return { conf, digest };
+  const planes: ('http' | 'stream')[] = [];
+  if (httpListeners.length > 0) planes.push('http');
+  if (streamListeners.length > 0) planes.push('stream');
+  return { conf, digest, planes };
 }

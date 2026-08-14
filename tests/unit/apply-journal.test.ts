@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
-import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
+import type { ActivationEvidence, ApplyLease, ApplyOperation } from '../../src/dp/operation.js';
 import {
   ApplyRunner,
   CrashClock,
@@ -236,9 +236,9 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
     // 올리면 그 사이 옛 상태로 peer 를 고른다.
     class Watching extends FakeEffects {
       stagedAtReload: string | undefined;
-      override async signalReload(): Promise<void> {
+      override async signalReload(lease: ApplyLease): Promise<void> {
         this.stagedAtReload = agent.stagedDigest('http', '1');
-        await super.signalReload();
+        await super.signalReload(lease);
       }
     }
     const watching = new Watching();

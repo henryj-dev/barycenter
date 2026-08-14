@@ -166,11 +166,12 @@ cat <<'GATES'
                         **전제**: 옛 writer 가 언젠가 멈춘다 (리더 선출의 몫).
  ③ 낡은 abort           ✅ 해소. 실행권 해제가 토큰까지 본다.
  ④ publishedByMe 토큰   ✅ 해소. 같은 id 라도 옛 토큰의 기록은 내 것이 아니다.
- ② 전역 세대 ↔ 평면별 좌표  ❌ **남았다.** 하나의 nginx.conf 가 두 평면을 바꾸는데
-                        affectedPlanes:['http'] 만으로 apply 할 수 있다. stream 설정도
-                        활성화되지만 stream 좌표는 옛 값으로 남는다.
- ⑤ Effects ABI          ❌ **남았다.** lease 가 선택 인자다. deadline·취소가 없다.
-                        owner/current 경로에 fsync 가 없다.
+ ② 전역 세대 ↔ 평면 결박  ✅ 해소. 렌더러가 구성한 평면을 답하고 manifest 가 그것을
+                        적는다. 게시 전 검사가 오퍼레이션의 affectedPlanes 와 대조한다 —
+                        어긋나면 current 를 건드리지 않는다.
+ ⑤ Effects ABI          ▲ lease 를 **필수 인자**로 만들고 owner/current 에 fsync 를
+                        넣었다. **deadline·취소는 없다** — exclusiveApply 교착이
+                        그대로 남는다.
 
  그리고 내가 **테스트를 코드에 맞춰 고친 것**이 드러났다 (review7 픽스처). 되돌렸다.
 
