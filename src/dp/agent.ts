@@ -381,6 +381,54 @@ export class InvariantViolation extends Error {
  * I6 이 그것이다. 넣고 나서 그 버그를 되돌려 보니 **명시적 단언이 없던 시나리오 세 개에서도
  * 잡혔다** — 반례 하나를 고정하는 것보다 넓다. 이음매라고 다 못 재는 것이 아니다.
  */
+/**
+ * 기준 후보를 **상태로** 판정한다 (14차 검수).
+ *
+ * 전에는 호출자가 `promote: boolean` 을 넘겼다. 그러면 경로 하나를 빠뜨리는 순간 기준이
+ * 새거나 사라진다 — 실제로 `recover()` 가 그랬고(e280e93), fence 로 승계될 때는 전 평면이
+ * 넘어간 후보가 그대로 고아가 됐다.
+ *
+ * 여기서는 **좌표를 직접 본다.** 선언한 평면이 전부 목표 epoch 에 도착했으면 기준이 되고,
+ * 아니면 후보를 버린다. 호출자가 무엇을 아는지와 무관하게 같은 답이 나온다.
+ */
+function finalizeCandidate(
+  s: AgentState,
+  ids: { operationId: string; transitionId: string },
+  epochs: Record<string, string>,
+): void {
+  const candidate = s.pendingActivation;
+  if (candidate === undefined) return;
+  if (candidate.operationId !== ids.operationId) return;
+  if (candidate.transitionId !== ids.transitionId) return;
+
+  const arrived = Object.entries(epochs).every(
+    ([plane, epoch]) => s.planes[plane as Plane]?.activationEpoch === epoch,
+  );
+  if (arrived) s.lastActivated = candidate;
+  delete s.pendingActivation;
+}
+
+/** 오퍼레이션이 선언한 평면별 목표 epoch. */
+function epochsOf(op: ApplyOperation): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const plane of ['http', 'stream'] as const) {
+    const target = op.planes[plane];
+    if (target !== undefined) {
+      out[plane] = normalizeNumeric(target.target.activationEpoch, 'activationEpoch');
+    }
+  }
+  return out;
+}
+
+/** 두 기록이 **같은 활성화 사건**인가. 세대 이름만 같아서는 안 된다. */
+function sameRecordIdentity(a: PublishRecord, b: PublishRecord): boolean {
+  return a.generation === b.generation
+    && a.generationDigest === b.generationDigest
+    && a.operationId === b.operationId
+    && a.transitionId === b.transitionId
+    && a.leaderToken === b.leaderToken;
+}
+
 export function assertInvariants(before: AgentState | undefined, next: AgentState): void {
   const big = (v: string): bigint => BigInt(v);
 
@@ -437,6 +485,46 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
       );
     }
   }
+  // ── I6. 기준은 후보를 거쳐서만 생기고, 활성화는 기준을 남긴다 ────────
+  //
+  // **처음 쓴 I6 은 틀렸다.** "후보가 사라지면 승격됐거나 저널이 activated 가 아니어야
+  // 한다" 고 적었는데, 한 평면만 commit 하고 저널 없이 abort 하는 **정당한 경로**를
+  // 막았다 (14차 검수). 사라지는 쪽이 아니라 **생기는 쪽**을 봐야 했다.
+  //
+  //   (a) `lastActivated` 는 직전 후보였던 것만 될 수 있다 — 기준이 허공에서 생기지 않는다
+  //   (b) 저널이 `activated` 인데 그 후보가 사라졌으면, 기준이 그것이어야 한다
+  //
+  // (b) 가 14차가 지목한 버그를 덮는다 — 활성화해 놓고 기준을 승격 없이 지우는 것.
+  const droppedCandidate = before.pendingActivation;
+  // **참조로 비교하면 안 된다.** `serial()` 이 매번 `structuredClone` 하므로 값이 그대로여도
+  // 객체는 늘 다르다. 그걸로 판정하면 모든 쓰기가 "기준이 움직였다" 가 된다.
+  const baselineMoved = next.lastActivated === undefined
+    ? before.lastActivated !== undefined
+    : before.lastActivated === undefined
+      || !sameRecordIdentity(next.lastActivated, before.lastActivated);
+  if (baselineMoved && next.lastActivated !== undefined) {
+    if (droppedCandidate === undefined || !sameRecordIdentity(next.lastActivated, droppedCandidate)) {
+      throw new InvariantViolation(
+        'I6 기준은 후보를 거쳐서만 생긴다',
+        `${next.lastActivated.generation} 이 후보를 거치지 않고 기준이 됐다`,
+      );
+    }
+  }
+  const j6 = next.journal;
+  if (j6 !== undefined
+    && j6.phase === 'activated'
+    && droppedCandidate !== undefined
+    && next.pendingActivation === undefined
+    && j6.op.operationId === droppedCandidate.operationId
+    && j6.op.transitionId === droppedCandidate.transitionId) {
+    if (next.lastActivated === undefined || !sameRecordIdentity(next.lastActivated, droppedCandidate)) {
+      throw new InvariantViolation(
+        'I6 활성화는 기준을 남긴다',
+        `${droppedCandidate.generation} 을 활성화해 놓고 기준으로 올리지 않은 채 후보를 지웠다`,
+      );
+    }
+  }
+
   const wasSeq = before.journal?.seq;
   const nowSeq = next.journal?.seq;
   if (wasSeq !== undefined && nowSeq !== undefined && nowSeq < wasSeq) {
@@ -625,27 +713,9 @@ export class DpAgent {
    *
    * 종단에 도달했는데 소유권이나 예약이 남으면 그 좌표는 영구히 잠긴다.
    */
-  finishOperation(
-    op: ApplyOperation,
-    releasePlanes: Plane[] = [],
-    opts: { promote?: boolean } = {},
-  ): Promise<void> {
+  finishOperation(op: ApplyOperation, releasePlanes: Plane[] = []): Promise<void> {
     return this.serial((s) => {
-      // **전 평면이 넘어갔을 때만** 수렴 기준을 올린다 (13차 반례 ②).
-      //
-      // 반납과 **같은 임계 구간**에서 한다. 따로 쓰면 크래시 지점이 하나 늘고, 그
-      // 사이에 죽으면 부분 활성화가 기준으로 남는다. 여기서 못 올리고 죽어도
-      // `recover()` 가 종단 저널을 보고 다시 반납하면서 올린다.
-      // id 대조는 **방어적이다** — 모든 commit 이 `pendingActivation` 을 덮어쓰므로
-      // 지금 구조에서는 남의 것이 남아 있을 수 없다. 뮤테이션으로 확인했고, 이 검사를
-      // 없애도 테스트가 빨개지지 않는다. 리팩터링이 그 전제를 깨면 여기가 막는다.
-      const pending = s.pendingActivation;
-      if (pending !== undefined
-        && pending.operationId === op.operationId
-        && pending.transitionId === op.transitionId) {
-        if (opts.promote === true) s.lastActivated = pending;
-        delete s.pendingActivation;
-      }
+      finalizeCandidate(s, op, epochsOf(op));
       for (const plane of releasePlanes) {
         const t = tupleFor(op, plane);
         if (ownsSlot(s, t)) delete s.reservations[plane][t.target.activationEpoch];
@@ -736,13 +806,6 @@ export class DpAgent {
         );
       }
       s.journal = entry;
-    });
-  }
-
-  /** 오퍼레이션이 끝나면 저널을 비운다. */
-  clearJournal(): Promise<void> {
-    return this.serial((s) => {
-      delete s.journal;
     });
   }
 
@@ -1069,6 +1132,9 @@ function supersede(s: AgentState, holder: ActiveOperation): void {
   if (sameOp && j !== undefined && !isTerminalPhase(j.phase)) {
     s.journal = { ...j, phase: 'superseded', seq: j.seq + 1 };
   }
+  // 승계도 **끝내는 것**이다 (14차 검수). 전에는 전 평면이 넘어간 후보가 여기서 고아가
+  // 됐다 — 활성화는 일어났는데 되돌릴 기준이 영영 안 생긴다.
+  finalizeCandidate(s, holder, holder.epochs);
   delete s.activeOperation;
 }
 

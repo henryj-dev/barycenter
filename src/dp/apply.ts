@@ -235,7 +235,6 @@ export class ApplyRunner {
       await this.agent.finishOperation(
         j.op,
         planesOf(j.op).filter((p) => j.progress?.[p] !== 'committed'),
-        { promote: j.phase === 'activated' },
       );
       return resultOf(j);
     }
@@ -333,7 +332,23 @@ export class ApplyRunner {
       }
       // **종단은 읽고 돌아가는 것뿐이다.** 부작용이 없으므로 소유권 검사 앞에 온다 —
       // 종단에 닿으면 실행권을 이미 놓은 뒤라 검사가 오히려 걸린다.
-      if (isTerminalPhase(j.phase)) return resultOf(j);
+      //
+      // 다만 **놓기는 해야 한다** (14차 검수). 같은 오퍼레이션으로 재진입하면 `run()` 이
+      // 예약과 실행권을 다시 잡은 뒤 여기서 종단을 만나고, 그대로 돌아가 버렸다 —
+      // 실행권이 남아 다음 오퍼레이션이 막힌다. 멱등이므로 다시 불러도 안전하다.
+      if (isTerminalPhase(j.phase)) {
+        // **놓을 것이 있을 때만 쓴다.** `finishOperation` 은 직렬 구간이라 부를 때마다
+        // durable write 가 하나 생긴다 — 정상 경로에서 크래시 지점이 늘어난다.
+        const holder = this.agent.activeOperation();
+        if (holder?.operationId === j.op.operationId
+          && holder.transitionId === j.op.transitionId) {
+          await this.agent.finishOperation(
+            j.op,
+            planesOf(j.op).filter((p) => j.progress?.[p] !== 'committed'),
+          );
+        }
+        return resultOf(j);
+      }
       // **부작용 앞에서 매번 확인한다** (6차 반례 ⑥). 예약은 과거의 승인일 뿐이고,
       // 그 사이 새 리더가 fence 했을 수 있다.
       this.agent.assertOwnership(j.op);
@@ -467,7 +482,7 @@ export class ApplyRunner {
           if (phase !== 'partially_activated') {
             const stuck = planesOf(j.op).filter((p) => progress[p] !== 'committed');
             // **전 평면이 넘어갔을 때만** 수렴 기준으로 올린다 (13차 반례 ②).
-            await this.agent.finishOperation(j.op, stuck, { promote: phase === 'activated' });
+            await this.agent.finishOperation(j.op, stuck);
           }
           break;
         }

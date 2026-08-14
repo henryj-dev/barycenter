@@ -167,11 +167,18 @@ describe('② 승계는 실행권이 든 목록으로 반납한다', () => {
     const agent = new DpAgent(store);
     const op = OP('done');
 
+    // **전 평면을 넘긴다.** 전에는 http 만 commit 하고 저널을 `activated` 로 적었는데,
+    // 그건 실제 코드가 만들 수 없는 상태다 — `activated` 는 선언한 평면이 전부 넘어갔을
+    // 때만 쓰인다. 불가능한 전제 위에서는 무엇을 확인해도 뜻이 없다 (14차 검수가
+    // I6 으로 이 픽스처를 짚었다). 확인하려는 것(종단 저널을 안 덮는다)은 그대로다.
     await agent.reserveAll(op);
-    await agent.stage(tupleFor(op, 'http'), null);
-    await agent.commit(tupleFor(op, 'http'), { acceptingGeneration: 'gen-1' });
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(op, plane), null);
+      await agent.commit(tupleFor(op, plane), { acceptingGeneration: 'gen-1' });
+    }
     await agent.writeJournal({
-      op, phase: 'activated', reloadAttempts: 1, seq: 1, progress: { http: 'committed' },
+      op, phase: 'activated', reloadAttempts: 1, seq: 1,
+      progress: { http: 'committed', stream: 'committed' },
     });
     // 여기서 죽었다고 치자 — 저널은 종단인데 실행권이 아직 남아 있다.
     expect(agent.activeOperation(), '창을 만들지 못했다').toBeDefined();
