@@ -310,6 +310,7 @@ function checkProperties(
   stuck?: string,
   seed?: Seen,
   blocked?: string,
+  rejections: readonly string[] = [],
 ): Violation[] {
   const bad: Violation[] = [];
   for (const p of problems) {
@@ -498,6 +499,18 @@ function checkProperties(
       detail: `스케줄이 끝나고 복구까지 했는데 새 오퍼레이션이 ${blocked} 로 막혔다`,
     });
   }
+  // **거부를 실제로 판정에 쓴다** (21차 검수). 주석에는 "영구 거부가 끝까지 남지
+  // 않는다" 고 적어 놓고 `rejections` 를 받지도 읽지도 않고 있었다 — **문서가 구현보다
+  // 앞서갔다.** 스윕도 없는 검사는 못 지운다.
+  //
+  // 좌표를 잠그는 거부(`slot_taken`)가 났는데 마지막에 새 오퍼레이션까지 막혔으면,
+  // 그건 일시적 경합이 아니라 **남은 것**이다.
+  if (blocked !== undefined && rejections.includes('slot_taken')) {
+    bad.push({
+      property: 'P8 좌표를 잠그는 거부가 남지 않는다',
+      detail: `slot_taken 이 났고 정리 뒤에도 ${blocked} 로 막혀 있다`,
+    });
+  }
 
   if (stuck !== undefined) {
     bad.push({
@@ -628,7 +641,9 @@ async function once(
   }
 
   return {
-    violations: checkProperties(store.history, world, problems, stuck, seedState, blocked),
+    violations: checkProperties(
+      store.history, world, problems, stuck, seedState, blocked, rejections,
+    ),
     trace: sched.trace,
     choices: space.taken(),
     effects: world.effects,

@@ -246,6 +246,11 @@ export class ApplyRunner {
     // 없으므로 닫는 것이 답이다(7차의 "펜싱이 곧 승계다" 와 같은 논리).
     if (BigInt(j.op.leaderToken) < BigInt(this.agent.maxLeaderToken())) {
       await this.agent.closeJournal(j.op, 'superseded');
+      // **예약도 반납한다** (21차 CE-B). 저널만 닫으면 `status()` 는 깨끗하다는데 같은
+      // 좌표의 새 오퍼레이션이 `slot_taken` 으로 죽는다 — 처방이 두 번 불러야 참이 되고,
+      // 그 사이 진단 신호가 거짓말을 한다. `reserveAll` 의 고아 청소는 `supersede` 로
+      // 슬롯까지 지우는데 이쪽만 안 했다. **두 경로의 비대칭이었다.**
+      await this.agent.releaseStaleSlots(j.op);
       return resultOf(this.agent.readJournal() ?? j);
     }
     // **고아가 됐으면 다시 잡는다** (14차 · 모델이 찾았다). 비종단 저널인데 실행권이

@@ -492,6 +492,25 @@ function planesOfOperation(op: ApplyOperation): Plane[] {
   return (['http', 'stream'] as const).filter((p) => op.planes[p] !== undefined);
 }
 
+/**
+ * **이 저널이 그 오퍼레이션의 것인가.**
+ *
+ * 열네 회차 동안 같은 병형이 반복됐다 — **새 판정 자리를 만들 때마다 신원 비교(id +
+ * 토큰)를 한 번씩 빠뜨린다.** `releaseHolderSlots`(9차 반례 ③) · `finishOperation`
+ * (10차 반례 ③) 이 각각 그렇게 물렸고, 20차에 만든 `closeJournal` 이 또 그랬다 —
+ * 낡은 리더의 지연 abort 가 신임의 진행 중 저널을 `failed` 로 닫았다.
+ *
+ * 그래서 **한 곳으로 모은다.** 새 자리를 만들 때 이걸 부르면 빠뜨릴 수가 없다.
+ * `Settled` 표가 "어디서 검사하나" 를 모은 것과 같은 수법이다.
+ */
+function ownsJournal(j: JournalEntry | undefined, op: ApplyOperation): boolean {
+  if (j === undefined) return false;
+  return j.op.operationId === op.operationId
+    && j.op.transitionId === op.transitionId
+    && normalizeNumeric(j.op.leaderToken, 'leaderToken')
+      === normalizeNumeric(op.leaderToken, 'leaderToken');
+}
+
 /** 두 기록이 **같은 활성화 사건**인가. 세대 이름만 같아서는 안 된다. */
 function sameRecordIdentity(a: PublishRecord, b: PublishRecord): boolean {
   return a.generation === b.generation
@@ -950,6 +969,28 @@ export class DpAgent {
    * 종단에 도달했는데 소유권이나 예약이 남으면 그 좌표는 영구히 잠긴다.
    */
   /**
+   * **낡은 전환이 남긴 예약을 반납한다** (21차 CE-B).
+   *
+   * 저널만 닫고 슬롯을 두면 `status()` 는 깨끗한데 같은 좌표의 새 오퍼레이션이
+   * `slot_taken` 으로 죽는다. 실행권은 이미 없으므로(고아) 반납이 안전하다.
+   */
+  releaseStaleSlots(op: ApplyOperation): Promise<void> {
+    return this.serial((s) => {
+      if (s.activeOperation !== undefined) return; // 주인이 있으면 손대지 않는다
+      for (const plane of planesOfOperation(op)) {
+        const epoch = normalizeNumeric(
+          op.planes[plane]!.target.activationEpoch, 'activationEpoch',
+        );
+        const slot = s.reservations[plane]?.[epoch];
+        if (slot?.op.operationId === op.operationId
+          && slot.op.transitionId === op.transitionId) {
+          delete s.reservations[plane][epoch];
+        }
+      }
+    });
+  }
+
+  /**
    * **포기한 전환의 저널을 닫는다** (20차 CE-1).
    *
    * `abortConfig` 의 계약은 "전환을 종단 상태로 닫는다" 인데 **저널을 안 닫고 있었다.**
@@ -960,12 +1001,14 @@ export class DpAgent {
    * **리더 검사를 하지 않는다.** 닫는 것은 되돌릴 수 없는 연산이 아니고, 이걸 막으면
    * 신임이 들어온 뒤 고아가 영영 안 닫힌다(20차 CE-2 가 그 모양이었다).
    */
-  closeJournal(op: ApplyOperation, how: 'failed' | 'superseded'): Promise<void> {
+  closeJournal(
+    op: ApplyOperation,
+    how: 'failed' | 'superseded' | 'partial_exhausted',
+  ): Promise<void> {
     return this.serial((s) => {
       const j = s.journal;
-      if (j === undefined) return;
-      if (j.op.operationId !== op.operationId || j.op.transitionId !== op.transitionId) return;
-      if (isTerminalPhase(j.phase)) return;
+      if (!ownsJournal(j, op)) return;
+      if (j === undefined || isTerminalPhase(j.phase)) return;
       s.journal = { ...j, phase: how, seq: j.seq + 1 };
     });
   }

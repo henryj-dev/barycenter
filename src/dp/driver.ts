@@ -283,7 +283,15 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     await this.agent.finishOperation(op, planesOf(op));
     // **저널도 닫는다** (20차 CE-1). 계약이 "종단 상태로 닫는다" 인데 저널을 두고 가면
     // `unfinished` 가 죽은 전환을 살아 있다고 답하고 수리 경로를 막는다.
-    await this.agent.closeJournal(op, 'failed');
+    //
+    // **넘어간 평면이 있으면 `failed` 가 아니다** (21차 CE-C). 좌표를 보고 정한다 —
+    // 15차에 `failAll` 에서 고친 §3.4 거짓말이 이 자리에서 재발했다. "다 실패했다" 고
+    // 적으면 운영자는 http 가 새 세대로 서비스 중인 것을 못 본다.
+    const moved = planesOf(op).filter(
+      (plane) => this.agent.coordinate(plane).activationEpoch
+        === tupleFor(op, plane).target.activationEpoch,
+    );
+    await this.agent.closeJournal(op, moved.length > 0 ? 'partial_exhausted' : 'failed');
     if (refused.length > 0) {
       throw new DpRejection('terminal', `일부 평면이 이미 끝나 있었다 — ${refused.join(', ')}`);
     }

@@ -615,3 +615,87 @@ describe('처방이 죽지 않는다 (20차 CE-2)', () => {
     expect((await driver.status()).unfinished, '복구했는데도 남아 있다').toBeUndefined();
   });
 });
+
+describe('새 판정 자리도 신원을 본다 (21차)', () => {
+  /**
+   * **열네 번째다. 그리고 병형이 늘 같다** — 새 판정 자리를 만들 때마다 기존 신원
+   * 비교(id + 토큰) 관례를 한 번씩 빠뜨린다. `releaseHolderSlots`(9차) ·
+   * `finishOperation`(10차) 이 각각 그렇게 물렸고, 20차에 만든 `closeJournal` 이 또 그랬다.
+   */
+  it('낡은 리더의 abort 가 신임의 저널을 닫지 못한다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    await agent.fence('11');
+
+    const fresh: ApplyOperation = { ...OP('same', 'gen-N', '0', '1'), leaderToken: '11' };
+    await agent.reserveAll(fresh, {
+      op: fresh, phase: 'preflight', reloadAttempts: 0, progress: {},
+    });
+
+    // 낡은 리더(토큰 10)의 지연 abort. 개별 동작은 전부 거부되는데 저널만 닫혔다.
+    const stale: ApplyOperation = { ...OP('same', 'gen-O', '0', '1'), leaderToken: '10' };
+    await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .abortConfig(stale).catch(() => undefined);
+
+    expect(
+      new DpAgent(store).readJournal()?.phase,
+      '낡은 토큰이 신임의 진행 중 전환을 죽였다 — §3.5 펜싱 계약 위반',
+    ).toBe('preflight');
+  });
+
+  it('복구가 낡은 고아를 닫을 때 예약도 반납한다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.writeJournal({
+      op: a, phase: 'published', reloadAttempts: 0,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'reserved', stream: 'reserved' },
+    });
+    await agent.finishOperation(a);
+    await new DpAgent(store).fence('11');
+
+    const driver = LocalDataplaneDriver.create({ store, effects: new FakeEffects() });
+    await driver.recoverConfig();
+
+    expect((await driver.status()).unfinished, '전제가 성립하지 않는다').toBeUndefined();
+    const next: ApplyOperation = { ...OP('B', 'gen-B', '0', '1'), leaderToken: '11' };
+    const r = await driver.applyConfig(next);
+    expect(
+      r.phase,
+      'status 는 깨끗하다는데 apply 가 죽는다 — 처방이 반쪽이면 운영자가 갈 곳이 없다',
+    ).toBe('activated');
+  });
+});
+
+describe('포기해도 넘어간 평면은 넘어갔다고 적는다 (21차 CE-C)', () => {
+  /**
+   * `abortConfig` 의 저널 닫기가 커밋된 평면 유무를 안 보고 무조건 `failed` 였다.
+   * 부분 활성화 뒤 abort 하면 http 가 새 세대를 서빙 중인데 `partialTransition=false`
+   * 로 보고된다 — **15차에 `failAll` 에서 고친 §3.4 거짓말이 한 칸 옆에서 재발했다.**
+   */
+  it('한 평면이 넘어간 뒤 abort 하면 부분 전환으로 닫힌다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.stage(tupleFor(a, 'http'), null);
+    await agent.commit(tupleFor(a, 'http'), { acceptingGeneration: 'gen-A' });
+    await agent.writeJournal({
+      op: a, phase: 'partially_activated', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'staged' },
+    });
+
+    await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .abortConfig(a).catch(() => undefined);
+
+    expect(new DpAgent(store).coordinate('http').activationEpoch, '전제가 성립하지 않는다').toBe('1');
+    expect(
+      new DpAgent(store).readJournal()?.phase,
+      'http 가 넘어갔는데 "다 실패했다" 고 적었다',
+    ).toBe('partial_exhausted');
+  });
+});
