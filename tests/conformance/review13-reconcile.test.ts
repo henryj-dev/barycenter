@@ -72,6 +72,28 @@ describe('① 옛 리더의 reconcile 은 신임 리더를 덮지 않는다', ()
     expect(r.kind).not.toBe('converged');
   });
 
+  /**
+   * ①을 고치면서 **정당한 수렴까지 막았다** (14차 검수가 짚었다). 토큰 검사를 관측
+   * **앞에** 뒀더니, fence 만 오르고 바깥은 그대로인 정합한 상태에도 `diverged` 라고
+   * 답했다. 아무것도 갈라지지 않았는데.
+   *
+   * 읽기와 쓰기를 갈라야 했다. **관측은 누구나 한다. 리더만 고친다.**
+   */
+  it('fence 만 올랐고 바깥이 정합하면 converged 다 — 막기만 하는 게 아니다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: fx }).applyConfig(OP('A', 'gen-A', '10'));
+
+    // 신임이 fence 만 했다. 새 게시도 활성화도 없고 바깥은 여전히 gen-A 다.
+    await new DpAgent(store).fence('11');
+    const before = fx.publishCalls;
+
+    const r = await LocalDataplaneDriver.create({ store, effects: fx }).reconcileConfig();
+
+    expect(r.kind, '갈라진 것이 없는데 갈라졌다고 답했다').toBe('converged');
+    expect(fx.publishCalls - before, '읽기만 하면 되는데 게시했다').toBe(0);
+  });
+
   it('같은 리더라면 그대로 되돌린다 — 막기만 하는 게 아니다', async () => {
     const store = new MemoryStore();
     const fx = new FakeEffects();

@@ -199,15 +199,6 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   async #reconcileOnce(rounds = 3): Promise<ReconcileResult> {
     for (let i = 0; i < rounds; i += 1) {
       const expected = this.agent.lastActivated();
-      // **옛 리더의 기준으로는 되돌리지 않는다** (13차 반례 ①).
-      //
-      // 여기는 리더 토큰을 전혀 보지 않고 있었다. 그래서 신임이 fence 하고 자기 세대를
-      // 게시한 뒤에도, 옛 드라이버의 reconcile 한 번이 그걸 옛 세대로 덮었다.
-      // `exclusiveApply` 는 **인스턴스 안의** 큐라 두 리더 사이에서는 아무것도 막지 못한다.
-      // 막을 수 있는 것은 durable 한 토큰뿐이다.
-      if (expected !== undefined && BigInt(expected.leaderToken) < BigInt(this.agent.maxLeaderToken())) {
-        return { kind: 'diverged', expected, found: await this.#observe() };
-      }
       if (expected === undefined) {
         const intent = this.agent.lastPublishIntent();
         if (intent === undefined) return { kind: 'no_baseline' };
@@ -219,6 +210,18 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       const pointerOk = seen.kind === 'owned' && sameRecord(seen.record, expected);
       const activeOk = provesActivation(activation, expected.generation);
       if (pointerOk && activeOk) return { kind: 'converged', record: expected };
+
+      // **관측은 누구나 한다. 고치는 것은 리더만 한다** (13차 반례 ① · 14차 보정).
+      //
+      // 처음엔 이 검사를 관측 **앞에** 뒀다. 그랬더니 fence 만 오르고 바깥은 그대로인
+      // 정합한 상태까지 `diverged` 라고 답했다 — 아무것도 갈라지지 않았는데. 읽기를
+      // 막을 이유가 없다. 막아야 하는 것은 **되돌릴 수 없는 연산**뿐이다.
+      //
+      // `exclusiveApply` 는 인스턴스 안의 큐라 두 리더 사이에서는 아무것도 막지 못한다.
+      // 막을 수 있는 것은 durable 한 토큰뿐이다.
+      if (BigInt(expected.leaderToken) < BigInt(this.agent.maxLeaderToken())) {
+        return { kind: 'diverged', expected, found: seen };
+      }
 
       if (!this.#stillBaseline(expected)) continue; // 기준이 바뀌었다 — 다시 본다
 
