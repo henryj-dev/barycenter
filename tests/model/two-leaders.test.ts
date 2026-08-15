@@ -183,11 +183,19 @@ const swallow = (problems: Error[]) => async (p: Promise<unknown>): Promise<void
 
 type Violation = { property: string; detail: string };
 
+/**
+ * `seed` 는 스케줄이 시작되기 **직전**의 상태다.
+ *
+ * 없으면 역사의 첫 항목이 전부 "새로 쓰였다" 로 보인다 — 준비 단계에서 넘어온 기록까지
+ * P1 위반으로 잡혔다. **경계에서 나는 오탐이고, 하네스 버그다.** 모델을 넓히자마자
+ * 나왔으니 시나리오를 늘릴 때마다 이런 것을 의심해야 한다.
+ */
 function checkProperties(
   history: readonly Seen[],
   world: World,
   problems: readonly Error[],
   stuck?: string,
+  seed?: Seen,
 ): Violation[] {
   const bad: Violation[] = [];
   for (const p of problems) {
@@ -199,7 +207,7 @@ function checkProperties(
   let promotions = 0;
   for (let i = 0; i < history.length; i += 1) {
     const s = history[i]!;
-    const prev = i === 0 ? undefined : history[i - 1]!;
+    const prev = i === 0 ? seed : history[i - 1]!;
     const max = BigInt(s.maxLeaderToken);
 
     // P1 — 낡은 행위자는 intent·후보·기준을 바꾸지 못한다.
@@ -326,6 +334,7 @@ async function once(
   sched.arm();
   const tasks = scenario(ctx);
   await sched.run(tasks);
+  const seedState = historyFrom === 0 ? undefined : store.history[historyFrom - 1];
   store.history.splice(0, historyFrom);
 
   // **스케줄 뒤에 복구를 한 번 돌린다.** 남은 상태가 이어받을 수 있는 것이어야 한다 —
@@ -340,7 +349,7 @@ async function once(
   }
 
   return {
-    violations: checkProperties(store.history, world, problems, stuck),
+    violations: checkProperties(store.history, world, problems, stuck, seedState),
     trace: sched.trace,
     choices: space.taken(),
   };
@@ -456,6 +465,73 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
           () => swallow(new DpAgent(store).abort(tupleFor(a, 'stream'))),
         ];
       });
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **밀던 러너와 복구가 겹친다.**
+   *
+   * 운영에서 흔한 모양이다 — 프로세스가 죽은 줄 알고 다른 쪽이 복구를 시작했는데 원래
+   * 러너가 살아 있었다. 종단 재진입과 실행권 반납이 여기서 얽힌다.
+   */
+  it('밀던 러너와 복구가 겹쳐도 다섯 속성이 성립한다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(space, ({ store, effects, swallow }) => {
+        const a = OP('A', 'gen-A', '10', '0', '1');
+        return [
+          () => swallow(new ApplyRunner(new DpAgent(store), effects('run'), FAST).run(a)),
+          () => swallow(new ApplyRunner(new DpAgent(store), effects('rec'), FAST).recover()),
+        ];
+      });
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **수렴 중에 리더가 바뀐다.**
+   *
+   * 13차 ① 과 14차 회귀가 둘 다 이 자리였다. 손으로는 두 번 다 틀렸으니 생성해서 본다.
+   */
+  it('수렴 중에 리더가 바뀌어도 다섯 속성이 성립한다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(
+        space,
+        ({ store, effects, swallow }) => [
+          () => swallow(
+            LocalDataplaneDriver.create({ store, effects: effects('rec') }).reconcileConfig(),
+          ),
+          () => swallow(new DpAgent(store).fence('11')),
+        ],
+        async ({ store, effects }) => {
+          await LocalDataplaneDriver.create({ store, effects: effects('seed') })
+            .applyConfig(OP('A', 'gen-A', '10', '0', '1'));
+        },
+      );
       if (r.violations.length > 0) failure = r;
     });
 
