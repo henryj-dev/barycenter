@@ -235,16 +235,23 @@ class ModelEffects implements Effects {
  * 드러나야 한다. 처음엔 이걸 `throw` 로 넘겼는데 `Promise.allSettled` 가 통째로 삼켜서,
  * 일부러 버그를 넣어도 모델이 초록이었다 — **하네스가 거짓말을 하고 있었다.**
  */
-const swallow = (problems: Error[]) => async (p: Promise<unknown>): Promise<void> => {
-  try {
-    await p;
-  } catch (e) {
-    if (e instanceof DpRejection) return;
-    const name = (e as Error).name;
-    if (name === 'StoreConflict' || name === 'EffectTimeout') return;
-    problems.push(e as Error);
-  }
-};
+const swallow = (problems: Error[], rejections: string[]) =>
+  async (p: Promise<unknown>): Promise<void> => {
+    try {
+      await p;
+    } catch (e) {
+      // **거부를 버리지 않는다** (20차 검수). 전에는 그냥 삼켰다. 그러면 "정당한 요청이
+      // 거부되지 않는다" 방향의 속성을 **구조적으로** 못 쓴다 — 거부가 기록에 안 남으니까.
+      // 20차 반례 셋이 전부 그 사각에 있었다.
+      if (e instanceof DpRejection) {
+        rejections.push(e.kind);
+        return;
+      }
+      const name = (e as Error).name;
+      if (name === 'StoreConflict' || name === 'EffectTimeout') return;
+      problems.push(e as Error);
+    }
+  };
 
 /**
  * 수렴을 부르고 **답과 그 순간의 상태를 함께** 남긴다.
@@ -293,6 +300,7 @@ function checkProperties(
   problems: readonly Error[],
   stuck?: string,
   seed?: Seen,
+  blocked?: string,
 ): Violation[] {
   const bad: Violation[] = [];
   for (const p of problems) {
@@ -432,6 +440,22 @@ function checkProperties(
     }
   }
 
+  // ── P8 — **좋은 일이 일어난다** (20차 검수) ──────────────────────────
+  //
+  // 계측기 넷이 전부 "나쁜 일이 안 일어난다" 만 봤다. 그런데 20차 반례 셋은 **전부**
+  // 반대쪽에서 났다 — 정당한 오퍼레이션이 거부되고, 좌표가 잠기고, 처방이 죽었다.
+  // 상태는 내내 정합했으므로 불변식도 P0~P7 도 무풍이었다.
+  //
+  // 여기서 두 가지를 본다.
+  //   · 스케줄이 끝난 뒤 **깨끗한 좌표에 대한 새 오퍼레이션이 들어간다** (`blocked`)
+  //   · 영구 거부(`slot_taken`·`operation_in_flight`)가 **끝까지 남지 않는다**
+  if (blocked !== undefined) {
+    bad.push({
+      property: 'P8 정리된 뒤에는 새 오퍼레이션이 들어간다',
+      detail: `스케줄이 끝나고 복구까지 했는데 새 오퍼레이션이 ${blocked} 로 막혔다`,
+    });
+  }
+
   if (stuck !== undefined) {
     bad.push({
       property: 'P5 남은 저널은 복구가 이어받는다',
@@ -473,6 +497,8 @@ type Ctx = {
   effects: (who: string) => ModelEffects;
   /** 거부가 아닌 오류가 여기 쌓인다. 하나라도 있으면 속성 위반이다. */
   problems: Error[];
+  /** 거부의 종류. 정상 결과지만 **기록은 남긴다** (P8). */
+  rejections: string[];
   swallow: (p: Promise<unknown>) => Promise<void>;
 };
 
@@ -485,13 +511,15 @@ async function once(
   const store = new ModelStore(sched, 'store');
   const world = new World();
   const problems: Error[] = [];
+  const rejections: string[] = [];
   const ctx: Ctx = {
     sched,
     store,
     world,
     effects: (who) => new ModelEffects(sched, world, who, store),
     problems,
-    swallow: swallow(problems),
+    rejections,
+    swallow: swallow(problems, rejections),
   };
   // 준비는 스케줄 밖에서 한다 — 관심 없는 교차를 훑지 않기 위해서다.
   if (setup !== undefined) await setup(ctx);
@@ -513,8 +541,46 @@ async function once(
     else problems.push(e as Error);
   }
 
+  // **정리된 뒤에는 일이 되어야 한다** (P8 · 20차 검수). 여기까지 오면 남은 것을 다
+  // 치운 상태다. 그 뒤 **아직 아무도 안 쓴 좌표**로 새 오퍼레이션을 하나 넣어 본다 —
+  // 막히면 앞선 교차가 무언가를 영구히 잠근 것이다.
+  let blocked: string | undefined;
+  // **지금 좌표에서 한 칸 올린다.** 고정값을 쓰면 `coordinate_mismatch` 가 나는데 그건
+  // 봉쇄가 아니라 내 탐침이 틀린 것이다 — 처음에 그렇게 짜서 전 시나리오가 빨개졌다.
+  const after = new DpAgent(store);
+  const token = after.maxLeaderToken();
+  /** 평면마다 **지금 그 평면의 좌표**에서 올린다 — 부분 활성화면 둘이 다르다. */
+  const step = (plane: Plane) => {
+    const at = after.coordinate(plane).activationEpoch;
+    const to = String(BigInt(at) + 1n);
+    return {
+      expectedCurrent: {
+        activationEpoch: at,
+        membershipRevision: after.coordinate(plane).membershipRevision,
+      },
+      target: { activationEpoch: to, membershipRevision: to },
+      payloadDigest: `sha256:${plane}-fresh`,
+    };
+  };
+  const fresh: ApplyOperation = {
+    leaderToken: token,
+    operationId: 'fresh',
+    transitionId: 'fresh',
+    affectedPlanes: ['http', 'stream'],
+    targetGeneration: 'gen-fresh',
+    generationDigest: 'sha256:gen-fresh',
+    planes: { http: step('http'), stream: step('stream') },
+  };
+  try {
+    const r = await new ApplyRunner(new DpAgent(store), ctx.effects('fresh'), FAST).run(fresh);
+    if (r.phase !== 'activated') blocked = r.phase;
+  } catch (e) {
+    if (e instanceof DpRejection) blocked = e.kind;
+    else problems.push(e as Error);
+  }
+
   return {
-    violations: checkProperties(store.history, world, problems, stuck, seedState),
+    violations: checkProperties(store.history, world, problems, stuck, seedState, blocked),
     trace: sched.trace,
     choices: space.taken(),
   };
@@ -907,6 +973,56 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
             .applyConfig(OP('A', 'gen-A', '10', '0', '1'));
           // **바깥을 어긋나게 둔다** — 그래야 수렴이 되돌리기 경로로 들어간다.
           world.published = undefined;
+        },
+      );
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **고아 뒤에 새 오퍼레이션이 들어온다** (20차 CE-3 의 모양).
+   *
+   * 비종단 저널 + 실행권 없음 상태를 준비 단계에서 만들고, 그 위로 새 오퍼레이션과
+   * 복구가 겹치게 한다. 20차 반례 셋이 전부 이 무대에서 났는데 모델에는 없었다.
+   *
+   * P8("정리된 뒤에는 새 오퍼레이션이 들어간다")이 여기서 이빨을 갖는다 — 고아 청소를
+   * 되돌리면 좌표가 잠기고, 그건 상태 위반이 아니라 **일이 안 되는 것**이라 P0~P7 이
+   * 통째로 무풍이었다.
+   */
+  it('고아 위로 새 오퍼레이션이 와도 속성이 전부 성립한다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(
+        space,
+        ({ store, effects, swallow }) => {
+          const b = OP('B', 'gen-B', '10', '0', '1');
+          return [
+            () => swallow(new ApplyRunner(new DpAgent(store.for('B')), effects('B'), FAST).run(b)),
+            () => swallow(new ApplyRunner(new DpAgent(store.for('rec')), effects('rec'), FAST).recover()),
+          ];
+        },
+        async ({ store }) => {
+          // 고아를 만든다 — 비종단 저널이 남고 실행권만 놓인다.
+          const agent = new DpAgent(store);
+          const a = OP('A', 'gen-A', '10', '0', '1');
+          await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+          await agent.writeJournal({
+            op: a, phase: 'published', reloadAttempts: 0,
+            seq: (agent.readJournal()?.seq ?? 0) + 1,
+            progress: { http: 'reserved', stream: 'reserved' },
+          });
+          await agent.finishOperation(a);
         },
       );
       if (r.violations.length > 0) failure = r;

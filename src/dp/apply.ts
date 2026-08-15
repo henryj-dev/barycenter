@@ -354,7 +354,16 @@ export class ApplyRunner {
       const j = this.agent.readJournal();
       if (j === undefined) return emptyResult();
       // **내가 맡은 오퍼레이션인가.** 저널이 남의 것으로 바뀌었으면 여기서 손을 뗀다.
+      //
+      // **다만 내 실행권은 놓고 간다** (20차 · 모델이 찾았다). 그냥 물러나면 내가 잡은
+      // 실행권이 남아 그 뒤 모든 오퍼레이션이 `operation_in_flight` 로 막힌다 — 상태는
+      // 내내 정합하므로 불변식도 P0~P7 도 무풍이고, **일이 안 되는 것**만 남는다.
+      // 20차가 "계측기가 전부 나쁜 일만 본다" 고 한 그 사각이다.
       if (j.op.operationId !== bound.operationId || j.op.transitionId !== bound.transitionId) {
+        const mine = this.agent.activeOperation();
+        if (mine?.operationId === bound.operationId && mine.transitionId === bound.transitionId) {
+          await this.agent.finishOperation(bound);
+        }
         return emptyResult();
       }
       // **종단은 읽고 돌아가는 것뿐이다.** 부작용이 없으므로 소유권 검사 앞에 온다 —
