@@ -23,7 +23,7 @@ import type {
   PublishedState,
   PublishRecord,
 } from './operation.js';
-import { CHECKED_TOKEN, planesOf, provesActivation } from './operation.js';
+import { isTerminalPhase, CHECKED_TOKEN, planesOf, provesActivation } from './operation.js';
 import { DpAgent, DpRejection, tupleFor, type DurableStore } from './agent.js';
 import { ApplyRunner, type Effects } from './apply.js';
 
@@ -163,8 +163,13 @@ export type ReconcileResult =
    * 못 잡았다.
    *
    * 갈라 둔다. 여기 오면 `recoverConfig()` 를 부르고 다시 수렴하면 된다.
+   *
+   * **양쪽을 다 담는다** (19차 반례 #1). 17차에는 "활성화가 끝났는데 안 올라간 후보" 만
+   * 봤는데, 정반대 쪽 — "시작했는데 안 끝난 오퍼레이션"(끊긴 러너의 비종단 저널과
+   * 실행권) — 은 `converged` 로 가려졌다. 그 상태에서는 apply 경로가 봉쇄고 복구 한 번이면
+   * 기준이 바뀐다. 둘 다 **"복구를 부르면 끝난다"** 이므로 한 변종이 맞다.
    */
-  | { kind: 'unfinished'; candidate: PublishRecord; found: PublishedState }
+  | { kind: 'unfinished'; pending: PublishRecord; found: PublishedState }
   /** 게시가 기준과 같다. 아무것도 하지 않았다. */
   | { kind: 'converged'; record: PublishRecord }
   /** 갈라져 있었고 다시 게시했다. */
@@ -265,9 +270,9 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       // 전 평면이 넘어갔는데 아직 기준으로 안 올라간 후보가 있으면, 좌표는 후보 쪽으로
       // 갔고 `lastActivated` 는 그 전 것으로 남아 있다. 그 상태에서 기준을 정답으로 읽으면
       // **이미 지나간 세대를 "수렴했다" 고 답한다.** 복구가 먼저 정리해야 하는 자리다.
-      const unfinished = this.agent.pendingActivation();
+      const unfinished = this.#unfinished();
       if (unfinished !== undefined) {
-        return { kind: 'unfinished', candidate: unfinished, found: await this.#observe() };
+        return { kind: 'unfinished', pending: unfinished, found: await this.#observe() };
       }
       const expected = this.agent.lastActivated();
       if (expected === undefined) {
@@ -305,13 +310,15 @@ export class LocalDataplaneDriver implements DataplaneDriver {
         return { kind: 'diverged', expected, found: seen };
       }
 
-      if (!this.#stillBaseline(expected)) continue; // 기준이 바뀌었다 — 다시 본다
+      // **부작용 앞에서도 후보를 본다** (19차 반례 #3). 답 게이트에만 넣고 여기를
+      // 빠뜨렸더니, 되돌리는 사이 끝난 활성화 위로 옛 기준을 게시하고 HUP 을 보냈다.
+      if (this.#settled(expected) === undefined) continue;
 
       const lease = this.#lease(expected);
       if (!pointerOk) await this.#budget(() => this.effects.publish(expected, lease));
       await this.#budget(() => this.effects.signalReload(lease));
 
-      if (!this.#stillBaseline(expected)) continue;
+      if (this.#settled(expected) === undefined) continue;
       const afterPublish = await this.#observe();
       const afterActive = await this.#budget(() => this.effects.observeActivation());
       const ok = afterPublish.kind === 'owned'
@@ -373,8 +380,32 @@ export class LocalDataplaneDriver implements DataplaneDriver {
    */
   #settled(expected: PublishRecord): Settled | undefined {
     if (!this.#stillBaseline(expected)) return undefined;
-    if (this.agent.pendingActivation() !== undefined) return undefined;
+    if (this.#unfinished() !== undefined) return undefined;
     return SETTLED;
+  }
+
+  /**
+   * **끝나지 않은 전환** — 있으면 기준을 정답이라고 말할 수 없다.
+   *
+   * 둘을 본다. 방향이 반대이고 둘 다 "복구를 부르면 끝난다" 다.
+   *   · 활성화가 끝났는데 기준으로 안 올라간 후보 (17차 A)
+   *   · 시작했는데 안 끝난 오퍼레이션 — 비종단 저널이 남아 있다 (19차 #1)
+   *
+   * **절을 여기 한 곳에만 넣으면 된다.** `Settled` 표를 만든 이유가 그것이다 — 판정
+   * 자리와 부작용 자리를 훑어 다니지 않아도 된다.
+   */
+  #unfinished(): PublishRecord | undefined {
+    const candidate = this.agent.pendingActivation();
+    if (candidate !== undefined) return candidate;
+    const journal = this.agent.readJournal();
+    if (journal === undefined || isTerminalPhase(journal.phase)) return undefined;
+    return {
+      generation: journal.op.targetGeneration,
+      leaderToken: journal.op.leaderToken,
+      operationId: journal.op.operationId,
+      transitionId: journal.op.transitionId,
+      generationDigest: journal.op.generationDigest,
+    };
   }
 
   /**
@@ -394,8 +425,14 @@ export class LocalDataplaneDriver implements DataplaneDriver {
         if (BigInt(expected.leaderToken) < BigInt(this.agent.maxLeaderToken())) {
           throw new DpRejection('stale_leader', '되돌리는 사이 리더가 바뀌었다');
         }
-        if (!this.#stillBaseline(expected)) {
-          throw new DpRejection('stale_leader', '되돌리는 사이 기준이 바뀌었다');
+        // **되돌릴 수 없는 연산 직전이다.** 여기도 `#settled` 를 본다 (19차 반례 #3) —
+        // 기준만 보면 그 사이 끝난 활성화를 우리가 되돌린다.
+        //
+        // 지금은 바로 위의 재검사가 이미 막아서 **이 절만 지워도 안 빨개진다**(확인했다).
+        // 반납이 네 자리에 있는 것과 같은 중복이다. 그래도 둔다 — 이건 **부작용 직전의
+        // 마지막 문**이고, 위의 검사와 여기 사이에 await 가 생기는 변경이 오면 여기만 남는다.
+        if (this.#settled(expected) === undefined) {
+          throw new DpRejection('stale_leader', '되돌리는 사이 기준이 바뀌었거나 새 활성화가 끝났다');
         }
         return CHECKED_TOKEN;
       },

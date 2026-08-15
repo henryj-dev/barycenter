@@ -27,7 +27,7 @@ import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { FakeEffects } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
-import type { ApplyOperation } from '../../src/dp/operation.js';
+import type { ApplyOperation, PublishedState } from '../../src/dp/operation.js';
 
 const OP = (id: string, generation: string, from: string, to: string): ApplyOperation => ({
   leaderToken: '10',
@@ -294,5 +294,110 @@ describe('관측 창 안에서 생긴 후보도 수렴이 본다 (18차 반례 #
     expect(slipped, '창을 만들지 못했다 — 반례를 재현하지 못한 것이다').toBe(true);
     expect(new DpAgent(store).coordinate('http').activationEpoch, '전제가 성립하지 않는다').toBe('2');
     expect(r.kind, '좌표가 지나갔는데 옛 기준으로 수렴했다고 답했다').not.toBe('converged');
+  });
+});
+
+describe('수렴은 끝난 활성화를 되돌리지 않는다 (19차 반례 #3)', () => {
+  /**
+   * **답 게이트에는 후보를 넣고 부작용 게이트에는 안 넣었다.**
+   *
+   * 18차에 `#settled`(기준 + 미완 활성화)를 만들어 `converged`·`repaired` 를 막았다.
+   * 그런데 **되돌리기 직전의 검사**(`#stillBaseline`)와 **부작용 직전의 표**
+   * (`#lease.assertValid`)에는 후보 절을 안 넣었다. 열 회차 반복된 그 모양이다 —
+   * 규칙을 만들고 자리 하나를 빠뜨린다. 18차가 그 패턴을 지적했는데 같은 회차에서 또 했다.
+   *
+   * ```
+   * 기대: 되돌리기 중단 — 후보가 있으면 기준을 믿을 수 없다
+   * 실제: publish(gen-A) 1회 · HUP 1회   ← 좌표는 epoch 2, 후보는 gen-B
+   * ```
+   *
+   * **증거까지 남긴 활성화를 컨트롤 플레인 자신의 수렴이 세상에서 되돌렸다.**
+   * §3.3 은 "이미 넘어간 좌표는 건드리지 않는다 — 롤백은 새 활성화 사건" 이라고 한다.
+   * ▲ 넷의 근거가 전부 "수렴이 덮는다" 인데, 여기서는 **거꾸로 덮었다.**
+   */
+  it('되돌리는 사이 후보가 생기면 게시도 HUP 도 나가지 않는다', async () => {
+    const store = new MemoryStore();
+    const seed = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: seed }).applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    let slipped = false;
+    const fx = new (class extends FakeEffects {
+      override async observePublished(): Promise<PublishedState> {
+        return { kind: 'none' }; // 포인터 유실 — 되돌리기 경로로 들어간다
+      }
+      override async observeActivation() {
+        if (!slipped) {
+          slipped = true;
+          const other = new DpAgent(store);
+          const b = OP('B', 'gen-B', '1', '2');
+          await other.reserveAll(b, { op: b, phase: 'preflight', reloadAttempts: 0, progress: {} });
+          for (const plane of ['http', 'stream'] as const) {
+            await other.stage(tupleFor(b, plane), null);
+            await other.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-B' });
+          }
+        }
+        return super.observeActivation();
+      }
+    })();
+    fx.acceptingGeneration = 'gen-A';
+    const publishes = fx.publishCalls;
+    const reloads = fx.reloadSignals;
+
+    await LocalDataplaneDriver.create({ store, effects: fx }).reconcileConfig();
+
+    expect(slipped, '창을 만들지 못했다 — 반례를 재현하지 못한 것이다').toBe(true);
+    expect(new DpAgent(store).coordinate('http').activationEpoch, '전제가 성립하지 않는다').toBe('2');
+    expect(fx.publishCalls - publishes, '끝난 활성화 위로 옛 기준을 게시했다').toBe(0);
+    expect(fx.reloadSignals - reloads, '끝난 활성화 위로 HUP 을 보냈다').toBe(0);
+  });
+});
+
+describe('끝나지 않은 전환을 converged 로 가리지 않는다 (19차 반례 #1)', () => {
+  /**
+   * 17차 A 는 "활성화가 끝났는데 안 올라간 후보" 를 드러내게 했다. 그런데 **정반대 쪽**
+   * — "시작했는데 안 끝난 오퍼레이션" — 은 그대로 `converged` 로 가려졌다.
+   *
+   * ```
+   * applyConfig(A)                    → activated, 기준 gen-A
+   * applyConfig(B) 가 게시 직전 끊긴다  → 저널 publish_intent · 실행권 B · intent gen-B
+   * reconcileConfig()                 → converged(gen-A)
+   * applyConfig(C)                    → operation_in_flight   ← 전부 막혀 있다
+   * ```
+   *
+   * `converged` 는 "손 떼도 된다" 는 뜻이다. 그런데 그 순간 apply 경로는 봉쇄고, 복구
+   * 한 번이면 기준이 gen-B 로 바뀐다. **답이 복구 한 번 거리의 거짓이었다.**
+   *
+   * §9.2 는 수렴을 주기적으로 부른다고 못박았으므로 "크래시 뒤엔 복구가 먼저" 는 방어가
+   * 되지 않는다 — 17차 A 때도 같은 방어를 받아들이지 않았다.
+   */
+  it('끊긴 오퍼레이션이 남아 있으면 수렴했다고 답하지 않는다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    await driver.applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    fx.crashBeforeEffect = 'publish';
+    await driver.applyConfig(OP('B', 'gen-B', '1', '2')).catch(() => undefined);
+    fx.crashBeforeEffect = undefined;
+
+    expect(new DpAgent(store).activeOperation()?.operationId, '전제가 성립하지 않는다').toBe('B');
+
+    const r = await driver.reconcileConfig();
+    expect(r.kind, '막힌 apply 경로를 수렴이라고 답했다').toBe('unfinished');
+  });
+
+  it('그 답을 받고 복구하면 끝난다 — 무한 루프가 아니다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    await driver.applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    fx.crashBeforeEffect = 'publish';
+    await driver.applyConfig(OP('B', 'gen-B', '1', '2')).catch(() => undefined);
+    fx.crashBeforeEffect = undefined;
+
+    expect((await driver.reconcileConfig()).kind).toBe('unfinished');
+    await driver.recoverConfig();
+    expect((await driver.reconcileConfig()).kind, '복구했는데도 안 끝난다').toBe('converged');
   });
 });
