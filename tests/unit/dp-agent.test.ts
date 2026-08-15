@@ -182,6 +182,16 @@ describe('헬스 델타 — 같은 epoch 안에서만', () => {
     });
     const ack = await a.applyHealth(h, 'delta');
     expect(ack.membershipRevision).toBe('2');
+    // **헬스는 서명을 훔치지 않는다** (28차). `by` 의 뜻은 "이 **epoch** 으로 옮긴
+    // 커밋" 이고 헬스는 epoch 을 안 옮긴다. 여기서 자기 신원을 쓰면 아직 안 닫힌
+    // 저널의 판정이 남의 것으로 뒤집혀 **정당한 활성화를 오살**한다.
+    //
+    // 26차에 이 보존 절을 넣으면서 근거를 주석에 적어 놓고 **테스트를 안 겨눴다** —
+    // 28차가 실측으로 짚었다(훔치게 바꿔도 565 전부 초록이었다). 27차에 배운 그것이
+    // 또 나왔다: **재현했다는 것과 그 수정을 지킨다는 것은 다른 일이다.**
+    expect(a.coordinate('http').by, '헬스가 서명을 자기 것으로 바꿨다').toEqual({
+      operationId: 'op-1', transitionId: 't-1', leaderToken: '10',
+    });
   });
 
   it('다른 epoch 로는 못 간다 — 헬스는 topology 를 바꾸지 않는다', async () => {

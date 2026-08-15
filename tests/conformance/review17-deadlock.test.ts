@@ -1139,3 +1139,59 @@ describe('26차 수정이 되돌아가면 빨개진다 (27차 — 회귀 감지�
     expect(outcome, '남이 옮긴 좌표를 보고 내가 커밋했다고 답했다').not.toBe('ok');
   });
 });
+
+describe('서명 없는 좌표가 영구 봉쇄를 만든다 (28차 CE-28)', () => {
+  /**
+   * **27차 수정이 만든 스물한 번째다.**
+   *
+   * 26차에 `by?` 를 옵셔널로 두며 그 대가를 이렇게 적었다 — *"구버전에서 이월된 열린
+   * 저널이 종단에서 **비관적으로 `failed` 로 판정**될 수 있는 1 회성 창"*.
+   * **그 가격표가 거짓이었다.** 27차가 `arrived` 에 서명 대조를 넣으면서, 서명 없는
+   * 좌표에서는 `arrived` 가 무조건 거짓이 됐다. 그러면 후보가 승격 없이 지워지는데,
+   * 저널은 `activated` 라 **I6(b)("활성화는 기준을 남긴다")가 발화한다.**
+   *
+   * `assertInvariants` 는 저장 앞에서 던지므로 **아무것도 안 써지고 매 호출 같은 자리에서
+   * 죽는다** — `recoverConfig` 도, `fence` 도(승계 불능), `abortConfig` 도(운영자 포기
+   * 경로까지). 비관 판정이 아니라 **영구 봉쇄**다.
+   *
+   * 두 기록이 서로 반대를 말하는 상황이다 — 저널은 "활성화했다", 좌표는 "누가 놨는지
+   * 모른다". 그때 던져서 멈추는 것은 답이 아니다. **판정을 못 하면 비관적으로 닫고
+   * 앞으로 가야 한다** — 26차가 약속한 그대로.
+   */
+  it('서명 없는 좌표에서도 복구가 앞으로 간다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+
+    await agent.reserveAll(a, {
+      op: a, phase: 'reload_observed', reloadAttempts: 1,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(a, plane), null);
+      await agent.commit(tupleFor(a, plane), { acceptingGeneration: 'gen-A' });
+    }
+    await agent.writeJournal({
+      op: a, phase: 'activated', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'committed' },
+    });
+    // 26차 이전 writer 가 남긴 상태를 흉내낸다 — 좌표에 서명이 없다.
+    const raw = store.load()!;
+    const payload = raw.payload as { planes: Record<string, { by?: unknown }> };
+    for (const plane of Object.keys(payload.planes)) delete payload.planes[plane]!.by;
+    await store.save({ ...raw, version: raw.version + 1, payload });
+
+    const driver = LocalDataplaneDriver.create({ store, effects: new FakeEffects() });
+    const outcome = await driver.recoverConfig()
+      .then((r) => r.phase)
+      .catch((e: unknown) => `던졌다: ${(e as Error).name}`);
+
+    expect(outcome, '복구가 던져서 아무것도 못 쓴다 — 영구 봉쇄다').not.toMatch(/던졌다/);
+    // 그리고 승계도 막히면 안 된다 — 신임 리더가 들어올 길이 있어야 한다.
+    const fenced = await new DpAgent(store).fence('11')
+      .then(() => 'ok')
+      .catch((e: unknown) => `던졌다: ${(e as Error).name}`);
+    expect(fenced, '신임 리더도 못 들어온다').toBe('ok');
+  });
+});
