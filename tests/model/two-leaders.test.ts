@@ -16,15 +16,19 @@
  *
  * ── 이 모델이 **못 보는 것** ────────────────────────────────────────────────
  *
- * `ModelEffects` 는 두 평면을 늘 성공시킨다. 그래서 **부분 커밋**이 만들어지지 않고,
- * `finalizeCandidate` 가 도착을 안 보게 하는 뮤테이션을 이 모델은 못 잡는다 —
- * conformance 가 잡는다(`review14-finalizer`). 통과를 넓게 읽지 않기 위해 적어 둔다.
+ * 스케줄 공간을 다 훑지 못한다.
  *
  * 스케줄 공간도 다 훑지 못한다. DFS 150 + 무작위 350 이고, 매번 "상한에서 끊었다" 가
  * 찍힌다. 초록이 "안전하다" 가 아니라 "**여기까지는 못 깼다**" 라는 뜻이다.
  */
 import { describe, expect, it } from 'vitest';
-import { DpAgent, DpRejection, type DurableStore, type StoredState } from '../../src/dp/agent.js';
+import {
+  DpAgent,
+  DpRejection,
+  tupleFor,
+  type DurableStore,
+  type StoredState,
+} from '../../src/dp/agent.js';
 import { ApplyRunner, type Effects, type PreflightResult } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type {
@@ -428,5 +432,40 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
     }
     expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
     expect(run.schedules, '교차가 생기지 않았다 — 모델이 좁다').toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **부분 커밋을 만드는 시나리오** (14차 뒤 보강).
+   *
+   * `ModelEffects` 가 두 평면을 늘 성공시켜서, 처음 세 시나리오로는 부분 활성화가
+   * 만들어지지 않았다 — `finalizeCandidate` 가 도착을 안 보게 하는 뮤테이션을 모델이
+   * 통째로 놓쳤다. **통과가 넓어 보였을 뿐 그 축을 안 본 것이다.**
+   *
+   * 한 평면만 abort 하는 행위자를 넣으면 그 평면의 commit 이 막히고 부분이 만들어진다.
+   */
+  it('한 평면이 막혀도 부분 활성화가 기준이 되지 않는다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(space, ({ store, effects, swallow }) => {
+        const a = OP('A', 'gen-A', '10', '0', '1');
+        return [
+          () => swallow(new ApplyRunner(new DpAgent(store), effects('apply'), FAST).run(a)),
+          // 남이 stream 슬롯을 걷어찬다. 그 평면은 못 넘어간다.
+          () => swallow(new DpAgent(store).abort(tupleFor(a, 'stream'))),
+        ];
+      });
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
   }, 120_000);
 });

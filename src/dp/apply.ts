@@ -392,10 +392,32 @@ export class ApplyRunner {
         case 'published': {
           // §6.5-1 — 슬롯은 **HUP 앞에** 올린다. 새 워커가 accept 를 시작한 뒤에 올리면
           // 그 사이 옛 상태로 peer 를 고른다. **두 평면 다** 올린 뒤에 신호를 보낸다.
+          //
+          // **한 평면이 더 못 가는 것은 종단이 아니다** (14차 · 모델이 찾았다). 전에는
+          // `stage` 의 거부가 그대로 밖으로 나갔고, 저널은 `published` 로 굳었다. 그러면
+          // 복구를 몇 번을 불러도 같은 자리에서 던지고 **그 전환은 영영 못 끝난다** —
+          // 실행권도 안 놓이므로 다음 오퍼레이션까지 막힌다. 남이 슬롯 하나를 걷어차면
+          // (abort) 그렇게 됐다.
+          //
+          // 평면별로 받아 적는다. 어디까지 갔는지 말하는 것이 여기서 할 일이다 (§3.4).
+          const staged: Record<string, PlaneProgress> = { ...(j.progress ?? {}) };
+          let advanced = 0;
           for (const plane of planesOf(j.op)) {
-            await this.agent.stage(tupleFor(j.op, plane), gen);
+            try {
+              await this.agent.stage(tupleFor(j.op, plane), gen);
+              staged[plane] = 'staged';
+              advanced += 1;
+            } catch (e) {
+              if (!(e instanceof DpRejection)) throw e;
+              staged[plane] = 'failed';
+            }
           }
-          await ignoreConflict(this.write(next(j, { phase: 'membership_staged', progress: progressOf(j.op, 'staged') })));
+          if (advanced === 0) {
+            // 아무 평면도 못 간다. 끌고 갈 이유가 없다 — 닫고 반납한다.
+            await this.failAll(j, '모든 평면이 더 진행할 수 없다');
+            break;
+          }
+          await ignoreConflict(this.write(next(j, { phase: 'membership_staged', progress: staged })));
           break;
         }
         case 'membership_staged': {

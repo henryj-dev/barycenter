@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation } from '../../src/dp/operation.js';
 
@@ -155,5 +155,46 @@ describe('버리는 것도 판정이다 — 정당한 경로를 막지 않는다
     await expect(abort).rejects.toBeInstanceOf(DpRejection);
 
     expect(new DpAgent(store).lastActivated(), '부분 활성화가 기준이 됐다').toBeUndefined();
+  });
+});
+
+describe('한 평면이 막혀도 전환이 끝난다 — 모델이 찾았다', () => {
+  /**
+   * 스케줄러가 찾았다. `published` 단계의 `stage` 거부가 그대로 밖으로 나가서 저널이
+   * `published` 로 굳었다. 복구를 몇 번을 불러도 같은 자리에서 `terminal` 로 던지고
+   * **그 전환은 영영 못 끝난다** — 실행권도 안 놓이므로 다음 오퍼레이션까지 막힌다.
+   *
+   * 손으로는 못 짰던 교차다. 남이 슬롯 하나를 걷어차는 순간을 고를 생각을 못 했다.
+   */
+  it('남이 한 평면을 걷어차도 복구가 종단으로 끝낸다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('A', 'gen-A', '10');
+    const fx = new FakeEffects();
+    fx.publishedRecord = {
+      generation: 'gen-A', leaderToken: '10', operationId: 'A',
+      transitionId: 'A', generationDigest: 'sha256:gen-A',
+    };
+    fx.acceptingGeneration = 'gen-A';
+
+    await agent.reserveAll(op);
+    await agent.writeJournal({
+      op, phase: 'published', reloadAttempts: 0, seq: 1,
+      progress: { http: 'reserved', stream: 'reserved' },
+    });
+    await agent.abort(tupleFor(op, 'stream'));
+
+    const FAST_MANY = { attempts: 1, intervalMs: 0, sleep: async () => {}, effectTimeoutMs: 500 };
+    const r = await new ApplyRunner(new DpAgent(store), fx, FAST_MANY).recover();
+
+    expect(['partial_exhausted', 'failed'], `종단이 아니다: ${r.phase}`).toContain(r.phase);
+    expect(
+      new DpAgent(store).activeOperation(),
+      '실행권이 남았다 — 다음 오퍼레이션이 막힌다',
+    ).toBeUndefined();
+    expect(
+      new DpAgent(store).lastActivated(),
+      '한 평면만 넘어간 것을 기준으로 삼았다',
+    ).toBeUndefined();
   });
 });
