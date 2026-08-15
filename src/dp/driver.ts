@@ -221,6 +221,15 @@ export class LocalDataplaneDriver implements DataplaneDriver {
    */
   async #reconcileOnce(rounds = 3): Promise<ReconcileResult> {
     for (let i = 0; i < rounds; i += 1) {
+      // **끝나지 않은 활성화가 있으면 기준을 믿을 수 없다** (17차 반례 A).
+      //
+      // 전 평면이 넘어갔는데 아직 기준으로 안 올라간 후보가 있으면, 좌표는 후보 쪽으로
+      // 갔고 `lastActivated` 는 그 전 것으로 남아 있다. 그 상태에서 기준을 정답으로 읽으면
+      // **이미 지나간 세대를 "수렴했다" 고 답한다.** 복구가 먼저 정리해야 하는 자리다.
+      const unfinished = this.agent.pendingActivation();
+      if (unfinished !== undefined) {
+        return { kind: 'dirty', intent: unfinished, found: await this.#observe() };
+      }
       const expected = this.agent.lastActivated();
       if (expected === undefined) {
         const intent = this.agent.lastPublishIntent();

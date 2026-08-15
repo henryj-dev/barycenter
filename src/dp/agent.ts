@@ -428,16 +428,22 @@ function finalizeCandidate(
   if (candidate.operationId !== ids.operationId) return;
   if (candidate.transitionId !== ids.transitionId) return;
 
-  // **후보가 들고 온 것만 쓴다** (15차 검수 · 16차에 fallback 을 걷어냈다).
+  // **뜻은 상태에서 온다. 호출자에게서 오지 않는다.**
   //
-  // 넘어온 오퍼레이션은 평면을 하나만 담고 있을 수 있고, 그걸 믿으면 부분 활성화가
-  // 기준이 된다 — 13차 ② 와 같은 결과다. 그래서 후보에 완결의 뜻을 함께 적었는데,
-  // **`?? fallback` 으로 옛 구멍을 그대로 열어 뒀다.** 후보에 뜻이 없는 상태(15차
-  // 앞에 저장된 것)에서 호출자를 다시 믿게 된다. 16차 검수가 지목했다.
+  // 15차: 넘어온 오퍼레이션이 담은 평면만 보고 판정했다 → 평면 하나만 담아 끝내면 부분
+  // 활성화가 기준이 됐다. 그래서 후보에 완결의 뜻을 함께 적었다(`pendingEpochs`).
   //
-  // 뜻이 없으면 **승격하지 않는다.** 완결을 확인할 수 없는 후보는 기준이 될 수 없다 —
-  // 기준이 없는 것은 `no_baseline` 으로 드러나고 수렴이 다시 만든다. 거짓 기준보다 낫다.
-  const epochs = s.pendingEpochs;
+  // 16차: 그런데 `?? fallback` 으로 호출자에게 되돌아가는 길을 남겨 뒀다. 걷어냈다.
+  //
+  // 17차: 걷어내기만 했더니 **뜻 없는 후보 + `activated` 저널이 영구 교착**이 됐다.
+  // I6(b)는 "활성화했으면 기준을 남겨라" 고 하고 여기는 "뜻이 없으면 못 올린다" 고 해서,
+  // 둘이 서로 반대를 명령한다. 복구도 fence 도 apply 도 전부 그 자리에서 던진다.
+  // 게다가 수렴은 **낡은 기준을 정답이라고 답한다** — "기준이 없으면 no_baseline 으로
+  // 드러난다" 던 16차의 근거가 이전 기준이 있을 때 틀린 것이다.
+  //
+  // 그래서 **저널**에서 가져온다. 저널의 op 는 실행권 아래서 쓰였으므로 상태다 —
+  // 호출자가 준 것이 아니라 우리가 그때 적은 것이다. 16차가 막으려던 것에 해당하지 않는다.
+  const epochs = s.pendingEpochs ?? epochsFromJournal(s, ids);
   const arrived = epochs !== undefined && Object.entries(epochs).every(
     ([plane, epoch]) => s.planes[plane as Plane]?.activationEpoch === epoch,
   );
@@ -449,6 +455,24 @@ function finalizeCandidate(
   // 그래도 지운다. 끝난 것을 남겨 두면 상태를 읽는 사람이 "진행 중" 으로 읽는다.
   delete s.pendingActivation;
   delete s.pendingEpochs;
+}
+
+/**
+ * 저널이 기억하는 완결의 뜻 (17차 반례 A).
+ *
+ * 후보에 뜻이 없는 상태에서도 저널이 같은 전환을 가리키면 거기서 가져온다. **저널은
+ * 실행권 아래서 쓰였다** — 호출자가 그때그때 넘기는 것과 다르다.
+ */
+function epochsFromJournal(
+  s: AgentState,
+  ids: { operationId: string; transitionId: string },
+): Record<string, string> | undefined {
+  const j = s.journal;
+  if (j === undefined) return undefined;
+  if (j.op.operationId !== ids.operationId || j.op.transitionId !== ids.transitionId) {
+    return undefined;
+  }
+  return epochsOf(j.op);
 }
 
 /** 오퍼레이션이 선언한 평면별 목표 epoch. */
@@ -685,6 +709,16 @@ export class DpAgent {
   /** 마지막으로 활성화를 인정한 게시. reconcile 의 기준이다. */
   lastActivated(): PublishRecord | undefined {
     return this.snapshot().lastActivated;
+  }
+
+  /**
+   * 아직 기준으로 올라가지 않은 활성화 후보 (17차 반례 A).
+   *
+   * 이게 있으면 **`lastActivated` 를 정답으로 읽으면 안 된다.** 좌표는 이미 후보 쪽으로
+   * 갔을 수 있는데 기준은 그 전 것으로 남아 있기 때문이다.
+   */
+  pendingActivation(): PublishRecord | undefined {
+    return this.snapshot().pendingActivation;
   }
 
   /** 마지막으로 게시한 것. 활성화까지 갔는지는 모른다. */
