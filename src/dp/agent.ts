@@ -1113,6 +1113,13 @@ export class DpAgent {
           `(${op.plane}, ${op.target.activationEpoch}) 는 ${transitionKey(slot.op)} 의 것이다`,
         );
       }
+      // **여기는 지금 도달할 수 없다** (뮤테이션 스윕이 알려줬다). 바로 위의
+      // `canonical(slot.op) !== canonical(op)` 가 `expectedCurrent` 를 포함하므로,
+      // 기대 좌표가 다르면 그쪽에서 `slot_taken` 으로 먼저 걸린다.
+      //
+      // 그래도 남긴다 — `canonical` 에서 좌표를 빼는 변경이 오면 여기가 마지막 문이다.
+      // 다만 **이걸 근거로 "CAS 를 검사한다" 고 읽으면 안 된다.** 실제로 막고 있는 것은
+      // 위의 신원 검사다.
       if (!sameCoordinate(current, op.expectedCurrent)) {
         throw new DpRejection('coordinate_mismatch', `${op.plane} 좌표가 기대와 다르다`);
       }
