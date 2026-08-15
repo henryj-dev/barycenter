@@ -22,6 +22,11 @@
 import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { provesActivation } from '../../src/dp/operation.js';
+import { GenerationError, materializeGeneration, readManifest } from '../../src/dp/materialize.js';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ApplyOperation } from '../../src/dp/operation.js';
 
 const OP = (id: string, from: string, to: string): ApplyOperation => ({
@@ -408,5 +413,85 @@ describe('좌표 CAS 는 마지막 문이다 — 도달 불가가 아니다 (17�
     ).rejects.toMatchObject({ kind: 'coordinate_mismatch' });
 
     expect(agent.coordinate('http').activationEpoch, '좌표가 되돌아갔다').toBe('2');
+  });
+});
+
+// ── 스윕이 찾은 셋째 무리 — **통과하는 쪽**이 비어 있었다 ──────────────────
+
+describe('활성화 증거는 막는 쪽만 있는 게 아니다', () => {
+  /**
+   * ```
+   * operation.ts  evidence.workersReported < evidence.workersExpected  →  <=   살아남았다
+   * ```
+   *
+   * 워커가 **모자랄 때** 거부하는 것은 테스트가 있다(3/4). 그런데 **전부 보고했을 때
+   * 인정하는지**는 아무도 안 봤다. `<` 를 `<=` 로 바꾸면 4/4 도 거부하게 되는데 초록이다.
+   *
+   * 열일곱 라운드가 "한쪽만 짚고 반대편으로 넘어가는 것" 을 반복했다. 여기도 같다.
+   */
+  it('워커가 전부 보고하면 증거로 인정한다', () => {
+    expect(
+      provesActivation({ acceptingGeneration: 'gen-A', workersExpected: 4, workersReported: 4 }, 'gen-A'),
+      '전부 보고했는데 증거가 아니라고 했다',
+    ).toBe(true);
+  });
+
+  it('워커가 더 많이 보고해도 인정한다 — 옛 워커가 남아 있을 수 있다', () => {
+    expect(
+      provesActivation({ acceptingGeneration: 'gen-A', workersExpected: 4, workersReported: 5 }, 'gen-A'),
+      'HUP 뒤 워커가 겹치는 순간을 실패로 읽었다',
+    ).toBe(true);
+  });
+
+  it('하나라도 모자라면 거부한다 — 반대편', () => {
+    expect(
+      provesActivation({ acceptingGeneration: 'gen-A', workersExpected: 4, workersReported: 3 }, 'gen-A'),
+      '모자란데 증거라고 했다',
+    ).toBe(false);
+  });
+
+  it('관측하지 못한 것은 반증이 아니다', () => {
+    expect(
+      provesActivation({ acceptingGeneration: 'gen-A' }, 'gen-A'),
+      '관측 못 한 것을 실패로 읽었다',
+    ).toBe(true);
+  });
+});
+
+describe('모르는 manifest 스키마는 거부한다', () => {
+  /**
+   * ```
+   * materialize.ts  if (parsed.schema !== MANIFEST_SCHEMA) {  →  if (false) {   살아남았다
+   * ```
+   *
+   * 스키마가 다른 manifest 를 그대로 읽으면, 우리가 모르는 모양을 아는 척 해석하게 된다.
+   * 6차 검수가 "경계에서 unknown 을 해독한다" 고 세운 것과 같은 자리인데 여기는 비어 있었다.
+   */
+  it('스키마가 다르면 읽지 않는다', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'barycenter-manifest-'));
+    try {
+      const gen = join(dir, 'generations', 'gen-A');
+      mkdirSync(gen, { recursive: true });
+      writeFileSync(join(gen, 'manifest.json'), JSON.stringify({
+        schema: 999, generation: 'gen-A', files: {}, digest: 'sha256:x', planes: ['http'],
+      }));
+
+      expect(() => readManifest(dir, 'gen-A'), '모르는 스키마를 읽었다').toThrow(GenerationError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('아는 스키마는 읽는다 — 막기만 하는 게 아니다', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'barycenter-manifest-'));
+    try {
+      const manifest = materializeGeneration({
+        prefix: dir, generation: 'gen-A',
+        files: { 'nginx.conf': 'events {}' }, planes: ['http'],
+      });
+      expect(readManifest(dir, 'gen-A').digest, '방금 만든 것을 못 읽는다').toBe(manifest.digest);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
