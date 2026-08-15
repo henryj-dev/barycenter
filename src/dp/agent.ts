@@ -545,6 +545,41 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
     }
   }
 
+  // ── I7. 한 번 적은 판정과 근거는 지워지지 않는다 ─────────────────────
+  //
+  // 14차 검수가 준 술어. `terminal` 은 "이 전환은 이렇게 끝났다" 이고 `activationEvidence`
+  // 는 "왜 그 좌표로 옮겼나" 다. 둘 다 **사후에 답할 수 있어야** 의미가 있는 기록이다.
+  // 지워지거나 조용히 바뀌면 장애 분석이 근거를 잃는다.
+  //
+  // 되돌아가지 않는 것(I3)과 다르다. I3 은 좌표가 뒤로 가지 않는다는 것이고, 이건
+  // **판정 자체가 사라지지 않는다**는 것이다.
+  //
+  // **지금은 이빨이 없다** — 뮤테이션으로 확인했다. `release` 가 종단 기록을 지우게 만들어도
+  // 아무 테스트도 빨개지지 않는다. 그 경로에 종단 기록이 있는 상태로 도달하는 테스트가
+  // 없기 때문이다. 즉 이 불변식은 지금 코드의 버그를 잡는 게 아니라, **앞으로 이 기록들을
+  // 지우기 시작하는 변경**을 막는다. 근거 기록 자체가 되는지는 `evidenceFor` 를 보는
+  // 테스트 셋이 지킨다(그건 뮤테이션으로 잡힌다).
+  for (const [key, was] of Object.entries(before.terminal)) {
+    const now = next.terminal[key];
+    if (now === undefined) {
+      throw new InvariantViolation('I7 판정은 지워지지 않는다', `종단 기록 ${key} 가 사라졌다`);
+    }
+    if (now !== was) {
+      throw new InvariantViolation(
+        'I7 판정은 바뀌지 않는다',
+        `${key} 의 종단이 ${was} 에서 ${now} 로 바뀌었다`,
+      );
+    }
+  }
+  for (const key of Object.keys(before.activationEvidence)) {
+    if (next.activationEvidence[key] === undefined) {
+      throw new InvariantViolation(
+        'I7 근거는 지워지지 않는다',
+        `${key} 로 옮긴 근거가 사라졌다 — 왜 옮겼는지 답할 수 없게 된다`,
+      );
+    }
+  }
+
   const wasSeq = before.journal?.seq;
   const nowSeq = next.journal?.seq;
   if (wasSeq !== undefined && nowSeq !== undefined && nowSeq < wasSeq) {
