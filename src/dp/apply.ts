@@ -644,22 +644,29 @@ export class ApplyRunner {
     // 가능한 경로에서는 여기 오기 전에 부분 처리가 먼저 걸린다. 그래도 이 함수가
     // 거짓을 적는 것 자체가 결함이라 고친다. 도달 경로가 없다는 것은 지금의 사실일 뿐이다.
     const progress: Partial<Record<Plane, PlaneProgress>> = { ...j.progress };
-    let committed = 0;
     for (const plane of planesOf(j.op)) {
       const moved = this.agent.coordinate(plane).activationEpoch
         === tupleFor(j.op, plane).target.activationEpoch;
       if (moved) {
         progress[plane] = 'committed';
-        committed += 1;
         continue;
       }
       await ignoreRejection(this.agent.fail(tupleFor(j.op, plane)));
       progress[plane] = 'failed';
     }
     // **같은 규칙으로 정한다** (23차 CE-A). 13차 ③ 이 처음 고친 자리가 여기이고, 그
-    // 뒤 세 번의 재발이 전부 "닫는 자리마다 따로 센" 탓이었다. `committed` 는 위 루프가
-    // 이미 셌지만 그 수로 판정하지 않는다 — 판정은 한 곳에서만 한다.
-    const phase: ApplyPhase = this.agent.reachedPhase() ?? (committed === 0 ? 'failed' : 'partial_exhausted');
+    // 뒤 세 번의 재발이 전부 "닫는 자리마다 따로 센" 탓이었다.
+    //
+    // 23차에는 `?? (committed === 0 ? ...)` 폴백을 달아 뒀는데 **24차 스윕이 그 줄을
+    // 짚었다** — 뒤집어도 아무 테스트가 안 죽는다. 당연하다. 이 함수는 저널을 읽은
+    // 호출자에게서 `j` 를 받으므로 `reachedPhase()` 가 `undefined` 를 줄 수가 없다.
+    // **폴백은 방어가 아니라 죽은 코드였고, 세는 자리를 하나로 모았다는 말을 반쯤
+    // 거짓으로 만들고 있었다.** 지운다. 그래야 판정이 정말 한 곳에서만 난다.
+    //
+    // 단언(`as`)으로 남긴 이유: 여기에 `if (phase === undefined) return` 을 두면 그건
+    // **또 하나의 도달 불가 분기**라 다음 스윕이 똑같이 짚는다. 못 오는 길에 방어를
+    // 세우는 대신 못 온다는 사실을 적는다.
+    const phase = this.agent.reachedPhase() as ApplyPhase;
     await ignoreConflict(this.write(next(j, { phase, progress })));
     await this.agent.finishOperation(j.op);
   }
