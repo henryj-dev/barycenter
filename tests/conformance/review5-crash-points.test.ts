@@ -62,10 +62,13 @@ function sweep(crashAt: number | undefined) {
 
 /** 정상 경로가 지나는 **모든** 지점. 이름이 하나라도 바뀌면 여기가 깨진다. */
 const NORMAL_PATH = [
-  // **한 쓰기다.** `reserveAll` 이 두 평면을 한 임계구역에서 잡는다 (6차 반례 ③).
-  'reserve:http+reserve:stream',
-  // 게시 **앞의** 검사 (§6.2 #2). 여기서 걸리면 current 도 nginx 도 그대로다.
-  'journal:preflight',
+  // **한 쓰기다.** `reserveAll` 이 두 평면을 한 임계구역에서 잡고, **첫 저널까지 같이
+  // 쓴다** (16차 검수). 나눠 쓰면 그 사이에 끊겼을 때 실행권만 있고 저널은 없는 상태가
+  // 남고, 복구가 그걸 반납하지 않아 그 뒤 모든 오퍼레이션이 막힌다.
+  //
+  // 그래서 **지점이 하나 줄었다** — `journal:preflight` 가 따로 없다. 크래시 지점이
+  // 줄어드는 것은 좋은 방향이다: 죽을 수 있는 자리가 하나 사라진 것이다.
+  'reserve:http+reserve:stream+journal:preflight',
   'journal:publish_intent',
   // 게시 **앞에** 의도를 남긴다 (12차 반례 ②) — 게시만 하고 끊긴 상태를 드러내기 위해.
   'publish_intent_recorded',
@@ -148,8 +151,10 @@ const gapExists = (seen: string[], after: string, before: string): boolean => {
 
 describe('§6.2 크래시 표의 각 행에 대응하는 지점이 있다', () => {
   const rows: Array<{ row: number; label: string; after: string; before: string }> = [
+    // 첫 저널이 예약과 한 쓰기가 되면서 이름이 합쳐졌다 (16차).
     { row: 2, label: '검증 후, publish_intent 기록 전',
-      after: 'journal:preflight:after', before: 'journal:publish_intent:before' },
+      after: 'reserve:http+reserve:stream+journal:preflight:after',
+      before: 'journal:publish_intent:before' },
     { row: 3, label: 'publish_intent 기록 후, symlink 교체 전',
       after: 'journal:publish_intent:after', before: 'publish:before' },
     { row: 4, label: 'symlink 교체 후, published 기록 전',

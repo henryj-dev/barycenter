@@ -83,7 +83,7 @@ describe('정상 경로', () => {
     const runner = new ApplyRunner(agentOn(store), new FakeEffects(), FAST);
     await runner.run(OP);
     expect(runner.phases()).toEqual([
-      'preflight', 'publish_intent', 'published', 'membership_staged', 'reload_intent', 'reload_observed', 'activated',
+      'publish_intent', 'published', 'membership_staged', 'reload_intent', 'reload_observed', 'activated',
     ]);
   });
 });

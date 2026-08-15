@@ -264,7 +264,10 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       const ok = afterPublish.kind === 'owned'
         && sameRecord(afterPublish.record, expected)
         && provesActivation(afterActive, expected.generation);
-      return ok
+      // **여기서도 읽고-확인한다** (16차 검수). 조기 `converged` 와 소진 경로에는 넣었는데
+      // 이 자리만 빠져 있었다. 되돌리고 관측하는 사이 기준이 옮겨 갔으면, 우리가 되돌린
+      // 것은 이미 옛 기준이다 — `repaired` 는 "제자리로 돌려놨다" 는 뜻이라 거짓이 된다.
+      return ok && this.#stillBaseline(expected)
         ? { kind: 'repaired', expected, found: seen }
         : { kind: 'diverged', expected, found: afterPublish };
     }

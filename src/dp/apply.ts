@@ -195,27 +195,22 @@ export class ApplyRunner {
 
     // §3.5 · 6차 반례 ③ — 리더 토큰 · 좌표 CAS · **apply 실행권**이 게시보다 먼저다.
     // 전 평면을 한 임계구역에서 잡으므로 부분 예약이 남는 경우가 없다.
-    await this.agent.reserveAll(op);
-
     // 저널은 하나뿐이라 **앞선 오퍼레이션의 종단 기록이 남아 있다.** 그걸 그대로 두고
     // drive 하면 남의 저널을 읽고 `operation_in_flight` 로 스스로 막힌다.
     //   · 같은 오퍼레이션의 기록이면 이어받는다 (동시 호출·복구).
     //   · 아니면 내 것으로 연다. seq 는 이어서 올린다.
-    const existing = this.agent.readJournal();
-    const mine = existing !== undefined
-      && existing.op.operationId === op.operationId
-      && existing.op.transitionId === op.transitionId;
-    if (!mine) {
-      await ignoreConflict(
-        this.write({
-          op,
-          phase: 'preflight',
-          reloadAttempts: 0,
-          seq: (existing?.seq ?? 0) + 1,
-          progress: progressOf(op, 'reserved'),
-        }),
-      );
-    }
+    //
+    // **잡기와 첫 저널을 한 번에 쓴다** (16차 검수). 나눠 쓰면 그 사이에 끊겼을 때
+    // 실행권만 있고 저널은 없는 상태가 남고, 복구가 그걸 반납하지 않아 그 뒤 모든
+    // 오퍼레이션이 막힌다. 치우는 대신 그 상태를 없앤다.
+    // **`seq` 는 넘기지 않는다.** 밖에서 읽으면 밀린 값이고, 두 러너가 같은 값을 읽으면
+    // seq 가 되감긴다. 이어받을지 새로 열지도 임계 구간 안에서 정한다.
+    await this.agent.reserveAll(op, {
+      op,
+      phase: 'preflight',
+      reloadAttempts: 0,
+      progress: progressOf(op, 'reserved'),
+    });
     return this.drive(op);
   }
 
@@ -225,7 +220,13 @@ export class ApplyRunner {
   async recover(): Promise<ApplyResult> {
     const j = this.agent.readJournal();
     // §6.2 #1 — 첫 저널 쓰기 전에 죽었으면 부작용도 없다. "실패" 가 아니라 "없던 일" 이다.
-    if (j === undefined) return emptyResult();
+    //
+    // **없던 일로 치되 자리는 비운다** (16차 검수). 전에는 그대로 돌아갔고, 실행권과
+    // 예약이 남아 그 뒤 모든 오퍼레이션이 `operation_in_flight` 로 막혔다 — 영구히.
+    if (j === undefined) {
+      await this.agent.releaseIdleHolder();
+      return emptyResult();
+    }
     if (isTerminalPhase(j.phase)) {
       // 종단 기록 뒤 반납 전에 죽었을 수 있다. 여기서 마저 놓는다 (멱등).
       //
@@ -756,6 +757,12 @@ export function classifyWrite(before: AgentState | undefined, next: AgentState):
         changes.push(`${how}:${plane}`);
       }
     }
+  }
+  // **한 쓰기가 저널까지 열면 이름이 그걸 말해야 한다** (16차). `reserveAll` 이 첫 저널을
+  // 함께 쓰게 되면서, 예약 이름만 남고 "저널을 열었다" 가 이름에서 사라졌다. 지점을
+  // 이름으로 판정하는데 이름이 하는 일을 다 안 말하면 계측이 거짓이 된다.
+  if (prev.journal?.phase !== next.journal?.phase && next.journal !== undefined) {
+    changes.push(`journal:${next.journal.phase}`);
   }
   if (changes.length > 0) return [...new Set(changes)].join('+');
 

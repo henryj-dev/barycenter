@@ -422,18 +422,23 @@ export class InvariantViolation extends Error {
 function finalizeCandidate(
   s: AgentState,
   ids: { operationId: string; transitionId: string },
-  fallback: Record<string, string>,
 ): void {
   const candidate = s.pendingActivation;
   if (candidate === undefined) return;
   if (candidate.operationId !== ids.operationId) return;
   if (candidate.transitionId !== ids.transitionId) return;
 
-  // **후보가 들고 온 것을 쓴다** (15차 검수). 넘어온 오퍼레이션은 평면을 하나만 담고
-  // 있을 수 있고, 그걸 믿으면 부분 활성화가 기준이 된다 — 13차 ② 와 같은 결과다.
-  // `fallback` 은 후보가 만들어지기 전 상태에서 온 옛 저장분을 위한 것뿐이다.
-  const epochs = s.pendingEpochs ?? fallback;
-  const arrived = Object.entries(epochs).every(
+  // **후보가 들고 온 것만 쓴다** (15차 검수 · 16차에 fallback 을 걷어냈다).
+  //
+  // 넘어온 오퍼레이션은 평면을 하나만 담고 있을 수 있고, 그걸 믿으면 부분 활성화가
+  // 기준이 된다 — 13차 ② 와 같은 결과다. 그래서 후보에 완결의 뜻을 함께 적었는데,
+  // **`?? fallback` 으로 옛 구멍을 그대로 열어 뒀다.** 후보에 뜻이 없는 상태(15차
+  // 앞에 저장된 것)에서 호출자를 다시 믿게 된다. 16차 검수가 지목했다.
+  //
+  // 뜻이 없으면 **승격하지 않는다.** 완결을 확인할 수 없는 후보는 기준이 될 수 없다 —
+  // 기준이 없는 것은 `no_baseline` 으로 드러나고 수렴이 다시 만든다. 거짓 기준보다 낫다.
+  const epochs = s.pendingEpochs;
+  const arrived = epochs !== undefined && Object.entries(epochs).every(
     ([plane, epoch]) => s.planes[plane as Plane]?.activationEpoch === epoch,
   );
   if (arrived) s.lastActivated = candidate;
@@ -764,7 +769,21 @@ export class DpAgent {
    *
    * 같은 오퍼레이션의 재요청은 멱등이다 — 이미 자기가 쥐고 있으면 그대로 통과한다.
    */
-  reserveAll(op: ApplyOperation): Promise<PlaneAck[]> {
+  /**
+   * 전 평면을 잡는다. **첫 저널을 함께 쓸 수 있다** (16차 검수).
+   *
+   * 전에는 잡기와 첫 저널 쓰기가 두 임계 구간이었다. 그 사이에 끊기면 **실행권만 있고
+   * 저널은 없는 상태**가 남고, 복구는 §6.2 #1 대로 `no_operation` 을 돌려주며 아무것도
+   * 반납하지 않았다 — 그 뒤 모든 오퍼레이션이 `operation_in_flight` 로 막힌다.
+   *
+   * 치우는 대신 **그 상태를 없앤다.** 한 번에 쓰면 "실행권이 있는데 저널이 없다" 가
+   * 나올 수 없고, 크래시 지점도 하나 줄어든다.
+   */
+  reserveAll(
+    op: ApplyOperation,
+    /** 첫 저널. **`seq` 는 여기서 정한다** — 밖에서 읽어 오면 밀린 값이 온다. */
+    opening?: Omit<JournalEntry, 'seq'>,
+  ): Promise<PlaneAck[]> {
     return this.serial((s) => {
       const tuples = planesOf(op).map((plane) => tupleFor(op, plane));
       const first = tuples[0];
@@ -799,6 +818,20 @@ export class DpAgent {
         planes: tuples.map((t) => t.plane),
         epochs: Object.fromEntries(tuples.map((t) => [t.plane, t.target.activationEpoch])),
       };
+      // **같은 쓰기에 저널을 얹는다.** 실행권만 있고 저널이 없는 상태를 만들지 않는다.
+      //
+      // `seq` 를 **여기서** 정한다. 처음엔 호출자가 읽어 온 값을 그대로 썼는데, 두 러너가
+      // 같은 값을 읽고 둘 다 쓰면 seq 가 되감긴다 — **모델이 즉시 잡았다**(I3).
+      // `writeJournal` 이 하는 CAS 를 우회한 것이었다.
+      //
+      // 같은 오퍼레이션의 저널이 이미 있으면 그대로 둔다. 이어받는 것이다.
+      if (opening !== undefined) {
+        const existing = s.journal;
+        const mine = existing !== undefined
+          && existing.op.operationId === op.operationId
+          && existing.op.transitionId === op.transitionId;
+        if (!mine) s.journal = { ...opening, seq: (existing?.seq ?? 0) + 1 };
+      }
       return acks;
     });
   }
@@ -808,6 +841,33 @@ export class DpAgent {
    *
    * 종단에 도달했는데 소유권이나 예약이 남으면 그 좌표는 영구히 잠긴다.
    */
+  /**
+   * **저널이 없는 실행권을 놓는다** (16차 검수).
+   *
+   * §6.2 #1 — 첫 저널 쓰기 전에 끊겼으면 부작용도 없다. "실패" 가 아니라 "없던 일" 이다.
+   * 그런데 없던 일로 치면서 **실행권과 예약은 그대로 뒀다.** 그러면 그 뒤 모든 오퍼레이션이
+   * `operation_in_flight` 로 막힌다 — 영구히.
+   *
+   * 이제 `run()` 이 잡기와 첫 저널을 한 쓰기로 하므로 표면 경로에서는 이 상태가 생기지
+   * 않는다. 이건 **그래도 생겼을 때를 위한 안전망**이다 — 옛 버전이 남긴 상태나
+   * `DpAgent` 를 직접 쓰는 경로.
+   *
+   * 저널이 없으면 아무 일도 없었으므로 놓는 것이 안전하다.
+   */
+  releaseIdleHolder(): Promise<boolean> {
+    return this.serial((s) => {
+      const holder = s.activeOperation;
+      if (holder === undefined) return false;
+      if (s.journal !== undefined) return false; // 진행 중이다 — 손대지 않는다
+      for (const plane of holder.planes) {
+        const epoch = holder.epochs[plane];
+        if (epoch !== undefined) delete s.reservations[plane][epoch];
+      }
+      delete s.activeOperation;
+      return true;
+    });
+  }
+
   /**
    * **고아가 된 저널을 다시 잡는다** (14차 · 모델이 찾았다).
    *
@@ -842,7 +902,7 @@ export class DpAgent {
 
   finishOperation(op: ApplyOperation, releasePlanes: Plane[] = []): Promise<void> {
     return this.serial((s) => {
-      finalizeCandidate(s, op, epochsOf(op));
+      finalizeCandidate(s, op);
       for (const plane of releasePlanes) {
         const t = tupleFor(op, plane);
         if (ownsSlot(s, t)) delete s.reservations[plane][t.target.activationEpoch];
@@ -1267,7 +1327,7 @@ function supersede(s: AgentState, holder: ActiveOperation): void {
   }
   // 승계도 **끝내는 것**이다 (14차 검수). 전에는 전 평면이 넘어간 후보가 여기서 고아가
   // 됐다 — 활성화는 일어났는데 되돌릴 기준이 영영 안 생긴다.
-  finalizeCandidate(s, holder, holder.epochs);
+  finalizeCandidate(s, holder);
   delete s.activeOperation;
 }
 
