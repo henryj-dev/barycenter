@@ -140,3 +140,62 @@ describe('③ repaired 를 돌려주기 전에도 기준을 다시 본다', () =
     expect(r.kind, '기준이 옮겨 갔는데 되돌렸다고 답했다').not.toBe('repaired');
   });
 });
+
+describe('막기만 하는 게 아니다 — 정당한 경로는 그대로 지난다', () => {
+  /**
+   * 16차 수정 셋은 전부 "덜 하게" 만드는 방향이다. 그러면 **정당한 것까지 덜 하게 될
+   * 위험**이 따라온다. 막는 쪽만 짚고 통과하는 쪽을 안 짚으면 반쪽이다.
+   */
+  it('정상 apply 는 여전히 기준을 세운다', async () => {
+    const store = new MemoryStore();
+    const r = await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .applyConfig(OP('A', 'gen-A', '10'));
+
+    expect(r.phase).toBe('activated');
+    expect(
+      new DpAgent(store).lastActivated()?.generation,
+      '승격을 포기하는 쪽으로 고쳤더니 정상 경로까지 잃었다',
+    ).toBe('gen-A');
+  });
+
+  it('실행권이 있으면 완결의 뜻이 후보에 함께 적힌다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('A', 'gen-A', '10');
+    await agent.reserveAll(op);
+    await agent.stage(tupleFor(op, 'http'), null);
+    await agent.commit(tupleFor(op, 'http'), { acceptingGeneration: 'gen-A' });
+
+    const payload = store.load()!.payload as { pendingEpochs?: Record<string, string> };
+    expect(payload.pendingEpochs, '뜻이 안 적혔다 — 그러면 영영 승격 못 한다')
+      .toEqual({ http: '1', stream: '1' });
+  });
+
+  it('같은 오퍼레이션 재진입은 저널을 새로 열지 않는다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    await driver.applyConfig(OP('A', 'gen-A', '10'));
+    const before = new DpAgent(store).readJournal()?.seq;
+
+    await driver.applyConfig(OP('A', 'gen-A', '10'));
+
+    expect(new DpAgent(store).readJournal()?.seq, '재진입이 저널을 새로 열었다').toBe(before);
+    expect(new DpAgent(store).activeOperation(), '재진입이 실행권을 쥔 채 돌아갔다').toBeUndefined();
+  });
+
+  it('다른 오퍼레이션이 진행 중이면 잡기가 막힌다 — 저널을 함께 써도', async () => {
+    const store = new MemoryStore();
+    const a = OP('A', 'gen-A', '10');
+    const b = OP('B', 'gen-B', '10');
+    const opening = (op: ApplyOperation) => ({
+      op, phase: 'preflight' as const, reloadAttempts: 0, progress: {},
+    });
+    await new DpAgent(store).reserveAll(a, opening(a));
+
+    await expect(
+      new DpAgent(store).reserveAll(b, opening(b)),
+      '남의 실행권을 밀고 들어갔다',
+    ).rejects.toMatchObject({ kind: 'operation_in_flight' });
+  });
+});
