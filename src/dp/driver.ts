@@ -126,6 +126,17 @@ export type ReconcileResult =
    * 조용히 `no_baseline` 이라고 답하는 대신 이 상태를 드러내고 컨트롤 플레인이 정하게 한다.
    */
   | { kind: 'dirty'; intent: PublishRecord; found: PublishedState }
+  /**
+   * **활성화는 끝났는데 아직 기준으로 올라가지 않았다** (18차 검수).
+   *
+   * 17차에 이 상태를 `dirty` 에 실었다가 지적받았다. `dirty` 는 "무엇으로 되돌릴지 DP 가
+   * 모르니 **네가 정해라**" 이고, 이건 "**복구를 부르면 끝난다**" 다 — 운영자가 할 일이
+   * 다른데 호출자가 구분할 수 없었다. 타입이 아니라 **의미**가 움직인 것이라 표면 해시도
+   * 못 잡았다.
+   *
+   * 갈라 둔다. 여기 오면 `recoverConfig()` 를 부르고 다시 수렴하면 된다.
+   */
+  | { kind: 'unfinished'; candidate: PublishRecord; found: PublishedState }
   /** 게시가 기준과 같다. 아무것도 하지 않았다. */
   | { kind: 'converged'; record: PublishRecord }
   /** 갈라져 있었고 다시 게시했다. */
@@ -228,7 +239,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       // **이미 지나간 세대를 "수렴했다" 고 답한다.** 복구가 먼저 정리해야 하는 자리다.
       const unfinished = this.agent.pendingActivation();
       if (unfinished !== undefined) {
-        return { kind: 'dirty', intent: unfinished, found: await this.#observe() };
+        return { kind: 'unfinished', candidate: unfinished, found: await this.#observe() };
       }
       const expected = this.agent.lastActivated();
       if (expected === undefined) {
