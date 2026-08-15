@@ -387,3 +387,53 @@ describe('수렴이 건네는 lease 는 리더도 확인한다 (15차)', () => {
       .toBe('stale_leader');
   });
 });
+
+describe('예산을 넘겨도 부분 전환은 정직하게 보고된다 (13차 ③)', () => {
+  /**
+   * 13차 ③. `failAll` 이 `progressOf(op, 'failed')` 로 **전부** 실패라고 적었다. 좌표가
+   * 이미 옮겨 간 평면이 있어도 그렇게 적으면, 운영자는 "다 실패했다" 고 읽고 실제로는
+   * http 만 새 세대로 서비스 중인 상태를 못 본다. §3.4 는 어디까지 갔는지 말하라고 한다.
+   *
+   * ⚠️ **이 테스트는 `failAll` 에 닿지 않는다.** 여섯 번 시도했고 전부 실패했다 —
+   * 도달 경로마다 부분 처리가 먼저 걸린다. 뮤테이션으로 확인했다: `failAll` 을 도로
+   * 전부-failed 로 되돌려도 이 테스트는 초록이다.
+   *
+   * 그러면 이건 무엇을 지키는가. **예산을 넘기는 경로에서 부분 전환이 정직하게 보고되는
+   * 것**을 지킨다 — 그건 참이고 값이 있다. `failAll` 자체의 수정은 **방어적**이고, 지금
+   * 도달 경로가 없다는 것은 오늘의 사실일 뿐 앞으로의 보장이 아니다.
+   *
+   * 제목을 확인보다 넓게 쓰지 않으려고 적어 둔다. 처음엔 "여기서 마침내 닿는다" 고
+   * 썼는데 거짓이었다.
+   */
+  it('예산을 넘겨 닫아도 http 가 넘어간 사실이 결과에 남는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('A', 'gen-A', '10');
+
+    await agent.reserveAll(op);
+    await agent.stage(tupleFor(op, 'http'), null);
+    await agent.commit(tupleFor(op, 'http'), { acceptingGeneration: 'gen-A' });
+    await agent.writeJournal({
+      op, phase: 'reload_intent', reloadAttempts: 1, seq: 1,
+      progress: { http: 'committed', stream: 'staged' },
+    });
+
+    const hang = new (class extends FakeEffects {
+      override async signalReload(): Promise<void> {
+        await new Promise<void>(() => undefined); // 영영 안 돌아온다
+      }
+    })();
+    hang.publishedRecord = {
+      generation: 'gen-A', leaderToken: '10', operationId: 'A',
+      transitionId: 'A', generationDigest: 'sha256:gen-A',
+    };
+    hang.acceptingGeneration = 'gen-A';
+
+    const TIGHT = { attempts: 1, intervalMs: 0, sleep: async () => {}, effectTimeoutMs: 30 };
+    const r = await new ApplyRunner(new DpAgent(store), hang, TIGHT).recover();
+
+    expect(new DpAgent(store).coordinate('http').activationEpoch, '전제가 성립하지 않는다').toBe('1');
+    expect(r.progress.http, '넘어간 평면을 실패라고 적었다').toBe('committed');
+    expect(r.partialTransition, '부분 전환인데 아니라고 답했다').toBe(true);
+  });
+});

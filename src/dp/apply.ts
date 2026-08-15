@@ -548,10 +548,30 @@ export class ApplyRunner {
   /** 전 평면을 실패로 닫는다. 슬롯을 반납해야 좌표가 영구히 잠기지 않는다. */
   private async failAll(j: JournalEntry, reason?: string): Promise<void> {
     if (reason !== undefined) this.lastFailure = reason;
+    // **넘어간 평면을 실패라고 적지 않는다** (13차 반례 ③ · 15차에 고쳤다).
+    //
+    // 전에는 `progressOf(op, 'failed')` 로 **전부** 실패라고 적었다. 좌표가 이미 옮겨 간
+    // 평면이 있어도 그렇게 적으면, 운영자는 "다 실패했다" 고 읽고 실제로는 http 만 새
+    // 세대로 서비스 중인 상태를 못 본다. §3.4 는 어디까지 갔는지 말하라고 한다.
+    //
+    // 13차 검수가 이걸 지적했고 나는 다섯 번 시도해 **재현하지 못했다** — 지금 도달
+    // 가능한 경로에서는 여기 오기 전에 부분 처리가 먼저 걸린다. 그래도 이 함수가
+    // 거짓을 적는 것 자체가 결함이라 고친다. 도달 경로가 없다는 것은 지금의 사실일 뿐이다.
+    const progress: Partial<Record<Plane, PlaneProgress>> = { ...j.progress };
+    let committed = 0;
     for (const plane of planesOf(j.op)) {
+      const moved = this.agent.coordinate(plane).activationEpoch
+        === tupleFor(j.op, plane).target.activationEpoch;
+      if (moved) {
+        progress[plane] = 'committed';
+        committed += 1;
+        continue;
+      }
       await ignoreRejection(this.agent.fail(tupleFor(j.op, plane)));
+      progress[plane] = 'failed';
     }
-    await ignoreConflict(this.write(next(j, { phase: 'failed', progress: progressOf(j.op, 'failed') })));
+    const phase: ApplyPhase = committed === 0 ? 'failed' : 'partial_exhausted';
+    await ignoreConflict(this.write(next(j, { phase, progress })));
     await this.agent.finishOperation(j.op);
   }
 
