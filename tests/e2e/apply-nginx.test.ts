@@ -32,6 +32,7 @@ import { ApplyRunner, CrashInjected, type Effects } from '../../src/dp/apply.js'
 import type {
   ActivationEvidence,
   ApplyLease,
+  Checked,
   ApplyOperation,
   PublishRecord,
   PublishedState,
@@ -179,8 +180,9 @@ const effects = (): Effects => {
     // **소유 기록을 먼저 쓴다** — 포인터가 먼저 바뀌면 주인 없는 세대가 관측된다.
     docker('exec', container, 'sh', '-c',
       `cat > /prefix/current.owner <<'OWNER'\n${JSON.stringify(record)}\nOWNER`);
-    lease?.assertValid();
+    const checked = lease.assertValid();
     docker('exec', container, 'sh', '-c', `mv -T /prefix/current.tmp /prefix/current`);
+    return checked;
   },
   async observePublished(): Promise<PublishedState> {
     const link = docker('exec', container, 'sh', '-c', 'readlink /prefix/current || true');
@@ -203,8 +205,9 @@ const effects = (): Effects => {
   async signalReload(lease) {
     // **신호 전에** 찍는다. 뒤에 찍으면 신호가 만든 오류를 놓친다.
     watermark = errorLogLines();
-    lease?.assertValid();
+    const checked = lease.assertValid();
     docker('kill', '--signal=HUP', container);
+    return checked;
   },
   async observeActivation(): Promise<ActivationEvidence | undefined> {
     const accepting = await probeAccepting();
@@ -405,7 +408,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
       publish: fx.publish.bind(fx),
       observePublished: fx.observePublished.bind(fx),
       observeActivation: fx.observeActivation.bind(fx),
-      signalReload: async () => {
+      signalReload: async (): Promise<Checked> => {
         throw new CrashInjected('reload 직전');
       },
     };
@@ -432,9 +435,9 @@ describe('S12 end-to-end — 실제 nginx', () => {
       publish: fx.publish.bind(fx),
       observePublished: fx.observePublished.bind(fx),
       observeActivation: fx.observeActivation.bind(fx),
-      signalReload: async (lease: ApplyLease) => {
+      signalReload: async (lease: ApplyLease): Promise<Checked> => {
         reloads += 1;
-        await fx.signalReload(lease);
+        return fx.signalReload(lease);
       },
     };
     await new ApplyRunner(new DpAgent(store), counted).run(OP('e2e-3', 'gen-2'));

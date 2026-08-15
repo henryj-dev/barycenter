@@ -20,6 +20,7 @@ import {
   type ApplyOperation,
   type ApplyPhase,
   type ApplyLease,
+  type Checked,
   type ApplyResult,
   type PublishedState,
   type PublishRecord,
@@ -69,7 +70,7 @@ export interface Effects {
    * 그래서 이건 **관례이지 강제가 아니다.** 정합성은 `reconcileConfig()` 의 수렴이
    * 맡는다 — 늦게 착지한 것을 관측하고 되돌린다.
    */
-  publish(record: PublishRecord, lease: ApplyLease): Promise<void>;
+  publish(record: PublishRecord, lease: ApplyLease): Promise<Checked>;
   /**
    * 지금 게시된 것과 **그것이 누구 것인지**.
    *
@@ -78,7 +79,7 @@ export interface Effects {
    */
   observePublished(): Promise<PublishedState>;
   /** HUP. `publish` 와 같은 규칙을 지킨다. */
-  signalReload(lease: ApplyLease): Promise<void>;
+  signalReload(lease: ApplyLease): Promise<Checked>;
   /**
    * 활성화 증거 (§6.3). 세대 리터럴만이 아니라 관측할 수 있는 것을 **전부** 싣는다.
    *
@@ -822,15 +823,16 @@ export class FakeEffects implements Effects {
       : { ok: false, reason: '주입된 preflight 실패' };
   }
 
-  async publish(record: PublishRecord, lease: ApplyLease): Promise<void> {
+  async publish(record: PublishRecord, lease: ApplyLease): Promise<Checked> {
     if (this.crashBeforeEffect === 'publish') throw new CrashInjected('before publish');
     this.clock.tick('publish:before');
     // **되돌릴 수 없는 지점 직전.** 여기와 아래 대입 사이에 await 가 없다.
-    lease.assertValid();
+    const checked = lease.assertValid();
     this.publishCalls += 1;
     this.publishedRecord = record;
     if (this.crashAfterEffect === 'publish') throw new CrashInjected('after publish');
     this.clock.tick('publish:after');
+    return checked;
   }
 
   async observePublished(): Promise<PublishedState> {
@@ -844,14 +846,15 @@ export class FakeEffects implements Effects {
     return this.publishedRecord?.generation;
   }
 
-  async signalReload(lease: ApplyLease): Promise<void> {
+  async signalReload(lease: ApplyLease): Promise<Checked> {
     if (this.crashBeforeEffect === 'reload') throw new CrashInjected('before reload');
     this.clock.tick('reload:before');
-    lease.assertValid();
+    const checked = lease.assertValid();
     this.reloadSignals += 1;
     if (this.reloadTakesEffect) this.acceptingGeneration = this.publishedRecord?.generation;
     if (this.crashAfterEffect === 'reload') throw new CrashInjected('after reload');
     this.clock.tick('reload:after');
+    return checked;
   }
 
   async observeActivation(): Promise<ActivationEvidence | undefined> {

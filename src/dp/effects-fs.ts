@@ -33,6 +33,7 @@ import type {
   ApplyOperation,
   PublishRecord,
   PublishedState,
+  Checked,
 } from './operation.js';
 
 export type FsEffectsOptions = {
@@ -128,7 +129,7 @@ export class FsEffects implements Effects {
     return `${this.link}.owner`;
   }
 
-  async publish(record: PublishRecord, lease: ApplyLease): Promise<void> {
+  async publish(record: PublishRecord, lease: ApplyLease): Promise<Checked> {
     const generation = record.generation;
     const dir = join(this.opts.prefix, 'generations', generation);
     // 끊어진 링크를 만들지 않는다. 게시 후 reload 가 실패하는 것보다 게시를 막는 게 낫다.
@@ -156,12 +157,13 @@ export class FsEffects implements Effects {
     renameSync(ownerTmp, this.ownerPath);
     fsyncDir(this.opts.prefix);
 
-    lease.assertValid();
+    const checked = lease.assertValid();
     // rename 은 원자적이다 — `current` 가 없는 순간이 생기지 않는다.
     renameSync(tmp, this.link);
     // **디렉토리 엔트리도 내린다** (10차 반례 ⑤). rename 만 하면 전원이 끊겼을 때
     // 포인터와 소유 기록의 순서가 뒤집힐 수 있다.
     fsyncDir(this.opts.prefix);
+    return checked;
   }
 
   async observePublished(): Promise<PublishedState> {
@@ -189,11 +191,14 @@ export class FsEffects implements Effects {
       : { kind: 'inconsistent', generation, record };
   }
 
-  async signalReload(lease: ApplyLease): Promise<void> {
+  async signalReload(lease: ApplyLease): Promise<Checked> {
     // **신호 전에** 워터마크를 찍는다. 뒤에 찍으면 신호가 만든 오류를 놓친다.
     this.watermark = await this.errorLogLines();
-    lease.assertValid();
+    const checked = lease.assertValid();
+    // ⚠️ 표는 "불렀는가" 를 강제할 뿐 "언제 불렀는가" 를 강제하지 못한다. 아래 `await`
+    // 안에서 리더가 바뀌면 신호는 그대로 나간다 — 9차에 재현했고 아직 남아 있다.
     await this.opts.reload();
+    return checked;
   }
 
   private async errorLogLines(): Promise<number | undefined> {

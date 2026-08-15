@@ -24,6 +24,7 @@ import {
   verifyGeneration,
 } from '../../src/dp/materialize.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
+import { CHECKED_TOKEN } from '../../src/dp/operation.js';
 import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
 import { FsEffects } from '../../src/dp/effects-fs.js';
 import type { ApplyOperation } from '../../src/dp/operation.js';
@@ -361,7 +362,7 @@ describe('FsEffects 도 lease 를 확인한다 — FakeEffects 로만 보면 놓
    * 지워도 conformance 가 전부 통과했다.
    */
   const invalid = { leaderToken: '10', assertValid: () => { throw new Error('lease 를 잃었다'); } };
-  const valid = { leaderToken: '10', assertValid: () => undefined };
+  const valid = { leaderToken: '10', assertValid: () => CHECKED_TOKEN };
 
   it('잃은 lease 로는 심볼릭 링크를 바꾸지 못한다', async () => {
     const m = make('gen-1');

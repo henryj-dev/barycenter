@@ -122,24 +122,68 @@ describe('v0.1 표면', () => {
 /**
  * 아무것도 하지 않는 부작용. 표면의 타입만으로 만든다.
  *
- * ⚠️ **여기 `publish()` 와 `signalReload()` 가 인자를 안 받는다.** 그런데 strict
- * typecheck 를 통과한다 — TypeScript 는 인자를 덜 받는 함수를 대입할 수 있게 한다.
- * 즉 **lease 를 필수 인자로 만들어도 사용을 강제하지 못한다** (11차 검수).
- * 그 사실을 여기 남겨 둔다. 정합성은 수렴(`reconcileConfig`)이 맡는다.
+ * **여기가 11차부터 네 회차 동안 열려 있던 자리다.** 전에는 이 자리에 `async publish() {}`
+ * 라고 적어 두고 "strict typecheck 를 통과한다 — lease 를 필수 인자로 만들어도 사용을
+ * 강제하지 못한다" 는 사실을 남겨 뒀다. TypeScript 가 인자를 덜 받는 함수를 대입할 수
+ * 있게 하기 때문이다.
+ *
+ * 15차에 닫았다. **인자로는 못 막지만 반환 타입으로는 막을 수 있다** — `assertValid()`
+ * 만이 만드는 표(`Checked`)를 돌려주게 하면, 표를 얻으려면 확인을 부를 수밖에 없다.
+ * 아래 구현은 그래서 lease 를 받고 부른다. 안 부르면 컴파일이 안 된다.
  */
 const NOOP_EFFECTS: surface.Effects = {
   async preflight(): Promise<surface.PreflightResult> {
     return { ok: true };
   },
-  async publish() {},
+  async publish(_record, lease) {
+    return lease.assertValid();
+  },
   async observePublished(): Promise<surface.PublishedState> {
     return { kind: 'none' };
   },
-  async signalReload() {},
+  async signalReload(lease) {
+    return lease.assertValid();
+  },
   async observeActivation() {
     return undefined;
   },
 };
+
+describe('lease 를 건너뛴 구현은 타입이 거부한다 (11차 ⑤ · 15차에 닫았다)', () => {
+  /**
+   * **이건 런타임 테스트가 아니라 타입 테스트다.** `@ts-expect-error` 가 붙은 줄이
+   * 컴파일 오류가 **아니면** `tsc` 가 "쓸데없는 지시자" 라고 실패한다. 즉 이 파일이
+   * 타입체크를 통과한다는 것 자체가 "여기는 반드시 오류다" 의 증거다.
+   *
+   * 11차부터 네 회차 동안 "타입이 강제 못 한다" 고 적어 왔다. 인자로는 못 막는 게 맞다 —
+   * TypeScript 는 인자를 덜 받는 함수를 대입할 수 있게 한다. 그런데 **반환 타입으로는
+   * 막을 수 있었다.**
+   */
+  it('lease 를 안 부르면 컴파일되지 않는다', () => {
+    const skipsLease = {
+      async preflight(): Promise<surface.PreflightResult> {
+        return { ok: true };
+      },
+      // @ts-expect-error — 표를 안 돌려주므로 Effects 가 아니다
+      async publish(): Promise<void> {},
+      async observePublished(): Promise<surface.PublishedState> {
+        return { kind: 'none' };
+      },
+      // @ts-expect-error — 여기도 마찬가지다
+      async signalReload(): Promise<void> {},
+      async observeActivation() {
+        return undefined;
+      },
+    } satisfies surface.Effects;
+    expect(skipsLease).toBeDefined();
+  });
+
+  it('표는 assertValid 에서만 나온다 — 손으로 만들 수 없다', () => {
+    // @ts-expect-error — `Checked` 는 unique symbol 로 봉인돼 있다
+    const forged: surface.Checked = {};
+    expect(forged).toBeDefined();
+  });
+});
 
 describe('표면만으로 실제로 구현할 수 있는가', () => {
   it('저장소를 갈아 끼울 수 있다 — DurableStore 를 밖에서 구현한다', async () => {
@@ -301,8 +345,10 @@ describe('불투명 저장소 — 내용을 모르는 구현이 실제로 돈다
         async observePublished(): Promise<surface.PublishedState> {
           return published;
         },
-        async publish(record) {
+        async publish(record, lease) {
+          const checked = lease.assertValid();
           published = { kind: 'owned', record };
+          return checked;
         },
         async observeActivation() {
           return { acceptingGeneration: 'gen-1' };

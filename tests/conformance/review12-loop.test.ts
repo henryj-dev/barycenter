@@ -18,7 +18,8 @@ import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
-import type { ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
+import type {
+  Checked, ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
 
 const OP = (id: string, gen = 'gen-1', o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
@@ -65,8 +66,9 @@ describe('① 끊긴 러너는 **자기 것만** 정리한다', () => {
     const gate = new Promise<void>((r) => { release = r; });
 
     class Hanging extends FakeEffects {
-      override async publish(_r: PublishRecord, _l: ApplyLease): Promise<void> {
+      override async publish(_r: PublishRecord, _l: ApplyLease): Promise<Checked> {
         await gate; // 예산을 넘긴다
+        return new Promise<Checked>(() => undefined);
       }
     }
 
@@ -106,8 +108,8 @@ describe('② 한 번도 활성화하지 못해도 되돌릴 기준이 있다', 
     const agent = new DpAgent(store);
 
     class HangingReload extends FakeEffects {
-      override async signalReload(_l: ApplyLease): Promise<void> {
-        await new Promise(() => {}); // 영영 안 끝난다
+      override async signalReload(_l: ApplyLease): Promise<Checked> {
+        return new Promise<Checked>(() => undefined); // 영영 안 끝난다
       }
     }
     const fx = new HangingReload();

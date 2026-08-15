@@ -15,7 +15,8 @@ import { describe, expect, it } from 'vitest';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { LocalDataplaneDriver, type DataplaneDriver } from '../../src/dp/driver.js';
 import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
-import type { ApplyLease } from '../../src/dp/operation.js';
+import type {
+  Checked, ApplyLease } from '../../src/dp/operation.js';
 import {
   provesActivation,
   type ActivationEvidence,
@@ -103,12 +104,12 @@ describe('두 평면은 한 오퍼레이션으로 함께 넘어간다 (§3.4)', 
     /** HUP 을 보내는 **그 순간** 두 슬롯을 들여다본다. */
     class Watching extends FakeEffects {
       staged: Partial<Record<Plane, string | undefined>> = {};
-      override async signalReload(lease: ApplyLease): Promise<void> {
+      override async signalReload(lease: ApplyLease): Promise<Checked> {
         this.staged = {
           http: agent.stagedDigest('http', '1'),
           stream: agent.stagedDigest('stream', '1'),
         };
-        await super.signalReload(lease);
+        return super.signalReload(lease);
       }
     }
 

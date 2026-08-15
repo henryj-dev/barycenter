@@ -188,20 +188,52 @@ export function publishedByMe(state: PublishedState, op: ApplyOperation): boolea
  * 그래서 검사를 부작용 **구현 안으로** 내린다. `Effects` 구현은 되돌릴 수 없는
  * 연산 **직전에** `assertValid()` 를 부르고, 그 사이에 `await` 를 두지 않아야 한다.
  *
- * ⚠️ **이건 타입이 강제하지 못한다** (9차 검수). 주석으로 부탁하는 것일 뿐이고,
- * 실제로 `FsEffects.signalReload` 는 확인 뒤 주입된 `reload()` 를 `await` 하는데
- * 그 안에서 리더가 바뀌면 신호는 그대로 나간다 — 재현했다.
+ * **이제 타입이 강제한다** (15차). 9차부터 네 회차 동안 "주석으로 부탁하는 것일 뿐" 이라고
+ * 적어 왔는데, 강제할 방법이 있었다 — `assertValid()` 만이 만들 수 있는 **표**(`Checked`)를
+ * 부작용의 반환 타입으로 요구하면 된다. 표를 얻으려면 확인을 부를 수밖에 없다.
+ *
+ * ```ts
+ * async publish(record, lease) {          // Promise<Checked>
+ *   const ok = lease.assertValid();       // 여기서만 표가 나온다
+ *   await this.swapSymlink(record);
+ *   return ok;
+ * }
+ * ```
+ *
+ * 전에는 `async publish() {}` 도 규약을 만족했다. 이제는 타입 오류다.
+ *
+ * ⚠️ **여전히 못 막는 것.** 확인과 부작용 **사이**에 `await` 를 두는 것은 못 막는다 —
+ * `FsEffects.signalReload` 가 확인 뒤 주입된 `reload()` 를 `await` 하고, 그 안에서 리더가
+ * 바뀌면 신호는 그대로 나간다(재현했다). 표는 "불렀는가" 를 강제할 뿐 "언제 불렀는가" 를
+ * 강제하지 못한다. 그건 여전히 규약이다.
  *
  * 막는 것만으로는 닫히지 않는다. 외부 효과는 **취소할 수 없다.** 대상(nginx)이 토큰을
  * 검증하지 않는 한, 남는 답은 "늦게 착지한 것을 **탐지하고 수렴시키는 것**" 이다.
  * `lease` 는 창을 좁히는 장치로 남기고, 정합성은 재수렴이 맡아야 한다.
  */
+declare const CHECKED: unique symbol;
+
+/**
+ * "되돌릴 수 없는 연산 직전에 확인했다" 는 표 (15차).
+ *
+ * `ApplyLease.assertValid()` 만이 만든다. 부작용이 이걸 돌려줘야 하므로, 확인을 건너뛴
+ * 구현은 **타입이 거부한다.** 값 자체는 아무 뜻이 없다 — 출처가 뜻이다.
+ */
+export type Checked = { readonly [CHECKED]: true };
+
 export type ApplyLease = {
   /** 이 lease 를 발급한 리더 토큰. */
   readonly leaderToken: string;
-  /** 아직 내 차례인가. 아니면 던진다. **동기 함수다** — await 를 만들지 않는다. */
-  assertValid(): void;
+  /**
+   * 아직 내 차례인가. 아니면 던진다. **동기 함수다** — await 를 만들지 않는다.
+   *
+   * 돌려주는 표를 부작용이 그대로 반환해야 한다. 그래야 "불렀다" 가 타입에 남는다.
+   */
+  assertValid(): Checked;
 };
+
+/** 표를 만든다. **`assertValid` 구현만 쓴다** — 표면에 내보내지 않는다. */
+export const CHECKED_TOKEN: Checked = Object.freeze({}) as Checked;
 
 /** apply 의 결과. **평면별로** 말한다. */
 export type ApplyResult = {

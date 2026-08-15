@@ -12,12 +12,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsEffects } from '../../src/dp/effects-fs.js';
+import { CHECKED_TOKEN } from '../../src/dp/operation.js';
 
 let prefix: string;
 
 /** 게시 기록. 이제 게시는 "무엇을" 이 아니라 "누가 무엇을" 이다. */
 /** 항상 유효한 lease. 이 스위트는 lease 자체가 아니라 파일 조작을 본다. */
-const LEASE = { leaderToken: '10', assertValid: () => undefined };
+const LEASE = { leaderToken: '10', assertValid: () => CHECKED_TOKEN };
 
 const rec = (generation: string) => ({
   generation,

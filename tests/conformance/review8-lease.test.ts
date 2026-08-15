@@ -21,7 +21,8 @@ import { describe, expect, it } from 'vitest';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
-import type { ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
+import type {
+  Checked, ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
 
 const OP = (id: string, gen = 'gen-1', o: Partial<ApplyOperation> = {}): ApplyOperation => ({
   leaderToken: '10',
@@ -71,9 +72,9 @@ describe('① 옛 러너의 늦은 게시가 착지하지 못한다', () => {
 
     /** 옛 세대를 게시하려다 준비 단계에서 멈춘다. */
     class Stalling extends FakeEffects {
-      override async publish(record: PublishRecord, lease: ApplyLease): Promise<void> {
+      override async publish(record: PublishRecord, lease: ApplyLease): Promise<Checked> {
         if (record.generation === 'gen-old') await gate;
-        await super.publish(record, lease);
+        return super.publish(record, lease);
       }
     }
 
@@ -220,8 +221,8 @@ describe('③ 관측 결과는 내 저널에만 쓴다', () => {
         // `awaitActivation` 안이다. 신임이 실행권과 저널을 **쥔 채로** 진행 중이다.
         return { acceptingGeneration: 'gen-1', errorLogGrowth: 0, masterPid: '옛-러너' };
       }
-      override async signalReload(lease: ApplyLease) {
-        await super.signalReload(lease);
+      override async signalReload(lease: ApplyLease): Promise<Checked> {
+        const checked = await super.signalReload(lease);
         // 승계하고 신임이 자기 저널을 연다 — 아직 끝나지 않았다.
         await newAgent.fence('11');
         await newAgent.reserveAll(newOp);
@@ -233,6 +234,7 @@ describe('③ 관측 결과는 내 저널에만 쓴다', () => {
         // 쓰기가 소유권 검사를 통과한다.
         expect(newAgent.activeOperation()?.operationId, '창을 만들지 못했다').toBe('new');
         handed = true;
+        return checked;
       }
     }
 

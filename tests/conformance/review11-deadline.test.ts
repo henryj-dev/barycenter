@@ -16,7 +16,8 @@
 import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
 import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
-import type { ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
+import type {
+  Checked, ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
 
 const OP = (id: string, gen = 'gen-1'): ApplyOperation => ({
   leaderToken: '10',
@@ -44,8 +45,9 @@ const FAST = { attempts: 1, intervalMs: 0, sleep: async () => {}, effectTimeoutM
 
 /** 영영 끝나지 않는 게시. */
 class Hanging extends FakeEffects {
-  override async publish(_record: PublishRecord, _lease: ApplyLease): Promise<void> {
-    await new Promise(() => {});
+  override async publish(_record: PublishRecord, _lease: ApplyLease): Promise<Checked> {
+    // 영영 돌아오지 않는다 — 표를 돌려줄 일이 없다.
+    return new Promise<Checked>(() => undefined);
   }
 }
 
@@ -74,9 +76,9 @@ describe('⑤ 멈춘 부작용은 예산을 넘기면 끊는다', () => {
   it('예산 안에 끝나는 부작용은 그대로 진행한다 — 막는 것만 하는 게 아니다', async () => {
     const agent = new DpAgent(new MemoryStore());
     class Slow extends FakeEffects {
-      override async publish(record: PublishRecord, lease: ApplyLease): Promise<void> {
+      override async publish(record: PublishRecord, lease: ApplyLease): Promise<Checked> {
         await new Promise((r) => setTimeout(r, 5));
-        await super.publish(record, lease);
+        return super.publish(record, lease);
       }
     }
     const r = await new ApplyRunner(agent, new Slow(), FAST).run(OP('ok'));

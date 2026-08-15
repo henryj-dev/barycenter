@@ -56,6 +56,7 @@ export { render, type RenderCapabilities, type RenderedConfig } from './conf/ren
 export type {
   ActivationEvidence,
   ApplyLease,
+  Checked,
   ApplyOperation,
   ApplyPhase,
   ApplyResult,

@@ -23,7 +23,7 @@ import type {
   PublishedState,
   PublishRecord,
 } from './operation.js';
-import { planesOf, provesActivation } from './operation.js';
+import { CHECKED_TOKEN, planesOf, provesActivation } from './operation.js';
 import { DpAgent, DpRejection, tupleFor, type DurableStore } from './agent.js';
 import { ApplyRunner, type Effects } from './apply.js';
 
@@ -322,6 +322,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
         if (!this.#stillBaseline(expected)) {
           throw new DpRejection('stale_leader', '되돌리는 사이 기준이 바뀌었다');
         }
+        return CHECKED_TOKEN;
       },
     };
   }

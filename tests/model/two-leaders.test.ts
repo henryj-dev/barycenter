@@ -34,6 +34,7 @@ import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type {
   ActivationEvidence,
   ApplyLease,
+  Checked,
   ApplyOperation,
   PublishedState,
   PublishRecord,
@@ -132,12 +133,13 @@ class ModelEffects implements Effects {
     return this.at('preflight', () => ({ ok: true, configTestPassed: true }));
   }
 
-  publish(record: PublishRecord, lease: ApplyLease): Promise<void> {
+  publish(record: PublishRecord, lease: ApplyLease): Promise<Checked> {
     return this.at('publish', () => {
       // **되돌릴 수 없는 연산 직전에 확인한다.** 동기라 확인과 부작용 사이가 없다.
-      lease.assertValid();
+      const checked = lease.assertValid();
       this.world.published = record;
       this.world.publishes += 1;
+      return checked;
     });
   }
 
@@ -148,11 +150,12 @@ class ModelEffects implements Effects {
         : { kind: 'owned' as const, record: this.world.published });
   }
 
-  signalReload(lease: ApplyLease): Promise<void> {
+  signalReload(lease: ApplyLease): Promise<Checked> {
     return this.at('signalReload', () => {
-      lease.assertValid();
+      const checked = lease.assertValid();
       this.world.reloads += 1;
       this.world.accepting = this.world.published?.generation;
+      return checked;
     });
   }
 

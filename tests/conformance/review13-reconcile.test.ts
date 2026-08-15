@@ -19,7 +19,8 @@ import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
-import type { ApplyOperation, PublishedState } from '../../src/dp/operation.js';
+import type {
+  Checked, ApplyOperation, PublishedState } from '../../src/dp/operation.js';
 
 const FAST = { attempts: 1, intervalMs: 0, sleep: async () => {}, effectTimeoutMs: 200 };
 
@@ -419,8 +420,8 @@ describe('예산을 넘겨도 부분 전환은 정직하게 보고된다 (13차 
     });
 
     const hang = new (class extends FakeEffects {
-      override async signalReload(): Promise<void> {
-        await new Promise<void>(() => undefined); // 영영 안 돌아온다
+      override async signalReload(): Promise<Checked> {
+        return new Promise<Checked>(() => undefined); // 영영 안 돌아온다
       }
     })();
     hang.publishedRecord = {

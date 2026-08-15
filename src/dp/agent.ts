@@ -27,7 +27,7 @@ import type {
   ApplyLease,
   PublishRecord,
 } from './operation.js';
-import { isTerminalPhase, planesOf, provesActivation } from './operation.js';
+import { CHECKED_TOKEN, isTerminalPhase, planesOf, provesActivation } from './operation.js';
 export type { ActivationEvidence, Coordinate, Plane };
 
 export type PlaneState = Coordinate & { payloadDigest: string };
@@ -868,7 +868,10 @@ export class DpAgent {
     const token = normalizeNumeric(op.leaderToken, 'leaderToken');
     return {
       leaderToken: token,
-      assertValid: () => this.assertOwnership(op),
+      assertValid: () => {
+        this.assertOwnership(op);
+        return CHECKED_TOKEN;
+      },
     };
   }
 
