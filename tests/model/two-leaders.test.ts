@@ -16,7 +16,16 @@
  *
  * ── 이 모델이 **못 보는 것** ────────────────────────────────────────────────
  *
- * 스케줄 공간을 다 훑지 못한다.
+ * 스케줄 공간을 다 훑지 못한다. DFS 150 + 무작위 350 이고, 큰 시나리오는 매번
+ * "상한에서 끊었다" 가 찍힌다.
+ *
+ * **그래서 시나리오를 추가한다고 그 축이 덮이는 것이 아니다.** 15차 수정 둘
+ * (`pendingEpochs` · reconcile lease 의 토큰 검사)을 겨냥해 시나리오를 넣었는데,
+ * 뮤테이션을 돌려 보니 **여전히 안 잡힌다** — 그 교차가 500 개 표본에 안 들어온다.
+ * 둘 다 conformance 가 잡는다(`review14-finalizer` · `review13-reconcile`).
+ *
+ * 시나리오가 그 자리를 **지나게** 만드는 것과 그 자리를 **때리는** 것은 다르다.
+ * 지나게는 만들었고 때리지는 못했다. 적어 둔다 — 안 적으면 "모델이 본다" 고 넓게 읽는다.
  *
  * 스케줄 공간도 다 훑지 못한다. DFS 150 + 무작위 350 이고, 매번 "상한에서 끊었다" 가
  * 찍힌다. 초록이 "안전하다" 가 아니라 "**여기까지는 못 깼다**" 라는 뜻이다.
@@ -530,11 +539,118 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
           ),
           () => swallow(new DpAgent(store).fence('11')),
         ],
-        async ({ store, effects }) => {
+        async ({ store, world, effects }) => {
           await LocalDataplaneDriver.create({ store, effects: effects('seed') })
             .applyConfig(OP('A', 'gen-A', '10', '0', '1'));
+          // **바깥을 어긋나게 둔다.** 정합하면 수렴이 읽고 끝나서 게시·HUP 경로를
+          // 아예 안 지난다 — lease 검사를 시험할 수가 없다.
+          world.published = undefined;
         },
       );
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **서로 다른 두 오퍼레이션이 같은 좌표를 노린다.**
+   *
+   * 15차에 `pendingEpochs` 를 넣으면서 "완결의 뜻은 후보가 정한다" 고 했는데, 그 뜻이
+   * **실행권에서** 온다. 실행권이 다른 오퍼레이션 것으로 바뀌는 사이에 후보가 만들어지면
+   * 어떻게 되는가 — 손으로는 그 순간을 고를 자신이 없어서 생성해서 본다.
+   */
+  it('두 오퍼레이션이 같은 좌표를 노려도 다섯 속성이 성립한다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(space, ({ store, effects, swallow }) => {
+        const a = OP('A', 'gen-A', '10', '0', '1');
+        const b = OP('B', 'gen-B', '10', '0', '1');
+        return [
+          () => swallow(new ApplyRunner(new DpAgent(store), effects('A'), FAST).run(a)),
+          () => swallow(new ApplyRunner(new DpAgent(store), effects('B'), FAST).run(b)),
+        ];
+      });
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **셋이 얽힌다** — 밀고, 리더가 바뀌고, 한 평면이 걷어차인다.
+   *
+   * 15차 수정 셋(`pendingEpochs` · lease 이중 검사 · `failAll` 이 좌표를 읽는 것)이
+   * 전부 이 교차에서 만난다.
+   */
+  it('밀기·승계·걷어차기가 겹쳐도 다섯 속성이 성립한다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(space, ({ store, effects, swallow }) => {
+        const a = OP('A', 'gen-A', '10', '0', '1');
+        return [
+          () => swallow(new ApplyRunner(new DpAgent(store), effects('run'), FAST).run(a)),
+          () => swallow(new DpAgent(store).fence('11')),
+          () => swallow(new DpAgent(store).abort(tupleFor(a, 'stream'))),
+        ];
+      });
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **호출자가 평면을 하나만 담아 끝낸다.**
+   *
+   * 15차 ① 이 이 모양이었다 — `abortConfig` 는 호출자가 준 오퍼레이션을 그대로 쓴다.
+   * 담긴 평면만 보고 완결을 판정하면 부분 활성화가 기준으로 올라간다. 고쳤지만,
+   * **모델이 그 자리를 안 지나고 있었다.** 지나게 만든다.
+   */
+  it('평면 하나만 담은 abort 가 끼어들어도 다섯 속성이 성립한다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(space, ({ store, effects, swallow }) => {
+        const a = OP('A', 'gen-A', '10', '0', '1');
+        const half: ApplyOperation = {
+          ...a,
+          affectedPlanes: ['http'],
+          planes: { http: a.planes.http! },
+        };
+        return [
+          () => swallow(new ApplyRunner(new DpAgent(store), effects('run'), FAST).run(a)),
+          () => swallow(
+            LocalDataplaneDriver.create({ store, effects: effects('ab') }).abortConfig(half),
+          ),
+        ];
+      });
       if (r.violations.length > 0) failure = r;
     });
 
