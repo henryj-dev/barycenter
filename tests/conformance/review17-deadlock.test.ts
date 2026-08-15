@@ -699,3 +699,64 @@ describe('포기해도 넘어간 평면은 넘어갔다고 적는다 (21차 CE-C
     ).toBe('partial_exhausted');
   });
 });
+
+describe('포기한 세대를 복구가 다시 게시하지 않는다 (22차 R4)', () => {
+  /**
+   * `abortConfig` 는 직렬 쓰기 넷이다 — abort×평면 · releaseHolderSlots ·
+   * finishOperation · **closeJournal**. 마지막 직전에 죽으면 `terminal='aborted'` 인데
+   * 저널은 비종단으로 남는다.
+   *
+   * 그 상태에서 복구가 돌면 **포기한 세대를 게시한다.** 러너의 게시 경로가 자기 전환의
+   * `terminal` 기록을 안 보기 때문이다 — 그 검사는 `stage`/`commit` 의 `admit` 에서야
+   * 나온다. HUP 까지는 안 가고 수렴이 덮지만, **되돌릴 수 없는 연산이 나간 것은 사실이다.**
+   */
+  it('terminal 로 닫힌 전환은 복구가 게시하지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    for (const plane of ['http', 'stream'] as const) await agent.abort(tupleFor(a, plane));
+    await agent.releaseHolderSlots(a);
+    await agent.finishOperation(a, ['http', 'stream']);
+
+    const fx = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: fx }).recoverConfig().catch(() => undefined);
+
+    expect(fx.publishCalls, '포기한 세대를 게시했다').toBe(0);
+    expect(fx.reloadSignals, '포기한 세대로 HUP 을 보냈다').toBe(0);
+  });
+});
+
+describe('전부 넘어갔으면 부분이 아니다 (22차 R2)', () => {
+  /**
+   * `moved.length > 0` 만 보면 **전 평면이 커밋된 전환도** `partial_exhausted` 로 닫혀
+   * `partialTransition=true` 가 된다. 좌표는 참인데 라벨만 거짓이다.
+   *
+   * §3.4 계열의 **세 번째 재발**이다 — 13차 ③(`failAll`) · 21차 CE-C(`abortConfig`) ·
+   * 이번. 매번 "넘어간 평면을 무시하고 한 덩어리로 적는" 같은 모양이었다.
+   */
+  it('전 평면이 넘어간 뒤 abort 하면 activated 로 닫힌다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(a, plane), null);
+      await agent.commit(tupleFor(a, plane), { acceptingGeneration: 'gen-A' });
+    }
+    await agent.writeJournal({
+      op: a, phase: 'reload_observed', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'committed' },
+    });
+
+    await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .abortConfig(a).catch(() => undefined);
+
+    expect(
+      new DpAgent(store).readJournal()?.phase,
+      '전 평면이 넘어갔는데 "부분" 이라고 적었다',
+    ).toBe('activated');
+  });
+});

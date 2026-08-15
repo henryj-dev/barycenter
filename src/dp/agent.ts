@@ -1003,7 +1003,7 @@ export class DpAgent {
    */
   closeJournal(
     op: ApplyOperation,
-    how: 'failed' | 'superseded' | 'partial_exhausted',
+    how: 'failed' | 'superseded' | 'partial_exhausted' | 'activated',
   ): Promise<void> {
     return this.serial((s) => {
       const j = s.journal;

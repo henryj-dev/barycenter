@@ -291,7 +291,12 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       (plane) => this.agent.coordinate(plane).activationEpoch
         === tupleFor(op, plane).target.activationEpoch,
     );
-    await this.agent.closeJournal(op, moved.length > 0 ? 'partial_exhausted' : 'failed');
+    // **전부 넘어갔으면 "부분" 이 아니다** (22차 R2). §3.4 계열의 세 번째 재발이라 끊는다.
+    const all = planesOf(op).length;
+    await this.agent.closeJournal(
+      op,
+      moved.length === all ? 'activated' : moved.length > 0 ? 'partial_exhausted' : 'failed',
+    );
     if (refused.length > 0) {
       throw new DpRejection('terminal', `일부 평면이 이미 끝나 있었다 — ${refused.join(', ')}`);
     }

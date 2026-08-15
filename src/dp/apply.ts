@@ -390,6 +390,26 @@ export class ApplyRunner {
         }
         return resultOf(j);
       }
+      // **이미 끝난 전환은 밀지 않는다** (22차 R4).
+      //
+      // `abortConfig` 는 직렬 쓰기 넷이라 마지막(저널 닫기) 직전에 죽을 수 있다. 그러면
+      // `terminal='aborted'` 인데 저널은 비종단으로 남고, 복구가 **포기한 세대를 게시**했다.
+      // terminal 검사가 `stage`/`commit` 의 `admit` 에서야 나와서, 그 앞의 게시는 그냥
+      // 지나갔다 — **되돌릴 수 없는 연산이 검사보다 먼저 있었다.**
+      //
+      // **포기·실패로 닫힌 것만 본다.** 전 평면이 `activated` 로 끝난 것은 정상 경로가
+      // 마저 처리해야 한다 — 처음엔 그걸 안 갈라서 활성화된 전환을 `failed` 로 닫았다.
+      const kinds = planesOf(j.op).map((plane) => this.agent.terminalOf(tupleFor(j.op, plane)));
+      const closed = kinds.every((k) => k === 'aborted' || k === 'failed');
+      if (closed) {
+        await this.agent.closeJournal(j.op, 'failed');
+        // **자리도 비운다.** 닫기만 하고 물러나면 실행권이 남아 다음 오퍼레이션이 막힌다
+        // — 20차에 배운 그것이다. 새 조기 반환을 만들 때마다 이걸 빠뜨린다.
+        await this.agent.finishOperation(j.op, planesOf(j.op));
+        const after = this.agent.readJournal();
+        return resultOf(after !== undefined && isTerminalPhase(after.phase) ? after : j);
+      }
+
       // **부작용 앞에서 매번 확인한다** (6차 반례 ⑥). 예약은 과거의 승인일 뿐이고,
       // 그 사이 새 리더가 fence 했을 수 있다.
       this.agent.assertOwnership(j.op);
