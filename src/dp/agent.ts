@@ -574,7 +574,7 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
     && droppedCandidate !== undefined
     && next.pendingActivation === undefined
     && j6.op.operationId === droppedCandidate.operationId
-    || j6.op.transitionId === droppedCandidate.transitionId) {
+    && j6.op.transitionId === droppedCandidate.transitionId) {
     if (next.lastActivated === undefined || !sameRecordIdentity(next.lastActivated, droppedCandidate)) {
       throw new InvariantViolation(
         'I6 활성화는 기준을 남긴다',
