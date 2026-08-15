@@ -840,3 +840,85 @@ describe('포기는 절반만 적혀 있어도 포기다 (23차 CE-B)', () => {
     expect(after.coordinate('stream').activationEpoch, '포기한 전환을 마저 커밋했다').toBe('0');
   });
 });
+
+describe('닫는 자리가 셋인데 둘만 모았다 (24차 CE-24-A)', () => {
+  /**
+   * **23차 CE-B 수정이 만든 회귀 — §3.4 계열의 다섯 번째 재발.**
+   *
+   * 22차까지 `closed` 는 `every` 였다. 그래서 참이면 `activated` 평면이 있을 수 **없었고**,
+   * 그 분기의 `closeJournal(j.op, 'failed')` 하드코딩은 **항상 참말**이었다.
+   *
+   * 23차가 CE-B 를 고치며 `includes('aborted')` 를 넣어 혼합 종단을 이 분기로 끌어들였다.
+   * 전제가 깨졌는데 하드코딩은 그대로 남았다 — `[activated, aborted]` 가 "다 실패했다" 로
+   * 적힌다. 21차 CE-C 가 `abortConfig` 에서 고친 바로 그 거짓말이다.
+   *
+   * **23차는 자기 규칙을 두 자리에만 적용했다.** 종단을 적는 자리는 셋이다 —
+   * `failAll` · `abortConfig` · 그리고 여기. `reachedPhase()` 를 만들어 놓고
+   * 정작 자기가 손댄 세 번째 자리를 안 고쳤다.
+   */
+  it('부분 활성화 위에서 abort 가 끊겨도 "다 실패했다" 고 적지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.stage(tupleFor(a, 'http'), null);
+    await agent.commit(tupleFor(a, 'http'), { acceptingGeneration: 'gen-A' });
+    await agent.stage(tupleFor(a, 'stream'), null);
+    await agent.writeJournal({
+      op: a, phase: 'partially_activated', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'staged' },
+    });
+    // abortConfig 가 http 는 이미 activated 라 거부당하고, stream 만 찍은 채 끊겼다.
+    await agent.abort(tupleFor(a, 'stream'));
+
+    const r = await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .recoverConfig();
+
+    expect(new DpAgent(store).coordinate('http').activationEpoch, '전제가 틀렸다').toBe('1');
+    expect(r.phase, 'http 가 서비스 중인데 "다 실패했다" 고 적었다').toBe('partial_exhausted');
+    expect(r.partialTransition, '부분 전환을 부분이 아니라고 답했다').toBe(true);
+  });
+});
+
+describe('한 걸음도 못 나갈 때 끝내는 자리 (24차 — 생존 뮤턴트를 죽인다)', () => {
+  /**
+   * 23차 스윕에서 `await this.failAll(...)` 을 **통째로 지워도 살아남았다.** 즉 그 줄을
+   * 걷는 테스트가 하나도 없었다. 분류를 미뤄 뒀는데 24차가 **길을 찾았다** — 17차에
+   * "도달 불가" 로 결론냈다가 뒤집힌 그 교훈이 또 맞았다.
+   *
+   * 모양은 이렇다. 남이 같은 (평면, epoch) 를 점유해 양 평면 stage 가 `slot_taken` 으로
+   * 막힌다. 이건 **종단이 아니라서** 위의 `closed` 분기가 안 잡고, 아무 평면도 못
+   * 나가므로 `advanced === 0` 이다. 그 자리에서 `failAll` 이 유일한 출구다.
+   *
+   * 지우면 `published` 에서 무한히 돈다 — HARD_LIMIT 예외로 튀어나오고 **실행권이 남아
+   * 다음 오퍼레이션이 영구히 막힌다.** 등급으로 치면 상(上)이 될 자리였고, 그것을
+   * 스윕이 "검사되지 않은 행동" 으로 정확히 짚었다.
+   */
+  it('양 평면이 남에게 막히면 실패로 닫고 실행권을 놓는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    const b = OP('B', 'gen-B', '0', '1');
+
+    await agent.reserveAll(a, {
+      op: a, phase: 'published', reloadAttempts: 0,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    // A 의 슬롯만 사라지고 저널은 남았다 — 그 위를 B 가 점유한다.
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.release(tupleFor(a, plane));
+      await agent.reserve(tupleFor(b, plane));
+    }
+
+    const r = await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .recoverConfig();
+
+    expect(r.phase, '한 걸음도 못 나갔는데 닫지 않았다').toBe('failed');
+    expect(
+      new DpAgent(store).activeOperation(),
+      '실행권이 남아 다음 오퍼레이션이 막힌다',
+    ).toBeUndefined();
+  });
+});

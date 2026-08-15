@@ -413,7 +413,16 @@ export class ApplyRunner {
       const closed = kinds.includes('aborted')
         || kinds.every((k) => k === 'aborted' || k === 'failed');
       if (closed) {
-        await this.agent.closeJournal(j.op, 'failed');
+        // **여기서도 `reachedPhase()` 다** (24차 CE-24-A). 22차까지 `closed` 는 `every`
+        // 라서 참이면 `activated` 평면이 있을 수 **없었고**, 그래서 `'failed'` 하드코딩이
+        // 항상 참말이었다. 23차가 CE-B 를 고치며 `includes` 로 혼합 종단을 이 분기에
+        // 끌어들여 **그 전제를 깼는데 하드코딩은 그대로 뒀다** — `[activated, aborted]`
+        // 가 "다 실패했다" 로 적힌다. §3.4 계열의 **다섯 번째 재발**이다.
+        //
+        // 23차는 판정을 한 곳으로 모으는 규칙을 만들어 놓고 **자기가 손댄 이 자리를
+        // 빠뜨렸다.** 종단을 적는 자리는 셋이다 — `failAll` · `abortConfig` · 여기.
+        // 규칙을 세우는 것과 전 자리에 적용하는 것은 다른 일이고, 안 한 쪽이 재발한다.
+        await this.agent.closeJournal(j.op, this.agent.reachedPhase() ?? 'failed');
         // **자리도 비운다.** 닫기만 하고 물러나면 실행권이 남아 다음 오퍼레이션이 막힌다
         // — 20차에 배운 그것이다. 새 조기 반환을 만들 때마다 이걸 빠뜨린다.
         await this.agent.finishOperation(j.op, planesOf(j.op));
@@ -588,6 +597,14 @@ export class ApplyRunner {
             //
             // 그리고 **저널을 종단으로 닫는다** (12차 반례 ⑤). 비종단으로 두면서
             // 실행권만 풀면, 두 번째 복구가 다시 밀려다 `not_reserved` 로 죽는다.
+            // **범위를 주장하는 네 번째 자리다** (24차 감사). 앞의 셋은 `reachedPhase()`
+            // 로 모았는데 여기는 안 모았다 — 일부러다. 예산 소진과 전 평면 커밋이 겹치면
+            // 좌표는 `activated` 인데 여기는 `partial_exhausted` 를 적는다. 그게 13차 ③
+            // 이고 **여섯 번 재현에 실패해** ▲ 로 남아 있다.
+            //
+            // 재현 경로 없이 고치면 스윕이 그 수정을 못 지킨다 — 다음 회차에 조용히
+            // 되돌아온다. 길을 찾으면 그때 `reachedPhase()` 로 모은다. 여기 적어 두는
+            // 이유는 **모았다고 말하면서 안 모은 자리를 남기지 않기 위해서**다.
             await ignoreConflict(this.write(next(j, { phase: 'partial_exhausted' })));
             await this.agent.finishOperation(
               j.op,
