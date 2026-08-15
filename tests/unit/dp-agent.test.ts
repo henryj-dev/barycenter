@@ -95,8 +95,11 @@ describe('§3.6 stage → commit', () => {
     const ack = await a.commit(op(), EVIDENCE);
     expect(ack.activationEpoch).toBe('1');
     expect(ack.payloadDigest).toBe('sha256:aaa');
+    // **서명이 계약의 일부다** (26차). 좌표는 "누가 놨는지" 를 같이 적는다 — 그게 없으면
+    // "내가 옮겼는가" 를 닮음으로 추론하게 되고, 그 추론이 §3.4 를 여섯 번 재발시켰다.
     expect(a.coordinate('http')).toEqual({
       activationEpoch: '1', membershipRevision: '1', payloadDigest: 'sha256:aaa',
+      by: { operationId: 'op-1', transitionId: 't-1', leaderToken: '10' },
     });
   });
 

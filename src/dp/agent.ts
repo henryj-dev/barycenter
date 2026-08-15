@@ -30,7 +30,36 @@ import type {
 import { CHECKED_TOKEN, isTerminalPhase, planesOf, provesActivation } from './operation.js';
 export type { ActivationEvidence, Coordinate, Plane };
 
-export type PlaneState = Coordinate & { payloadDigest: string };
+/**
+ * **이 좌표를 누가 놨는가** (26차 — 부류를 닫는다).
+ *
+ * 좌표에 서명이 없어서 §3.4 가 **여섯 번 재발했다.** 매번 "내가 옮겼는가" 를 **닮음**
+ * 으로 물었기 때문이다 — 평면 집합이 같은가(22·23차) → 하드코딩 전제(24차) →
+ * epoch 가 같은가 → digest 도 같은가(25차). 닮음의 기준을 하나 얹을 때마다 인스턴스
+ * 하나가 닫혔고 다음 회차에 그 아래 층이 열렸다.
+ *
+ * 26차가 마지막 층을 재현했다: **남이 같은 내용으로 같은 좌표를 채우면** digest 를 봐도
+ * 못 가른다. 그리고 같은 설정의 재시도는 운영에서 가장 흔한 패턴이다.
+ *
+ * 그래서 추론을 그만두고 **적는다.** 닮음의 기준을 몇 개 얹든 못 가르는 경우가 남지만,
+ * 서명은 안 남는다.
+ */
+export type PlaneAuthor = { operationId: string; transitionId: string; leaderToken: string };
+
+export type PlaneState = Coordinate & {
+  payloadDigest: string;
+  /**
+   * 이 `activationEpoch` 로 좌표를 옮긴 **commit 의 신원**.
+   *
+   * 없을 수 있다 — 초기 좌표(epoch 0)에는 작성자가 없고, 이 필드 이전에 저장된 상태에도
+   * 없다. **없으면 "내가 옮겼다" 가 아니다.** 닮음 폴백을 두지 않는다: 두면 부류가 안
+   * 닫히고, 업그레이드 창이 지나면 죽은 폴백으로 남아 스윕이 짚는다(24차 규칙).
+   *
+   * 그 대가는 구버전에서 이월된 **열린 저널**이 종단에서 비관적으로 `failed` 로 판정될
+   * 수 있는 1 회성 창이다. 방향이 안전하다 — 남의 공로를 흡수하는 것보다 비관이 싸다.
+   */
+  by?: PlaneAuthor;
+};
 
 /** §3.6 — epoch 하나로는 "허가된 operation" 을 증명하지 못한다. 튜플 전체를 싣는다. */
 export type OperationTuple = {
@@ -523,6 +552,24 @@ function planesOfOperation(op: ApplyOperation): Plane[] {
  * 그래서 **한 곳으로 모은다.** 새 자리를 만들 때 이걸 부르면 빠뜨릴 수가 없다.
  * `Settled` 표가 "어디서 검사하나" 를 모은 것과 같은 수법이다.
  */
+/**
+ * 이 좌표를 **이 신원이** 놨는가 (26차).
+ *
+ * 임계구역 안팎에서 같이 쓰므로 순수 함수다 — `this.coordinate()` 를 쓰면 `serial()`
+ * 안에서 스냅샷과 작업 중인 상태가 갈릴 수 있다.
+ */
+function authoredBy(
+  at: PlaneState | undefined,
+  who: { operationId: string; transitionId: string; leaderToken: string },
+): boolean {
+  const by = at?.by;
+  if (by === undefined) return false;
+  return by.operationId === who.operationId
+    && by.transitionId === who.transitionId
+    && normalizeNumeric(by.leaderToken, 'leaderToken')
+      === normalizeNumeric(who.leaderToken, 'leaderToken');
+}
+
 function ownsJournal(j: JournalEntry | undefined, op: ApplyOperation): boolean {
   if (j === undefined) return false;
   return j.op.operationId === op.operationId
@@ -1039,23 +1086,26 @@ export class DpAgent {
    * "무엇을 비교하나" 를 한 함수로 모은 것처럼, 이건 **"무엇을 세나" 를 모은다.**
    * 셀 대상을 못 고르면 잘못 고를 수도 없다.
    */
+  /**
+   * **이 평면을 내가 옮겼는가.** 닮음이 아니라 서명을 읽는다 (26차).
+   *
+   * 판정을 한 함수로 모은다 — 25차가 digest 조임을 `reachedPhase()` 에만 넣고
+   * `failAll` 의 평면별 판정에 안 넣어서, 한 결과 안에서 phase 와 progress 가
+   * **서로 모순**되게 만들었다. 자리가 둘이면 언젠가 갈린다.
+   *
+   * `ownsJournal()` 과 같은 삼중 비교다 — id 만으로는 fence 뒤 같은 id 재사용을 못 가른다.
+   */
+  movedByMe(op: ApplyOperation, plane: Plane): boolean {
+    const at = this.coordinate(plane);
+    return at.activationEpoch === tupleFor(op, plane).target.activationEpoch
+      && authoredBy(at, op);
+  }
+
   reachedPhase(): 'activated' | 'partial_exhausted' | 'failed' | undefined {
     const j = this.readJournal();
     if (j === undefined) return undefined;
     const planes = planesOf(j.op);
-    // **번지만 보면 안 된다** (25차 CE-25-A). epoch 은 좌표의 **번지**이고 digest 는
-    // **거기 있는 것**이다. 24차까지 이 자리는 `'failed'` 하드코딩이었고 그게 참말이었는데,
-    // 그것을 규칙으로 바꾸면서 번지 동일성만 봤다. 그러면 내가 전부 포기한 뒤 남이 같은
-    // epoch 을 **다른 payload** 로 채운 경우를 "내가 옮겼다" 로 읽는다.
-    //
-    // `payloadDigest` 까지 본다. 정상 경로에서는 내가 올린 것이 거기 있으므로 무해하고,
-    // 남이 채운 경우만 갈린다.
-    const moved = planes.filter((plane) => {
-      const at = this.coordinate(plane);
-      const want = tupleFor(j.op, plane);
-      return at.activationEpoch === want.target.activationEpoch
-        && at.payloadDigest === want.payloadDigest;
-    });
+    const moved = planes.filter((plane) => this.movedByMe(j.op, plane));
     if (moved.length === planes.length) return 'activated';
     return moved.length > 0 ? 'partial_exhausted' : 'failed';
   }
@@ -1328,7 +1378,14 @@ export class DpAgent {
 
       const current = s.planes[op.plane];
       // 이미 목표 좌표에 있으면 재요청이다 — 좌표를 두 번 옮기지 않는다.
-      if (sameCoordinate(current, op.target) && current.payloadDigest === op.payloadDigest) {
+      //
+      // **닮음이 아니라 서명을 본다** (26차 CE-26-C). 좌표와 digest 만 보면, 남이 같은
+      // 내용으로 그 좌표를 채운 뒤 내 지연된 commit 이 도착했을 때 **성공 ACK 를
+      // 돌려준다** — 나는 내가 커밋했다고 믿는데 아무것도 안 했다. 이 분기까지 내려오는
+      // 경우는 (a) 내 캐시가 지워진 뒤 (b) 남이 옮긴 뒤 둘뿐이고 **둘 다 거부가 옳다.**
+      if (sameCoordinate(current, op.target)
+        && current.payloadDigest === op.payloadDigest
+        && authoredBy(current, op)) {
         return record(s, op, 'commit', current);
       }
       const slot = s.reservations[op.plane][op.target.activationEpoch];
@@ -1378,7 +1435,15 @@ export class DpAgent {
         );
       }
 
-      s.planes[op.plane] = { ...op.target, payloadDigest: op.payloadDigest };
+      s.planes[op.plane] = {
+        ...op.target,
+        payloadDigest: op.payloadDigest,
+        by: {
+          operationId: op.operationId,
+          transitionId: op.transitionId,
+          leaderToken: normalizeNumeric(op.leaderToken, 'leaderToken'),
+        },
+      };
       s.activationEvidence[`${op.plane}:${op.target.activationEpoch}`] = evidence;
       // 무엇을 활성화했는지 기억한다 — reconcile 이 이걸로 되돌린다.
       //
@@ -1461,7 +1526,14 @@ export class DpAgent {
         throw new DpRejection('epoch_not_monotonic', 'membership_revision 은 앞으로만 간다');
       }
 
-      s.planes[op.plane] = { ...op.target, payloadDigest: op.payloadDigest };
+      // **서명은 그대로 둔다** (26차). `by` 의 뜻은 "이 **epoch** 로 옮긴 커밋" 이고
+      // health 는 epoch 을 안 옮긴다. 여기서 자기 신원을 쓰면 아직 안 닫힌 config 저널의
+      // 판정이 남의 것으로 뒤집혀 **정당한 활성화를 오살**한다.
+      s.planes[op.plane] = {
+        ...op.target,
+        payloadDigest: op.payloadDigest,
+        ...(current.by !== undefined ? { by: current.by } : {}),
+      };
       return record(s, op, 'health', s.planes[op.plane]);
     });
   }

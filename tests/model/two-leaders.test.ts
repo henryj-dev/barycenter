@@ -84,7 +84,11 @@ const OP = (id: string, generation: string, leaderToken: string, from: string, t
 /** 우리가 보는 상태의 모양. `payload` 는 store 에게 불투명하지만 모델은 안다. */
 type Seen = {
   maxLeaderToken: string;
-  planes: Record<Plane, { activationEpoch: string; payloadDigest: string }>;
+  planes: Record<Plane, {
+    activationEpoch: string;
+    payloadDigest: string;
+    by?: { operationId: string; transitionId: string; leaderToken: string };
+  }>;
   activeOperation?: { operationId: string; transitionId: string; leaderToken: string };
   journal?: {
     phase: string;
@@ -374,16 +378,25 @@ function checkProperties(
         && prev.journal.op.leaderToken === j.op.leaderToken;
       if (!same) {
         const planes = j.op.affectedPlanes;
-        // **번지와 내용을 같이 본다** (25차). 처음엔 epoch 만 봤는데, 그러면 속성이
-        // 구현과 **같은 착란을 공유한다** — 남이 같은 epoch 을 다른 payload 로 채운
-        // 경우를 둘 다 "내가 옮겼다" 로 읽어서 P10 이 CE-25-A 를 못 잡았다.
+        // **서명을 읽는다** (26차). 25차에 digest 를 넣었지만 그건 **가정을 한 층
+        // 아래로 같이 옮긴 것**일 뿐이었다 — 구현과 속성이 똑같이 닮음으로 셌으므로,
+        // 남이 **같은 내용**으로 채운 경우는 둘 다 속았다.
+        //
         // **계측기가 재려는 대상과 같은 가정을 쓰면 그 가정이 틀린 것은 영원히 못 잡는다.**
+        // 26차가 이 병을 짚었고, 그것이 좌표에 서명을 붙인 이유이기도 하다.
+        //
+        // 남은 한계: 이제 구현도 속성도 `by` 를 읽으므로 **`commit` 이 `by` 를 잘못
+        // 쓰는 버그는 둘 다 못 잡는다.** 진짜 독립은 시나리오가 자기 장부로 "누가 커밋에
+        // 성공했나" 를 세어 대조하는 것이다 — 아직 안 했다.
         const moved = planes.filter((plane) => {
           const at = s.planes[plane];
           const want = j.op.planes[plane];
-          return at !== undefined && want !== undefined
-            && at.activationEpoch === want.target.activationEpoch
-            && at.payloadDigest === want.payloadDigest;
+          if (at === undefined || want === undefined) return false;
+          if (at.activationEpoch !== want.target.activationEpoch) return false;
+          return at.by !== undefined
+            && at.by.operationId === j.op.operationId
+            && at.by.transitionId === j.op.transitionId
+            && BigInt(at.by.leaderToken) === BigInt(j.op.leaderToken);
         });
         const truth = moved.length === planes.length
           ? 'activated'

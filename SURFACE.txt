@@ -1,6 +1,6 @@
 # barycenter v0.1 공개 표면
-# 77 심볼 · sha256:3f99179406394e348f70f84cabf18c1fb3fdcdc4d672d97fa57324e007f83218
-# 동결 카운터: 4 회차 (표면이 안 움직인 검수 회차 수)
+# 78 심볼 · sha256:cb084702f7334b858e30a65d948b00ce9429b8106434684c88dd0685abd548ed
+# 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
 # 13차 검수가 준 동결 기준: 여러 적대적 회차 동안 이 파일이 변하지 않을 것.
@@ -261,11 +261,18 @@ export type PlaneAck = PlaneState & {
     transitionId: string;
     cached: boolean;
 };
+── PlaneAuthor
+export type PlaneAuthor = {
+    operationId: string;
+    transitionId: string;
+    leaderToken: string;
+};
 ── PlaneProgress
 export type PlaneProgress = 'pending' | 'reserved' | 'staged' | 'committed' | 'aborted' | 'failed';
 ── PlaneState
 export type PlaneState = Coordinate & {
     payloadDigest: string;
+    by?: PlaneAuthor;
 };
 ── PlaneStatus
 export type PlaneStatus = {

@@ -259,6 +259,8 @@ describe('저널과 멤버십이 한 오퍼레이션으로 묶인다', () => {
     await new ApplyRunner(agent, new FakeEffects(), FAST).run(OP);
     expect(agent.coordinate('http')).toEqual({
       activationEpoch: '1', membershipRevision: '1', payloadDigest: 'sha256:gen2',
+      // 좌표에 서명이 남는다 (26차) — "누가 이 좌표를 놨는가" 를 나중에 읽을 수 있어야 한다.
+      by: { operationId: 'op-1', transitionId: 't-1', leaderToken: '10' },
     });
   });
 

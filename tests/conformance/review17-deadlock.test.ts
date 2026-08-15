@@ -963,3 +963,80 @@ describe('남이 옮긴 좌표를 내 공로로 적지 않는다 (25차 CE-25-A)
     expect(r.phase, 'A 는 전부 포기했는데 남이 옮긴 것을 자기 공로로 적었다').toBe('failed');
   });
 });
+
+describe('닮음으로는 부류가 안 닫힌다 (26차 CE-26-A · CE-26-B)', () => {
+  /**
+   * **25차 수정이 만든 모순 — §3.4 여섯 번째 재발.**
+   *
+   * 25차는 digest 조임을 `reachedPhase()` 에만 넣고 **`failAll` 의 평면별 `moved`
+   * 판정에는 안 넣었다.** 그래서 한 `ApplyResult` 안에서 phase 는 "다 실패했다"(digest 를
+   * 보므로 참) 인데 progress 는 "다 커밋됐다"(epoch 만 보므로 거짓) 가 된다.
+   *
+   * 25차 이전에는 **일관되게 틀렸고**(둘 다 남의 것을 내 공로로), 25차가 한쪽만 고쳐
+   * **모순**을 만들었다. 25차가 스스로 진단한 병형("규칙을 세우고 일부 자리에만 적용")을
+   * 그 규칙을 쓴 커밋에서 또 저지른 것이다.
+   */
+  it('phase 와 progress 가 같은 기준으로 판정된다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    const b = OP('B', 'gen-B', '0', '1');
+
+    await agent.reserveAll(a, {
+      op: a, phase: 'reload_intent', reloadAttempts: 2,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.release(tupleFor(a, plane));
+      await agent.reserve(tupleFor(b, plane));
+      await agent.stage(tupleFor(b, plane), null);
+      await agent.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-B' });
+    }
+
+    const r = await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .recoverConfig();
+
+    expect(r.phase, '전제가 틀렸다').toBe('failed');
+    expect(
+      r.progress?.http,
+      'phase 는 "다 실패" 인데 progress 는 "커밋됐다" 고 적었다 — 한 결과 안에서 모순이다',
+    ).toBe('failed');
+  });
+
+  /**
+   * **닮음의 기준을 아무리 얹어도 남는 구멍.**
+   *
+   * 남이 **같은 내용**(같은 payloadDigest)으로 같은 epoch 을 채우면 digest 를 봐도 못
+   * 가른다. 그리고 같은 설정의 재시도는 운영에서 가장 흔한 패턴이다 — 좁은 구멍이 아니다.
+   *
+   * 이것이 "인스턴스를 여섯 번 닫아도 일곱 번째가 있다" 의 실물이고, **좌표가 누가
+   * 놨는지 기억해야** 닫힌다는 근거다.
+   */
+  it('남이 같은 내용으로 같은 좌표를 채워도 내 공로가 아니다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    // 같은 설정의 재시도 — 내용이 A 와 똑같다.
+    const b: ApplyOperation = {
+      ...OP('B', 'gen-A', '0', '1'),
+      planes: a.planes,
+    };
+
+    await agent.reserveAll(a, {
+      op: a, phase: 'published', reloadAttempts: 0,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    for (const plane of ['http', 'stream'] as const) await agent.abort(tupleFor(a, plane));
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.reserve(tupleFor(b, plane));
+      await agent.stage(tupleFor(b, plane), null);
+      await agent.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-A' });
+    }
+
+    const r = await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .recoverConfig();
+
+    expect(r.phase, 'A 는 전부 포기했는데 남의 같은-내용 커밋을 자기 공로로 적었다')
+      .toBe('failed');
+  });
+});

@@ -658,9 +658,11 @@ export class ApplyRunner {
     // 거짓을 적는 것 자체가 결함이라 고친다. 도달 경로가 없다는 것은 지금의 사실일 뿐이다.
     const progress: Partial<Record<Plane, PlaneProgress>> = { ...j.progress };
     for (const plane of planesOf(j.op)) {
-      const moved = this.agent.coordinate(plane).activationEpoch
-        === tupleFor(j.op, plane).target.activationEpoch;
-      if (moved) {
+      // **phase 와 같은 기준으로 판정한다** (26차 CE-26-A). 25차가 digest 조임을
+      // `reachedPhase()` 에만 넣고 여기 안 넣어서, 한 결과 안에서 phase 는 "다 실패"
+      // 인데 progress 는 "커밋됐다" 가 됐다 — **일관되게 틀린 것보다 나쁘다.**
+      // 자리가 둘이면 언젠가 갈린다.
+      if (this.agent.movedByMe(j.op, plane)) {
         progress[plane] = 'committed';
         continue;
       }
