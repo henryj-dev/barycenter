@@ -196,7 +196,7 @@ export function verifyGeneration(
   expectedPlanes?: readonly ('http' | 'stream')[],
 ): GenerationManifest {
   const manifest = readManifest(prefix, generation);
-  if (true) {
+  if (expectedPlanes !== undefined) {
     // **포함 관계다** (11차 반례 ②). 설정 apply 는 항상 두 평면을 선언하고, 세대는
     // 그중 일부만 구성할 수 있다 — 비는 평면도 전환이기 때문이다. 반대로 세대가
     // 구성하는데 선언하지 않은 평면이 있으면 그 좌표가 옛 값으로 남는다.
