@@ -84,7 +84,7 @@ const OP = (id: string, generation: string, leaderToken: string, from: string, t
 /** 우리가 보는 상태의 모양. `payload` 는 store 에게 불투명하지만 모델은 안다. */
 type Seen = {
   maxLeaderToken: string;
-  planes: Record<Plane, { activationEpoch: string }>;
+  planes: Record<Plane, { activationEpoch: string; payloadDigest: string }>;
   activeOperation?: { operationId: string; transitionId: string; leaderToken: string };
   journal?: {
     phase: string;
@@ -95,7 +95,7 @@ type Seen = {
       // P10 이 보려면 **이 전환이 어디로 가려 했는지**가 있어야 한다. payload 에는 원래
       // 있었고 여기서 좁혀 놓았을 뿐이다.
       affectedPlanes: Plane[];
-      planes: Record<Plane, { target: { activationEpoch: string } }>;
+      planes: Record<Plane, { target: { activationEpoch: string }; payloadDigest: string }>;
     };
   };
   lastActivated?: PublishRecord;
@@ -374,9 +374,17 @@ function checkProperties(
         && prev.journal.op.leaderToken === j.op.leaderToken;
       if (!same) {
         const planes = j.op.affectedPlanes;
-        const moved = planes.filter(
-          (plane) => s.planes[plane]?.activationEpoch === j.op.planes[plane]?.target.activationEpoch,
-        );
+        // **번지와 내용을 같이 본다** (25차). 처음엔 epoch 만 봤는데, 그러면 속성이
+        // 구현과 **같은 착란을 공유한다** — 남이 같은 epoch 을 다른 payload 로 채운
+        // 경우를 둘 다 "내가 옮겼다" 로 읽어서 P10 이 CE-25-A 를 못 잡았다.
+        // **계측기가 재려는 대상과 같은 가정을 쓰면 그 가정이 틀린 것은 영원히 못 잡는다.**
+        const moved = planes.filter((plane) => {
+          const at = s.planes[plane];
+          const want = j.op.planes[plane];
+          return at !== undefined && want !== undefined
+            && at.activationEpoch === want.target.activationEpoch
+            && at.payloadDigest === want.payloadDigest;
+        });
         const truth = moved.length === planes.length
           ? 'activated'
           : moved.length > 0 ? 'partial_exhausted' : 'failed';

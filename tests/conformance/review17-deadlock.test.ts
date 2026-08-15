@@ -922,3 +922,44 @@ describe('한 걸음도 못 나갈 때 끝내는 자리 (24차 — 생존 뮤턴
     ).toBeUndefined();
   });
 });
+
+describe('남이 옮긴 좌표를 내 공로로 적지 않는다 (25차 CE-25-A)', () => {
+  /**
+   * **24차 수정이 만든 회귀다 — 전제를 바꾸고 그 전제에 기대던 것을 안 고쳤다.**
+   *
+   * 22차까지 이 자리는 `'failed'` 하드코딩이었고 그게 **참말**이었다. 24차가 그것을
+   * `reachedPhase()` 라는 **규칙**으로 바꿨는데, 그 규칙은 "좌표 epoch == 내 목표 epoch"
+   * 동일성만 본다 — `payloadDigest` 를 안 본다.
+   *
+   * 그래서 내 전환이 **전부 포기**됐는데 남이 같은 epoch 을 **다른 payload** 로 점유해
+   * 커밋하면, 내 저널이 `activated` 로 닫힌다. 참말이던 하드코딩이 거짓이 될 수 있는
+   * 규칙으로 바뀐 것이다.
+   *
+   * epoch 은 좌표의 **번지**이고 digest 는 **거기 있는 것**이다. "내가 옮겼다" 를
+   * 번지만으로 판정하면 남이 같은 번지에 다른 것을 놓은 경우를 못 가른다.
+   */
+  it('전부 포기한 전환은 남이 같은 epoch 을 채워도 failed 로 닫힌다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    const b = OP('B', 'gen-B', '0', '1');
+
+    await agent.reserveAll(a, {
+      op: a, phase: 'published', reloadAttempts: 0,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    for (const plane of ['http', 'stream'] as const) await agent.abort(tupleFor(a, plane));
+    // B 가 같은 좌표를 자기 payload 로 채운다 — A 는 한 걸음도 못 갔다.
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.reserve(tupleFor(b, plane));
+      await agent.stage(tupleFor(b, plane), null);
+      await agent.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-B' });
+    }
+
+    const r = await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .recoverConfig();
+
+    expect(new DpAgent(store).coordinate('http').activationEpoch, '전제가 틀렸다').toBe('1');
+    expect(r.phase, 'A 는 전부 포기했는데 남이 옮긴 것을 자기 공로로 적었다').toBe('failed');
+  });
+});

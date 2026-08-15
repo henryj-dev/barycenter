@@ -1043,10 +1043,19 @@ export class DpAgent {
     const j = this.readJournal();
     if (j === undefined) return undefined;
     const planes = planesOf(j.op);
-    const moved = planes.filter(
-      (plane) => this.coordinate(plane).activationEpoch
-        === tupleFor(j.op, plane).target.activationEpoch,
-    );
+    // **번지만 보면 안 된다** (25차 CE-25-A). epoch 은 좌표의 **번지**이고 digest 는
+    // **거기 있는 것**이다. 24차까지 이 자리는 `'failed'` 하드코딩이었고 그게 참말이었는데,
+    // 그것을 규칙으로 바꾸면서 번지 동일성만 봤다. 그러면 내가 전부 포기한 뒤 남이 같은
+    // epoch 을 **다른 payload** 로 채운 경우를 "내가 옮겼다" 로 읽는다.
+    //
+    // `payloadDigest` 까지 본다. 정상 경로에서는 내가 올린 것이 거기 있으므로 무해하고,
+    // 남이 채운 경우만 갈린다.
+    const moved = planes.filter((plane) => {
+      const at = this.coordinate(plane);
+      const want = tupleFor(j.op, plane);
+      return at.activationEpoch === want.target.activationEpoch
+        && at.payloadDigest === want.payloadDigest;
+    });
     if (moved.length === planes.length) return 'activated';
     return moved.length > 0 ? 'partial_exhausted' : 'failed';
   }

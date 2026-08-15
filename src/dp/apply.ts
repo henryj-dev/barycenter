@@ -422,7 +422,13 @@ export class ApplyRunner {
         // 23차는 판정을 한 곳으로 모으는 규칙을 만들어 놓고 **자기가 손댄 이 자리를
         // 빠뜨렸다.** 종단을 적는 자리는 셋이다 — `failAll` · `abortConfig` · 여기.
         // 규칙을 세우는 것과 전 자리에 적용하는 것은 다른 일이고, 안 한 쪽이 재발한다.
-        await this.agent.closeJournal(j.op, this.agent.reachedPhase() ?? 'failed');
+        // 폴백을 안 단다 (25차). 여기 오려면 `j` 가 있어야 하므로 `reachedPhase()` 가
+        // `undefined` 를 줄 수 없다 — 24차에 `failAll` 에서 지운 것과 **똑같은 죽은
+        // 폴백**을 나는 그 규칙을 쓴 커밋 안에서 다시 써 넣었다. 25차 스윕이 짚었다.
+        await this.agent.closeJournal(
+          j.op,
+          this.agent.reachedPhase() as 'activated' | 'partial_exhausted' | 'failed',
+        );
         // **자리도 비운다.** 닫기만 하고 물러나면 실행권이 남아 다음 오퍼레이션이 막힌다
         // — 20차에 배운 그것이다. 새 조기 반환을 만들 때마다 이걸 빠뜨린다.
         await this.agent.finishOperation(j.op, planesOf(j.op));
@@ -571,6 +577,13 @@ export class ApplyRunner {
               progress[plane] = 'failed';
             }
           }
+          // **범위를 주장하는 다섯 번째 자리다** (25차 감사). 24차가 "종단을 적는
+          // 자리는 셋" 이라고 셌는데 그건 `closeJournal` 호출부만 센 것이었다 — `write`
+          // 로 직접 적는 자리가 여기와 아래 `stuck.length === 0` 까지 둘 더 있다.
+          //
+          // 이 둘은 모수를 저널에서 가져오므로 22차 R2 병형(호출자 봉투)은 아니고 지금
+          // `reachedPhase()` 와 **동치**다. 그래서 안 모았다. 적어 두는 이유는 다음에
+          // 여기를 만지는 사람이 **규칙 밖이라는 것을 알아야** 하기 때문이다.
           const committed = planesOf(j.op).filter((p) => progress[p] === 'committed');
           const phase: ApplyPhase =
             committed.length === planesOf(j.op).length
