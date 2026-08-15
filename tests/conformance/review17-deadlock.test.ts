@@ -1194,6 +1194,45 @@ describe('서명 없는 좌표가 영구 봉쇄를 만든다 (28차 CE-28)', () 
       .catch((e: unknown) => `던졌다: ${(e as Error).name}`);
     expect(fenced, '신임 리더도 못 들어온다').toBe('ok');
   });
+
+  /**
+   * **가격표를 겨눈다** (29차 지적).
+   *
+   * 위 테스트는 "던지지 않는다 · fence 가 된다" 만 봤다. **약속한 것이 실제로 무엇인지 —
+   * 판정이 무엇으로 닫히고 기준이 어디로 가는지 — 를 안 봤다.** 그 미검사 구간에서
+   * CE-29(세상 되감김)가 나왔다. 가격표를 세 번 틀렸는데 세 번 다 가격표를 겨눈 단언이
+   * 없었다.
+   */
+  it('서명 없는 좌표에서도 기준이 제대로 올라간다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+
+    await agent.reserveAll(a, {
+      op: a, phase: 'reload_observed', reloadAttempts: 1,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(a, plane), null);
+      await agent.commit(tupleFor(a, plane), { acceptingGeneration: 'gen-A' });
+    }
+    await agent.writeJournal({
+      op: a, phase: 'activated', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'committed' },
+    });
+    const raw = store.load()!;
+    const payload = raw.payload as { planes: Record<string, { by?: unknown }> };
+    for (const plane of Object.keys(payload.planes)) delete payload.planes[plane]!.by;
+    await store.save({ ...raw, version: raw.version + 1, payload });
+
+    await LocalDataplaneDriver.create({ store, effects: new FakeEffects() }).recoverConfig();
+
+    expect(
+      new DpAgent(store).lastActivated()?.generation,
+      '활성화가 끝난 세대인데 기준으로 안 올랐다 — 수렴이 옛 기준을 정답으로 삼는다',
+    ).toBe('gen-A');
+  });
 });
 
 describe('서명 비교의 세 축이 전부 일한다 (28차 — 넷이 미검사였다)', () => {
@@ -1267,5 +1306,75 @@ describe('서명 비교의 세 축이 전부 일한다 (28차 — 넷이 미검�
       new DpAgent(store).movedByMe(padded, 'http'),
       '표기만 다른 같은 토큰을 남의 것으로 읽었다',
     ).toBe(true);
+  });
+});
+
+describe('면제가 세상을 되감는 길을 열었다 (29차 CE-29)', () => {
+  /**
+   * **28차 수정이 만든 스물두 번째다 — 그리고 이번엔 상(上)이다.**
+   *
+   * 27차 수정은 서명 없는 좌표에서 **봉쇄**를 만들었다(CE-28). 28차가 I6(b) 면제로 그
+   * 봉쇄를 풀었다 — "판정을 못 하면 비관적으로 두고 앞으로 간다" 는 근거였다.
+   *
+   * **그 "앞으로" 가 문제였다.** 기준을 안 올린 채 통과하면, 저널·terminal·좌표가 전부
+   * "gen-B 가 활성화됐다" 고 말하는데 기준만 gen-A 다. 그리고 수렴은 **기준을 정답으로
+   * 삼는다** — 실제로 서빙 중인 gen-B 를 gen-A 로 **되감고** `repaired` 라고 답한다.
+   * 게시와 HUP 이 실제로 나간다. 되돌릴 수 없는 연산이다.
+   *
+   * 가격표가 세 번째로 틀렸다.
+   * ```
+   * 26차  "비관적으로 failed 로 판정"     실제: 영구 봉쇄
+   * 28차  "비관적으로 두고 앞으로 간다"   실제: activated 로 답하고 세상을 되감는다
+   * ```
+   *
+   * **판정을 못 한다고 적어 놓고, 판정이 필요한 자리를 그냥 통과시킨 것이 병이다.**
+   * 서명이 없어도 신원 있는 증거는 있다 — `terminal` 원장은 키가
+   * `operationId:transitionId:plane` 이다. 닮음이 아니라 신원이다.
+   */
+  it('서명 없는 좌표라도 신원 있는 증거가 있으면 기준을 올린다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    // **되감을 옛 기준이 있어야 한다.** gen-A 를 정상으로 세운다.
+    await LocalDataplaneDriver.create({ store, effects: fx })
+      .applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    const agent = new DpAgent(store);
+    const b = OP('B', 'gen-B', '1', '2');
+
+    await agent.reserveAll(b, {
+      op: b, phase: 'published', reloadAttempts: 0,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(b, plane), null);
+      await agent.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-B' });
+    }
+    await agent.writeJournal({
+      op: b, phase: 'activated', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'committed' },
+    });
+    // 구버전 writer 가 남긴 모양 — 좌표에 서명이 없다.
+    const raw = store.load()!;
+    const payload = raw.payload as { planes: Record<string, { by?: unknown }> };
+    for (const plane of Object.keys(payload.planes)) delete payload.planes[plane]!.by;
+    await store.save({ ...raw, version: raw.version + 1, payload });
+
+    // 세상은 이미 gen-B 다 — 게시도 HUP 도 나갔다.
+    fx.publishedRecord = {
+      generation: 'gen-B', leaderToken: '10', operationId: 'B',
+      transitionId: 'B', generationDigest: 'sha256:gen-B',
+    };
+    fx.acceptingGeneration = 'gen-B';
+
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    await driver.recoverConfig();
+    const before = { publishes: fx.publishCalls, reloads: fx.reloadSignals };
+    await driver.reconcileConfig();
+
+    expect(fx.publishCalls, '수렴이 실제 활성화를 되감으려고 다시 게시했다')
+      .toBe(before.publishes);
+    expect(fx.reloadSignals, '되감기 HUP 이 나갔다').toBe(before.reloads);
+    expect(fx.acceptingGeneration, '서빙 중인 세대가 되감겼다').toBe('gen-B');
   });
 });

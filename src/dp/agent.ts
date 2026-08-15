@@ -507,11 +507,40 @@ function finalizeCandidate(
   //
   // 23·25·27차가 세 번 같은 진단을 했다: **규칙을 세우고 일부 자리에만 적용.**
   // 규칙을 만들 때 **자리를 세는 것**이 규칙을 만드는 일의 절반이다.
+  //
+  // **서명이 없으면 신원 있는 다른 증거를 읽는다** (29차 CE-29).
+  //
+  // 27차에 서명 대조를 넣자 서명 없는 좌표(26차 이전 writer)에서 승격이 무조건 거부됐고,
+  // 그게 봉쇄를 만들었다(CE-28). 28차는 그 봉쇄를 I6(b) **면제**로 풀었다 — 판정을 못
+  // 하면 비관적으로 두고 앞으로 간다는 근거였다. **그 "앞으로" 가 세상을 되감았다**:
+  // 저널·terminal·좌표가 전부 "gen-B 가 활성화됐다" 고 말하는데 기준만 옛것이고,
+  // 수렴은 기준을 정답으로 삼아 **서빙 중인 세대를 되돌리고 `repaired` 라 답했다.**
+  //
+  // 병은 "판정을 못 한다" 고 적어 놓고 **판정할 재료를 안 찾아본 것**이다.
+  // `terminal` 원장의 키가 `operationId:transitionId:plane` 이다 — **닮음이 아니라
+  // 신원**이고, 서명과 독립이며, 이 창 이전부터 있었다. 그것을 읽는다.
+  //
+  // CE-27 은 그대로 닫혀 있다: 거기서는 남(Y)이 옮긴 평면에 대해 후보의 전환 키로 된
+  // `terminal` 기록이 **없다.** 이 폴백은 "내가 그 평면을 활성화로 끝냈다" 는 기록이
+  // 있을 때만 열린다.
+  //
+  // **서명을 우선으로 두고 원장은 폴백이다.** 순서를 뒤집어(항상 원장만 보게) 뮤테이션하면
+  // **안 죽는다** — 지금 도달 가능한 상태에서는 둘이 동치다. 그래도 이 순서를 쓰는 이유는
+  // 둘이 답하는 물음이 다르기 때문이다: 서명은 **"지금 거기 있는 것을 누가 놨나"** 이고
+  // 원장은 **"그 전환이 어떻게 끝났나"** 라는 과거의 주장이다. 좌표가 같은 epoch 에서
+  // 덮이는 길이 생기면 서명만 그것을 본다.
+  //
+  // 동치를 동치라고 적는다 — 검출력 없는 것을 있다고 적지 않는다(22차 P8).
+  const activatedByCandidate = (plane: Plane): boolean =>
+    s.terminal[`${candidate.operationId}:${candidate.transitionId}:${plane}`] === 'activated';
   const epochs = s.pendingEpochs ?? epochsFromJournal(s, ids);
   const arrived = epochs !== undefined && Object.entries(epochs).every(
     ([plane, epoch]) => {
       const at = s.planes[plane as Plane];
-      return at?.activationEpoch === epoch && authoredBy(at, candidate);
+      if (at?.activationEpoch !== epoch) return false;
+      return at.by === undefined
+        ? activatedByCandidate(plane as Plane)
+        : authoredBy(at, candidate);
     },
   );
   if (arrived) s.lastActivated = candidate;
@@ -715,28 +744,17 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
       );
     }
   }
-  // **판정할 수 없으면 발화하지 않는다** (28차 CE-28).
+  // 28차에 여기 **면제**를 달았다 — 서명 없는 좌표에서는 (b) 를 끄는 것이었다.
+  // **뺐다** (29차). 면제는 CE-28 의 봉쇄를 푸는 우회였고 그 우회가 CE-29(세상 되감김)를
+  // 열었다. 이제 `finalizeCandidate` 가 `terminal` 원장으로 제대로 승격하므로 그 상태
+  // 자체가 안 생긴다. **증상을 끄는 대신 원인을 고쳤다.**
   //
-  // 27차가 `arrived` 에 서명 대조를 넣으면서, **서명 없는 좌표**(26차 이전 writer 가
-  // 남긴 것)에서는 `arrived` 가 무조건 거짓이 됐다. 그러면 후보가 승격 없이 지워지고
-  // 저널은 `activated` 라 아래 (b) 가 발화한다 — `assertInvariants` 는 저장 앞에서
-  // 던지므로 **아무것도 안 써지고 매 호출 같은 자리에서 죽는다.** `recoverConfig` 도,
-  // `fence` 도(신임 리더가 못 들어온다), `abortConfig` 도(운영자 포기 경로까지).
-  //
-  // 26차에 이 창의 대가를 **"비관적으로 `failed` 로 판정될 수 있는 1 회성 창"** 이라고
-  // 적었다. **그 가격표가 거짓이었다** — 실제 가격은 비관이 아니라 봉쇄였다.
-  //
-  // 두 기록이 서로 반대를 말한다: 저널은 "활성화했다", 좌표는 "누가 놨는지 모른다".
-  // **그때 던져서 멈추는 것은 답이 아니다.** 판정을 못 하면 비관적으로 두고(기준을
-  // 안 올린다) 앞으로 가야 한다 — 약속한 그대로.
-  //
-  // (b) 를 빼도 되는 근거: (b) 가 잡으려던 진짜 버그는 "commit 이 서명을 제대로 안
-  // 쓴다" 인데, **그건 P11 이 잡는다**(측정했다 — `commit` 이 남의 신원을 적으면 모델
-  // 13/13 이 빨개진다). 여기서 빠지는 것은 **애초에 판정할 수 없는 경우**뿐이다.
-  const unsigned = Object.values(next.planes).some((at) => at.by === undefined);
+  // 그리고 29차가 실측했다: (b) 를 통째로 꺼도 569 전부 초록이다 — **(b) 는 지금
+  // 장식이다.** 28차가 면제의 안전 근거로 든 두 측정("P11 이 잡는다", "승격 차단
+  // 뮤턴트 112 건")은 **승격 기능의 백업**을 잰 것이지 (b) 의 검출력을 잰 것이 아니었다.
+  // 근거를 적었지만 그 근거가 재는 대상이 달랐다 — 이 시리즈가 네 회차째 반복하는 병이다.
   const j6 = next.journal;
   if (j6 !== undefined
-    && !unsigned
     && j6.phase === 'activated'
     && droppedCandidate !== undefined
     && next.pendingActivation === undefined
