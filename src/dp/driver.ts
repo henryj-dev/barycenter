@@ -287,16 +287,12 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     // **넘어간 평면이 있으면 `failed` 가 아니다** (21차 CE-C). 좌표를 보고 정한다 —
     // 15차에 `failAll` 에서 고친 §3.4 거짓말이 이 자리에서 재발했다. "다 실패했다" 고
     // 적으면 운영자는 http 가 새 세대로 서비스 중인 것을 못 본다.
-    const moved = planesOf(op).filter(
-      (plane) => this.agent.coordinate(plane).activationEpoch
-        === tupleFor(op, plane).target.activationEpoch,
-    );
-    // **전부 넘어갔으면 "부분" 이 아니다** (22차 R2). §3.4 계열의 세 번째 재발이라 끊는다.
-    const all = planesOf(op).length;
-    await this.agent.closeJournal(
-      op,
-      moved.length === all ? 'activated' : moved.length > 0 ? 'partial_exhausted' : 'failed',
-    );
+    //
+    // **여기서 세지 않는다** (23차 CE-A). 22차에 이 자리에서 직접 셌더니 호출자의 봉투를
+    // 모수로 삼아, 한 평면짜리 봉투가 오면 나머지가 옛 세대인데도 "전부 넘어갔다" 가
+    // 됐다. `reachedPhase()` 는 저널에서 평면 집합을 가져온다 — 넘길 수가 없으니
+    // 잘못 넘길 수도 없다.
+    await this.agent.closeJournal(op, this.agent.reachedPhase() ?? 'failed');
     if (refused.length > 0) {
       throw new DpRejection('terminal', `일부 평면이 이미 끝나 있었다 — ${refused.join(', ')}`);
     }

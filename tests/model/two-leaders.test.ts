@@ -86,7 +86,18 @@ type Seen = {
   maxLeaderToken: string;
   planes: Record<Plane, { activationEpoch: string }>;
   activeOperation?: { operationId: string; transitionId: string; leaderToken: string };
-  journal?: { phase: string; op: { operationId: string; transitionId: string; leaderToken: string } };
+  journal?: {
+    phase: string;
+    op: {
+      operationId: string;
+      transitionId: string;
+      leaderToken: string;
+      // P10 이 보려면 **이 전환이 어디로 가려 했는지**가 있어야 한다. payload 에는 원래
+      // 있었고 여기서 좁혀 놓았을 뿐이다.
+      affectedPlanes: Plane[];
+      planes: Record<Plane, { target: { activationEpoch: string } }>;
+    };
+  };
   lastActivated?: PublishRecord;
   pendingActivation?: PublishRecord;
   lastPublishIntent?: PublishRecord;
@@ -95,6 +106,14 @@ type Seen = {
 const TERMINAL = new Set([
   'activated', 'partial_exhausted', 'failed', 'superseded', 'no_operation',
 ]);
+
+/**
+ * 종단 중 **범위를 주장하는** 것들. P10 은 이것만 본다.
+ *
+ * `superseded` 는 "내 일이 아니게 됐다" 이고 `no_operation` 은 "할 일이 없었다" 다 —
+ * 둘 다 몇 평면이 넘어갔는지 말하지 않으므로 좌표와 대조할 것이 없다.
+ */
+const EXTENT = new Set(['activated', 'partial_exhausted', 'failed']);
 
 /**
  * 저장될 때마다 상태를 남긴다. 속성은 **역사**를 보고 판정한다.
@@ -324,6 +343,52 @@ function checkProperties(
     const s = history[i]!;
     const prev = i === 0 ? seed : history[i - 1]!;
     const max = BigInt(s.maxLeaderToken);
+
+    // P10 — **어디까지 갔는지 적은 말이 좌표와 맞는가** (23차 CE-A).
+    //
+    // §3.4 는 **네 번 재발했다**: 13차 ③(`failAll` 이 "다 실패" 로 넘어간 평면을 숨김) ·
+    // 21차 CE-C(`abortConfig` 에서 같은 것) · 22차 R2(전부 넘어갔는데 "부분") ·
+    // 23차 CE-A(부분 봉투가 "전부"). 네 번 다 다른 자리였고 네 번 다 손으로 찾았다.
+    //
+    // **이유는 무대가 좁아서가 아니다.** 모델에는 이미 부분 봉투 abort 시나리오가 있고
+    // 그 자리를 매번 지나갔다 — 그런데 **P0~P9 중 저널의 말이 참인지 보는 속성이 하나도
+    // 없었다.** 속성 없는 축은 무대가 아무리 넓어도 안 잡힌다. 22차가 P8 에서 배운 것과
+    // 같다: 없는 검사는 스윕도 못 지운다.
+    //
+    // **검출력을 재 봤다.** CE-A 를 되돌리면 기존 시나리오("부분 커밋 상태에서 부분
+    // abort")가 잡는다. 21차 CE-C 모양(넘어간 평면을 숨기고 `failed`)도 잡는다.
+    // **22차 R2 모양(전부 넘어갔는데 "부분")은 못 잡는다** — 전 평면 커밋 뒤 abort 라는
+    // 무대가 모델에 없어서다. 그쪽은 conformance 가 든다. 여기 적어 두는 이유는 22차에
+    // P8 에서 배운 것 때문이다: **검출력을 재지 않고 넣은 절은 자구로만 이행한 것이다.**
+    //
+    // 판정은 **그 말이 쓰인 순간**에만 한다. 저널이 종단으로 닫힌 뒤에도 좌표는 다음
+    // 오퍼레이션이 움직일 수 있고, 그걸 옛 말과 대조하면 오탐이다.
+    //
+    // `superseded` · `no_operation` 은 뺀다 — 그 둘은 **범위를 주장하지 않는다.**
+    if (s.journal !== undefined && EXTENT.has(s.journal.phase)) {
+      const j = s.journal;
+      const same = prev?.journal !== undefined
+        && prev.journal.phase === j.phase
+        && prev.journal.op.operationId === j.op.operationId
+        && prev.journal.op.transitionId === j.op.transitionId
+        && prev.journal.op.leaderToken === j.op.leaderToken;
+      if (!same) {
+        const planes = j.op.affectedPlanes;
+        const moved = planes.filter(
+          (plane) => s.planes[plane]?.activationEpoch === j.op.planes[plane]?.target.activationEpoch,
+        );
+        const truth = moved.length === planes.length
+          ? 'activated'
+          : moved.length > 0 ? 'partial_exhausted' : 'failed';
+        if (truth !== j.phase) {
+          bad.push({
+            property: 'P10 어디까지 갔는지 적은 말이 좌표와 맞는다',
+            detail: `저널은 ${j.phase} 인데 좌표는 ${moved.length}/${planes.length} 넘어갔다`
+              + ` (${planes.map((x) => `${x}=${s.planes[x]?.activationEpoch}`).join(' ')})`,
+          });
+        }
+      }
+    }
 
     // P1 — 낡은 행위자는 **지금 하려는 일**을 바꾸지 못한다.
     //

@@ -399,8 +399,19 @@ export class ApplyRunner {
       //
       // **포기·실패로 닫힌 것만 본다.** 전 평면이 `activated` 로 끝난 것은 정상 경로가
       // 마저 처리해야 한다 — 처음엔 그걸 안 갈라서 활성화된 전환을 `failed` 로 닫았다.
+      //
+      // **`aborted` 는 하나로 족하다** (23차 CE-B). `every` 만 쓰면 창의 절반만 닫힌다 —
+      // `abortConfig` 의 abort 는 평면마다 따로 도는 직렬 쓰기라 루프 **도중**에 죽으면
+      // `{http:'aborted'}` 하나만 남고, 혼합 종단은 `every` 를 통과 못 해 복구가 그냥
+      // 지나가며 포기한 세대로 HUP 을 보냈다.
+      //
+      // 둘을 다르게 보는 이유가 있다. `aborted` 를 쓰는 자리는 운영자의 `abortConfig` 와
+      // `reserveAll` 의 고아 청소(전 평면을 한 쓰기에 적는다)뿐이라, **하나만 보여도
+      // "이 전환은 포기됐다" 는 뜻**이다. `failed` 는 정상 apply 의 `failAll` 이 평면별로
+      // 남기므로 하나로는 아무 뜻이 아니다 — 그래서 전부일 때만 센다.
       const kinds = planesOf(j.op).map((plane) => this.agent.terminalOf(tupleFor(j.op, plane)));
-      const closed = kinds.every((k) => k === 'aborted' || k === 'failed');
+      const closed = kinds.includes('aborted')
+        || kinds.every((k) => k === 'aborted' || k === 'failed');
       if (closed) {
         await this.agent.closeJournal(j.op, 'failed');
         // **자리도 비운다.** 닫기만 하고 물러나면 실행권이 남아 다음 오퍼레이션이 막힌다
@@ -628,7 +639,10 @@ export class ApplyRunner {
       await ignoreRejection(this.agent.fail(tupleFor(j.op, plane)));
       progress[plane] = 'failed';
     }
-    const phase: ApplyPhase = committed === 0 ? 'failed' : 'partial_exhausted';
+    // **같은 규칙으로 정한다** (23차 CE-A). 13차 ③ 이 처음 고친 자리가 여기이고, 그
+    // 뒤 세 번의 재발이 전부 "닫는 자리마다 따로 센" 탓이었다. `committed` 는 위 루프가
+    // 이미 셌지만 그 수로 판정하지 않는다 — 판정은 한 곳에서만 한다.
+    const phase: ApplyPhase = this.agent.reachedPhase() ?? (committed === 0 ? 'failed' : 'partial_exhausted');
     await ignoreConflict(this.write(next(j, { phase, progress })));
     await this.agent.finishOperation(j.op);
   }

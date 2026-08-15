@@ -1001,6 +1001,36 @@ export class DpAgent {
    * **리더 검사를 하지 않는다.** 닫는 것은 되돌릴 수 없는 연산이 아니고, 이걸 막으면
    * 신임이 들어온 뒤 고아가 영영 안 닫힌다(20차 CE-2 가 그 모양이었다).
    */
+  /**
+   * **이 전환이 어디까지 갔는가** (23차 CE-A).
+   *
+   * §3.4("어디까지 갔는지 말한다")는 **네 번을 재발했다** — 13차 ③(`failAll`) ·
+   * 21차 CE-C(`abortConfig` 가 "다 실패했다" 로 넘어간 평면을 숨김) · 22차 R2(전부
+   * 넘어갔는데 "부분") · 23차 CE-A. 매번 자리를 하나씩 고쳤고 매번 다음 자리가 났다.
+   *
+   * 마지막 것의 모양이 원인을 보여 준다. 22차 R2 는 `moved.length === all` 을 옳게
+   * 썼지만 `all` 을 **호출자가 넘긴 봉투**에서 셌다. 한 평면짜리 봉투가 오면 `all === 1`
+   * 이라 나머지가 옛 세대여도 "전부" 가 된다 — 저널을 닫을 자격(`ownsJournal`)은 id 와
+   * 토큰만 보지 평면은 안 보기 때문에 좁은 봉투가 넓은 저널을 닫는다.
+   *
+   * 그래서 **평면 집합을 인자로 받지 않는다.** 저널의 op 에서 가져온다. 저널은 실행권
+   * 아래서 쓰였으니 호출자가 준 것이 아니고, 그것이 이 전환의 진짜 크기다 — 17차가
+   * `pendingEpochs` 를 저널에서 가져오기로 한 것과 같은 근거다. `ownsJournal()` 이
+   * "무엇을 비교하나" 를 한 함수로 모은 것처럼, 이건 **"무엇을 세나" 를 모은다.**
+   * 셀 대상을 못 고르면 잘못 고를 수도 없다.
+   */
+  reachedPhase(): 'activated' | 'partial_exhausted' | 'failed' | undefined {
+    const j = this.readJournal();
+    if (j === undefined) return undefined;
+    const planes = planesOf(j.op);
+    const moved = planes.filter(
+      (plane) => this.coordinate(plane).activationEpoch
+        === tupleFor(j.op, plane).target.activationEpoch,
+    );
+    if (moved.length === planes.length) return 'activated';
+    return moved.length > 0 ? 'partial_exhausted' : 'failed';
+  }
+
   closeJournal(
     op: ApplyOperation,
     how: 'failed' | 'superseded' | 'partial_exhausted' | 'activated',

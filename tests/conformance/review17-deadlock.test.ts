@@ -760,3 +760,83 @@ describe('전부 넘어갔으면 부분이 아니다 (22차 R2)', () => {
     ).toBe('activated');
   });
 });
+
+describe('부분 봉투가 전체 저널을 닫는다 (23차 CE-A)', () => {
+  /**
+   * **22차 R2 가 만든 회귀다 — §3.4 계열의 네 번째 재발.**
+   *
+   * R2 는 `moved.length === all` 이면 `activated` 로 닫게 했다. 그런데 `all` 을
+   * **호출자가 넘긴 봉투**(`planesOf(op)`)에서 세었다. 봉투가 한 평면만 담고 있으면
+   * `all === 1` 이라, 다른 평면이 옛 세대에 남아 있어도 "전부 넘어갔다" 가 된다.
+   *
+   * 부분 봉투는 오용이 아니다 — 바로 위 `releaseHolderSlots` 의 주석이 12차 반례 ④ 를
+   * 두고 **"넘어온 op 가 한 평면만 담고 있으면"** 이라고 적어 실전 입력으로 취급한다.
+   * 그리고 저널을 닫을 자격(`ownsJournal`)은 id 와 토큰만 본다 — **평면은 안 본다.**
+   * 그래서 좁은 봉투가 넓은 저널을 닫는다.
+   *
+   * 세는 모수는 **저널의 op** 여야 한다. 저널은 실행권 아래서 쓰였으니 호출자가 준
+   * 것이 아니고, 그것이 이 전환의 진짜 크기다 — 17차가 `pendingEpochs` 를 저널에서
+   * 가져오기로 한 것과 같은 근거다.
+   */
+  it('한 평면만 담은 봉투로 abort 해도 남은 평면을 "넘어갔다" 고 적지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    /** 같은 전환인데 http 만 담았다 — id · 전환 · 토큰이 같으므로 저널의 주인이다. */
+    const half: ApplyOperation = { ...a, affectedPlanes: ['http'] };
+
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.stage(tupleFor(a, 'http'), null);
+    await agent.commit(tupleFor(a, 'http'), { acceptingGeneration: 'gen-A' });
+    await agent.stage(tupleFor(a, 'stream'), null);
+    await agent.writeJournal({
+      op: a, phase: 'reload_observed', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'staged' },
+    });
+
+    await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .abortConfig(half).catch(() => undefined);
+
+    const after = new DpAgent(store);
+    expect(after.coordinate('stream').activationEpoch, '전제가 틀렸다').toBe('0');
+    expect(
+      after.readJournal()?.phase,
+      'stream 은 옛 세대인데 "전부 넘어갔다" 고 적었다',
+    ).toBe('partial_exhausted');
+  });
+});
+
+describe('포기는 절반만 적혀 있어도 포기다 (23차 CE-B)', () => {
+  /**
+   * **R4 는 창의 절반만 닫았다.**
+   *
+   * R4 의 `closed` 는 **전 평면**이 `aborted|failed` 일 것을 요구한다. 그런데
+   * `abortConfig` 의 abort 는 평면마다 따로 도는 직렬 쓰기라, 루프 **도중**에 죽으면
+   * `{http:'aborted'}` 하나만 남는다. 혼합 종단은 `every` 를 통과하지 못하므로 복구가
+   * 그냥 지나가고, **포기한 세대를 게시하고 HUP 까지 보낸 뒤 남은 평면을 마저 커밋한다.**
+   *
+   * `aborted` 를 쓰는 자리는 둘뿐이다 — 운영자의 `abortConfig`, 그리고 `reserveAll` 의
+   * 고아 청소(이건 전 평면을 한 쓰기에 적고 곧바로 supersede 한다). 그래서 **평면 하나에
+   * `aborted` 가 보이면 이 전환은 포기된 것**이다. `failed` 는 다르다 — 정상 apply 의
+   * `failAll` 이 평면별로 남기므로 하나만으로는 아무 뜻이 아니다.
+   */
+  it('평면 하나만 aborted 여도 복구가 그 세대를 게시하지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    await agent.reserveAll(a, {
+      op: a, phase: 'published', reloadAttempts: 0,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    // abort 루프가 http 까지만 durable 하고 죽었다.
+    await agent.abort(tupleFor(a, 'http'));
+
+    const fx = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: fx }).recoverConfig().catch(() => undefined);
+
+    const after = new DpAgent(store);
+    expect(fx.reloadSignals, '포기한 세대로 HUP 을 보냈다').toBe(0);
+    expect(after.coordinate('stream').activationEpoch, '포기한 전환을 마저 커밋했다').toBe('0');
+  });
+});
