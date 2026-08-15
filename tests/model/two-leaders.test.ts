@@ -155,7 +155,9 @@ class World {
    * 게시와 HUP 은 되돌릴 수 없다. 낡은 리더가 그걸 내면 lease 규약이 깨진 것이다 —
    * 그런데 그 사실은 **상태에 안 남는다.** 바깥에서만 보인다. 그래서 여기 적는다.
    */
-  readonly effects: { what: string; token: string; maxAtTime: string }[] = [];
+  readonly effects: {
+    what: string; token: string; maxAtTime: string; pendingAtTime?: string; generation?: string;
+  }[] = [];
 
   /**
    * **수렴이 무엇이라고 답했는가** (P7 · 18차 검수).
@@ -178,10 +180,17 @@ class ModelEffects implements Effects {
     private readonly store?: ModelStore,
   ) {}
 
-  /** 이 부작용을 낸 토큰과, 그 순간의 최신 토큰을 함께 남긴다. */
-  private witness(what: string, token: string): void {
-    const payload = this.store?.load()?.payload as { maxLeaderToken?: string } | undefined;
-    this.world.effects.push({ what, token, maxAtTime: payload?.maxLeaderToken ?? '0' });
+  /** 이 부작용을 낸 토큰과, 그 순간의 최신 토큰·미완 활성화를 함께 남긴다. */
+  private witness(what: string, token: string, generation?: string): void {
+    const payload = this.store?.load()?.payload as Seen | undefined;
+    this.world.effects.push({
+      what,
+      token,
+      maxAtTime: payload?.maxLeaderToken ?? '0',
+      ...(generation !== undefined ? { generation } : {}),
+      ...(payload?.pendingActivation !== undefined
+        ? { pendingAtTime: payload.pendingActivation.generation } : {}),
+    });
   }
 
   private async at<T>(label: string, run: () => T): Promise<T> {
@@ -199,7 +208,7 @@ class ModelEffects implements Effects {
     return this.at('publish', () => {
       // **되돌릴 수 없는 연산 직전에 확인한다.** 동기라 확인과 부작용 사이가 없다.
       const checked = lease.assertValid();
-      this.witness('publish', lease.leaderToken);
+      this.witness('publish', lease.leaderToken, record.generation);
       this.world.published = record;
       this.world.publishes += 1;
       return checked;
@@ -216,7 +225,7 @@ class ModelEffects implements Effects {
   signalReload(lease: ApplyLease): Promise<Checked> {
     return this.at('signalReload', () => {
       const checked = lease.assertValid();
-      this.witness('reload', lease.leaderToken);
+      this.witness('reload', lease.leaderToken, this.world.published?.generation);
       this.world.reloads += 1;
       this.world.accepting = this.world.published?.generation;
       return checked;
@@ -449,6 +458,34 @@ function checkProperties(
   // 여기서 두 가지를 본다.
   //   · 스케줄이 끝난 뒤 **깨끗한 좌표에 대한 새 오퍼레이션이 들어간다** (`blocked`)
   //   · 영구 거부(`slot_taken`·`operation_in_flight`)가 **끝까지 남지 않는다**
+  // ── P9 — 부작용은 **끝난 활성화를 되돌리지 않는다** (20차 검수) ──────
+  //
+  // 19차 #3 이 이 모양이었다: 수렴이 되돌리는 사이 다른 인스턴스가 새 세대를 전 평면
+  // 커밋했는데, 수렴이 **옛 기준을 게시하고 HUP 을 보냈다.** 답은 참이었다(diverged)
+  // — 거짓은 **세상**에 있었다. P6 은 토큰만, P7 은 답만 본다.
+  //
+  // 20차 검수가 실측했다: 부작용 게이트 셋을 지운 뮤턴트를 **모델 전부가 통과**시킨다.
+  //
+  // ⚠️ **속성은 만들었지만 아직 그 창을 못 지난다.** 후보가 수렴 **시작 전에** 서 있으면
+  // 라운드 머리 검사가 먼저 걸려 게시까지 안 가고, **도중에** 생기게 하려면 관측 두 번
+  // 사이를 정확히 맞춰야 하는데 표본에 안 들어온다. 무대를 좁혀 두 번 시도했고 둘 다
+  // 실패했다 — 그렇게 적어 둔다.
+  //
+  // 지금 이 창을 지키는 것은 conformance 다(`review17-deadlock` 의 "되돌리는 사이 후보가
+  // 생기면 게시도 HUP 도 나가지 않는다"). **속성이 없는 것과 무대가 좁은 것은 다르고,
+  // 이건 후자다** — 고치려면 스케줄러가 아니라 시나리오를 더 파야 한다.
+  for (const e of world.effects) {
+    if (e.pendingAtTime === undefined) continue;
+    // **자기 것을 내보내는 것은 정상이다.** 러너는 자기 후보를 게시한다 — 그때도
+    // `pendingActivation` 이 있다. 위반은 **남의 활성화 위로** 내보낼 때다.
+    if (e.generation === e.pendingAtTime) continue;
+    bad.push({
+      property: 'P9 부작용은 끝난 활성화를 되돌리지 않는다',
+      detail: `${e.what}(${e.generation ?? '?'}) 이 나갔는데 그 순간 승격 안 된 `
+        + `활성화 ${e.pendingAtTime} 가 있었다`,
+    });
+  }
+
   if (blocked !== undefined) {
     bad.push({
       property: 'P8 정리된 뒤에는 새 오퍼레이션이 들어간다',
@@ -1032,6 +1069,56 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
     if (failure !== undefined) {
       console.error('선택열:', JSON.stringify(failure.choices));
       console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **후보가 이미 서 있는 채로 수렴이 돈다** (P9 를 겨냥한 무대).
+   *
+   * 19차 #3 의 모양이다: 승격 안 된 활성화가 있는데 수렴이 옛 기준을 게시한다. 답은
+   * 참이어도(diverged) **세상이 되감긴다** — P6 은 토큰만, P7 은 답만 봐서 못 본다.
+   *
+   * 준비 단계에서 gen-B 를 전 평면 커밋해 후보를 세워 두고, 바깥은 어긋나게 둔다.
+   * 그러면 수렴이 되돌리기 경로로 들어가는데 그 앞에 후보가 있다.
+   */
+  it('후보가 선 채로 수렴이 돌아도 세상이 되감기지 않는다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(
+        space,
+        ({ store, world, effects, swallow }) => [
+          () => swallow(reconcileWitnessed(
+            LocalDataplaneDriver.create({ store: store.for('rec'), effects: effects('rec') }),
+            store, world,
+          )),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('rec2')), effects('rec2'), FAST).recover()),
+        ],
+        async ({ store, world, effects }) => {
+          await LocalDataplaneDriver.create({ store, effects: effects('seed') })
+            .applyConfig(OP('A', 'gen-A', '10', '0', '1'));
+          // gen-B 를 전 평면 넘겨 후보를 세운다 — 아직 승격 전이다.
+          const agent = new DpAgent(store);
+          const b = OP('B', 'gen-B', '10', '1', '2');
+          await agent.reserveAll(b, { op: b, phase: 'preflight', reloadAttempts: 0, progress: {} });
+          for (const plane of ['http', 'stream'] as const) {
+            await agent.stage(tupleFor(b, plane), null);
+            await agent.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-B' });
+          }
+          // 바깥은 어긋나 있다 — 수렴이 되돌리려 든다.
+          world.published = undefined;
+        },
+      );
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
       for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
     }
     expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
