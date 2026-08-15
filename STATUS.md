@@ -381,6 +381,28 @@ commit 재요청의 서명 절 제거 (CE-26-C 되돌림)  → 562 초록
 디테일로 재현해 놓고 정작 수정이 막는 자리를 안 겨눴기** 때문이다(CE-26-A 는 digest 가
 다른 시나리오라 epoch+digest 닮음으로도 통과한다). 셋 다 고정했고 뮤턴트로 확인했다.
 
+#### 스윕 76.4% — 방패가 또 찍혔다
+
+```
+523 개 생성 · 110 개 실행 (seed 27027) · 죽었다 84 · 살았다 26 · 76.4%
+```
+
+**이 측정은 27차 수정 앞의 HEAD 다**(수정 셋은 표적 뮤턴트로 따로 확인했다). 점수는
+시드마다 표본이 달라 회차 간 비교가 대략치라는 것을 다시 적어 둔다 — 86.4 → 81.8 →
+76.4 는 코드가 자란 것과 시드가 섞인 결과이지 품질이 내려간 증거가 아니다.
+
+**생존자 26 개 중 넷이 또 신원 비교다.**
+
+```
+agent.ts:1243  if (holder.operationId !== op.operationId || holder.transitionId !== ...)
+agent.ts:1629  if (slot.op.operationId === holder.operationId && slot.op.transitionId === ...)
+agent.ts:1053  && slot.op.transitionId === op.transitionId)
+agent.ts:618   if (big(slot.op.leaderToken) > max)
+```
+
+23차부터 매 회차 같은 자리들이 찍힌다. **`completed` 캐시가 지우고 있다** — 그 캐시가
+아니라 비교가 지켜야 할 것들이다. 가지치기 체크리스트가 이제 여섯 항목이다.
+
 #### 여섯 번째 우연한 방패
 
 26차에 "`by` 없는 좌표는 비관 판정한다, 대가는 구버전 열린 저널이 한 번 비관적으로
