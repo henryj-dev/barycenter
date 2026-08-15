@@ -96,19 +96,41 @@ const TERMINAL = new Set([
   'activated', 'partial_exhausted', 'failed', 'superseded', 'no_operation',
 ]);
 
-/** 저장될 때마다 상태를 남긴다. 속성은 **역사**를 보고 판정한다. */
+/**
+ * 저장될 때마다 상태를 남긴다. 속성은 **역사**를 보고 판정한다.
+ *
+ * **누가 쓰는지로 라벨을 단다** (17차 검수). 전에는 모든 행위자의 save 가 `store:save:*`
+ * 하나였다. `actorOf` 가 라벨 앞부분으로 행위자를 가르는데 그게 전부 'store' 로 뭉개져서,
+ * preemption 예산이 "같은 행위자를 계속 돌린다" 를 잘못 계산했다 — 표본이 특정 창을
+ * 구조적으로 못 지나는 원인 중 하나였다.
+ *
+ * 상태는 하나를 공유하고 **라벨만 갈라진다.** `for(who)` 가 그 행위자용 창구다.
+ */
 class ModelStore implements DurableStore {
   private current: StoredState | undefined;
   readonly history: Seen[] = [];
 
   constructor(private readonly sched: Scheduler, private readonly who: string) {}
 
+  /** 같은 상태를 보는, 이름만 다른 창구. */
+  for(who: string): DurableStore {
+    const shared = this;
+    return {
+      load: () => shared.load(),
+      save: (state) => shared.saveAs(who, state),
+    };
+  }
+
   load(): StoredState | undefined {
     return this.current;
   }
 
-  async save(state: StoredState): Promise<void> {
-    await this.sched.yield(`${this.who}:save:before`);
+  save(state: StoredState): Promise<void> {
+    return this.saveAs(this.who, state);
+  }
+
+  private async saveAs(who: string, state: StoredState): Promise<void> {
+    await this.sched.yield(`${who}:save:before`);
     const live = this.current?.version ?? 0;
     if (state.version !== live + 1) {
       // CAS. 여기서 밀리는 것이 정상이다 — 러너가 다시 읽고 다시 판정한다.
@@ -117,7 +139,7 @@ class ModelStore implements DurableStore {
     }
     this.current = state;
     this.history.push(structuredClone(state.payload) as Seen);
-    await this.sched.yield(`${this.who}:save:after`);
+    await this.sched.yield(`${who}:save:after`);
   }
 }
 
@@ -243,11 +265,24 @@ function checkProperties(
     const prev = i === 0 ? seed : history[i - 1]!;
     const max = BigInt(s.maxLeaderToken);
 
-    // P1 — 낡은 행위자는 intent·후보·기준을 바꾸지 못한다.
+    // P1 — 낡은 행위자는 **지금 하려는 일**을 바꾸지 못한다.
+    //
+    // 처음엔 `pendingActivation` 과 `lastActivated` 도 여기서 봤다. **틀렸다** (17차 반례 B).
+    // 그 둘은 **일어난 일의 기록**이고, 기록에 적힌 토큰은 "누가 활성화했나" 라는 역사다 —
+    // 지금 쓰는 사람이 누구인지가 아니다.
+    //
+    // 실제로 갈리는 자리: 전 평면이 넘어간 후보가 서 있는데 `fence('11')` 이 끼어들면,
+    // `supersede` 가 후보를 승격시킨다(14차 고아 방지). 그 **한 쓰기**에서 `max` 가 11 이
+    // 되면서 토큰 10 짜리 기준이 새로 쓰인다. 쓰는 사람은 신임인데 기록은 옛 사건이다.
+    // 그걸 위반으로 세면 정당한 승계를 위반이라고 부르게 된다.
+    //
+    // `lastPublishIntent` 는 다르다 — "지금 게시하려는 것" 이라 **현재 리더의 주장**이다.
+    // 낡은 러너가 그걸 덮은 것이 14차에 모델이 찾은 진짜 버그였고, 그건 여기 남는다.
+    //
+    // 활성화 기록 쪽은 다른 것들이 지킨다: I5(토큰 ≤ max) · I6(기준은 후보를 거쳐서만
+    // 생긴다) · P3(부분 후보는 승격되지 않는다).
     for (const [what, rec] of [
       ['lastPublishIntent', s.lastPublishIntent],
-      ['pendingActivation', s.pendingActivation],
-      ['lastActivated', s.lastActivated],
     ] as const) {
       if (rec === undefined) continue;
       const before = prev?.[what];
@@ -417,9 +452,9 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
       const r = await once(space, ({ store, effects, swallow }) => {
         const a = OP('A', 'gen-A', '10', '0', '1');
         return [
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('A'), FAST).run(a)),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('A')), effects('A'), FAST).run(a)),
           async () => {
-            await swallow(new DpAgent(store).fence('11'));
+            await swallow(new DpAgent(store.for('fence')).fence('11'));
           },
         ];
       });
@@ -444,8 +479,8 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
       const r = await once(space, ({ store, effects, swallow }) => {
         const a = OP('A', 'gen-A', '10', '0', '1');
         return [
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('one'), FAST).run(a)),
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('two'), FAST).run(a)),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('one')), effects('one'), FAST).run(a)),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('two')), effects('two'), FAST).run(a)),
         ];
       });
       if (r.violations.length > 0) failure = r;
@@ -472,9 +507,9 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
           // 이미 gen-A 가 서 있다. 이제 gen-B 로 옮기는 동안 수렴이 끼어든다.
           const b = OP('B', 'gen-B', '10', '1', '2');
           return [
-            () => swallow(new ApplyRunner(new DpAgent(store), effects('apply'), FAST).run(b)),
+            () => swallow(new ApplyRunner(new DpAgent(store.for('apply')), effects('apply'), FAST).run(b)),
             () => swallow(
-              LocalDataplaneDriver.create({ store, effects: effects('rec') }).reconcileConfig(),
+              LocalDataplaneDriver.create({ store: store.for('rec'), effects: effects('rec') }).reconcileConfig(),
             ),
           ];
         },
@@ -515,7 +550,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
         return [
           () => swallow(new ApplyRunner(new DpAgent(store), effects('apply'), FAST).run(a)),
           // 남이 stream 슬롯을 걷어찬다. 그 평면은 못 넘어간다.
-          () => swallow(new DpAgent(store).abort(tupleFor(a, 'stream'))),
+          () => swallow(new DpAgent(store.for('ab')).abort(tupleFor(a, 'stream'))),
         ];
       });
       if (r.violations.length > 0) failure = r;
@@ -545,8 +580,8 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
       const r = await once(space, ({ store, effects, swallow }) => {
         const a = OP('A', 'gen-A', '10', '0', '1');
         return [
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('run'), FAST).run(a)),
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('rec'), FAST).recover()),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('run')), effects('run'), FAST).run(a)),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('rec')), effects('rec'), FAST).recover()),
         ];
       });
       if (r.violations.length > 0) failure = r;
@@ -578,7 +613,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
           () => swallow(
             LocalDataplaneDriver.create({ store, effects: effects('rec') }).reconcileConfig(),
           ),
-          () => swallow(new DpAgent(store).fence('11')),
+          () => swallow(new DpAgent(store.for('fence')).fence('11')),
         ],
         async ({ store, world, effects }) => {
           await LocalDataplaneDriver.create({ store, effects: effects('seed') })
@@ -617,8 +652,8 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
         const a = OP('A', 'gen-A', '10', '0', '1');
         const b = OP('B', 'gen-B', '10', '0', '1');
         return [
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('A'), FAST).run(a)),
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('B'), FAST).run(b)),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('A')), effects('A'), FAST).run(a)),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('B')), effects('B'), FAST).run(b)),
         ];
       });
       if (r.violations.length > 0) failure = r;
@@ -648,9 +683,9 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
       const r = await once(space, ({ store, effects, swallow }) => {
         const a = OP('A', 'gen-A', '10', '0', '1');
         return [
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('run'), FAST).run(a)),
-          () => swallow(new DpAgent(store).fence('11')),
-          () => swallow(new DpAgent(store).abort(tupleFor(a, 'stream'))),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('run')), effects('run'), FAST).run(a)),
+          () => swallow(new DpAgent(store.for('fence')).fence('11')),
+          () => swallow(new DpAgent(store.for('ab')).abort(tupleFor(a, 'stream'))),
         ];
       });
       if (r.violations.length > 0) failure = r;
@@ -686,9 +721,9 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
           planes: { http: a.planes.http! },
         };
         return [
-          () => swallow(new ApplyRunner(new DpAgent(store), effects('run'), FAST).run(a)),
+          () => swallow(new ApplyRunner(new DpAgent(store.for('run')), effects('run'), FAST).run(a)),
           () => swallow(
-            LocalDataplaneDriver.create({ store, effects: effects('ab') }).abortConfig(half),
+            LocalDataplaneDriver.create({ store: store.for('ab'), effects: effects('ab') }).abortConfig(half),
           ),
         ];
       });
@@ -736,7 +771,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
           () => swallow(new ApplyRunner(new DpAgent(store), effects('run'), FAST).recover()),
           // 그 사이 호출자가 **평면 하나만 담아** 끝낸다.
           () => swallow(
-            LocalDataplaneDriver.create({ store, effects: effects('ab') }).abortConfig(half),
+            LocalDataplaneDriver.create({ store: store.for('ab'), effects: effects('ab') }).abortConfig(half),
           ),
         ],
         async ({ store }) => {
