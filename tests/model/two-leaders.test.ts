@@ -466,10 +466,16 @@ function checkProperties(
   //
   // 20차 검수가 실측했다: 부작용 게이트 셋을 지운 뮤턴트를 **모델 전부가 통과**시킨다.
   //
-  // ⚠️ **속성은 만들었지만 아직 그 창을 못 지난다.** 후보가 수렴 **시작 전에** 서 있으면
-  // 라운드 머리 검사가 먼저 걸려 게시까지 안 가고, **도중에** 생기게 하려면 관측 두 번
-  // 사이를 정확히 맞춰야 하는데 표본에 안 들어온다. 무대를 좁혀 두 번 시도했고 둘 다
-  // 실패했다 — 그렇게 적어 둔다.
+  // ⚠️ **속성은 만들었지만 아직 그 창을 못 지난다. 네 번 시도했다.**
+  //
+  // 무대 자체는 성립한다 — 그 시나리오에서 게시가 2000 회 넘게 나가고 그중 700 회 이상은
+  // 후보가 선 채로 나간다(테스트가 그 수를 센다). 다만 그건 전부 **러너가 자기 후보를
+  // 게시하는 것**이라 정상이다. 필요한 것은 **수렴이 남의 후보 위로** 게시하는 순간인데,
+  // 후보가 수렴 시작 전에 서면 라운드 머리가 먼저 잡고, 도중에 생기게 하려면 관측 두 번
+  // 사이를 정확히 맞춰야 한다 — 표본에 안 들어온다.
+  //
+  // **초록을 "안전하다" 로 읽으면 안 된다.** 그래서 게시 수를 세어 "무대는 지났다" 만
+  // 단언한다 — 무대도 안 지났으면 그건 다른 문제다.
   //
   // 지금 이 창을 지키는 것은 conformance 다(`review17-deadlock` 의 "되돌리는 사이 후보가
   // 생기면 게시도 HUP 도 나가지 않는다"). **속성이 없는 것과 무대가 좁은 것은 다르고,
@@ -543,7 +549,12 @@ async function once(
   space: ScheduleSpace,
   scenario: (ctx: Ctx) => (() => Promise<unknown>)[],
   setup?: (ctx: Ctx) => Promise<void>,
-): Promise<{ violations: Violation[]; trace: string[]; choices: number[] }> {
+): Promise<{
+  violations: Violation[];
+  trace: string[];
+  choices: number[];
+  effects: World['effects'];
+}> {
   const sched = new Scheduler(space);
   const store = new ModelStore(sched, 'store');
   const world = new World();
@@ -620,6 +631,7 @@ async function once(
     violations: checkProperties(store.history, world, problems, stuck, seedState, blocked),
     trace: sched.trace,
     choices: space.taken(),
+    effects: world.effects,
   };
 }
 
@@ -1086,6 +1098,8 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
    */
   it('후보가 선 채로 수렴이 돌아도 세상이 되감기지 않는다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+    let publishes = 0;
+    let withPending = 0;
 
     const run = await sweep(async (space) => {
       if (failure !== undefined) return;
@@ -1096,32 +1110,49 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
             LocalDataplaneDriver.create({ store: store.for('rec'), effects: effects('rec') }),
             store, world,
           )),
-          () => swallow(new ApplyRunner(new DpAgent(store.for('rec2')), effects('rec2'), FAST).recover()),
+          // 두 평면을 넘긴다 — 첫 commit 이 수렴의 관측 창 안에 들어가면 후보가 그때 생긴다.
+          async () => {
+            const b2 = OP('B', 'gen-B', '10', '1', '2');
+            const mine = new DpAgent(store.for('B'));
+            for (const plane of ['http', 'stream'] as const) {
+              await swallow(mine.commit(tupleFor(b2, plane), { acceptingGeneration: 'gen-B' }));
+            }
+          },
         ],
         async ({ store, world, effects }) => {
           await LocalDataplaneDriver.create({ store, effects: effects('seed') })
             .applyConfig(OP('A', 'gen-A', '10', '0', '1'));
-          // gen-B 를 전 평면 넘겨 후보를 세운다 — 아직 승격 전이다.
+          // gen-B 를 **한 평면만** 남겨 둔다. 그러면 후보가 수렴 **도중에** 생긴다 —
+          // 미리 세워 두면 라운드 머리 검사가 먼저 걸려 게시까지 안 간다. 교차에 필요한
+          // 전환 수를 하나로 줄이는 것이 요점이다.
           const agent = new DpAgent(store);
           const b = OP('B', 'gen-B', '10', '1', '2');
           await agent.reserveAll(b, { op: b, phase: 'preflight', reloadAttempts: 0, progress: {} });
           for (const plane of ['http', 'stream'] as const) {
             await agent.stage(tupleFor(b, plane), null);
-            await agent.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-B' });
           }
-          // 바깥은 어긋나 있다 — 수렴이 되돌리려 든다.
+          // **커밋은 하나도 안 한다** — 후보가 준비 단계에 있으면 라운드 머리 검사가
+          // 먼저 걸려 게시까지 안 간다. 후보가 **수렴 도중에** 생겨야 부작용 게이트가
+          // 시험된다. stage 까지만 해 두면 태스크의 첫 commit 이 그 창에 들어갈 수 있다.
           world.published = undefined;
         },
       );
+      publishes += r.effects.filter((e) => e.what === 'publish').length;
+      withPending += r.effects.filter((e) => e.what === 'publish' && e.pendingAtTime !== undefined).length;
       if (r.violations.length > 0) failure = r;
     });
 
     console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    console.log(`  게시 ${publishes} 회 · 후보가 서 있던 게시 ${withPending} 회`);
     if (failure !== undefined) {
       console.error('선택열:', JSON.stringify(failure.choices));
       for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
     }
     expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
     expect(run.schedules).toBeGreaterThan(1);
+    // **무대가 실제로 그 자리를 지나는지 센다.** 안 지나면 초록은 "안전하다" 가 아니라
+    // "거기까지 못 갔다" 다 — 그 구분이 없으면 계측기를 잘못 읽는다.
+    expect(publishes, '수렴이 되돌리기까지 가지 않았다 — 무대가 성립하지 않는다')
+      .toBeGreaterThan(0);
   }, 120_000);
 });
