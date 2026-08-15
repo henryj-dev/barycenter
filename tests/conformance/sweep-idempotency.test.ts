@@ -21,6 +21,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
+import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
 import type { ApplyOperation } from '../../src/dp/operation.js';
 
 const OP = (id: string, from: string, to: string): ApplyOperation => ({
@@ -166,5 +167,128 @@ describe('좌표가 지나간 뒤에도 옛 요청은 같은 답을 받는다', 
       agent.commit(forged, { acceptingGeneration: 'gen-A' }),
       '같은 좌표에 다른 내용을 받아들였다',
     ).rejects.toMatchObject({ kind: expect.any(String) });
+  });
+});
+
+// ── 스윕이 찾은 두 번째 무리 ──────────────────────────────────────────────
+
+describe('부분 전환이 재시도로 완성되면 activated 로 끝난다', () => {
+  /**
+   * ```
+   * apply.ts:532  if (stuck.length === 0) {  →  if (false) {   살아남았다
+   * ```
+   *
+   * 정상 경로는 commit 루프에서 바로 `activated` 를 쓴다. 여기는 **재시도 경로**다 —
+   * 한 라운드에서 일부만 넘어가 `partially_activated` 가 됐다가, 다음 라운드에서 나머지가
+   * 넘어가는 자리. 아무도 그 길을 안 지났다.
+   *
+   * 그게 §6.2 #8 이 말하는 "partial 은 재시도다" 의 성공 쪽이다. 실패 쪽(소진)은
+   * 12차 반례 ⑤ 가 짚는데 성공 쪽은 비어 있었다.
+   *
+   * ⚠️ **그 뮤턴트는 동치였다.** 아래 테스트를 넣고도 `if (false)` 가 살아남는다 —
+   * 조기 반환을 없애면 한 바퀴 더 돌아 commit 루프에서 같은 `activated` 에 닿는다.
+   * 지름길이지 판정이 아니다. 관측되는 차이는 durable write 하나뿐이고, 그건 이 경로가
+   * 정상 경로가 아니라 크래시 지점 집합에도 안 잡힌다.
+   *
+   * 그래도 이 테스트는 둔다 — 재시도가 성공으로 끝나는 길과 어긋난 저널에서 회복하는
+   * 길을 짚는다. **뮤턴트를 못 죽였다고 테스트가 값이 없는 것은 아니다.**
+   */
+  it('한 평면이 늦게 따라와도 전 평면이 넘어가면 activated 다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('A', '0', '1');
+    const fx = new FakeEffects();
+    fx.publishedRecord = {
+      generation: 'gen-A', leaderToken: '10', operationId: 'A',
+      transitionId: 'A', generationDigest: 'sha256:gen-A',
+    };
+    fx.acceptingGeneration = 'gen-A';
+
+    // http 만 넘어간 채 `partially_activated` 로 멈춰 있다. stream 은 아직 staged 다.
+    await agent.reserveAll(op);
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(op, plane), null);
+    }
+    await agent.commit(tupleFor(op, 'http'), { acceptingGeneration: 'gen-A' });
+    await agent.writeJournal({
+      op, phase: 'partially_activated', reloadAttempts: 1, seq: 1,
+      progress: { http: 'committed', stream: 'staged' },
+    });
+
+    const FAST_APPLY = { attempts: 2, intervalMs: 0, sleep: async () => {}, effectTimeoutMs: 1_000 };
+    const r = await new ApplyRunner(new DpAgent(store), fx, FAST_APPLY).recover();
+
+    expect(r.phase, '늦게 따라온 평면을 완성으로 인정하지 않았다').toBe('activated');
+    expect(new DpAgent(store).coordinate('stream').activationEpoch, 'stream 이 안 넘어갔다').toBe('1');
+    expect(
+      new DpAgent(store).lastActivated()?.generation,
+      '전 평면이 넘어갔는데 기준이 안 섰다',
+    ).toBe('gen-A');
+  });
+  it('저널이 어긋나 있어도 — phase 는 partial 인데 progress 는 전부 committed', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('A', '0', '1');
+    const fx = new FakeEffects();
+    fx.publishedRecord = {
+      generation: 'gen-A', leaderToken: '10', operationId: 'A',
+      transitionId: 'A', generationDigest: 'sha256:gen-A',
+    };
+    fx.acceptingGeneration = 'gen-A';
+
+    await agent.reserveAll(op);
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(op, plane), null);
+      await agent.commit(tupleFor(op, plane), { acceptingGeneration: 'gen-A' });
+    }
+    // **저널만 어긋나 있다.** 좌표는 둘 다 넘어갔는데 phase 가 partial 로 남았다 —
+    // 단계와 progress 를 따로 쓰던 시절이 남긴 모양이거나, 그렇게 될 수 있는 자리다.
+    await agent.writeJournal({
+      op, phase: 'partially_activated', reloadAttempts: 1, seq: 1,
+      progress: { http: 'committed', stream: 'committed' },
+    });
+
+    const FAST_APPLY = { attempts: 2, intervalMs: 0, sleep: async () => {}, effectTimeoutMs: 1_000 };
+    const r = await new ApplyRunner(new DpAgent(store), fx, FAST_APPLY).recover();
+
+    expect(r.phase, '더 밀 것이 없는데 재시도로 보냈다').toBe('activated');
+    expect(new DpAgent(store).activeOperation(), '실행권이 남았다').toBeUndefined();
+  });
+});
+
+describe('신원 비교는 한 자리만 같아도 같다고 하지 않는다', () => {
+  /**
+   * ```
+   * agent.ts:797   holder.operationId === op.operationId && holder.transitionId === ...  → ||
+   * agent.ts:470   a.operationId === b.operationId && ...                                → ||
+   * ```
+   *
+   * 둘 다 살아남았다. **id 는 같은데 transition 이 다른 경우**를 아무도 안 만들었다.
+   * 재시도가 새 transitionId 로 오는 것이 정상 운영이므로 실제로 생기는 모양이다.
+   */
+  it('operationId 가 같아도 transitionId 가 다르면 남의 실행권이다', async () => {
+    const store = new MemoryStore();
+    const first = OP('A', '0', '1');
+    const retry: ApplyOperation = { ...first, transitionId: 'A-retry' };
+
+    await new DpAgent(store).reserveAll(first);
+
+    await expect(
+      new DpAgent(store).reserveAll(retry),
+      'transitionId 가 다른데 같은 실행권으로 봤다',
+    ).rejects.toMatchObject({ kind: 'operation_in_flight' });
+  });
+
+  it('transitionId 가 같아도 operationId 가 다르면 남의 실행권이다', async () => {
+    const store = new MemoryStore();
+    const first = OP('A', '0', '1');
+    const other: ApplyOperation = { ...first, operationId: 'B' };
+
+    await new DpAgent(store).reserveAll(first);
+
+    await expect(
+      new DpAgent(store).reserveAll(other),
+      'operationId 가 다른데 같은 실행권으로 봤다',
+    ).rejects.toMatchObject({ kind: 'operation_in_flight' });
   });
 });
