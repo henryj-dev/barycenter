@@ -150,7 +150,27 @@ export type AgentState = {
   planes: Record<Plane, PlaneState>;
   /** epoch → 예약. 아직 활성화되지 않은 슬롯 (§6.5 staging). */
   reservations: Record<Plane, Record<string, Reservation>>;
-  /** `operationId:transitionId:plane:step` → 그때 돌려준 ACK 와 정본 튜플. 재요청 판정용. */
+  /**
+   * `operationId:transitionId:plane:step` → 그때 돌려준 ACK 와 정본 튜플. 재요청 판정용.
+   *
+   * ⚠️ **가지치기를 넣으려면 신원 비교를 같은 커밋에서 고쳐라** (22·23차).
+   *
+   * 이 표는 전환마다 영구 누적된다 — 즉 **무한히 자란다.** 언젠가 잘라야 한다. 그런데
+   * 지금 이 표는 **캐시가 아니라 방패**로도 쓰이고 있다. `reserveAll` 의 고아 청소 ·
+   * `driveLoop` · `EffectTimeout` 정리 · `epochsFromJournal` · `finalizeCandidate` 는
+   * 전환을 **id 로만** 비교한다(토큰을 안 본다). 그게 지금 안전한 이유는 비교가 옳아서가
+   * 아니라 **같은 id 의 옛 전환이 이 표에 늘 남아 있어서** `admit` 이 `digest_mismatch`
+   * 로 먼저 시끄럽게 거부하기 때문이다. 방어가 아니라 부작용이다.
+   *
+   * 23차가 가지치기를 모의해 확인했다: 옛 리더의 op 'X' 가 fence 로 승계된 뒤 신임이
+   * **같은 id** 'X' 를 새 토큰으로 내면, 그 호출이 **조용히 `superseded` 를 반환**하고
+   * (자기 일은 하나도 안 했는데) 홀더가 남아 다음 오퍼레이션이 `operation_in_flight` 로
+   * **봉쇄된다.** `recoverConfig` 도 못 푼다 — 푸는 것은 다음 fence 뿐이다.
+   *
+   * 지금 고치지 않는 것은 판단이다. 저 다섯 자리는 현재 도달 경로가 없어서 고쳐도
+   * 뮤테이션 스윕이 지켜 주지 못한다(재현 경로 없는 수정은 다음 회차에 조용히 되돌아온다 —
+   * 이 시리즈가 배운 그대로다). **가지치기가 그 경로를 만든다.** 그러니 둘은 한 커밋이다.
+   */
   completed: Record<string, { tuple: string; payloadDigest: string; ack: PlaneAck }>;
   /** 끝난 전환. 지연된 RPC 가 되살리지 못하게 막는다. */
   terminal: Record<string, TerminalKind>;
