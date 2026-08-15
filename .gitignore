@@ -34,3 +34,4 @@ tmp/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+.omc/

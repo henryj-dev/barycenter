@@ -15,11 +15,39 @@
  * 뮤테이션이 잴 값이 아니다.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * **본체를 건드리지 않는다.**
+ *
+ * 처음엔 소스를 제자리에서 변이시키고 `finally` 에서 되돌렸다. 그런데 스윕이 도는 동안
+ * 내가 `git add -A` 를 했고, **변이 두 개가 커밋에 섞여 들어갔다.** `finally` 는 그
+ * 프로세스만 지키지 옆에서 일어나는 일은 못 막는다.
+ *
+ * 별도 worktree 에서 돈다. `node_modules` 만 심볼릭 링크로 빌려 쓴다. 이러면 본체는
+ * 스윕이 무엇을 하든 그대로다 — 도중에 죽어도, 옆에서 커밋해도.
+ */
+function makeWorktree() {
+  const dir = mkdtempSync(join(tmpdir(), 'barycenter-mutate-'));
+  const tree = join(dir, 'tree');
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', tree, 'HEAD'], { cwd: REPO });
+  symlinkSync(join(REPO, 'node_modules'), join(tree, 'node_modules'), 'dir');
+  return { dir, tree };
+}
+
+function dropWorktree(w) {
+  try {
+    execFileSync('git', ['worktree', 'remove', '--force', w.tree], { cwd: REPO });
+  } catch {
+    // 이미 사라졌으면 그만이다.
+  }
+  rmSync(w.dir, { recursive: true, force: true });
+}
 
 const TARGETS = [
   'src/dp/agent.ts',
@@ -77,7 +105,7 @@ const skippable = (line) => {
 function generate(files) {
   const out = [];
   for (const file of files) {
-    const lines = readFileSync(resolve(ROOT, file), 'utf8').split('\n');
+    const lines = readFileSync(resolve(REPO, file), 'utf8').split('\n');
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       if (line === undefined || skippable(line)) continue;
@@ -121,15 +149,35 @@ const files = only === undefined ? TARGETS : [only];
 const all = shuffle(generate(files), seed);
 const chosen = all.slice(0, limit);
 
-console.log(`뮤턴트 ${all.length} 개 생성 · ${chosen.length} 개 실행 (seed ${seed})`);
-console.log('');
+/**
+ * **진행을 파일로도 쓴다.** node 는 파이프로 나갈 때 stdout 을 버퍼링해서, 배경으로
+ * 돌리면 끝날 때까지 한 줄도 안 보인다. 수십 분짜리 스윕에서 그건 못 쓴다.
+ */
+const LOG = resolve(REPO, '.omc/mutation-sweep.log');
+const say = (line) => {
+  console.log(line);
+  try {
+    appendFileSync(LOG, `${line}\n`);
+  } catch {
+    // 로그를 못 써도 스윕은 계속한다.
+  }
+};
+
+writeFileSync(LOG, '');
+say(`뮤턴트 ${all.length} 개 생성 · ${chosen.length} 개 실행 (seed ${seed})`);
+say('');
 
 const survivors = [];
 let killed = 0;
 let broken = 0;
 
+const work = makeWorktree();
+process.on('exit', () => dropWorktree(work));
+process.on('SIGINT', () => process.exit(130));
+process.on('SIGTERM', () => process.exit(143));
+
 for (const [n, m] of chosen.entries()) {
-  const path = resolve(ROOT, m.file);
+  const path = resolve(work.tree, m.file);
   const original = readFileSync(path, 'utf8');
   const lines = original.split('\n');
   lines[m.line] = RULES.find((r) => r.name === m.rule).apply(lines[m.line]);
@@ -137,7 +185,7 @@ for (const [n, m] of chosen.entries()) {
   let verdict;
   try {
     execFileSync('npx', ['vitest', 'run', 'tests/unit', 'tests/conformance', 'tests/model'],
-      { cwd: ROOT, stdio: 'pipe', timeout: 300_000 });
+      { cwd: work.tree, stdio: 'pipe', timeout: 300_000 });
     verdict = '살았다';
     survivors.push(m);
   } catch (e) {
@@ -150,22 +198,22 @@ for (const [n, m] of chosen.entries()) {
     writeFileSync(path, original);
   }
   const mark = verdict === '살았다' ? '  ← 살아남았다' : '';
-  console.log(`[${n + 1}/${chosen.length}] ${verdict}  ${m.file}:${m.line + 1} (${m.rule})${mark}`);
-  if (verdict === '살았다') console.log(`        ${m.from}\n     →  ${m.to}`);
+  say(`[${n + 1}/${chosen.length}] ${verdict}  ${m.file}:${m.line + 1} (${m.rule})${mark}`);
+  if (verdict === '살았다') say(`        ${m.from}\n     →  ${m.to}`);
 }
 
-console.log('');
-console.log('═══════════════════════════════════════════════════════════════');
-console.log(` 죽었다 ${killed} · 살았다 ${survivors.length} · 컴파일 깨짐 ${broken}`);
+say('');
+say('═══════════════════════════════════════════════════════════════');
+say(` 죽었다 ${killed} · 살았다 ${survivors.length} · 컴파일 깨짐 ${broken}`);
 const scored = killed + survivors.length;
 if (scored > 0) {
-  console.log(` 점수 ${((killed / scored) * 100).toFixed(1)}% — 살아남은 것이 검사되지 않은 행동이다`);
+  say(` 점수 ${((killed / scored) * 100).toFixed(1)}% — 살아남은 것이 검사되지 않은 행동이다`);
 }
 if (survivors.length > 0) {
-  console.log('');
-  console.log(' 살아남은 것:');
+  say('');
+  say(' 살아남은 것:');
   for (const s of survivors) {
-    console.log(`   ${s.file}:${s.line + 1}  ${s.rule}`);
-    console.log(`     ${s.from}`);
+    say(`   ${s.file}:${s.line + 1}  ${s.rule}`);
+    say(`     ${s.from}`);
   }
 }
