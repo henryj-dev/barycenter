@@ -442,6 +442,11 @@ function finalizeCandidate(
     ([plane, epoch]) => s.planes[plane as Plane]?.activationEpoch === epoch,
   );
   if (arrived) s.lastActivated = candidate;
+  // 뮤테이션 스윕이 이 두 줄을 지워도 아무것도 안 빨개진다고 알려줬다. **동치다** —
+  // 남은 후보가 나중에 "도착" 이 되려면 좌표가 움직여야 하는데, 좌표는 `commit` 으로만
+  // 움직이고 `commit` 은 후보를 자기 것으로 덮어쓴다. 되살아날 길이 없다.
+  //
+  // 그래도 지운다. 끝난 것을 남겨 두면 상태를 읽는 사람이 "진행 중" 으로 읽는다.
   delete s.pendingActivation;
   delete s.pendingEpochs;
 }
