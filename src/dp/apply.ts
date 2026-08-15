@@ -240,6 +240,14 @@ export class ApplyRunner {
       );
       return resultOf(j);
     }
+    // **낡은 토큰의 고아는 닫는다** (20차 CE-2). 다시 잡으려 하면 `assertLeader` 가
+    // `stale_leader` 로 막고, 그러면 `unfinished` 의 처방("복구를 부르면 끝난다")이
+    // **거짓이 된다** — 수렴이 영영 `unfinished` 만 답한다. 옛 리더는 어차피 더 갈 수
+    // 없으므로 닫는 것이 답이다(7차의 "펜싱이 곧 승계다" 와 같은 논리).
+    if (BigInt(j.op.leaderToken) < BigInt(this.agent.maxLeaderToken())) {
+      await this.agent.closeJournal(j.op, 'superseded');
+      return resultOf(this.agent.readJournal() ?? j);
+    }
     // **고아가 됐으면 다시 잡는다** (14차 · 모델이 찾았다). 비종단 저널인데 실행권이
     // 없으면 `drive` 가 `not_reserved` 로 죽고 그 전환은 영구히 막힌다.
     await this.agent.reclaimOperation(j.op);

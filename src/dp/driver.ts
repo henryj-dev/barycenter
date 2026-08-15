@@ -281,6 +281,9 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     // 무엇을 잡았는지 모르게 된다 — 실행권이 그 목록을 들고 있기 때문이다.
     await this.agent.releaseHolderSlots(op);
     await this.agent.finishOperation(op, planesOf(op));
+    // **저널도 닫는다** (20차 CE-1). 계약이 "종단 상태로 닫는다" 인데 저널을 두고 가면
+    // `unfinished` 가 죽은 전환을 살아 있다고 답하고 수리 경로를 막는다.
+    await this.agent.closeJournal(op, 'failed');
     if (refused.length > 0) {
       throw new DpRejection('terminal', `일부 평면이 이미 끝나 있었다 — ${refused.join(', ')}`);
     }

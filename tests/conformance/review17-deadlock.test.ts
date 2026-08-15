@@ -541,3 +541,77 @@ describe('고아를 닫는 것이 새 오퍼레이션을 막지 않는다 (20차
     }
   });
 });
+
+describe('포기한 전환은 끝난 것이다 (20차 CE-1)', () => {
+  /**
+   * `abortConfig` 의 계약은 "예약을 반납하고 전환을 **종단 상태로 닫는다**" 인데,
+   * **저널을 안 닫았다.** `unfinished` 는 저널 phase 만 보므로 죽은 전환을 "안 끝났다" 고
+   * 답한다. 운영자가 포기를 선언했는데 시스템은 "복구해라" 라고 하고, 그동안 진짜
+   * 드리프트 수리를 거부한다.
+   */
+  it('abort 뒤에는 status 도 수렴도 끝났다고 말한다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    const a = OP('A', 'gen-A', '0', '1');
+
+    fx.crashAfterEffect = 'publish';
+    await driver.applyConfig(a).catch(() => undefined);
+    fx.crashAfterEffect = undefined;
+    await driver.abortConfig(a).catch(() => undefined);
+
+    expect((await driver.status()).unfinished, '포기한 전환을 안 끝났다고 답했다').toBeUndefined();
+    expect(
+      (await driver.reconcileConfig()).kind,
+      '포기한 전환 때문에 수리 경로가 막혔다',
+    ).not.toBe('unfinished');
+  });
+});
+
+describe('처방이 죽지 않는다 (20차 CE-2)', () => {
+  /**
+   * `unfinished` 는 "**복구를 부르면 끝난다**" 는 뜻이다. 그런데 낡은 토큰의 고아 저널
+   * 에서는 `recoverConfig` 가 `stale_leader` 로 죽는다 — **문서화된 처방이 거짓이 된다.**
+   * 그동안 수렴은 영영 `unfinished` 만 답한다.
+   */
+  it('낡은 토큰의 고아도 복구가 마감한다 — abort 를 안 거쳤어도', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.writeJournal({
+      op: a, phase: 'published', reloadAttempts: 0,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'reserved', stream: 'reserved' },
+    });
+    await agent.finishOperation(a);        // 고아 — 비종단 저널 + 실행권 없음
+    await new DpAgent(store).fence('11');  // 신임이 들어온다
+
+    const driver = LocalDataplaneDriver.create({ store, effects: new FakeEffects() });
+    await driver.recoverConfig();
+
+    expect(
+      (await driver.status()).unfinished,
+      '복구가 낡은 고아를 못 닫아서 수렴이 영영 unfinished 다',
+    ).toBeUndefined();
+    expect((await driver.reconcileConfig()).kind, '수렴이 봉쇄됐다').not.toBe('unfinished');
+  });
+
+  it('신임이 들어온 뒤에도 복구가 고아를 마감한다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    const a = OP('A', 'gen-A', '0', '1');
+
+    fx.crashAfterEffect = 'publish';
+    await driver.applyConfig(a).catch(() => undefined);
+    fx.crashAfterEffect = undefined;
+    await driver.abortConfig(a).catch(() => undefined);
+    await new DpAgent(store).fence('11');
+
+    const r = await driver.recoverConfig();
+    expect(['failed', 'superseded', 'no_operation', 'activated', 'partial_exhausted'],
+      `복구가 마감하지 못했다: ${r.phase}`).toContain(r.phase);
+    expect((await driver.status()).unfinished, '복구했는데도 남아 있다').toBeUndefined();
+  });
+});

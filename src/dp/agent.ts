@@ -950,6 +950,27 @@ export class DpAgent {
    * 종단에 도달했는데 소유권이나 예약이 남으면 그 좌표는 영구히 잠긴다.
    */
   /**
+   * **포기한 전환의 저널을 닫는다** (20차 CE-1).
+   *
+   * `abortConfig` 의 계약은 "전환을 종단 상태로 닫는다" 인데 **저널을 안 닫고 있었다.**
+   * 그래서 `unfinished`(저널 phase 를 본다)가 죽은 전환을 "안 끝났다" 고 답했다 —
+   * 운영자가 포기를 선언했는데 시스템이 "복구해라" 라고 하고, 그동안 진짜 드리프트
+   * 수리를 거부한다.
+   *
+   * **리더 검사를 하지 않는다.** 닫는 것은 되돌릴 수 없는 연산이 아니고, 이걸 막으면
+   * 신임이 들어온 뒤 고아가 영영 안 닫힌다(20차 CE-2 가 그 모양이었다).
+   */
+  closeJournal(op: ApplyOperation, how: 'failed' | 'superseded'): Promise<void> {
+    return this.serial((s) => {
+      const j = s.journal;
+      if (j === undefined) return;
+      if (j.op.operationId !== op.operationId || j.op.transitionId !== op.transitionId) return;
+      if (isTerminalPhase(j.phase)) return;
+      s.journal = { ...j, phase: how, seq: j.seq + 1 };
+    });
+  }
+
+  /**
    * **저널이 없는 실행권을 놓는다** (16차 검수).
    *
    * §6.2 #1 — 첫 저널 쓰기 전에 끊겼으면 부작용도 없다. "실패" 가 아니라 "없던 일" 이다.
