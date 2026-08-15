@@ -140,8 +140,12 @@ publish 2; hup
 s=$(served_until gen2.example.com)
 [ "$s" = gen2.example.com ] && ok S8.renew "세대 전환 후 갱신된 인증서를 제시한다 ($s)" \
                             || bad S8.renew "기대 gen2, 실제 '$s'"
-[ "$(body)" = gen2 ] && ok S8.swap "symlink 교체 + HUP 으로 새 세대의 conf 가 로드된다" \
-                     || bad S8.swap "conf 가 바뀌지 않았다: $(body)"
+# 인증서가 gen2 라고 본문도 gen2 인 것은 아니다 — HUP 뒤 옛 워커가 드레이닝하는 동안
+# 둘이 번갈아 답한다. `served_until` 은 인증서만 보므로 여기서 또 걸렸다(간헐 재발).
+# `gc_traffic` 에서 이미 배운 것인데 이 자리에는 안 고쳐 뒀다.
+swapped=$(body_settled gen2)
+[ "$swapped" = gen2 ] && ok S8.swap "symlink 교체 + HUP 으로 새 세대의 conf 가 로드된다" \
+                      || bad S8.swap "conf 가 바뀌지 않았다: $swapped"
 
 publish 1; hup
 s=$(served_until gen1.example.com)
