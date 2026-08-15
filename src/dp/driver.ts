@@ -18,6 +18,7 @@ import type {
   ApplyLease,
   ActivationEvidence,
   ApplyOperation,
+  ApplyPhase,
   ApplyResult,
   Plane,
   PublishedState,
@@ -104,6 +105,37 @@ export interface DataplaneDriver {
 
   status(): Promise<DriverStatus>;
 }
+
+/**
+ * 한 스냅샷 안에서 **끝나지 않은 전환**을 읽는다.
+ *
+ * 방향이 반대인 둘을 본다. 둘 다 "복구를 부르면 끝난다" 다.
+ *   · 활성화가 끝났는데 기준으로 안 올라간 후보 (17차 A)
+ *   · 시작했는데 안 끝난 오퍼레이션 — 비종단 저널이 남아 있다 (19차 #1)
+ */
+function unfinishedIn(view: {
+  pendingActivation: PublishRecord | undefined;
+  journal: { phase: ApplyPhase; op: ApplyOperation } | undefined;
+}): PublishRecord | undefined {
+  if (view.pendingActivation !== undefined) return view.pendingActivation;
+  const j = view.journal;
+  if (j === undefined || isTerminalPhase(j.phase)) return undefined;
+  return {
+    generation: j.op.targetGeneration,
+    leaderToken: j.op.leaderToken,
+    operationId: j.op.operationId,
+    transitionId: j.op.transitionId,
+    generationDigest: j.op.generationDigest,
+  };
+}
+
+/** `#settled` 의 답. **왜 아닌지**까지 말한다. */
+type SettleCheck =
+  | { kind: 'settled'; proof: Settled }
+  /** 끝나지 않은 전환이 있다 — 복구를 부르면 끝난다. */
+  | { kind: 'unfinished'; pending: PublishRecord }
+  /** 기준이 그 사이 옮겨 갔다 — 새 기준으로 다시 본다. */
+  | { kind: 'moved' };
 
 declare const SETTLED_BRAND: unique symbol;
 
@@ -293,8 +325,11 @@ export class LocalDataplaneDriver implements DataplaneDriver {
         // 관측 두 번을 기다리는 사이 생긴 후보를 못 봤다 — 좌표는 이미 지나갔는데
         // 옛 기준으로 `converged` 를 답했다. 14차에 만든 "읽고-확인" 집합에 17차가 새로
         // 만든 "믿을 수 없는 상태" 를 안 넣은 것이다.
-        const proof = this.#settled(expected);
-        if (proof !== undefined) return converged(expected, proof);
+        const check = this.#settled(expected);
+        if (check.kind === 'settled') return converged(expected, check.proof);
+        if (check.kind === 'unfinished') {
+          return { kind: 'unfinished', pending: check.pending, found: seen };
+        }
         continue; // 기준이 옮겨 갔거나 끝나지 않은 활성화가 생겼다 — 다시 본다
       }
 
@@ -312,13 +347,21 @@ export class LocalDataplaneDriver implements DataplaneDriver {
 
       // **부작용 앞에서도 후보를 본다** (19차 반례 #3). 답 게이트에만 넣고 여기를
       // 빠뜨렸더니, 되돌리는 사이 끝난 활성화 위로 옛 기준을 게시하고 HUP 을 보냈다.
-      if (this.#settled(expected) === undefined) continue;
+      const before = this.#settled(expected);
+      if (before.kind === 'unfinished') {
+        return { kind: 'unfinished', pending: before.pending, found: seen };
+      }
+      if (before.kind !== 'settled') continue;
 
       const lease = this.#lease(expected);
       if (!pointerOk) await this.#budget(() => this.effects.publish(expected, lease));
       await this.#budget(() => this.effects.signalReload(lease));
 
-      if (this.#settled(expected) === undefined) continue;
+      const midway = this.#settled(expected);
+      if (midway.kind === 'unfinished') {
+        return { kind: 'unfinished', pending: midway.pending, found: seen };
+      }
+      if (midway.kind !== 'settled') continue;
       const afterPublish = await this.#observe();
       const afterActive = await this.#budget(() => this.effects.observeActivation());
       const ok = afterPublish.kind === 'owned'
@@ -327,9 +370,12 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       // **여기서도 읽고-확인한다** (16차 검수). 조기 `converged` 와 소진 경로에는 넣었는데
       // 이 자리만 빠져 있었다. 되돌리고 관측하는 사이 기준이 옮겨 갔으면, 우리가 되돌린
       // 것은 이미 옛 기준이다 — `repaired` 는 "제자리로 돌려놨다" 는 뜻이라 거짓이 된다.
-      const proof = ok ? this.#settled(expected) : undefined;
-      return proof !== undefined
-        ? repaired(expected, seen, proof)
+      const after = this.#settled(expected);
+      if (after.kind === 'unfinished') {
+        return { kind: 'unfinished', pending: after.pending, found: afterPublish };
+      }
+      return ok && after.kind === 'settled'
+        ? repaired(expected, seen, after.proof)
         : { kind: 'diverged', expected, found: afterPublish };
     }
     // 기준이 계속 바뀐다 — 지금은 우리 차례가 아니다.
@@ -345,9 +391,10 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     const observed = found.kind === 'owned'
       && sameRecord(found.record, now)
       && provesActivation(activation, now.generation);
-    const proof = observed ? this.#settled(now) : undefined;
-    return proof !== undefined
-      ? converged(now, proof)
+    const tail = this.#settled(now);
+    if (tail.kind === 'unfinished') return { kind: 'unfinished', pending: tail.pending, found };
+    return observed && tail.kind === 'settled'
+      ? converged(now, tail.proof)
       : { kind: 'diverged', expected: now, found };
   }
 
@@ -378,10 +425,28 @@ export class LocalDataplaneDriver implements DataplaneDriver {
    * 후보가 있으면 좌표는 이미 후보 쪽으로 갔고 기준은 그 전 것이다. 그 상태에서
    * `converged`·`repaired` 를 답하면 호출자에게 **옛 세대로 "손 떼도 된다"** 고 말한다.
    */
-  #settled(expected: PublishRecord): Settled | undefined {
-    if (!this.#stillBaseline(expected)) return undefined;
-    if (this.#unfinished() !== undefined) return undefined;
-    return SETTLED;
+  /**
+   * **왜 아닌지까지 답한다** (19차 반례 #2).
+   *
+   * 전에는 참/거짓만 돌려줬고, 실패하면 자리마다 알아서 `continue` 하거나 `diverged` 를
+   * 냈다. 그래서 후보가 생겨 실패한 것도 `diverged` 로 나갔다 — `expected` 와 `found` 가
+   * **같은 기록**인데 "갈라졌다" 고 답한다. `dirty` 를 가른 것과 같은 병이다.
+   *
+   * 이유를 함께 돌려주면 각 자리가 맞는 답을 낸다.
+   */
+  #settled(expected: PublishRecord): SettleCheck {
+    // **한 스냅샷으로 본다** (19차 검수). 따로 읽으면 그 사이가 벌어지고, `DurableStore`
+    // 는 공개 표면이라 락 없는 구현에서 그 틈이 실제로 열린다.
+    //
+    // **방어적이다** — 따로 읽게 되돌려도 아무것도 안 빨개진다(확인했다). 인프로세스에서는
+    // `snapshot()` 이 동기라 사이가 안 벌어지고, 우리 `FileStore` 는 락이 막는다. 남의
+    // 구현을 위한 것이고, 그건 우리 테스트가 못 만든다.
+    const view = this.agent.decisionView();
+    const pending = unfinishedIn(view);
+    if (pending !== undefined) return { kind: 'unfinished', pending };
+    if (view.lastActivated === undefined) return { kind: 'moved' };
+    if (!sameRecord(view.lastActivated, expected)) return { kind: 'moved' };
+    return { kind: 'settled', proof: SETTLED };
   }
 
   /**
@@ -395,17 +460,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
    * 자리와 부작용 자리를 훑어 다니지 않아도 된다.
    */
   #unfinished(): PublishRecord | undefined {
-    const candidate = this.agent.pendingActivation();
-    if (candidate !== undefined) return candidate;
-    const journal = this.agent.readJournal();
-    if (journal === undefined || isTerminalPhase(journal.phase)) return undefined;
-    return {
-      generation: journal.op.targetGeneration,
-      leaderToken: journal.op.leaderToken,
-      operationId: journal.op.operationId,
-      transitionId: journal.op.transitionId,
-      generationDigest: journal.op.generationDigest,
-    };
+    return unfinishedIn(this.agent.decisionView());
   }
 
   /**
@@ -431,7 +486,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
         // 지금은 바로 위의 재검사가 이미 막아서 **이 절만 지워도 안 빨개진다**(확인했다).
         // 반납이 네 자리에 있는 것과 같은 중복이다. 그래도 둔다 — 이건 **부작용 직전의
         // 마지막 문**이고, 위의 검사와 여기 사이에 await 가 생기는 변경이 오면 여기만 남는다.
-        if (this.#settled(expected) === undefined) {
+        if (this.#settled(expected).kind !== 'settled') {
           throw new DpRejection('stale_leader', '되돌리는 사이 기준이 바뀌었거나 새 활성화가 끝났다');
         }
         return CHECKED_TOKEN;

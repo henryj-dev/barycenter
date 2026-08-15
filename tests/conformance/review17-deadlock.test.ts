@@ -401,3 +401,50 @@ describe('끝나지 않은 전환을 converged 로 가리지 않는다 (19차 �
     expect((await driver.reconcileConfig()).kind, '복구했는데도 안 끝난다').toBe('converged');
   });
 });
+
+describe('갈라진 것이 없으면 갈라졌다고 하지 않는다 (19차 반례 #2)', () => {
+  /**
+   * 되돌린 뒤 관측하는 사이 후보가 생기면 `diverged{ expected: gen-A, found: gen-A }` 가
+   * 나왔다 — **둘이 같은 기록**인데 "갈라졌다" 고 답한다.
+   *
+   * 게이트가 참/거짓만 돌려줘서, 자리마다 실패를 알아서 해석했다. 후보 때문에 실패한
+   * 것도 `diverged` 로 나간 것이다. `dirty` 를 가른 것과 같은 병 — 한 이름에 여러 뜻.
+   *
+   * 게이트가 **왜 아닌지**까지 답하게 했다. 후보면 `unfinished`, 기준이 옮겨 갔으면
+   * 다시 본다. 변종을 새로 만들 필요가 없었다.
+   */
+  it('되돌린 뒤 후보가 생기면 unfinished 다', async () => {
+    const store = new MemoryStore();
+    const seed = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: seed }).applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    let observes = 0;
+    let slipped = false;
+    const fx = new (class extends FakeEffects {
+      override async observePublished(): Promise<PublishedState> {
+        observes += 1;
+        return observes === 1 ? { kind: 'none' } : super.observePublished();
+      }
+      override async observeActivation() {
+        if (observes >= 2 && !slipped) {
+          slipped = true;
+          const other = new DpAgent(store);
+          const b = OP('B', 'gen-B', '1', '2');
+          await other.reserveAll(b, { op: b, phase: 'preflight', reloadAttempts: 0, progress: {} });
+          for (const plane of ['http', 'stream'] as const) {
+            await other.stage(tupleFor(b, plane), null);
+            await other.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-B' });
+          }
+        }
+        return super.observeActivation();
+      }
+    })();
+    fx.publishedRecord = seed.publishedRecord;
+    fx.acceptingGeneration = 'gen-A';
+
+    const r = await LocalDataplaneDriver.create({ store, effects: fx }).reconcileConfig();
+
+    expect(slipped, '창을 만들지 못했다 — 반례를 재현하지 못한 것이다').toBe(true);
+    expect(r.kind, '갈라진 것이 없는데 갈라졌다고 답했다').toBe('unfinished');
+  });
+});

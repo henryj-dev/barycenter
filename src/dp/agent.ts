@@ -726,6 +726,27 @@ export class DpAgent {
   }
 
   /**
+   * **한 번에 읽는 판정 재료** (19차 검수).
+   *
+   * 전에는 `lastActivated()` · `pendingActivation()` · `readJournal()` 을 따로 불렀다.
+   * 인프로세스에서는 `snapshot()` 이 동기라 사이가 안 벌어지고 프로세스 간에는 파일 락이
+   * 막지만, **`DurableStore` 는 공개 표면**이다 — 락 없는 구현에서는 그 사이가 벌어진다.
+   * 한 스냅샷으로 접으면 공짜로 닫힌다.
+   */
+  decisionView(): {
+    lastActivated: PublishRecord | undefined;
+    pendingActivation: PublishRecord | undefined;
+    journal: JournalEntry | undefined;
+  } {
+    const s = this.snapshot();
+    return {
+      lastActivated: s.lastActivated,
+      pendingActivation: s.pendingActivation,
+      journal: s.journal,
+    };
+  }
+
+  /**
    * 아직 기준으로 올라가지 않은 활성화 후보 (17차 반례 A).
    *
    * 이게 있으면 **`lastActivated` 를 정답으로 읽으면 안 된다.** 좌표는 이미 후보 쪽으로
