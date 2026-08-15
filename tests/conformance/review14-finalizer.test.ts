@@ -198,3 +198,61 @@ describe('한 평면이 막혀도 전환이 끝난다 — 모델이 찾았다', 
     ).toBeUndefined();
   });
 });
+
+describe('완결 판정은 호출자가 준 평면 집합을 믿지 않는다 (15차)', () => {
+  /**
+   * **boolean 을 없앴더니 같은 병이 한 층 아래로 내려가 있었다.**
+   *
+   * `finishOperation(op)` 이 `op` 가 담은 평면만 보고 완결을 판정했다. 그래서 같은 id 로
+   * **평면 하나만 담아** 끝내면 부분 활성화가 기준으로 올라갔다 — `http=1 / stream=0`
+   * 인데 `lastActivated` 가 생긴다. 13차 ② 와 정확히 같은 결과다.
+   *
+   * 15차 검수가 지목했다. 호출자가 무엇을 아는지에 기대는 것이 문제였지, boolean 이
+   * 문제였던 게 아니다. 완결의 뜻은 **후보가 만들어질 때** 정해져야 한다.
+   */
+  it('평면 하나만 담아 끝내도 부분 후보는 승격되지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const full = OP('A', 'gen-A', '10');
+
+    await agent.reserveAll(full);
+    await agent.stage(tupleFor(full, 'http'), null);
+    await agent.commit(tupleFor(full, 'http'), { acceptingGeneration: 'gen-A' });
+
+    // 같은 id 인데 http 만 담은 오퍼레이션으로 끝낸다.
+    const partial: ApplyOperation = {
+      ...full,
+      affectedPlanes: ['http'],
+      planes: { http: full.planes.http! },
+    };
+    await agent.finishOperation(partial);
+
+    expect(
+      new DpAgent(store).lastActivated(),
+      '부분 활성화가 기준이 됐다 — 호출자가 준 평면 집합을 믿었다',
+    ).toBeUndefined();
+  });
+
+  it('전 평면이 넘어갔으면 평면 하나만 담아 끝내도 승격된다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const full = OP('B', 'gen-B', '10');
+
+    await agent.reserveAll(full);
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(full, plane), null);
+      await agent.commit(tupleFor(full, plane), { acceptingGeneration: 'gen-B' });
+    }
+    const partial: ApplyOperation = {
+      ...full,
+      affectedPlanes: ['http'],
+      planes: { http: full.planes.http! },
+    };
+    await agent.finishOperation(partial);
+
+    expect(
+      new DpAgent(store).lastActivated()?.generation,
+      '전 평면이 넘어갔는데 승격을 안 했다 — 막기만 하는 게 아니다',
+    ).toBe('gen-B');
+  });
+});

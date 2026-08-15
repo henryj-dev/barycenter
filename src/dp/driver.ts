@@ -15,6 +15,7 @@
  * 깨진 것이 그것이었다.
  */
 import type {
+  ApplyLease,
   ActivationEvidence,
   ApplyOperation,
   ApplyResult,
@@ -253,20 +254,9 @@ export class LocalDataplaneDriver implements DataplaneDriver {
 
       if (!this.#stillBaseline(expected)) continue; // 기준이 바뀌었다 — 다시 본다
 
-      if (!pointerOk) {
-        await this.#budget(() => this.effects.publish(expected, {
-          leaderToken: expected.leaderToken,
-          assertValid: () => {
-            if (!this.#stillBaseline(expected)) {
-              throw new DpRejection('stale_leader', '되돌리는 사이 기준이 바뀌었다');
-            }
-          },
-        }));
-      }
-      await this.#budget(() => this.effects.signalReload({
-        leaderToken: expected.leaderToken,
-        assertValid: () => undefined,
-      }));
+      const lease = this.#lease(expected);
+      if (!pointerOk) await this.#budget(() => this.effects.publish(expected, lease));
+      await this.#budget(() => this.effects.signalReload(lease));
 
       if (!this.#stillBaseline(expected)) continue;
       const afterPublish = await this.#observe();
@@ -312,6 +302,30 @@ export class LocalDataplaneDriver implements DataplaneDriver {
    * 직전에 끝나는 스케줄이면, 한 번의 `reconcileConfig` 가 **2 분 넘게 인스턴스 큐를
    * 잡는다** — 그동안 apply 도 못 들어온다. 마감은 호출 시작에서 한 번 정해진다.
    */
+  /**
+   * 되돌릴 수 없는 연산 직전에 확인하는 표 (15차 검수).
+   *
+   * 전에는 게시 lease 가 **기준만** 봤고 HUP lease 는 `() => undefined` — **아무것도**
+   * 안 봤다. 그래서 규약을 지켜 `assertValid()` 를 부르는 구현도 낡은 리더 밑에서 그대로
+   * 진행했다. `fence` 는 기준(`lastActivated`)을 바꾸지 않으므로 기준 검사만으로는
+   * 리더 교체를 못 본다 — **둘은 서로를 대신하지 못한다.**
+   *
+   * 규약이 "이걸 확인하면 안전하다" 인데 확인해도 안전하지 않으면 규약이 거짓말이 된다.
+   */
+  #lease(expected: PublishRecord): ApplyLease {
+    return {
+      leaderToken: expected.leaderToken,
+      assertValid: () => {
+        if (BigInt(expected.leaderToken) < BigInt(this.agent.maxLeaderToken())) {
+          throw new DpRejection('stale_leader', '되돌리는 사이 리더가 바뀌었다');
+        }
+        if (!this.#stillBaseline(expected)) {
+          throw new DpRejection('stale_leader', '되돌리는 사이 기준이 바뀌었다');
+        }
+      },
+    };
+  }
+
   #budget<T>(run: () => Promise<T>): Promise<T> {
     const left = this.#deadline === undefined ? RECONCILE_EFFECT_MS : this.#deadline - Date.now();
     if (left <= 0) {

@@ -190,6 +190,14 @@ export type AgentState = {
    */
   pendingActivation?: PublishRecord;
   /**
+   * 그 후보가 **완결되려면 어디에 도착해야 하는가** (15차 검수).
+   *
+   * 전에는 `finishOperation` 이 넘어온 오퍼레이션이 담은 평면만 보고 판정했다. 그래서
+   * 같은 id 로 평면 하나만 담아 끝내면 부분 활성화가 기준으로 올라갔다. 호출자가 무엇을
+   * 아는지에 기대는 것이 문제였다 — 완결의 뜻은 **후보가 만들어질 때** 정해진다.
+   */
+  pendingEpochs?: Record<string, string>;
+  /**
    * 진행 중인 apply 오퍼레이션의 저널 (§6.2).
    *
    * **여기 있어야 한다.** 저널과 멤버십 좌표가 서로 다른 소유자를 가지면 같은 store 를
@@ -414,18 +422,23 @@ export class InvariantViolation extends Error {
 function finalizeCandidate(
   s: AgentState,
   ids: { operationId: string; transitionId: string },
-  epochs: Record<string, string>,
+  fallback: Record<string, string>,
 ): void {
   const candidate = s.pendingActivation;
   if (candidate === undefined) return;
   if (candidate.operationId !== ids.operationId) return;
   if (candidate.transitionId !== ids.transitionId) return;
 
+  // **후보가 들고 온 것을 쓴다** (15차 검수). 넘어온 오퍼레이션은 평면을 하나만 담고
+  // 있을 수 있고, 그걸 믿으면 부분 활성화가 기준이 된다 — 13차 ② 와 같은 결과다.
+  // `fallback` 은 후보가 만들어지기 전 상태에서 온 옛 저장분을 위한 것뿐이다.
+  const epochs = s.pendingEpochs ?? fallback;
   const arrived = Object.entries(epochs).every(
     ([plane, epoch]) => s.planes[plane as Plane]?.activationEpoch === epoch,
   );
   if (arrived) s.lastActivated = candidate;
   delete s.pendingActivation;
+  delete s.pendingEpochs;
 }
 
 /** 오퍼레이션이 선언한 평면별 목표 epoch. */
@@ -1067,6 +1080,9 @@ export class DpAgent {
       // http 만 넘어간 상태에서도 기준이 생겨 reconcile 이 `converged` 라고 답했다 —
       // 실제 좌표는 http=1 / stream=0 인데. 전 평면이 넘어갔을 때만 "여기로 되돌린다"
       // 고 말할 수 있다.
+      // 완결의 뜻은 실행권이 안다 — `reserveAll` 이 **전체** 오퍼레이션을 보고 적었다.
+      const declared = s.activeOperation?.epochs;
+      if (declared !== undefined) s.pendingEpochs = declared;
       s.pendingActivation = {
         generation: op.targetGeneration,
         leaderToken: op.leaderToken,

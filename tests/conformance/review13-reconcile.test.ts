@@ -313,3 +313,77 @@ describe('수렴은 마감이 있다 — apply 를 무한정 막지 않는다', 
     }
   });
 });
+
+describe('수렴이 건네는 lease 는 리더도 확인한다 (15차)', () => {
+  /**
+   * 15차 검수. 수렴의 게시 lease 는 **기준만** 봤고, HUP lease 는 `() => undefined` —
+   * **아무것도 안 봤다.** 그래서 규약을 지켜 `assertValid()` 를 부르는 `Effects` 구현도
+   * 낡은 리더 밑에서 그대로 진행한다. fence 는 기준(`lastActivated`)을 바꾸지 않으므로
+   * 기준 검사만으로는 리더 교체를 못 본다.
+   *
+   * 부작용이 실제로 나가는 것까지는 재현하지 못했다 — 관측 뒤 토큰 검사가 그 앞을 막는다.
+   * 그래도 **lease 가 약속을 안 지키는 것 자체**가 결함이다. 규약은 "되돌릴 수 없는 연산
+   * 직전에 이걸 확인하면 안전하다" 인데, 확인해도 안전하지 않았다.
+   */
+  /** 리더는 그대로 두고 **기준만** 옮긴다. 토큰 검사로는 이걸 못 본다. */
+  const moveBaseline = async (store: MemoryStore): Promise<void> => {
+    const stored = store.load()!;
+    const payload = stored.payload as { lastActivated?: unknown };
+    payload.lastActivated = {
+      generation: 'gen-Z', leaderToken: '10', operationId: 'Z',
+      transitionId: 'Z', generationDigest: 'sha256:gen-Z',
+    };
+    await store.save({ version: stored.version + 1, payload });
+  };
+
+  const leaseChecks = async (
+    fenceBefore: 'publish' | 'reload' | 'baseline',
+  ): Promise<{ threw: string | undefined }> => {
+    const store = new MemoryStore();
+    const seed = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: seed }).applyConfig(OP('A', 'gen-A', '10'));
+
+    let threw: string | undefined;
+    const fx = new (class extends FakeEffects {
+      override async observePublished(): Promise<PublishedState> {
+        return { kind: 'none' }; // 어긋나 있다 — 수렴이 고치려 든다
+      }
+      override async publish(record: never, lease: { assertValid: () => void }) {
+        if (fenceBefore === 'publish' || fenceBefore === 'baseline') {
+          if (fenceBefore === 'publish') await new DpAgent(store).fence('11');
+          else await moveBaseline(store);
+          try { lease.assertValid(); } catch (e) { threw = (e as { kind?: string }).kind; }
+        }
+        return super.publish(record, lease as never);
+      }
+      override async signalReload(lease: { assertValid: () => void }) {
+        if (fenceBefore === 'reload') {
+          await new DpAgent(store).fence('11');
+          try { lease.assertValid(); } catch (e) { threw = (e as { kind?: string }).kind; }
+        }
+        return super.signalReload(lease as never);
+      }
+    })();
+
+    await LocalDataplaneDriver.create({ store, effects: fx }).reconcileConfig().catch(() => undefined);
+    return { threw };
+  };
+
+  it('게시 직전 lease 가 리더 교체를 막는다', async () => {
+    expect((await leaseChecks('publish')).threw, 'lease 가 통과시켰다').toBe('stale_leader');
+  });
+
+  it('HUP 직전 lease 가 리더 교체를 막는다 — 여기는 아예 비어 있었다', async () => {
+    expect((await leaseChecks('reload')).threw, 'lease 가 아무것도 확인하지 않았다').toBe('stale_leader');
+  });
+
+  /**
+   * **토큰 검사와 기준 검사는 서로를 대신하지 못한다.** 리더는 그대로인데 기준만 옮겨
+   * 가는 경우가 있고(다른 오퍼레이션이 활성화를 끝냈다), 그때 옛 기준으로 되돌리면
+   * 방금 올라간 것을 지운다.
+   */
+  it('리더가 그대로여도 기준이 옮겨 갔으면 막는다', async () => {
+    expect((await leaseChecks('baseline')).threw, '기준이 바뀌었는데 lease 가 통과시켰다')
+      .toBe('stale_leader');
+  });
+});
