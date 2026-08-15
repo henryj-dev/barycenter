@@ -22,6 +22,7 @@
 import { describe, expect, it } from 'vitest';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import { provesActivation } from '../../src/dp/operation.js';
 import { GenerationError, materializeGeneration, readManifest } from '../../src/dp/materialize.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -493,5 +494,76 @@ describe('모르는 manifest 스키마는 거부한다', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── 스윕이 찾은 넷째 무리 — 신원 비교가 통째로 미검사였다 ────────────────
+
+describe('수렴의 신원 비교는 한 자리만 달라도 남의 것이다', () => {
+  /**
+   * ```
+   * driver.ts  sameRecord 의 네 절(digest · operationId · transitionId · leaderToken)
+   *            → 어느 하나를 무력화해도 534 개가 전부 초록
+   * ```
+   *
+   * 수렴은 **바깥에 올라간 기록**과 기준을 이걸로 견준다. 절이 헐거우면 **남이 같은 이름
+   * 으로 올린 세대를 "내 것" 으로 읽고** `converged` 를 답한다 — 9차가 `publishedByMe`
+   * 에서 고친 "조용한 거짓 성공" 과 같은 병인데, 수렴 쪽은 비어 있었다.
+   *
+   * 21차가 짚은 병형("새 판정 자리마다 신원 비교를 빠뜨린다")이 **검사 쪽에도** 있었던
+   * 셈이다. 자리를 만들 때만이 아니라 **자리를 검사할 때도** 빠뜨렸다.
+   */
+  const BASE = {
+    generation: 'gen-A',
+    generationDigest: 'sha256:gen-A',
+    operationId: 'A',
+    transitionId: 'A',
+    leaderToken: '10',
+  };
+
+  const activated = async (): Promise<{ store: MemoryStore; effects: FakeEffects }> => {
+    const store = new MemoryStore();
+    const effects = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects }).applyConfig({
+      leaderToken: '10', operationId: 'A', transitionId: 'A',
+      affectedPlanes: ['http', 'stream'],
+      targetGeneration: 'gen-A', generationDigest: 'sha256:gen-A',
+      planes: {
+        http: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:h-A',
+        },
+        stream: {
+          expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+          target: { activationEpoch: '1', membershipRevision: '1' },
+          payloadDigest: 'sha256:s-A',
+        },
+      },
+    });
+    return { store, effects };
+  };
+
+  for (const field of ['generationDigest', 'operationId', 'transitionId', 'leaderToken'] as const) {
+    it(`${field} 만 달라도 내 것이 아니다`, async () => {
+      const { store, effects } = await activated();
+      // 세대 **이름은 같고** 한 자리만 다른 기록이 바깥에 올라가 있다.
+      effects.publishedRecord = { ...BASE, [field]: `${BASE[field]}-남의것` };
+      const before = effects.publishCalls;
+
+      const r = await LocalDataplaneDriver.create({ store, effects }).reconcileConfig();
+
+      expect(r.kind, `${field} 가 다른데 수렴했다고 답했다`).not.toBe('converged');
+      expect(
+        effects.publishCalls - before,
+        '남의 것을 내 것으로 읽어 아무것도 안 했다',
+      ).toBeGreaterThan(0);
+    });
+  }
+
+  it('전부 같으면 수렴이다 — 막기만 하는 게 아니다', async () => {
+    const { store, effects } = await activated();
+    const r = await LocalDataplaneDriver.create({ store, effects }).reconcileConfig();
+    expect(r.kind, '정합한데 갈라졌다고 답했다').toBe('converged');
   });
 });
