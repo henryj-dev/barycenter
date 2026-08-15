@@ -557,7 +557,32 @@ function finalizeCandidate(
   // 동치를 동치라고 적는다 — 검출력 없는 것을 있다고 적지 않는다(22차 P8).
   const epochs = s.pendingEpochs ?? epochsFromJournal(s, ids);
   const arrived = candidateArrived(s, candidate, epochs);
+  // **세 번째 결과** (31차 CE-31). 30차가 뿌리를 이렇게 적었다 — *"판정이 불능인데
+  // 결과 선택지가 승격/폐기 둘뿐이다."* **그리고는 셋째를 만들지 않고 나머지를 폐기
+  // 쪽에 배정했다.** 다섯 회차를 그 둘 사이에서 오갔다:
+  //
+  // ```
+  // 27차 봉쇄 → 28차 폐기 통과 → 되감김 → 29차 부분 승격 + 나머지 봉쇄
+  //          → 30차 나머지 폐기 통과 → 되감김
+  // ```
+  //
+  // 폐기가 왜 되감김인가: 폐기는 **낡은 `lastActivated` 를 정답 권위로 남긴다.**
+  // 좌표·저널·terminal 이 전부 새 세대를 말하는데 기준만 옛것이면, 수렴은 기준을
+  // 정답으로 삼아 **서빙 중인 세대를 되감고 `repaired` 라 답한다.**
+  //
+  // 셋째 결과는 **기준 폐위**다. 선언한 전 평면이 목표 좌표에 **도착했는데**(I3 에 의해
+  // 좌표는 앞으로만 가므로, 이것은 세상이 기준을 지나쳤다는 증명이다) 그것을 내 공로로
+  // 셀 수 없으면 — 승격도 아니고, 옛 기준을 권위로 남기는 것도 아니다. **기준이 더 이상
+  // 권위가 아니라고 적는다.**
+  //
+  // 그러면 수렴의 기존 분기가 받는다: 기준이 없고 게시 의도가 있으면 `dirty` —
+  // 부작용 0, 봉쇄 0, 되감김 0, 그리고 진단이 정직하다("기준을 보증 못 한다").
+  // 표면은 안 움직인다. `dirty` 는 이미 계약에 있다.
+  const positionsReached = epochs !== undefined && Object.entries(epochs).every(
+    ([plane, epoch]) => s.planes[plane as Plane]?.activationEpoch === epoch,
+  );
   if (arrived) s.lastActivated = candidate;
+  else if (positionsReached) delete s.lastActivated;
   // 뮤테이션 스윕이 이 두 줄을 지워도 아무것도 안 빨개진다고 알려줬다. **동치다** —
   // 남은 후보가 나중에 "도착" 이 되려면 좌표가 움직여야 하는데, 좌표는 `commit` 으로만
   // 움직이고 `commit` 은 후보를 자기 것으로 덮어쓴다. 되살아날 길이 없다.

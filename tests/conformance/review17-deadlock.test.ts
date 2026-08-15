@@ -1433,3 +1433,103 @@ describe('원장 폴백은 창의 부분집합만 닫았다 (30차 CE-30)', () =
     expect(fenced, '신임 리더도 못 들어온다').toBe('ok');
   });
 });
+
+describe('세 번째 결과를 만들지 않았다 (31차 CE-31)', () => {
+  /**
+   * **30차 수정이 만든 스물네 번째다. 다섯 회차째 같은 창이다.**
+   *
+   * 30차는 뿌리를 정확히 적었다 — *"판정이 불능인데 결과 선택지가 승격/폐기 둘뿐이다."*
+   * **그리고는 셋째 결과를 만들지 않고 나머지를 폐기 쪽에 배정했다.**
+   *
+   * 폐기는 낡은 `lastActivated` 를 정답 권위로 남긴다. 좌표·저널·terminal 은 전부
+   * "gen-B" 인데 기준만 gen-A 다. 수렴은 기준을 정답으로 삼아 **서빙 중인 gen-B 를
+   * gen-A 로 되감고 `repaired` 라 답한다** — CE-29 와 똑같은 되감김이다.
+   *
+   * ```
+   * 27차 봉쇄 → 28차 폐기 통과 → 되감김(전체 창)
+   *          → 29차 부분 승격 + 나머지 봉쇄 → 30차 나머지 폐기 통과 → 되감김(나머지 창)
+   * ```
+   *
+   * 그리고 **CE-30 테스트는 "복구·승계가 앞으로 간다" 만 단언하고 앞으로 간 뒤의 세상을
+   * 안 봤다.** "봉쇄가 풀렸다" 를 검증하고 "안전하게 풀렸다" 로 조용히 일반화했다 —
+   * 29차와 정확히 같은 병형이다.
+   */
+  it('폐기된 후보 뒤에서 수렴이 세상을 되감지 않는다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: fx })
+      .applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    const agent = new DpAgent(store);
+    const x = OP('X', 'gen-B', '1', '2');
+    const y: ApplyOperation = {
+      ...OP('Y', 'gen-B', '1', '2'), affectedPlanes: ['stream'], planes: x.planes,
+    };
+
+    await agent.reserveAll(x, { op: x, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.abort(tupleFor(x, 'stream'));
+    await agent.reserve(tupleFor(y, 'stream'));
+    await agent.stage(tupleFor(y, 'stream'), null);
+    await agent.commit(tupleFor(y, 'stream'), { acceptingGeneration: 'gen-B' });
+    await agent.finishOperation(y, ['stream']);
+    await agent.stage(tupleFor(x, 'http'), null);
+    await agent.commit(tupleFor(x, 'http'), { acceptingGeneration: 'gen-B' });
+    await agent.writeJournal({
+      op: x, phase: 'activated', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'committed' },
+    });
+    const raw = store.load()!;
+    const payload = raw.payload as { planes: Record<string, { by?: unknown }> };
+    for (const plane of Object.keys(payload.planes)) delete payload.planes[plane]!.by;
+    await store.save({ ...raw, version: raw.version + 1, payload });
+
+    // 세상은 이미 gen-B 를 서빙한다 — 게시도 HUP 도 나갔다.
+    fx.publishedRecord = {
+      generation: 'gen-B', leaderToken: '10', operationId: 'X',
+      transitionId: 'X', generationDigest: 'sha256:gen-B',
+    };
+    fx.acceptingGeneration = 'gen-B';
+
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    await driver.recoverConfig();
+    const before = { publishes: fx.publishCalls, reloads: fx.reloadSignals };
+    await driver.reconcileConfig();
+
+    expect(fx.publishCalls, '수렴이 옛 기준으로 세상을 되감았다').toBe(before.publishes);
+    expect(fx.acceptingGeneration, '서빙 세대가 되감겼다').toBe('gen-B');
+  });
+
+  /**
+   * **폐위는 좌표가 기준을 지나쳤을 때만이다.**
+   *
+   * 도착 여부를 안 보고 폐기할 때마다 폐위하면, **정상적인 부분 실패**에서도 기준이
+   * 날아간다 — 거기서는 세상이 아직 기준에 있으므로 되돌릴 곳이 바로 그 기준이다.
+   * 기준을 지우면 멀쩡히 수렴할 수 있는 상태를 `dirty` 로 만들어 운영자를 부른다.
+   *
+   * 넓게 만든 뮤턴트가 573 전부 통과하길래(= `positionsReached` 가 미검사였다) 겨눈다.
+   * 이 시리즈가 다섯 회차째 앓은 병("검증한 부분집합에서 조용히 일반화")을 이번엔
+   * **내 수정 자신에게** 적용해 본 것이다.
+   */
+  it('세상이 기준에 그대로 있으면 폐위하지 않는다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: fx })
+      .applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    const agent = new DpAgent(store);
+    const b = OP('B', 'gen-B', '1', '2');
+    // **후보는 생겼는데 도착은 못 했다** — http 만 넘어가고 stream 은 기준에 남았다.
+    // (커밋이 하나도 없으면 후보 자체가 안 생겨 이 분기를 아예 안 지나간다. 첫 시도가
+    // 그렇게 짜여서 뮤턴트를 못 잡았다 — 픽스처가 통과시킨 것이다.)
+    await agent.reserveAll(b, { op: b, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    for (const plane of ['http', 'stream'] as const) await agent.stage(tupleFor(b, plane), null);
+    await agent.commit(tupleFor(b, 'http'), { acceptingGeneration: 'gen-B' });
+    await LocalDataplaneDriver.create({ store, effects: fx }).abortConfig(b).catch(() => undefined);
+
+    expect(
+      new DpAgent(store).lastActivated()?.generation,
+      '되돌릴 곳이 멀쩡히 있는데 기준을 지웠다 — 수렴이 dirty 로 운영자를 부른다',
+    ).toBe('gen-A');
+  });
+});
