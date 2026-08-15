@@ -53,6 +53,17 @@ export type DriverStatus = {
   published: PublishedState;
   /** 마지막으로 관측한 활성화 증거. */
   lastEvidence: ActivationEvidence | undefined;
+  /**
+   * **끝나지 않은 전환이 있는가** (19차 검수).
+   *
+   * 없으면 컨트롤 플레인이 apply 봉쇄를 볼 창구가 `applyConfig` 실패뿐이다 — 끊긴 러너가
+   * 실행권을 쥐고 있으면 모든 apply 가 `operation_in_flight` 로 막히는데, `status()` 는
+   * 그걸 안 보여줬다. `reconcileConfig` 가 `unfinished` 로 답하는 것과 같은 사실을
+   * **묻지 않고도** 보게 한다.
+   *
+   * 여기 값이 있으면 `recoverConfig()` 를 부르면 된다.
+   */
+  unfinished: PublishRecord | undefined;
 };
 
 /**
@@ -516,6 +527,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       planes: { http: this.agent.coordinate('http'), stream: this.agent.coordinate('stream') },
       published: await this.effects.observePublished(),
       lastEvidence: journal?.evidence,
+      unfinished: this.#unfinished(),
     };
   }
 }

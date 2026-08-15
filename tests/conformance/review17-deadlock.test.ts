@@ -448,3 +448,30 @@ describe('갈라진 것이 없으면 갈라졌다고 하지 않는다 (19차 반
     expect(r.kind, '갈라진 것이 없는데 갈라졌다고 답했다').toBe('unfinished');
   });
 });
+
+describe('status 가 봉쇄를 보여준다 (19차)', () => {
+  /**
+   * 끊긴 러너가 실행권을 쥐고 있으면 모든 apply 가 `operation_in_flight` 로 막히는데,
+   * `status()` 는 그걸 안 보여줬다. **컨트롤 플레인이 봉쇄를 볼 창구가 `applyConfig`
+   * 실패뿐**이었다 — 실패해 봐야 아는 것은 관측이 아니다.
+   */
+  it('끊긴 전환이 남아 있으면 status 가 그것을 답한다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    await driver.applyConfig(OP('A', 'gen-A', '0', '1'));
+    expect((await driver.status()).unfinished, '정상인데 뭔가 있다고 했다').toBeUndefined();
+
+    fx.crashBeforeEffect = 'publish';
+    await driver.applyConfig(OP('B', 'gen-B', '1', '2')).catch(() => undefined);
+    fx.crashBeforeEffect = undefined;
+
+    expect(
+      (await driver.status()).unfinished?.generation,
+      '봉쇄돼 있는데 status 가 조용하다',
+    ).toBe('gen-B');
+
+    await driver.recoverConfig();
+    expect((await driver.status()).unfinished, '복구했는데도 남아 있다고 한다').toBeUndefined();
+  });
+});

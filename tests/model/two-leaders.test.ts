@@ -165,7 +165,9 @@ class World {
    * 답한 반례 넷(13차 ①④ · 16차 · 17차 A · 18차 #1)이 **전부 사람 손에 잡혔고 모델이
    * 잡은 것은 0** 이었다. "무대가 넓거나 속성이 없거나" 중 후자다.
    */
-  readonly answers: { kind: string; generation?: string; pending?: string; baseline?: string }[] = [];
+  readonly answers: {
+    kind: string; generation?: string; pending?: string; baseline?: string; world?: string;
+  }[] = [];
 }
 
 class ModelEffects implements Effects {
@@ -250,15 +252,23 @@ const swallow = (problems: Error[]) => async (p: Promise<unknown>): Promise<void
  * 답이 나온 뒤에 상태를 읽으면 늦다 — 그 사이 남이 또 바꾼다. 부른 직후 같은 tick 에서 읽는다.
  */
 async function reconcileWitnessed(
-  driver: { reconcileConfig(): Promise<{ kind: string; record?: { generation: string } }> },
+  driver: {
+    reconcileConfig(): Promise<{
+      kind: string;
+      record?: { generation: string };
+      expected?: { generation: string };
+    }>;
+  },
   store: ModelStore,
   world: World,
 ): Promise<void> {
   const r = await driver.reconcileConfig();
   const payload = store.load()?.payload as Seen | undefined;
+  const named = r.record ?? r.expected;
   world.answers.push({
     kind: r.kind,
-    ...(r.record !== undefined ? { generation: r.record.generation } : {}),
+    ...(named !== undefined ? { generation: named.generation } : {}),
+    ...(world.published !== undefined ? { world: world.published.generation } : {}),
     ...(payload?.pendingActivation !== undefined
       ? { pending: payload.pendingActivation.generation } : {}),
     ...(payload?.lastActivated !== undefined
@@ -392,17 +402,32 @@ function checkProperties(
   // `converged(r)` 는 호출자에게 **손 떼도 된다**는 뜻이다. 틀리면 제일 비싼 답이다.
   // 그 순간 (1) 끝나지 않은 활성화가 없어야 하고 (2) 답한 것이 실제 기준이어야 한다.
   for (const a of world.answers) {
-    if (a.kind !== 'converged') continue;
+    // **`repaired` 도 settled 주장이다** (19차 검수). 처음엔 `converged` 만 봤는데,
+    // "제자리로 돌려놨다" 도 "손 떼도 된다" 와 같은 무게의 답이다.
+    //
+    // ⚠️ 다만 **아직 이빨이 없다** — `repaired` 앞 게이트를 무력화해도 모델은 초록이다.
+    // 시나리오가 `repaired` 답에 끝나지 않은 전환이 겹치는 자리를 안 지난다. **속성이
+    // 없어서가 아니라 무대가 좁아서다** — 둘은 고치는 방법이 다르다(TESTS.md).
+    // conformance(review16 ③)가 그 자리를 지킨다.
+    if (a.kind !== 'converged' && a.kind !== 'repaired') continue;
     if (a.pending !== undefined) {
       bad.push({
-        property: 'P7 수렴은 끝나지 않은 활성화를 덮지 않는다',
-        detail: `converged(${a.generation}) 인데 후보 ${a.pending} 가 남아 있다`,
+        property: 'P7 수렴은 끝나지 않은 전환을 덮지 않는다',
+        detail: `${a.kind}(${a.generation}) 인데 끝나지 않은 것 ${a.pending} 가 남아 있다`,
       });
     }
     if (a.generation !== undefined && a.baseline !== undefined && a.generation !== a.baseline) {
       bad.push({
         property: 'P7 수렴이 답한 것이 기준이다',
-        detail: `converged(${a.generation}) 인데 기준은 ${a.baseline} 다`,
+        detail: `${a.kind}(${a.generation}) 인데 기준은 ${a.baseline} 다`,
+      });
+    }
+    // **바깥도 본다** (19차 검수). durable 만 보면 "기준과 세상이 갈라진 채 수렴했다" 를
+    // 못 잡는다 — 수렴의 존재 이유가 바로 그 둘을 맞추는 것이다.
+    if (a.generation !== undefined && a.world !== undefined && a.generation !== a.world) {
+      bad.push({
+        property: 'P7 수렴이 답한 것이 바깥에 올라가 있다',
+        detail: `${a.kind}(${a.generation}) 인데 바깥은 ${a.world} 다`,
       });
     }
   }
@@ -496,7 +521,7 @@ async function once(
 }
 
 describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서 본다', () => {
-  it('apply 와 fence 가 교차해도 다섯 속성이 성립한다', async () => {
+  it('apply 와 fence 가 교차해도 속성이 전부 성립한다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
 
     const run = await sweep(async (space) => {
@@ -523,7 +548,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
     expect(run.schedules, '스케줄을 하나도 못 훑었다').toBeGreaterThan(1);
   }, 120_000);
 
-  it('두 인스턴스가 같은 오퍼레이션을 밀어도 다섯 속성이 성립한다', async () => {
+  it('두 인스턴스가 같은 오퍼레이션을 밀어도 속성이 전부 성립한다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
 
     const run = await sweep(async (space) => {
@@ -548,7 +573,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
     expect(run.schedules).toBeGreaterThan(1);
   }, 120_000);
 
-  it('apply 와 reconcile 이 교차해도 다섯 속성이 성립한다', async () => {
+  it('apply 와 reconcile 이 교차해도 속성이 전부 성립한다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
 
     const run = await sweep(async (space) => {
@@ -625,7 +650,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
    * 운영에서 흔한 모양이다 — 프로세스가 죽은 줄 알고 다른 쪽이 복구를 시작했는데 원래
    * 러너가 살아 있었다. 종단 재진입과 실행권 반납이 여기서 얽힌다.
    */
-  it('밀던 러너와 복구가 겹쳐도 다섯 속성이 성립한다', async () => {
+  it('밀던 러너와 복구가 겹쳐도 속성이 전부 성립한다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
 
     const run = await sweep(async (space) => {
@@ -655,7 +680,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
    *
    * 13차 ① 과 14차 회귀가 둘 다 이 자리였다. 손으로는 두 번 다 틀렸으니 생성해서 본다.
    */
-  it('수렴 중에 리더가 바뀌어도 다섯 속성이 성립한다', async () => {
+  it('수렴 중에 리더가 바뀌어도 속성이 전부 성립한다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
 
     const run = await sweep(async (space) => {
@@ -696,7 +721,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
    * **실행권에서** 온다. 실행권이 다른 오퍼레이션 것으로 바뀌는 사이에 후보가 만들어지면
    * 어떻게 되는가 — 손으로는 그 순간을 고를 자신이 없어서 생성해서 본다.
    */
-  it('두 오퍼레이션이 같은 좌표를 노려도 다섯 속성이 성립한다', async () => {
+  it('두 오퍼레이션이 같은 좌표를 노려도 속성이 전부 성립한다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
 
     const run = await sweep(async (space) => {
@@ -728,7 +753,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
    * 15차 수정 셋(`pendingEpochs` · lease 이중 검사 · `failAll` 이 좌표를 읽는 것)이
    * 전부 이 교차에서 만난다.
    */
-  it('밀기·승계·걷어차기가 겹쳐도 다섯 속성이 성립한다', async () => {
+  it('밀기·승계·걷어차기가 겹쳐도 속성이 전부 성립한다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
 
     const run = await sweep(async (space) => {
@@ -761,7 +786,7 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
    * 담긴 평면만 보고 완결을 판정하면 부분 활성화가 기준으로 올라간다. 고쳤지만,
    * **모델이 그 자리를 안 지나고 있었다.** 지나게 만든다.
    */
-  it('평면 하나만 담은 abort 가 끼어들어도 다섯 속성이 성립한다', async () => {
+  it('평면 하나만 담은 abort 가 끼어들어도 속성이 전부 성립한다', async () => {
     let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
 
     const run = await sweep(async (space) => {

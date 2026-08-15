@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 77 심볼 · sha256:cdff8cc082d7381e1a63e32ac17426cbf539de8694c6c37327d230a1815c9b80
+# 77 심볼 · sha256:3f99179406394e348f70f84cabf18c1fb3fdcdc4d672d97fa57324e007f83218
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -88,6 +88,7 @@ export type DriverStatus = {
     planes: Record<Plane, PlaneStatus>;
     published: PublishedState;
     lastEvidence: ActivationEvidence | undefined;
+    unfinished: PublishRecord | undefined;
 };
 ── DurableStore
 export interface DurableStore {

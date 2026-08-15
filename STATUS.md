@@ -1,4 +1,4 @@
-# 현재 상태 정리 (2026-08-15, 16차 검수 중)
+# 현재 상태 정리 (2026-08-15, 19차 검수 뒤)
 
 열두 번의 외부 검수를 지나온 시점의 정리다 (13차 진행 중). **무엇이 있고, 무엇이 증명됐고, 무엇이
 열려 있는지**를 한자리에 적는다. 설계는 `DESIGN.md`, 테스트 목록은 `TESTS.md`,
@@ -21,9 +21,9 @@ DESIGN.md    2,400+ 줄
 |---|---|---|---|
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
-| 모델 | `npm run test:model` | **10** | **교차를 생성해서** 속성 P0~P6 을 때린다 |
+| 모델 | `npm run test:model` | **10** | **교차를 생성해서** 속성 P0~P7 을 때린다 |
 | 단위 | `npm test` | **217** | 렌더러·검증기·라우트·DP 상태기계 |
-| conformance | `npm run test:conformance` | **296** | **검수가 재현한 반례** (5~14차) |
+| conformance | `npm run test:conformance` | **307** | **검수가 재현한 반례** (5~14차) |
 | 골든 | `npm run test:golden` | **10** | `nginx -t` + 런타임 프로브 |
 | e2e | `npm run test:e2e` | **14** | 실제 nginx (그중 6건은 컨테이너 안 에이전트) |
 | 엔진 사실 | `npm run test:engine` | **61** | 설계가 전제한 nginx 동작 |
@@ -501,7 +501,7 @@ B. API · DB 스키마  No-Go — 만들지 않았다
 동결 카운터  0 회차 / 필요: 미정 (최소 3 회차로 본다)
 표면         77 심볼 · SURFACE.txt 가 기준 · verify.sh 가 매번 대조
              15차에 lease 강제(`Checked`)로 **일부러** 움직였다 — 그때 0 으로 리셋됐다.
-             16·17차 수정은 전부 내부라 그 뒤로는 안 움직였다.
+             16·17차 수정은 전부 내부였고, 18차에 `unfinished` 변종을 가르며 다시 움직였다.
 ```
 
 카운터가 0 으로 리셋되는 조건은 하나다 — `node scripts/surface.mjs --write`. 즉

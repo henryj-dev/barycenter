@@ -232,13 +232,13 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 > 도커가 필요한 묶음은 도커가 없으면 **건너뛰지 않고 실패한다.** 조용히 건너뛰면 통과 신호를
 > 위조하게 된다. 굳이 빼려면 `--quick` 을 명시한다.
 
-### 현재 상태 — 스위트 578개 통과, 게이트는 별개
+### 현재 상태 — 숫자는 `./scripts/verify.sh` 가 답한다, 게이트는 별개
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
 | 단위 | `npm test` | **217 PASS** |
-| 표면 (계약 고정) | `node scripts/surface.mjs --check` | **76 심볼 고정** — 동결 카운터 1 회차 |
-| conformance | `npm run test:conformance` | **234 PASS** — 5~13차 반례 · 크래시 지점 매핑 · 세대 materializer · **DESIGN↔ABI 대조**. 단위와 합쳐 451 건이 전부 **불변식 테스트이기도 하다** |
+| 표면 (계약 고정) | `node scripts/surface.mjs --check` | **77 심볼 고정** — 카운터는 `SURFACE.txt` 가 답한다 |
+| conformance | `npm run test:conformance` | **307 PASS** — 5~13차 반례 · 크래시 지점 매핑 · 세대 materializer · **DESIGN↔ABI 대조**. 단위와 합쳐 451 건이 전부 **불변식 테스트이기도 하다** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | **e2e (실제 nginx)** | `npm run test:e2e` | **14 PASS** — 저널이 실제 nginx 를 수렴시킨다 (http·stream 두 평면). 그중 6건은 **DP 컨테이너 안에서** `FsEffects` 까지 실물로 돈다 |
 
