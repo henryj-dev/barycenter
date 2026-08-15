@@ -292,3 +292,78 @@ describe('신원 비교는 한 자리만 같아도 같다고 하지 않는다', 
     ).rejects.toMatchObject({ kind: 'operation_in_flight' });
   });
 });
+
+describe('실패로 닫을 때도 실행권을 놓는다', () => {
+  /**
+   * ```
+   * apply.ts  await this.agent.finishOperation(j.op);  →  void 0;   살아남았다
+   * ```
+   *
+   * `failAll` 이 실행권을 안 놓아도 **501 개가 전부 초록이었다.** 6차 반례 ④ 와 16차
+   * 반례 ② 가 정확히 이 부류였다 — 실행권이 남으면 그 뒤 모든 오퍼레이션이
+   * `operation_in_flight` 로 막힌다. 두 번 물렸는데 세 번째 자리는 비어 있었다.
+   *
+   * ⚠️ **그 뮤턴트는 동치였다.** 아래 테스트를 넣고도 살아남는다 — `failAll` 이 안 놓아도
+   * 곧바로 루프 머리의 종단 처리가 놓기 때문이다. 반납이 **두 자리에 있다.**
+   *
+   * 그래서 확인 방식을 바꿨다: **둘 다** 없애면 빨개진다(3 건). 이 테스트가 지키는 것은
+   * "어느 줄이 놓는가" 가 아니라 **"실패로 닫힌 뒤에는 실행권도 예약도 남지 않는다"**
+   * 는 계약이다. 그게 두 번 물렸던 것이고, 한 자리가 사라져도 다른 자리가 지킨다는 것도
+   * 이제 안다.
+   */
+  it('두 평면이 다 막혀 실패로 닫혀도 실행권과 예약이 남지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('A', '0', '1');
+    const fx = new FakeEffects();
+    fx.publishedRecord = {
+      generation: 'gen-A', leaderToken: '10', operationId: 'A',
+      transitionId: 'A', generationDigest: 'sha256:gen-A',
+    };
+    fx.acceptingGeneration = 'gen-A';
+
+    await agent.reserveAll(op);
+    await agent.writeJournal({
+      op, phase: 'published', reloadAttempts: 0, seq: 1,
+      progress: { http: 'reserved', stream: 'reserved' },
+    });
+    // 남이 두 평면을 다 걷어찼다 — 이 전환은 더 갈 곳이 없다.
+    await agent.abort(tupleFor(op, 'http'));
+    await agent.abort(tupleFor(op, 'stream'));
+
+    const FAST_APPLY = { attempts: 1, intervalMs: 0, sleep: async () => {}, effectTimeoutMs: 500 };
+    const r = await new ApplyRunner(new DpAgent(store), fx, FAST_APPLY).recover();
+
+    expect(r.phase, '종단으로 닫지 않았다').toBe('failed');
+    expect(
+      new DpAgent(store).activeOperation(),
+      '실행권이 남았다 — 그 뒤 모든 오퍼레이션이 막힌다',
+    ).toBeUndefined();
+    for (const plane of ['http', 'stream'] as const) {
+      expect(
+        new DpAgent(store).reservationOwner(plane, '1'),
+        `${plane} 예약이 남았다 — 좌표가 잠긴다`,
+      ).toBeUndefined();
+    }
+  });
+
+  it('그래서 실패 뒤에도 다음 오퍼레이션이 들어간다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('A', '0', '1');
+    await agent.reserveAll(op);
+    await agent.writeJournal({
+      op, phase: 'published', reloadAttempts: 0, seq: 1,
+      progress: { http: 'reserved', stream: 'reserved' },
+    });
+    await agent.abort(tupleFor(op, 'http'));
+    await agent.abort(tupleFor(op, 'stream'));
+
+    const FAST_APPLY = { attempts: 1, intervalMs: 0, sleep: async () => {}, effectTimeoutMs: 500 };
+    await new ApplyRunner(new DpAgent(store), new FakeEffects(), FAST_APPLY).recover();
+
+    const next = await new ApplyRunner(new DpAgent(store), new FakeEffects(), FAST_APPLY)
+      .run(OP('B', '0', '1'));
+    expect(next.phase, '실패한 전환이 다음 것을 막고 있다').toBe('activated');
+  });
+});
