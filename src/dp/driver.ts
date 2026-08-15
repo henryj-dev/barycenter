@@ -104,6 +104,17 @@ export interface DataplaneDriver {
   status(): Promise<DriverStatus>;
 }
 
+/** 부작용 하나에 주는 예산. */
+const RECONCILE_EFFECT_MS = 10_000;
+
+/**
+ * `reconcileConfig` 한 번의 마감.
+ *
+ * apply 와 같은 큐에서 돌므로 여기 머무는 시간이 곧 apply 가 막히는 시간이다. 라운드
+ * 3 회 × 부작용 여러 개면 부작용별 예산만으로는 2 분을 넘길 수 있다 (14차 검수).
+ */
+const RECONCILE_TOTAL_MS = 30_000;
+
 export type ReconcileResult =
   /** 되돌릴 기준이 없다 — 게시한 적도 활성화한 적도 없다. */
   | { kind: 'no_baseline' }
@@ -188,9 +199,20 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   }
 
   async reconcileConfig(): Promise<ReconcileResult> {
-    // **apply 와 같은 큐에서 돈다** (11차 반례 ②).
-    return this.agent.exclusiveApply(() => this.#reconcileOnce());
+    // **apply 와 같은 큐에서 돈다** (11차 반례 ②). 그래서 여기 오래 머무는 것은 그대로
+    // apply 를 막는 것이다 — 마감을 호출 시작에서 한 번 정한다 (14차 검수).
+    return this.agent.exclusiveApply(async () => {
+      this.#deadline = Date.now() + RECONCILE_TOTAL_MS;
+      try {
+        return await this.#reconcileOnce();
+      } finally {
+        this.#deadline = undefined;
+      }
+    });
   }
+
+  /** 이번 `reconcileConfig` 호출의 마감. 돌고 있지 않으면 `undefined`. */
+  #deadline: number | undefined;
 
   /**
    * 한 바퀴 돈다. **기준이 바뀌면 처음부터 다시 본다** (12차 반례 ③) — 전에는 바뀐
@@ -209,7 +231,13 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       const activation = await this.#budget(() => this.effects.observeActivation());
       const pointerOk = seen.kind === 'owned' && sameRecord(seen.record, expected);
       const activeOk = provesActivation(activation, expected.generation);
-      if (pointerOk && activeOk) return { kind: 'converged', record: expected };
+      // **읽고-확인한다** (14차 검수). `expected` 를 읽고 두 번 await 한 뒤라 그 사이
+      // 기준이 옮겨 갔을 수 있다. 그대로 `converged(expected)` 를 돌려주면 호출자에게
+      // "손 떼도 된다" 고 **옛 기준으로** 말하는 것이 된다 — 틀리면 비싼 답이다.
+      if (pointerOk && activeOk) {
+        if (this.#stillBaseline(expected)) return { kind: 'converged', record: expected };
+        continue; // 기준이 옮겨 갔다 — 새 기준으로 다시 본다
+      }
 
       // **관측은 누구나 한다. 고치는 것은 리더만 한다** (13차 반례 ① · 14차 보정).
       //
@@ -262,7 +290,8 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     const activation = await this.#budget(() => this.effects.observeActivation());
     const ok = found.kind === 'owned'
       && sameRecord(found.record, now)
-      && provesActivation(activation, now.generation);
+      && provesActivation(activation, now.generation)
+      && this.#stillBaseline(now); // 여기서도 읽고-확인한다
     return ok ? { kind: 'converged', record: now } : { kind: 'diverged', expected: now, found };
   }
 
@@ -276,8 +305,19 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   }
 
   /** 수렴에도 예산을 씌운다 (12차 반례 ③) — 안 그러면 같은 큐가 다시 교착한다. */
+  /**
+   * 부작용 하나의 예산. **호출 전체의 마감보다 길 수 없다** (14차 검수).
+   *
+   * 전에는 부작용마다 10 초가 새로 시작됐다. 기준이 매 라운드 바뀌고 각 관측이 10 초
+   * 직전에 끝나는 스케줄이면, 한 번의 `reconcileConfig` 가 **2 분 넘게 인스턴스 큐를
+   * 잡는다** — 그동안 apply 도 못 들어온다. 마감은 호출 시작에서 한 번 정해진다.
+   */
   #budget<T>(run: () => Promise<T>): Promise<T> {
-    const ms = 10_000;
+    const left = this.#deadline === undefined ? RECONCILE_EFFECT_MS : this.#deadline - Date.now();
+    if (left <= 0) {
+      return Promise.reject(new DpRejection('stale_state', `수렴 마감 ${RECONCILE_TOTAL_MS}ms 초과`));
+    }
+    const ms = Math.min(RECONCILE_EFFECT_MS, left);
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => reject(new DpRejection('stale_state', `수렴 예산 ${ms}ms 초과`)), ms);
       run().then(

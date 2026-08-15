@@ -146,6 +146,47 @@ describe('④ 라운드를 소진하면 수렴했다고 말하지 않는다', ()
   });
 });
 
+describe('관측하는 사이 기준이 바뀌면 옛 기준으로 수렴을 선언하지 않는다', () => {
+  /**
+   * 14차 검수. 조기 `converged` 경로에는 재검사가 없었다 — `expected` 를 읽고 두 번
+   * await 한 뒤, 그 사이 기준이 바뀌었는지 보지 않고 `converged(expected)` 를 돌려줬다.
+   *
+   * 호출자에게 "손 떼도 된다" 고 말하는 답이라 틀리면 비싸다. 읽고-확인하는 seqlock 이다.
+   */
+  it('조기 converged 앞에서 기준을 다시 본다', async () => {
+    const store = new MemoryStore();
+    const seed = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: seed }).applyConfig(OP('A', 'gen-A', '10'));
+
+    let moved = false;
+    const shifting = new (class extends FakeEffects {
+      override async observeActivation() {
+        // 바깥은 gen-A 그대로인데, 관측하는 사이 기준이 gen-B 로 옮겨 갔다.
+        if (!moved) {
+          moved = true;
+          const stored = store.load()!;
+          const payload = stored.payload as { lastActivated?: unknown };
+          payload.lastActivated = {
+            generation: 'gen-B', leaderToken: '10', operationId: 'B',
+            transitionId: 'B', generationDigest: 'sha256:gen-B',
+          };
+          await store.save({ version: stored.version + 1, payload });
+        }
+        return super.observeActivation();
+      }
+    })();
+    shifting.publishedRecord = seed.publishedRecord;
+    shifting.acceptingGeneration = 'gen-A';
+
+    const r = await LocalDataplaneDriver.create({ store, effects: shifting }).reconcileConfig();
+
+    expect(moved, '기준을 흔들지 못했다 — 반례를 재현하지 못한 것이다').toBe(true);
+    if (r.kind === 'converged') {
+      expect(r.record.generation, '옛 기준으로 수렴했다고 답했다').not.toBe('gen-A');
+    }
+  });
+});
+
 // ── 내가 만든 구멍 — 13차 ② 수정이 열었다 ────────────────────────────────
 
 describe('종단 기록 뒤 죽어도 수렴 기준이 사라지지 않는다', () => {
@@ -218,5 +259,57 @@ describe('종단 기록 뒤 죽어도 수렴 기준이 사라지지 않는다', 
       new DpAgent(store).lastActivated(),
       '한 평면만 넘어간 것을 되돌릴 기준으로 삼았다',
     ).toBeUndefined();
+  });
+});
+
+describe('수렴은 마감이 있다 — apply 를 무한정 막지 않는다', () => {
+  /**
+   * 14차 검수. 부작용마다 10 초가 **새로** 시작됐다. 기준이 매 라운드 바뀌고 각 관측이
+   * 10 초 직전에 끝나는 스케줄이면 한 번의 `reconcileConfig` 가 2 분 넘게 인스턴스 큐를
+   * 잡는다 — 그동안 apply 도 못 들어온다. `reconcileConfig` 와 `applyConfig` 가 같은
+   * 큐에서 도는 것이 11차의 결론이었으므로, 여기 머무는 시간이 곧 막히는 시간이다.
+   *
+   * 시계를 밀어서 본다. 30 초를 실제로 기다리면 그것대로 나쁜 테스트가 된다.
+   */
+  it('마감을 넘기면 부작용을 더 부르지 않고 끝낸다', async () => {
+    const store = new MemoryStore();
+    const seed = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: seed }).applyConfig(OP('A', 'gen-A', '10'));
+
+    const real = Date.now;
+    let offset = 0;
+    Date.now = () => real.call(Date) + offset;
+    try {
+      let observes = 0;
+      const slow = new (class extends FakeEffects {
+        override async observePublished(): Promise<PublishedState> {
+          observes += 1;
+          offset += 11_000; // 부작용 하나가 예산 직전까지 걸렸다고 친다
+          // 기준도 매번 바뀐다 — 그래야 라운드를 다시 돈다. 이 둘이 겹치는 스케줄이
+          // 바로 검수가 지목한 것이다("각 관측이 10 초 직전에 끝나고 매번 baseline 이 바뀐다").
+          const stored = store.load()!;
+          const payload = stored.payload as { lastActivated?: unknown };
+          payload.lastActivated = {
+            generation: `gen-${observes}`, leaderToken: '10',
+            operationId: `op-${observes}`, transitionId: `t-${observes}`,
+            generationDigest: `sha256:gen-${observes}`,
+          };
+          await store.save({ version: stored.version + 1, payload });
+          return { kind: 'none' };
+        }
+      })();
+
+      const r = await LocalDataplaneDriver.create({ store, effects: slow })
+        .reconcileConfig()
+        .catch((e: unknown) => ({ kind: 'threw' as const, why: (e as { kind?: string }).kind }));
+
+      expect(observes, '관측을 아예 안 했다 — 반례를 재현하지 못한 것이다').toBeGreaterThan(0);
+      // **마감이 실제로 걸렸는지**를 본다. 처음엔 흘러간 시간만 봤는데, 마감을 없애도
+      // 그 수치가 그대로라 뮤테이션이 통과했다 — 제목이 확인보다 넓었다.
+      expect(r, '마감을 넘겼는데 부작용을 계속 불렀다').toEqual({ kind: 'threw', why: 'stale_state' });
+      expect(offset, '마감 뒤에도 부작용을 더 불렀다').toBeLessThanOrEqual(33_000);
+    } finally {
+      Date.now = real;
+    }
   });
 });
