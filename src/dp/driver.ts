@@ -245,8 +245,12 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       // 기준이 옮겨 갔을 수 있다. 그대로 `converged(expected)` 를 돌려주면 호출자에게
       // "손 떼도 된다" 고 **옛 기준으로** 말하는 것이 된다 — 틀리면 비싼 답이다.
       if (pointerOk && activeOk) {
-        if (this.#stillBaseline(expected)) return { kind: 'converged', record: expected };
-        continue; // 기준이 옮겨 갔다 — 새 기준으로 다시 본다
+        // **후보도 여기서 다시 본다** (18차 반례 #1). 라운드 머리에서 한 번 보고 끝냈더니,
+        // 관측 두 번을 기다리는 사이 생긴 후보를 못 봤다 — 좌표는 이미 지나갔는데
+        // 옛 기준으로 `converged` 를 답했다. 14차에 만든 "읽고-확인" 집합에 17차가 새로
+        // 만든 "믿을 수 없는 상태" 를 안 넣은 것이다.
+        if (this.#settled(expected)) return { kind: 'converged', record: expected };
+        continue; // 기준이 옮겨 갔거나 끝나지 않은 활성화가 생겼다 — 다시 본다
       }
 
       // **관측은 누구나 한다. 고치는 것은 리더만 한다** (13차 반례 ① · 14차 보정).
@@ -276,7 +280,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       // **여기서도 읽고-확인한다** (16차 검수). 조기 `converged` 와 소진 경로에는 넣었는데
       // 이 자리만 빠져 있었다. 되돌리고 관측하는 사이 기준이 옮겨 갔으면, 우리가 되돌린
       // 것은 이미 옛 기준이다 — `repaired` 는 "제자리로 돌려놨다" 는 뜻이라 거짓이 된다.
-      return ok && this.#stillBaseline(expected)
+      return ok && this.#settled(expected)
         ? { kind: 'repaired', expected, found: seen }
         : { kind: 'diverged', expected, found: afterPublish };
     }
@@ -293,7 +297,7 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     const ok = found.kind === 'owned'
       && sameRecord(found.record, now)
       && provesActivation(activation, now.generation)
-      && this.#stillBaseline(now); // 여기서도 읽고-확인한다
+      && this.#settled(now); // 여기서도 읽고-확인한다 (기준 + 끝나지 않은 활성화)
     return ok ? { kind: 'converged', record: now } : { kind: 'diverged', expected: now, found };
   }
 
@@ -314,6 +318,20 @@ export class LocalDataplaneDriver implements DataplaneDriver {
    * 직전에 끝나는 스케줄이면, 한 번의 `reconcileConfig` 가 **2 분 넘게 인스턴스 큐를
    * 잡는다** — 그동안 apply 도 못 들어온다. 마감은 호출 시작에서 한 번 정해진다.
    */
+  /**
+   * **지금 이 기준을 정답이라고 말해도 되는가** (18차 반례 #1).
+   *
+   * 둘을 함께 본다.
+   *   · 기준이 그 사이 옮겨 가지 않았다 (14차)
+   *   · **끝나지 않은 활성화가 없다** (17차 A · 18차에 판정 직전까지 넓혔다)
+   *
+   * 후보가 있으면 좌표는 이미 후보 쪽으로 갔고 기준은 그 전 것이다. 그 상태에서
+   * `converged`·`repaired` 를 답하면 호출자에게 **옛 세대로 "손 떼도 된다"** 고 말한다.
+   */
+  #settled(expected: PublishRecord): boolean {
+    return this.#stillBaseline(expected) && this.agent.pendingActivation() === undefined;
+  }
+
   /**
    * 되돌릴 수 없는 연산 직전에 확인하는 표 (15차 검수).
    *

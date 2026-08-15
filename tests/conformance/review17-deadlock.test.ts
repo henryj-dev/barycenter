@@ -112,12 +112,10 @@ describe('뜻 없는 후보가 상태를 잠그지 않는다', () => {
     const r = await LocalDataplaneDriver.create({ store, effects }).reconcileConfig();
 
     expect(new DpAgent(store).coordinate('http').activationEpoch, '전제가 성립하지 않는다').toBe('2');
-    if (r.kind === 'converged') {
-      expect(
-        r.record.generation,
-        '좌표는 gen-B 로 갔는데 gen-A 를 수렴이라고 답했다',
-      ).not.toBe('gen-A');
-    }
+    // **조건부로 적으면 안 된다** (18차 ④). 처음엔 `if (r.kind === 'converged')` 안에서만
+    // 검사해서, 코드가 `diverged` 나 `no_baseline` 같은 다른 오답을 내도 초록이었다.
+    // 무엇이 나와야 하는지를 직접 못박는다.
+    expect(r.kind, '끝나지 않은 활성화를 드러내지 않았다').toBe('dirty');
   });
 
   it('빠져나온 뒤 기준은 실제로 활성화된 세대다', async () => {
@@ -246,5 +244,53 @@ describe('고아 저널을 덮을 때는 닫고 덮는다 (반례 D)', () => {
       }),
       '진행 중인 전환을 밀고 들어갔다',
     ).rejects.toMatchObject({ kind: 'operation_in_flight' });
+  });
+});
+
+describe('관측 창 안에서 생긴 후보도 수렴이 본다 (18차 반례 #1)', () => {
+  /**
+   * 17차 A 를 고치면서 후보 검사를 **라운드 머리에서 한 번**만 했다. 그 뒤 관측 두 번을
+   * 지나 판정하는데, 판정 직전의 읽고-확인에는 `#stillBaseline` 만 있고 후보가 없었다.
+   *
+   * 14차에 "읽고-확인" 집합을 만들어 놓고, 17차에 새로 만든 "믿을 수 없는 상태"(후보)를
+   * **그 집합에 넣지 않은 것**이다. 열 회차 연속으로 직전 수정이 구멍을 남겼다.
+   *
+   * 재현: 수렴이 `observeActivation` 응답을 기다리는 사이 다른 인스턴스가 gen-B 를 전
+   * 평면 커밋한다(finish 전). 관측은 유효하지만 배달이 늦었을 뿐이다.
+   *
+   * ```
+   * 기대: dirty — 끝나지 않은 활성화가 있으면 기준을 믿을 수 없다
+   * 실제: converged(gen-A)   ← 좌표는 epoch 2, 후보는 gen-B
+   * ```
+   */
+  it('관측 중에 후보가 생기면 converged 라고 답하지 않는다', async () => {
+    const store = new MemoryStore();
+    const seed = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: seed }).applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    let slipped = false;
+    const late = new (class extends FakeEffects {
+      override async observeActivation() {
+        if (!slipped) {
+          slipped = true;
+          const other = new DpAgent(store);
+          const b = OP('B', 'gen-B', '1', '2');
+          await other.reserveAll(b, { op: b, phase: 'preflight', reloadAttempts: 0, progress: {} });
+          for (const plane of ['http', 'stream'] as const) {
+            await other.stage(tupleFor(b, plane), null);
+            await other.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-B' });
+          }
+        }
+        return super.observeActivation();
+      }
+    })();
+    late.publishedRecord = seed.publishedRecord;
+    late.acceptingGeneration = 'gen-A';
+
+    const r = await LocalDataplaneDriver.create({ store, effects: late }).reconcileConfig();
+
+    expect(slipped, '창을 만들지 못했다 — 반례를 재현하지 못한 것이다').toBe(true);
+    expect(new DpAgent(store).coordinate('http').activationEpoch, '전제가 성립하지 않는다').toBe('2');
+    expect(r.kind, '좌표가 지나갔는데 옛 기준으로 수렴했다고 답했다').not.toBe('converged');
   });
 });

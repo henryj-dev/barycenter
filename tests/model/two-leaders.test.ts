@@ -156,6 +156,16 @@ class World {
    * 그런데 그 사실은 **상태에 안 남는다.** 바깥에서만 보인다. 그래서 여기 적는다.
    */
   readonly effects: { what: string; token: string; maxAtTime: string }[] = [];
+
+  /**
+   * **수렴이 무엇이라고 답했는가** (P7 · 18차 검수).
+   *
+   * 여기가 통째로 비어 있었다. P0~P6 은 store 역사와 부작용만 본다 — `reconcileConfig`
+   * 의 **반환값**을 보는 속성이 하나도 없었다. 그래서 수렴이 거짓으로 `converged` 를
+   * 답한 반례 넷(13차 ①④ · 16차 · 17차 A · 18차 #1)이 **전부 사람 손에 잡혔고 모델이
+   * 잡은 것은 0** 이었다. "무대가 넓거나 속성이 없거나" 중 후자다.
+   */
+  readonly answers: { kind: string; generation?: string; pending?: string; baseline?: string }[] = [];
 }
 
 class ModelEffects implements Effects {
@@ -233,6 +243,28 @@ const swallow = (problems: Error[]) => async (p: Promise<unknown>): Promise<void
     problems.push(e as Error);
   }
 };
+
+/**
+ * 수렴을 부르고 **답과 그 순간의 상태를 함께** 남긴다.
+ *
+ * 답이 나온 뒤에 상태를 읽으면 늦다 — 그 사이 남이 또 바꾼다. 부른 직후 같은 tick 에서 읽는다.
+ */
+async function reconcileWitnessed(
+  driver: { reconcileConfig(): Promise<{ kind: string; record?: { generation: string } }> },
+  store: ModelStore,
+  world: World,
+): Promise<void> {
+  const r = await driver.reconcileConfig();
+  const payload = store.load()?.payload as Seen | undefined;
+  world.answers.push({
+    kind: r.kind,
+    ...(r.record !== undefined ? { generation: r.record.generation } : {}),
+    ...(payload?.pendingActivation !== undefined
+      ? { pending: payload.pendingActivation.generation } : {}),
+    ...(payload?.lastActivated !== undefined
+      ? { baseline: payload.lastActivated.generation } : {}),
+  });
+}
 
 // ── 속성 ────────────────────────────────────────────────────────────────
 
@@ -351,6 +383,26 @@ function checkProperties(
       bad.push({
         property: 'P6 낡은 리더는 부작용을 내지 않는다',
         detail: `토큰 ${e.token} 이 ${e.what} 을 냈다 (그 순간 최신은 ${e.maxAtTime})`,
+      });
+    }
+  }
+
+  // ── P7 — 수렴이 "다 됐다" 고 말할 때는 정말 다 돼 있어야 한다 ────────
+  //
+  // `converged(r)` 는 호출자에게 **손 떼도 된다**는 뜻이다. 틀리면 제일 비싼 답이다.
+  // 그 순간 (1) 끝나지 않은 활성화가 없어야 하고 (2) 답한 것이 실제 기준이어야 한다.
+  for (const a of world.answers) {
+    if (a.kind !== 'converged') continue;
+    if (a.pending !== undefined) {
+      bad.push({
+        property: 'P7 수렴은 끝나지 않은 활성화를 덮지 않는다',
+        detail: `converged(${a.generation}) 인데 후보 ${a.pending} 가 남아 있다`,
+      });
+    }
+    if (a.generation !== undefined && a.baseline !== undefined && a.generation !== a.baseline) {
+      bad.push({
+        property: 'P7 수렴이 답한 것이 기준이다',
+        detail: `converged(${a.generation}) 인데 기준은 ${a.baseline} 다`,
       });
     }
   }
@@ -503,14 +555,15 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
       if (failure !== undefined) return;
       const r = await once(
         space,
-        ({ store, effects, swallow }) => {
+        ({ store, world, effects, swallow }) => {
           // 이미 gen-A 가 서 있다. 이제 gen-B 로 옮기는 동안 수렴이 끼어든다.
           const b = OP('B', 'gen-B', '10', '1', '2');
           return [
             () => swallow(new ApplyRunner(new DpAgent(store.for('apply')), effects('apply'), FAST).run(b)),
-            () => swallow(
-              LocalDataplaneDriver.create({ store: store.for('rec'), effects: effects('rec') }).reconcileConfig(),
-            ),
+            () => swallow(reconcileWitnessed(
+              LocalDataplaneDriver.create({ store: store.for('rec'), effects: effects('rec') }),
+              store, world,
+            )),
           ];
         },
         async ({ store, effects }) => {
