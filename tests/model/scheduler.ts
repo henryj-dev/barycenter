@@ -33,15 +33,15 @@ export class ScheduleSpace {
   constructor(
     private readonly prefix: readonly number[] = [],
     /** 접두사를 넘어선 지점에서 무엇을 고를지. 없으면 0 (DFS). */
-    private readonly beyond?: (options: number) => number,
+    private readonly beyond?: (options: number, ctx: PickContext) => number,
   ) {}
 
   /** 선택지가 `options` 개인 지점. 어느 것을 고를지 답한다. */
-  pick(options: number): number {
+  pick(options: number, ctx: PickContext = { labels: [], last: undefined }): number {
     const depth = this.path.length;
     const wanted = depth < this.prefix.length
       ? (this.prefix[depth] ?? 0)
-      : (this.beyond?.(options) ?? 0);
+      : (this.beyond?.(options, ctx) ?? 0);
     // 접두사가 더 넓은 지점에서 만들어졌을 수 있다 — 범위를 벗어나면 0 으로 접는다.
     const chosen = wanted < options ? wanted : 0;
     this.path.push({ chosen, options });
@@ -65,6 +65,9 @@ export class ScheduleSpace {
   }
 }
 
+/** 고를 때 보는 것. 어떤 태스크들이 서 있고, 직전에 무엇이 돌았는가. */
+export type PickContext = { labels: readonly string[]; last: string | undefined };
+
 type Parked = { label: string; resume: () => void };
 
 /**
@@ -82,6 +85,7 @@ export class Scheduler {
   private running = 0;
   private onQuiet: (() => void) | undefined;
   readonly trace: string[] = [];
+  private lastActor: string | undefined;
 
   constructor(private readonly space: ScheduleSpace) {}
 
@@ -151,8 +155,12 @@ export class Scheduler {
     while (this.parked.length > 0) {
       if (steps > 4096) throw new Error('스케줄이 끝나지 않는다 — 모델에 사이클이 있다');
       steps += 1;
-      const at = this.space.pick(this.parked.length);
+      const at = this.space.pick(this.parked.length, {
+        labels: this.parked.map((x) => x.label),
+        last: this.lastActor,
+      });
       const [chosen] = this.parked.splice(at, 1);
+      this.lastActor = actorOf(chosen!.label);
       this.trace.push(chosen!.label);
       chosen!.resume();
       await this.quiescent();
@@ -207,6 +215,49 @@ export async function probe(
   };
   for (let i = 0; i < runs; i += 1) {
     await body(new ScheduleSpace([], (options) => Math.floor(rand() * options)));
+  }
+  return { schedules: runs };
+}
+
+/** 라벨의 앞부분이 행위자다 — `A:publish:before` 에서 `A`. */
+export const actorOf = (label: string): string => label.slice(0, label.indexOf(':'));
+
+/**
+ * **preemption bounding** — 문맥 전환 횟수를 묶어 공간을 좁힌다.
+ *
+ * 무작위 표본에는 한계가 있다. 시나리오가 커지면 500 개를 뽑아도 특정 교차가 안 들어온다 —
+ * 15차 수정 둘을 겨냥해 시나리오를 넣었는데도 뮤테이션이 안 잡히는 것을 확인했다.
+ *
+ * 동시성 버그는 대개 **문맥 전환 두세 번**이면 드러난다(CHESS 의 관찰). 그래서 "돌던
+ * 태스크를 계속 돌리되, 전환은 K 번까지만" 으로 좁힌다. 같은 예산으로 훨씬 촘촘해진다.
+ *
+ * 전환 예산이 남아 있으면 무작위로 고르고, 다 쓰면 **직전 행위자를 계속** 돌린다.
+ */
+export async function probeBounded(
+  seed: number,
+  runs: number,
+  maxPreemptions: number,
+  body: (space: ScheduleSpace) => Promise<void>,
+): Promise<{ schedules: number }> {
+  let state = seed >>> 0 || 1;
+  const rand = (): number => {
+    state ^= state << 13; state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5; state >>>= 0;
+    return state / 0x1_0000_0000;
+  };
+  for (let i = 0; i < runs; i += 1) {
+    let budget = maxPreemptions;
+    await body(new ScheduleSpace([], (options, ctx) => {
+      const sameIdx = ctx.last === undefined
+        ? -1
+        : ctx.labels.findIndex((l) => actorOf(l) === ctx.last);
+      if (budget <= 0 && sameIdx >= 0) return sameIdx;
+      const choice = Math.floor(rand() * options);
+      const picked = ctx.labels[choice];
+      if (sameIdx >= 0 && picked !== undefined && actorOf(picked) !== ctx.last) budget -= 1;
+      return choice;
+    }));
   }
   return { schedules: runs };
 }

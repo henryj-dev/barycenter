@@ -48,7 +48,7 @@ import type {
   PublishedState,
   PublishRecord,
 } from '../../src/dp/operation.js';
-import { Scheduler, ScheduleSpace, explore, probe } from './scheduler.js';
+import { Scheduler, ScheduleSpace, explore, probe, probeBounded } from './scheduler.js';
 
 // ── 모델의 세계 ─────────────────────────────────────────────────────────
 
@@ -304,8 +304,14 @@ async function sweep(
   body: (space: ScheduleSpace) => Promise<void>,
 ): Promise<{ schedules: number; exhausted: boolean }> {
   const dfs = await explore(150, body);
-  const random = await probe(0x5EED, 350, body);
-  return { schedules: dfs.schedules + random.schedules, exhausted: dfs.exhausted };
+  const random = await probe(0x5EED, 250, body);
+  // 문맥 전환을 둘·셋으로 묶어 촘촘히 본다. 같은 예산으로 훨씬 깊이 들어간다.
+  const bounded2 = await probeBounded(0xB0, 250, 2, body);
+  const bounded3 = await probeBounded(0xB1, 250, 3, body);
+  return {
+    schedules: dfs.schedules + random.schedules + bounded2.schedules + bounded3.schedules,
+    exhausted: dfs.exhausted,
+  };
 }
 
 // ── 실행 ────────────────────────────────────────────────────────────────
