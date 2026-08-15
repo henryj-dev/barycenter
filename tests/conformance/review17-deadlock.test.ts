@@ -1533,3 +1533,101 @@ describe('세 번째 결과를 만들지 않았다 (31차 CE-31)', () => {
     ).toBe('gen-A');
   });
 });
+
+describe('폐위는 레거시 창의 것이 아니다 (32차 CE-32-A)', () => {
+  /**
+   * **여섯 회차 동안 쓴 프레이밍이 거짓이었다.**
+   *
+   * 27~31차 내내 이 창을 *"26차 이전 writer 가 남긴 상태"* 라고 불렀다. 그런데 폐위 절은
+   * `by === undefined` 를 **안 본다** — 서명이 온전한 26차 이후 세상에서도 혼합 저자 +
+   * 지연 finalize 면 같은 상태가 만들어지고, 폐위가 없으면 **세상 되감김**이다.
+   *
+   * 즉 31차는 서명 경로의 상(上)급 되감김을 **우연히** 함께 고쳤고, 그것을 겨눈 테스트는
+   * 0 개였다. 주석과 커밋이 이 절을 "레거시 창의 셋째 결과" 라고 서술하므로, 다음 회차가
+   * 절을 창에 맞춰 **좁히는 순간** 상급 되감김이 전 스위트 초록인 채 돌아온다.
+   *
+   * **이름을 잘못 붙이면 다음 사람이 그 이름을 믿고 좁힌다.** 그래서 이 테스트는 수정을
+   * 지키는 것이 아니라 **이름을 지킨다.**
+   */
+  it('서명이 온전해도 폐기된 후보 뒤에서 세상을 되감지 않는다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: fx })
+      .applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    const agent = new DpAgent(store);
+    const x = OP('X', 'gen-B', '1', '2');
+    const y: ApplyOperation = {
+      ...OP('Y', 'gen-B', '1', '2'), affectedPlanes: ['stream'], planes: x.planes,
+    };
+
+    await agent.reserveAll(x, { op: x, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.abort(tupleFor(x, 'stream'));
+    await agent.reserve(tupleFor(y, 'stream'));
+    await agent.stage(tupleFor(y, 'stream'), null);
+    await agent.commit(tupleFor(y, 'stream'), { acceptingGeneration: 'gen-B' });
+    await agent.finishOperation(y, ['stream']);
+    await agent.stage(tupleFor(x, 'http'), null);
+    await agent.commit(tupleFor(x, 'http'), { acceptingGeneration: 'gen-B' });
+    // **서명은 그대로 둔다** — 수술 없음. 이것이 26차 이후의 평범한 세상이다.
+
+    fx.publishedRecord = {
+      generation: 'gen-B', leaderToken: '10', operationId: 'X',
+      transitionId: 'X', generationDigest: 'sha256:gen-B',
+    };
+    fx.acceptingGeneration = 'gen-B';
+
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    await driver.abortConfig(x).catch(() => undefined);
+    const before = { publishes: fx.publishCalls, reloads: fx.reloadSignals };
+    await driver.reconcileConfig();
+
+    expect(fx.publishCalls, '수렴이 옛 기준으로 세상을 되감았다').toBe(before.publishes);
+    expect(fx.acceptingGeneration, '서빙 세대가 되감겼다').toBe('gen-B');
+  });
+});
+
+describe('원장 폴백의 판별 방향 (32차 CE-32-B)', () => {
+  /**
+   * 폴백의 **긍정 방향**(원장이 내 활성화를 증명하면 승격)은 CE-28 테스트가 지킨다.
+   * **판별 방향**(원장이 증명 못 하면 승격하지 않는다)은 검출력 0 이었다 — 조건을
+   * `=== 'activated'` 에서 `true` 로 넓혀도 574 전부 초록이었다(32차 실측).
+   *
+   * 막는 해악은 이렇다: 레거시 상태에서 남이 **다른 세대**로 한 평면을 채웠는데, 폴백이
+   * 판별을 안 하면 내 세대가 **전체 활성화 기준**으로 승격된다. 기준이 오염되면 수렴이
+   * 그것을 정답으로 밀므로 CE-27 급이다.
+   *
+   * I6(b)·I7 처럼 **살아 있는데 아무도 안 지나가는 판정 자리**를 하나 더 두지 않는다.
+   */
+  it('원장이 증명 못 하는 평면은 서명이 없어도 내 것이 아니다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const x = OP('X', 'gen-B', '0', '1');
+    // 남이 **다른 세대**로 stream 을 같은 좌표에 채운다.
+    const y: ApplyOperation = {
+      ...OP('Y', 'gen-C', '0', '1'), affectedPlanes: ['stream'],
+    };
+
+    await agent.reserveAll(x, { op: x, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.abort(tupleFor(x, 'stream'));
+    await agent.reserve(tupleFor(y, 'stream'));
+    await agent.stage(tupleFor(y, 'stream'), null);
+    await agent.commit(tupleFor(y, 'stream'), { acceptingGeneration: 'gen-C' });
+    await agent.finishOperation(y, ['stream']);
+    await agent.stage(tupleFor(x, 'http'), null);
+    await agent.commit(tupleFor(x, 'http'), { acceptingGeneration: 'gen-B' });
+
+    // 26차 이전 writer 를 흉내낸다 — 서명이 없다.
+    const raw = store.load()!;
+    const payload = raw.payload as { planes: Record<string, { by?: unknown }> };
+    for (const plane of Object.keys(payload.planes)) delete payload.planes[plane]!.by;
+    await store.save({ ...raw, version: raw.version + 1, payload });
+
+    await new DpAgent(store).finishOperation(x, ['http', 'stream']);
+
+    expect(
+      new DpAgent(store).lastActivated()?.generation,
+      'stream 은 gen-C 를 서빙하는데 gen-B 를 전체 활성화 기준으로 올렸다',
+    ).not.toBe('gen-B');
+  });
+});
