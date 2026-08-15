@@ -19,13 +19,18 @@
  * 스케줄 공간을 다 훑지 못한다. DFS 150 + 무작위 350 이고, 큰 시나리오는 매번
  * "상한에서 끊었다" 가 찍힌다.
  *
- * **그래서 시나리오를 추가한다고 그 축이 덮이는 것이 아니다.** 15차 수정 둘
- * (`pendingEpochs` · reconcile lease 의 토큰 검사)을 겨냥해 시나리오를 넣었는데,
- * 뮤테이션을 돌려 보니 **여전히 안 잡힌다** — 그 교차가 500 개 표본에 안 들어온다.
- * 둘 다 conformance 가 잡는다(`review14-finalizer` · `review13-reconcile`).
+ * **시나리오가 그 자리를 지나게 만드는 것과 때리는 것은 다르다.** 15차 수정 둘을 겨냥해
+ * 시나리오를 넣었는데 뮤테이션이 안 잡혔다 — 지나기만 한 것이다. 원인이 둘로 갈렸다.
  *
- * 시나리오가 그 자리를 **지나게** 만드는 것과 그 자리를 **때리는** 것은 다르다.
- * 지나게는 만들었고 때리지는 못했다. 적어 둔다 — 안 적으면 "모델이 본다" 고 넓게 읽는다.
+ *   · `pendingEpochs` — **교차가 너무 길었다.** "http commit → abort 전체 시퀀스 →
+ *     stream commit" 이 표본에 안 들어온다. **준비 단계에서 http 만 넘겨 놓아** 무대를
+ *     좁혔다. 어느 쪽이 언제 끼어드는지는 여전히 스케줄러가 정한다.
+ *
+ *   · reconcile lease 의 토큰 검사 — **속성이 없었다.** 게시와 HUP 은 상태에 안 남고
+ *     바깥에서만 보이므로 P1~P5 중 어느 것도 볼 수 없었다. **P6** 을 만들었다:
+ *     낡은 리더는 되돌릴 수 없는 연산을 내지 않는다.
+ *
+ * 둘 다 이제 잡힌다. **못 잡을 때는 이유가 둘 중 하나다 — 무대가 넓거나, 속성이 없거나.**
  *
  * 스케줄 공간도 다 훑지 못한다. DFS 150 + 무작위 350 이고, 매번 "상한에서 끊었다" 가
  * 찍힌다. 초록이 "안전하다" 가 아니라 "**여기까지는 못 깼다**" 라는 뜻이다.
@@ -122,6 +127,13 @@ class World {
   accepting: string | undefined;
   publishes = 0;
   reloads = 0;
+  /**
+   * **누가 부작용을 냈는가** (P6).
+   *
+   * 게시와 HUP 은 되돌릴 수 없다. 낡은 리더가 그걸 내면 lease 규약이 깨진 것이다 —
+   * 그런데 그 사실은 **상태에 안 남는다.** 바깥에서만 보인다. 그래서 여기 적는다.
+   */
+  readonly effects: { what: string; token: string; maxAtTime: string }[] = [];
 }
 
 class ModelEffects implements Effects {
@@ -129,7 +141,14 @@ class ModelEffects implements Effects {
     private readonly sched: Scheduler,
     private readonly world: World,
     private readonly who: string,
+    private readonly store?: ModelStore,
   ) {}
+
+  /** 이 부작용을 낸 토큰과, 그 순간의 최신 토큰을 함께 남긴다. */
+  private witness(what: string, token: string): void {
+    const payload = this.store?.load()?.payload as { maxLeaderToken?: string } | undefined;
+    this.world.effects.push({ what, token, maxAtTime: payload?.maxLeaderToken ?? '0' });
+  }
 
   private async at<T>(label: string, run: () => T): Promise<T> {
     await this.sched.yield(`${this.who}:${label}:before`);
@@ -146,6 +165,7 @@ class ModelEffects implements Effects {
     return this.at('publish', () => {
       // **되돌릴 수 없는 연산 직전에 확인한다.** 동기라 확인과 부작용 사이가 없다.
       const checked = lease.assertValid();
+      this.witness('publish', lease.leaderToken);
       this.world.published = record;
       this.world.publishes += 1;
       return checked;
@@ -162,6 +182,7 @@ class ModelEffects implements Effects {
   signalReload(lease: ApplyLease): Promise<Checked> {
     return this.at('signalReload', () => {
       const checked = lease.assertValid();
+      this.witness('reload', lease.leaderToken);
       this.world.reloads += 1;
       this.world.accepting = this.world.published?.generation;
       return checked;
@@ -285,6 +306,20 @@ function checkProperties(
       }
     }
   }
+  // ── P6 — 낡은 리더는 되돌릴 수 없는 연산을 내지 않는다 ────────────────
+  //
+  // lease 규약이 약속하는 것이 정확히 이것이다. 그런데 **상태에 안 남는다** — 게시와
+  // HUP 은 바깥에서만 보인다. 그래서 누가 냈는지를 World 가 적고 여기서 본다.
+  // 이 속성이 없어서 reconcile lease 의 토큰 검사를 빼는 뮤테이션이 통과했다.
+  for (const e of world.effects) {
+    if (BigInt(e.token) < BigInt(e.maxAtTime)) {
+      bad.push({
+        property: 'P6 낡은 리더는 부작용을 내지 않는다',
+        detail: `토큰 ${e.token} 이 ${e.what} 을 냈다 (그 순간 최신은 ${e.maxAtTime})`,
+      });
+    }
+  }
+
   if (stuck !== undefined) {
     bad.push({
       property: 'P5 남은 저널은 복구가 이어받는다',
@@ -342,7 +377,7 @@ async function once(
     sched,
     store,
     world,
-    effects: (who) => new ModelEffects(sched, world, who),
+    effects: (who) => new ModelEffects(sched, world, who, store),
     problems,
     swallow: swallow(problems),
   };
@@ -657,6 +692,64 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
           ),
         ];
       });
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **창을 좁혀서 겨냥한다.**
+   *
+   * 앞의 시나리오들은 그 자리를 *지나기만* 했다 — 뮤테이션이 안 잡혔다. 교차가
+   * "http commit → abort 전체 시퀀스 → stream commit" 처럼 길어서 표본에 안 들어온다.
+   *
+   * 준비 단계에서 **http 만 넘겨 놓는다.** 그러면 스케줄이 시작될 때 이미 창 안이고,
+   * 남은 것은 "stream 을 마저 넘기는 러너" 와 "평면 하나만 담아 끝내는 abort" 둘뿐이다.
+   * 수렴 시나리오에 기준을 미리 세워 둔 것과 같은 수법이다.
+   *
+   * 이건 교차를 **고르는** 것이 아니다 — 어느 쪽이 언제 끼어드는지는 여전히 스케줄러가
+   * 정한다. 무대만 좁혔다.
+   */
+  it('부분 커밋 상태에서 부분 abort 가 끼어들어도 기준이 서지 않는다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+    const a = OP('A', 'gen-A', '10', '0', '1');
+    const half: ApplyOperation = {
+      ...a,
+      affectedPlanes: ['http'],
+      planes: { http: a.planes.http! },
+    };
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(
+        space,
+        ({ store, effects, swallow }) => [
+          // 남은 평면을 마저 넘긴다.
+          () => swallow(new ApplyRunner(new DpAgent(store), effects('run'), FAST).recover()),
+          // 그 사이 호출자가 **평면 하나만 담아** 끝낸다.
+          () => swallow(
+            LocalDataplaneDriver.create({ store, effects: effects('ab') }).abortConfig(half),
+          ),
+        ],
+        async ({ store }) => {
+          const agent = new DpAgent(store);
+          await agent.reserveAll(a);
+          await agent.stage(tupleFor(a, 'http'), null);
+          await agent.commit(tupleFor(a, 'http'), { acceptingGeneration: 'gen-A' });
+          await agent.writeJournal({
+            op: a, phase: 'reload_observed', reloadAttempts: 1, seq: 1,
+            progress: { http: 'committed', stream: 'staged' },
+          });
+        },
+      );
       if (r.violations.length > 0) failure = r;
     });
 
