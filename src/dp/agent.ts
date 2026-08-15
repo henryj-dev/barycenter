@@ -468,6 +468,30 @@ export class InvariantViolation extends Error {
  * 여기서는 **좌표를 직접 본다.** 선언한 평면이 전부 목표 epoch 에 도착했으면 기준이 되고,
  * 아니면 후보를 버린다. 호출자가 무엇을 아는지와 무관하게 같은 답이 나온다.
  */
+/**
+ * **이 후보가 정말 도착했는가.** 승격자와 불변식이 같이 쓴다 (30차 CE-30).
+ *
+ * 자리가 둘이면 언젠가 갈린다 — 25차에 판정 기준을 `reachedPhase()` 에만 넣고
+ * `failAll` 에 안 넣어 phase 와 progress 가 모순됐던 그것이다. 여기서는 **승격을
+ * 결정하는 판정**과 **승격을 강제하는 불변식**이 갈리면 안 된다.
+ */
+function candidateArrived(
+  s: AgentState,
+  candidate: PublishRecord,
+  epochs: Record<string, string> | undefined,
+): boolean {
+  if (epochs === undefined) return false;
+  return Object.entries(epochs).every(([plane, epoch]) => {
+    const at = s.planes[plane as Plane];
+    if (at?.activationEpoch !== epoch) return false;
+    // 서명이 있으면 서명이 답한다. 없으면(26차 이전 상태) **신원 있는 다른 증거**를
+    // 읽는다 — `terminal` 원장의 키는 `operationId:transitionId:plane` 이다.
+    return at.by === undefined
+      ? s.terminal[`${candidate.operationId}:${candidate.transitionId}:${plane}`] === 'activated'
+      : authoredBy(at, candidate);
+  });
+}
+
 function finalizeCandidate(
   s: AgentState,
   ids: { operationId: string; transitionId: string },
@@ -531,18 +555,8 @@ function finalizeCandidate(
   // 덮이는 길이 생기면 서명만 그것을 본다.
   //
   // 동치를 동치라고 적는다 — 검출력 없는 것을 있다고 적지 않는다(22차 P8).
-  const activatedByCandidate = (plane: Plane): boolean =>
-    s.terminal[`${candidate.operationId}:${candidate.transitionId}:${plane}`] === 'activated';
   const epochs = s.pendingEpochs ?? epochsFromJournal(s, ids);
-  const arrived = epochs !== undefined && Object.entries(epochs).every(
-    ([plane, epoch]) => {
-      const at = s.planes[plane as Plane];
-      if (at?.activationEpoch !== epoch) return false;
-      return at.by === undefined
-        ? activatedByCandidate(plane as Plane)
-        : authoredBy(at, candidate);
-    },
-  );
+  const arrived = candidateArrived(s, candidate, epochs);
   if (arrived) s.lastActivated = candidate;
   // 뮤테이션 스윕이 이 두 줄을 지워도 아무것도 안 빨개진다고 알려줬다. **동치다** —
   // 남은 후보가 나중에 "도착" 이 되려면 좌표가 움직여야 하는데, 좌표는 `commit` 으로만
@@ -745,6 +759,7 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
     }
   }
   // 28차에 여기 **면제**를 달았다 — 서명 없는 좌표에서는 (b) 를 끄는 것이었다.
+  // 30차에 그 자리를 아예 다시 세웠다(아래).
   // **뺐다** (29차). 면제는 CE-28 의 봉쇄를 푸는 우회였고 그 우회가 CE-29(세상 되감김)를
   // 열었다. 이제 `finalizeCandidate` 가 `terminal` 원장으로 제대로 승격하므로 그 상태
   // 자체가 안 생긴다. **증상을 끄는 대신 원인을 고쳤다.**
@@ -753,8 +768,32 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
   // 장식이다.** 28차가 면제의 안전 근거로 든 두 측정("P11 이 잡는다", "승격 차단
   // 뮤턴트 112 건")은 **승격 기능의 백업**을 잰 것이지 (b) 의 검출력을 잰 것이 아니었다.
   // 근거를 적었지만 그 근거가 재는 대상이 달랐다 — 이 시리즈가 네 회차째 반복하는 병이다.
+  // **저널을 믿지 않고 좌표를 본다** (30차 CE-30).
+  //
+  // (b) 는 "저널이 `activated` 인데 후보가 승격 없이 사라졌다" 를 위반으로 봤다. 즉
+  // **저널의 주장을 전제로 삼았다.** 그런데 26차 이전 writer 의 저널은 닮음으로 판정해
+  // 쓴 것이라 거짓일 수 있다 — 혼합 저자인데 `activated` 라고 적혀 있는 상태가 실재한다.
+  // 그러면 후보는 정당하게 승격되지 않는데 (b) 가 발화해 **영구 봉쇄**가 된다.
+  //
+  // 28차는 이것을 면제로 껐다가 되감김을 열었고(CE-29), 29차는 판정 가능한 부분집합만
+  // 승격으로 옮겼다가 나머지에서 봉쇄를 재도입했다(CE-30). **같은 창을 양쪽으로 오갔다.**
+  //
+  // 뿌리는 (b) 의 전제였다. 이제 **좌표가 도착을 증명할 때만** 발화한다 — 그러면
+  // (b) 가 원래 잡으려던 버그("도착했는데 승격을 안 했다")는 그대로 잡고, 저널이
+  // 거짓말한 경우는 봉쇄 대신 통과한다. 판정은 `candidateArrived` 하나가 한다.
+  //
+  // **이 수정이 (b)의 이빨을 되찾아 준 것은 아니다.** 재 봤다 — (b)를 통째로 꺼도
+  // 572 전부 초록이다(29차 측정과 같다). 바뀐 것은 **잘못 발화하던 것이 멈춘 것**뿐이고,
+  // 검출력은 여전히 0 이다. 되찾았다고 적고 싶었지만 재 보니 아니었다.
+  const arrivedForReal = droppedCandidate !== undefined
+    && candidateArrived(
+      next,
+      droppedCandidate,
+      before.pendingEpochs ?? epochsFromJournal(before, droppedCandidate),
+    );
   const j6 = next.journal;
   if (j6 !== undefined
+    && arrivedForReal
     && j6.phase === 'activated'
     && droppedCandidate !== undefined
     && next.pendingActivation === undefined

@@ -1378,3 +1378,58 @@ describe('면제가 세상을 되감는 길을 열었다 (29차 CE-29)', () => {
     expect(fx.acceptingGeneration, '서빙 중인 세대가 되감겼다').toBe('gen-B');
   });
 });
+
+describe('원장 폴백은 창의 부분집합만 닫았다 (30차 CE-30)', () => {
+  /**
+   * **29차 수정이 만든 스물세 번째다. 봉쇄가 돌아왔다.**
+   *
+   * 29차의 논증은 *"이제 `finalizeCandidate` 가 `terminal` 원장으로 제대로 승격하므로
+   * 그 상태 자체가 안 생긴다"* 였다. **이 전칭 명제가 거짓이다.** 원장 폴백이 승격하는
+   * 것은 **후보가 모든 평면을 자기 전환 키로 활성화한** 경우뿐이고, 29차가 넣은 테스트
+   * 둘이 정확히 그 부분집합만 만든다. **검증한 부분집합에서 전체 창으로 조용히
+   * 일반화했다** — 이 시리즈가 다섯 회차째 반복하는 병이다.
+   *
+   * 혼합 저자에서는 폴백이 false 를 답하고, 면제는 뺐으므로 I6(b)가 발화한다.
+   *
+   * 그리고 30차가 뿌리를 짚었다: **판정이 불능인데 결과 선택지가 승격/폐기 둘뿐이다.**
+   * 28차는 폐기를 통과시켰고(→ 되감김), 29차는 일부를 승격으로 옮겼다(→ 나머지가 봉쇄).
+   * 같은 창을 양쪽으로 오갔을 뿐이다.
+   */
+  it('혼합 저자 + 서명 없는 좌표에서도 복구·승계·포기가 앞으로 간다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const x = OP('X', 'gen-X', '0', '1');
+    const y: ApplyOperation = {
+      ...OP('Y', 'gen-X', '0', '1'), affectedPlanes: ['stream'], planes: x.planes,
+    };
+
+    await agent.reserveAll(x, { op: x, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.abort(tupleFor(x, 'stream'));
+    // 남이 같은 내용으로 재시도한다 — 26차가 "가장 흔한 패턴" 이라 적은 그것이다.
+    await agent.reserve(tupleFor(y, 'stream'));
+    await agent.stage(tupleFor(y, 'stream'), null);
+    await agent.commit(tupleFor(y, 'stream'), { acceptingGeneration: 'gen-X' });
+    await agent.finishOperation(y, ['stream']);
+
+    await agent.stage(tupleFor(x, 'http'), null);
+    await agent.commit(tupleFor(x, 'http'), { acceptingGeneration: 'gen-X' });
+    await agent.writeJournal({
+      op: x, phase: 'activated', reloadAttempts: 1,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'committed', stream: 'committed' },
+    });
+    const raw = store.load()!;
+    const payload = raw.payload as { planes: Record<string, { by?: unknown }> };
+    for (const plane of Object.keys(payload.planes)) delete payload.planes[plane]!.by;
+    await store.save({ ...raw, version: raw.version + 1, payload });
+
+    const driver = LocalDataplaneDriver.create({ store, effects: new FakeEffects() });
+    const recovered = await driver.recoverConfig()
+      .then(() => 'ok').catch((e: unknown) => `던졌다: ${(e as Error).name}`);
+    expect(recovered, '복구가 던져서 아무것도 못 쓴다').toBe('ok');
+
+    const fenced = await new DpAgent(store).fence('11')
+      .then(() => 'ok').catch((e: unknown) => `던졌다: ${(e as Error).name}`);
+    expect(fenced, '신임 리더도 못 들어온다').toBe('ok');
+  });
+});
