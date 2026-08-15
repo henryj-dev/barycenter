@@ -405,10 +405,10 @@ function checkProperties(
     // **`repaired` 도 settled 주장이다** (19차 검수). 처음엔 `converged` 만 봤는데,
     // "제자리로 돌려놨다" 도 "손 떼도 된다" 와 같은 무게의 답이다.
     //
-    // ⚠️ 다만 **아직 이빨이 없다** — `repaired` 앞 게이트를 무력화해도 모델은 초록이다.
-    // 시나리오가 `repaired` 답에 끝나지 않은 전환이 겹치는 자리를 안 지난다. **속성이
-    // 없어서가 아니라 무대가 좁아서다** — 둘은 고치는 방법이 다르다(TESTS.md).
-    // conformance(review16 ③)가 그 자리를 지킨다.
+    // 처음엔 이빨이 없었다 — 시나리오가 `repaired` 답에 끝나지 않은 전환이 겹치는 자리를
+    // 안 지났다. **속성이 없어서가 아니라 무대가 좁아서**였고, 그건 고치는 방법이 다르다.
+    // 바깥을 어긋나게 둔 시나리오를 넣어 그 자리를 지나게 했고, 이제 게이트를 무력화하면
+    // P7 이 두 절에서 터진다(확인했다).
     if (a.kind !== 'converged' && a.kind !== 'repaired') continue;
     if (a.pending !== undefined) {
       bad.push({
@@ -861,6 +861,52 @@ describe('두 리더가 같은 store 를 흔든다 — 스케줄을 생성해서
             op: a, phase: 'reload_observed', reloadAttempts: 1, seq: 1,
             progress: { http: 'committed', stream: 'staged' },
           });
+        },
+      );
+      if (r.violations.length > 0) failure = r;
+    });
+
+    console.log(`  스케줄 ${run.schedules} 개 · ${run.exhausted ? '전부 훑었다' : '상한에서 끊었다'}`);
+    if (failure !== undefined) {
+      console.error('선택열:', JSON.stringify(failure.choices));
+      console.error('경로:', failure.trace.join(' → '));
+      for (const v of failure.violations) console.error(`  ${v.property}: ${v.detail}`);
+    }
+    expect(failure?.violations ?? [], '속성이 깨졌다').toEqual([]);
+    expect(run.schedules).toBeGreaterThan(1);
+  }, 120_000);
+
+  /**
+   * **`repaired` 자리를 지나게 만든다** (19차 검수가 P7 의 그쪽 절에 이빨이 없다고 했다).
+   *
+   * 앞의 수렴 시나리오는 바깥이 정합하거나 기준이 없어서 되돌리기까지 안 갔다. 여기서는
+   * **바깥을 어긋나게 둔 채** 시작해 수렴이 실제로 되돌리게 하고, 그 위로 다른 인스턴스가
+   * 새 활성화를 끝낸다. 그러면 `repaired` 를 답할 자리에 끝나지 않은 전환이 겹친다.
+   *
+   * 무대만 좁혔다 — 누가 언제 끼어드는지는 여전히 스케줄러가 정한다.
+   */
+  it('되돌리는 중에 새 활성화가 끝나도 속성이 전부 성립한다', async () => {
+    let failure: { violations: Violation[]; trace: string[]; choices: number[] } | undefined;
+
+    const run = await sweep(async (space) => {
+      if (failure !== undefined) return;
+      const r = await once(
+        space,
+        ({ store, world, effects, swallow }) => {
+          const b = OP('B', 'gen-B', '10', '1', '2');
+          return [
+            () => swallow(reconcileWitnessed(
+              LocalDataplaneDriver.create({ store: store.for('rec'), effects: effects('rec') }),
+              store, world,
+            )),
+            () => swallow(new ApplyRunner(new DpAgent(store.for('B')), effects('B'), FAST).run(b)),
+          ];
+        },
+        async ({ store, world, effects }) => {
+          await LocalDataplaneDriver.create({ store, effects: effects('seed') })
+            .applyConfig(OP('A', 'gen-A', '10', '0', '1'));
+          // **바깥을 어긋나게 둔다** — 그래야 수렴이 되돌리기 경로로 들어간다.
+          world.published = undefined;
         },
       );
       if (r.violations.length > 0) failure = r;
