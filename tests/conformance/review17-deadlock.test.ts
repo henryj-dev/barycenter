@@ -1631,3 +1631,46 @@ describe('원장 폴백의 판별 방향 (32차 CE-32-B)', () => {
     ).not.toBe('gen-B');
   });
 });
+
+describe('폐위 뒤에 갈 곳이 있다 (33차 — 실측을 고정한다)', () => {
+  /**
+   * 32차가 `dirty` 뒤의 출구를 **실측**했고 STATUS 에 적었다. 33차가 지적하기를 —
+   * **고정 안 된 실측은 이 시리즈에서 세 번 되돌아왔다**(가격표 두 번, `positionsReached`
+   * 한 번). 그래서 못박는다.
+   *
+   * 폐위의 정당성은 "되감지 않는다" 만으로는 부족하다. **막다른 곳이 아니어야** 한다 —
+   * 운영자가 새 세대를 적용하면 정상으로 돌아와야 한다. 그게 아니면 폐위는 봉쇄의
+   * 다른 이름일 뿐이고, 이 시리즈는 봉쇄를 상(上)으로 세어 왔다.
+   */
+  it('폐위된 뒤 새 세대를 적용하면 다시 수렴한다', async () => {
+    const store = new MemoryStore();
+    const fx = new FakeEffects();
+    await LocalDataplaneDriver.create({ store, effects: fx })
+      .applyConfig(OP('A', 'gen-A', '0', '1'));
+
+    const agent = new DpAgent(store);
+    const x = OP('X', 'gen-B', '1', '2');
+    const y: ApplyOperation = {
+      ...OP('Y', 'gen-B', '1', '2'), affectedPlanes: ['stream'], planes: x.planes,
+    };
+    await agent.reserveAll(x, { op: x, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.abort(tupleFor(x, 'stream'));
+    await agent.reserve(tupleFor(y, 'stream'));
+    await agent.stage(tupleFor(y, 'stream'), null);
+    await agent.commit(tupleFor(y, 'stream'), { acceptingGeneration: 'gen-B' });
+    await agent.finishOperation(y, ['stream']);
+    await agent.stage(tupleFor(x, 'http'), null);
+    await agent.commit(tupleFor(x, 'http'), { acceptingGeneration: 'gen-B' });
+
+    const driver = LocalDataplaneDriver.create({ store, effects: fx });
+    await driver.abortConfig(x).catch(() => undefined);
+    expect((await driver.reconcileConfig()).kind, '전제가 성립하지 않는다').toBe('dirty');
+
+    // **출구**: 운영자가 새 세대를 적용한다.
+    const applied = await driver.applyConfig(OP('C', 'gen-C', '2', '3'));
+    expect(applied.phase, '폐위된 뒤에 새 전환이 못 들어간다 — 봉쇄의 다른 이름이다')
+      .toBe('activated');
+    expect((await driver.reconcileConfig()).kind, '새 기준으로 수렴하지 못한다')
+      .toBe('converged');
+  });
+});

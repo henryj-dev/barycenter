@@ -159,6 +159,7 @@ npm run mutate -- --file src/dp/driver.ts --limit 40
 
 ```
 13차 첫 측정  76.4%  →  반례 채운 뒤 80.0%  →  80.7%  →  22차 75.7%  →  23차 86.4%
+24차 81.8%  →  27차 76.4%  →  **33차 84.5%** (26차 계약 이동 이후 첫 측정)
 ```
 
 스윕은 **별도 worktree** 에서 돈다. 처음엔 소스를 제자리에서 변이시키고 `finally` 에서
@@ -246,7 +247,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 |---|---|---|
 | 단위 | `npm test` | **217 PASS** |
 | 표면 (계약 고정) | `node scripts/surface.mjs --check` | **77 심볼 고정** — 카운터는 `SURFACE.txt` 가 답한다 |
-| conformance | `npm run test:conformance` | **307 PASS** — 5~13차 반례 · 크래시 지점 매핑 · 세대 materializer · **DESIGN↔ABI 대조**. 단위와 합쳐 451 건이 전부 **불변식 테스트이기도 하다** |
+| conformance | `npm run test:conformance` | **347 PASS** — 5~33차 반례 · 크래시 지점 매핑 · 세대 materializer · **DESIGN↔ABI 대조**. 단위와 합쳐 564 건이 전부 **불변식 테스트이기도 하다** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
 | **e2e (실제 nginx)** | `npm run test:e2e` | **14 PASS** — 저널이 실제 nginx 를 수렴시킨다 (http·stream 두 평면). 그중 6건은 **DP 컨테이너 안에서** `FsEffects` 까지 실물로 돈다 |
 
