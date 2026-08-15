@@ -475,3 +475,69 @@ describe('status 가 봉쇄를 보여준다 (19차)', () => {
     expect((await driver.status()).unfinished, '복구했는데도 남아 있다고 한다').toBeUndefined();
   });
 });
+
+describe('고아를 닫는 것이 새 오퍼레이션을 막지 않는다 (20차 CE-3)', () => {
+  /**
+   * 17차 D 를 고치면서 고아 저널을 `supersede` 로 닫게 했다. 그런데 **두 자리가 틀렸다.**
+   *
+   *   ① 청소가 **슬롯 획득 뒤에** 온다 — 고아의 예약이 아직 있어서 새 오퍼레이션이
+   *      `slot_taken` 으로 죽는다. "그 좌표는 아무도 못 쓴다" 를 없애려던 수정이 같은
+   *      증상을 한 칸 옆에 다시 만들었다.
+   *   ② `supersede` 가 `delete s.activeOperation` 을 **무조건** 한다 — fence 경로에서는
+   *      지울 대상이 곧 holder 라 맞지만, 여기서는 **방금 앉힌 신임 실행권**을 지운다.
+   *
+   * 20차 검수가 찾았다. 열세 번째로 직전 수정이 만든 구멍이다.
+   */
+  const orphaned = async (): Promise<MemoryStore> => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.writeJournal({
+      op: a, phase: 'published', reloadAttempts: 0,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'reserved', stream: 'reserved' },
+    });
+    await agent.finishOperation(a);
+    return store;
+  };
+
+  it('고아가 남아 있어도 새 오퍼레이션이 들어간다', async () => {
+    const store = await orphaned();
+    const driver = LocalDataplaneDriver.create({ store, effects: new FakeEffects() });
+
+    const r = await driver.applyConfig(OP('B', 'gen-B', '0', '1'));
+    expect(r.phase, '고아가 새 오퍼레이션을 막았다').toBe('activated');
+  });
+
+  it('신임 실행권을 스스로 지우지 않는다', async () => {
+    const store = await orphaned();
+    const b = OP('B', 'gen-B', '0', '1');
+
+    await new DpAgent(store).reserveAll(b, {
+      op: b, phase: 'preflight', reloadAttempts: 0, progress: {},
+    });
+
+    expect(
+      new DpAgent(store).activeOperation()?.operationId,
+      '고아를 닫으면서 방금 앉힌 실행권을 지웠다',
+    ).toBe('B');
+  });
+
+  it('거부당한 오퍼레이션이 나중에 활성화되지 않는다', async () => {
+    const store = await orphaned();
+    const driver = LocalDataplaneDriver.create({ store, effects: new FakeEffects() });
+
+    const b = await driver.applyConfig(OP('B', 'gen-B', '0', '1'))
+      .then((x) => x.phase, () => 'rejected');
+    await driver.recoverConfig().catch(() => undefined);
+
+    const baseline = new DpAgent(store).lastActivated()?.generation;
+    if (b === 'rejected') {
+      expect(baseline, '거부해 놓고 나중에 올렸다 — 9차 "조용한 거짓 성공" 의 거울상이다')
+        .not.toBe('gen-B');
+    } else {
+      expect(baseline, '활성화했다면서 기준이 없다').toBe('gen-B');
+    }
+  });
+});

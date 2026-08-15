@@ -876,6 +876,38 @@ export class DpAgent {
         );
       }
 
+      // **고아를 먼저 치운다** (17차 반례 D · 20차 CE-3 에서 순서를 고쳤다).
+      //
+      // 처음엔 슬롯을 잡은 **뒤에** 치웠다. 그러면 고아의 예약이 아직 있어서 새
+      // 오퍼레이션이 `slot_taken` 으로 죽는다 — "그 좌표는 아무도 못 쓴다" 를 없애려던
+      // 수정이 같은 증상을 한 칸 옆에 다시 만든 것이다.
+      //
+      // 여기 오는 시점에 실행권은 없다(있으면 위에서 `operation_in_flight` 로 막혔다).
+      // 그 저널은 고아이므로 닫는 것이 안전하다.
+      const stale = s.journal;
+      const staleIsMine = stale !== undefined
+        && stale.op.operationId === op.operationId
+        && stale.op.transitionId === op.transitionId;
+      if (opening !== undefined && stale !== undefined && !staleIsMine
+        && !isTerminalPhase(stale.phase)) {
+        for (const plane of planesOf(stale.op)) {
+          const key = transitionKey(tupleFor(stale.op, plane));
+          if (s.terminal[key] === undefined) s.terminal[key] = 'aborted';
+        }
+        supersede(s, {
+          operationId: stale.op.operationId,
+          transitionId: stale.op.transitionId,
+          leaderToken: normalizeNumeric(stale.op.leaderToken, 'leaderToken'),
+          planes: planesOf(stale.op),
+          epochs: Object.fromEntries(
+            planesOf(stale.op).map((plane) => [
+              plane,
+              normalizeNumeric(stale.op.planes[plane]!.target.activationEpoch, 'activationEpoch'),
+            ]),
+          ),
+        });
+      }
+
       // 전부 잡거나 하나도 안 잡는다. `acquire` 가 던지면 이 임계구역의 변경은
       // 저장되지 않으므로 롤백이 따로 필요 없다.
       const acks = tuples.map((t) => {
@@ -905,33 +937,6 @@ export class DpAgent {
           && existing.op.operationId === op.operationId
           && existing.op.transitionId === op.transitionId;
         if (!mine) {
-          // **닫고 덮는다** (17차 반례 D). 전에는 남의 비종단 저널을 그냥 덮었고, 그
-          // 전환은 종단 기록 없이 증발하면서 **예약이 남았다** — 그 좌표는 아무도 못 쓴다.
-          // 6차 ④ · 16차 ② 와 같은 부류다(이번엔 실행권이 아니라 슬롯).
-          //
-          // 여기 온 시점에 실행권은 없다(있으면 위에서 `operation_in_flight` 로 막혔다).
-          // 즉 그 저널은 **고아**이고, 닫는 것이 안전하다. 무엇이 됐는지는 남긴다 —
-          // "왜 사라졌나" 에 답할 수 없으면 장애 분석이 근거를 잃는다(I7 과 같은 이유).
-          if (existing !== undefined && !isTerminalPhase(existing.phase)) {
-            // **무엇이 됐는지 남긴다.** 예약만 반납하고 기록을 안 남기면 "그 전환은
-            // 어떻게 끝났나" 에 답할 수 없다 — I7 이 지키려는 것과 같은 것이다.
-            for (const plane of planesOf(existing.op)) {
-              const key = transitionKey(tupleFor(existing.op, plane));
-              if (s.terminal[key] === undefined) s.terminal[key] = 'aborted';
-            }
-            supersede(s, {
-              operationId: existing.op.operationId,
-              transitionId: existing.op.transitionId,
-              leaderToken: normalizeNumeric(existing.op.leaderToken, 'leaderToken'),
-              planes: planesOf(existing.op),
-              epochs: Object.fromEntries(
-                planesOf(existing.op).map((plane) => [
-                  plane,
-                  normalizeNumeric(existing.op.planes[plane]!.target.activationEpoch, 'activationEpoch'),
-                ]),
-              ),
-            });
-          }
           s.journal = { ...opening, seq: (s.journal?.seq ?? existing?.seq ?? 0) + 1 };
         }
       }
@@ -1443,7 +1448,20 @@ function supersede(s: AgentState, holder: ActiveOperation): void {
   // 승계도 **끝내는 것**이다 (14차 검수). 전에는 전 평면이 넘어간 후보가 여기서 고아가
   // 됐다 — 활성화는 일어났는데 되돌릴 기준이 영영 안 생긴다.
   finalizeCandidate(s, holder);
-  delete s.activeOperation;
+  // **자기 것일 때만 지운다** (20차 CE-3). fence 경로에서는 지울 대상이 곧 holder 라
+  // 무조건 지워도 맞았는데, 고아를 닫는 경로에서는 **방금 앉힌 신임 실행권**을 지웠다.
+  // 열 번 배운 "토큰까지 본다" 를 이 자리에는 안 넣고 있었다.
+  //
+  // 청소를 실행권 앉히기 **앞으로** 옮기고 나니 이 절은 **방어적**이 됐다 — 무조건
+  // 지우게 되돌려도 안 빨개진다(확인했다). 그래도 둔다: 정리 루틴이 원래의 불변식 봉투
+  // 밖에서 재사용되면 다시 필요해지고, 이번이 바로 그렇게 물린 경우다.
+  const live = s.activeOperation;
+  if (live !== undefined
+    && live.operationId === holder.operationId
+    && live.transitionId === holder.transitionId
+    && live.leaderToken === holder.leaderToken) {
+    delete s.activeOperation;
+  }
 }
 
 /** 전환을 끝내고 슬롯을 반납한다. **내 슬롯만** 지운다. */
