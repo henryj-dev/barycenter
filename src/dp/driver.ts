@@ -105,6 +105,34 @@ export interface DataplaneDriver {
   status(): Promise<DriverStatus>;
 }
 
+declare const SETTLED_BRAND: unique symbol;
+
+/**
+ * **"판정 직전에 다시 봤다" 는 표** (18차 검수 뒤).
+ *
+ * 열 회차 동안 같은 모양으로 물렸다 — 믿을 수 없는 상태를 하나 새로 만들고, 그걸 **판정
+ * 자리 전부에** 넣는 것을 잊는다. 14차에 "읽고-확인" 집합을 만들었는데 17차가 거기에
+ * 후보를 안 넣었고, 18차가 그 구멍을 찾았다.
+ *
+ * "잊지 말자" 는 계약이 아니다. `Checked` 로 lease 를 강제한 것과 같은 수법을 쓴다 —
+ * **`converged`·`repaired` 는 이 표 없이 만들 수 없다.** 표는 `#settled` 만이 만들고,
+ * `#settled` 는 기준과 미완 활성화를 **둘 다** 본다. 새로 봐야 할 것이 생기면 거기 한
+ * 곳에만 넣으면 된다.
+ */
+type Settled = { readonly [SETTLED_BRAND]: true };
+const SETTLED: Settled = Object.freeze({}) as Settled;
+
+/** 수렴했다고 답한다. **표가 있어야 한다.** */
+const converged = (record: PublishRecord, _proof: Settled): ReconcileResult =>
+  ({ kind: 'converged', record });
+
+/** 되돌렸다고 답한다. **표가 있어야 한다.** */
+const repaired = (
+  expected: PublishRecord,
+  found: PublishedState,
+  _proof: Settled,
+): ReconcileResult => ({ kind: 'repaired', expected, found });
+
 /** 부작용 하나에 주는 예산. */
 const RECONCILE_EFFECT_MS = 10_000;
 
@@ -260,7 +288,8 @@ export class LocalDataplaneDriver implements DataplaneDriver {
         // 관측 두 번을 기다리는 사이 생긴 후보를 못 봤다 — 좌표는 이미 지나갔는데
         // 옛 기준으로 `converged` 를 답했다. 14차에 만든 "읽고-확인" 집합에 17차가 새로
         // 만든 "믿을 수 없는 상태" 를 안 넣은 것이다.
-        if (this.#settled(expected)) return { kind: 'converged', record: expected };
+        const proof = this.#settled(expected);
+        if (proof !== undefined) return converged(expected, proof);
         continue; // 기준이 옮겨 갔거나 끝나지 않은 활성화가 생겼다 — 다시 본다
       }
 
@@ -291,8 +320,9 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       // **여기서도 읽고-확인한다** (16차 검수). 조기 `converged` 와 소진 경로에는 넣었는데
       // 이 자리만 빠져 있었다. 되돌리고 관측하는 사이 기준이 옮겨 갔으면, 우리가 되돌린
       // 것은 이미 옛 기준이다 — `repaired` 는 "제자리로 돌려놨다" 는 뜻이라 거짓이 된다.
-      return ok && this.#settled(expected)
-        ? { kind: 'repaired', expected, found: seen }
+      const proof = ok ? this.#settled(expected) : undefined;
+      return proof !== undefined
+        ? repaired(expected, seen, proof)
         : { kind: 'diverged', expected, found: afterPublish };
     }
     // 기준이 계속 바뀐다 — 지금은 우리 차례가 아니다.
@@ -305,11 +335,13 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     if (now === undefined) return { kind: 'no_baseline' };
     const found = await this.#observe();
     const activation = await this.#budget(() => this.effects.observeActivation());
-    const ok = found.kind === 'owned'
+    const observed = found.kind === 'owned'
       && sameRecord(found.record, now)
-      && provesActivation(activation, now.generation)
-      && this.#settled(now); // 여기서도 읽고-확인한다 (기준 + 끝나지 않은 활성화)
-    return ok ? { kind: 'converged', record: now } : { kind: 'diverged', expected: now, found };
+      && provesActivation(activation, now.generation);
+    const proof = observed ? this.#settled(now) : undefined;
+    return proof !== undefined
+      ? converged(now, proof)
+      : { kind: 'diverged', expected: now, found };
   }
 
   #stillBaseline(expected: PublishRecord): boolean {
@@ -339,8 +371,10 @@ export class LocalDataplaneDriver implements DataplaneDriver {
    * 후보가 있으면 좌표는 이미 후보 쪽으로 갔고 기준은 그 전 것이다. 그 상태에서
    * `converged`·`repaired` 를 답하면 호출자에게 **옛 세대로 "손 떼도 된다"** 고 말한다.
    */
-  #settled(expected: PublishRecord): boolean {
-    return this.#stillBaseline(expected) && this.agent.pendingActivation() === undefined;
+  #settled(expected: PublishRecord): Settled | undefined {
+    if (!this.#stillBaseline(expected)) return undefined;
+    if (this.agent.pendingActivation() !== undefined) return undefined;
+    return SETTLED;
   }
 
   /**
