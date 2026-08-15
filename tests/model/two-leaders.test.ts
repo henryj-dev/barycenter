@@ -122,6 +122,22 @@ const TERMINAL = new Set([
 const EXTENT = new Set(['activated', 'partial_exhausted', 'failed']);
 
 /**
+ * 두 스냅샷의 저널이 **같은 기록**인가. "그 말이 쓰인 순간에만 판정한다" 를 위한 것이다.
+ *
+ * P10 과 P11 이 같이 쓴다 — 27차에 P11 에만 이 가드가 없어서 잠복 오탐이 있었다.
+ * 가드가 자리마다 따로 있으면 언젠가 하나가 빠진다.
+ */
+const sameJournalEntry = (
+  a: Seen['journal'],
+  b: NonNullable<Seen['journal']>,
+): boolean =>
+  a !== undefined
+  && a.phase === b.phase
+  && a.op.operationId === b.op.operationId
+  && a.op.transitionId === b.op.transitionId
+  && a.op.leaderToken === b.op.leaderToken;
+
+/**
  * 저장될 때마다 상태를 남긴다. 속성은 **역사**를 보고 판정한다.
  *
  * **누가 쓰는지로 라벨을 단다** (17차 검수). 전에는 모든 행위자의 save 가 `store:save:*`
@@ -373,12 +389,7 @@ function checkProperties(
     // `superseded` · `no_operation` 은 뺀다 — 그 둘은 **범위를 주장하지 않는다.**
     if (s.journal !== undefined && EXTENT.has(s.journal.phase)) {
       const j = s.journal;
-      const same = prev?.journal !== undefined
-        && prev.journal.phase === j.phase
-        && prev.journal.op.operationId === j.op.operationId
-        && prev.journal.op.transitionId === j.op.transitionId
-        && prev.journal.op.leaderToken === j.op.leaderToken;
-      if (!same) {
+      if (!sameJournalEntry(prev?.journal, j)) {
         const planes = j.op.affectedPlanes;
         // **서명을 읽는다** (26차). 25차에 digest 를 넣었지만 그건 **가정을 한 층
         // 아래로 같이 옮긴 것**일 뿐이었다 — 구현과 속성이 똑같이 닮음으로 셌으므로,
@@ -429,7 +440,13 @@ function checkProperties(
     //
     // 못 잡는 것도 적는다: `failAll` 이 다시 닮음으로 세는 뮤턴트(CE-26-A 그 자체)는
     // **살아남는다.** 그 자리가 갈리는 무대가 모델에 없다 — conformance 가 든다.
-    if (s.journal?.progress !== undefined) {
+    //
+    // **P10 과 같은 가드를 단다** (27차). 처음엔 없었다 — P11 이 역사의 모든 상태에서
+    // 대조하면, 종단 저널이 남은 채 다음 오퍼레이션이 **저널을 안 열고**(`reserveAll` 의
+    // `opening` 은 선택 인자다) 같은 평면을 다음 epoch 으로 commit 했을 때 **옛 저널의
+    // 참말**이 새 서명과 대조돼 오탐이 난다. 지금 시나리오가 그 모양을 안 만들 뿐이고,
+    // 이 하네스는 스윕 밖이라 아무도 못 짚는다.
+    if (s.journal?.progress !== undefined && !sameJournalEntry(prev?.journal, s.journal)) {
       const j = s.journal;
       for (const [plane, mark] of Object.entries(j.progress ?? {})) {
         if (mark !== 'committed') continue;

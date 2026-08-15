@@ -24,7 +24,7 @@
  * 호출자가 준 것이 아니다 — 16차가 막으려던 것(호출자를 믿는 것)에 해당하지 않는다.
  */
 import { describe, expect, it } from 'vitest';
-import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
+import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { FakeEffects } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation, PublishedState } from '../../src/dp/operation.js';
@@ -1038,5 +1038,104 @@ describe('닮음으로는 부류가 안 닫힌다 (26차 CE-26-A · CE-26-B)', (
 
     expect(r.phase, 'A 는 전부 포기했는데 남의 같은-내용 커밋을 자기 공로로 적었다')
       .toBe('failed');
+  });
+});
+
+describe('일곱 번째 층 — 후보 승격도 닮음이었다 (27차 CE-27)', () => {
+  /**
+   * **26차에 "부류를 닫았다" 고 적은 것은 거짓이었다.**
+   *
+   * 좌표에 서명을 붙이고 `reachedPhase` · `failAll` · commit 재요청을 서명으로 바꿨는데,
+   * **"내가 놓았는가" 를 묻는 자리가 둘 더 있었다.** `finalizeCandidate` 의 `arrived` 는
+   * 좌표 epoch 만 보고(`s.planes[plane].activationEpoch === epoch`), 완결의 뜻
+   * (`pendingEpochs`)은 **후보 신원에 결속돼 있지 않다.**
+   *
+   * 그래서 내가 http 만 옮기고 stream 을 포기한 뒤 남이 stream 을 옮기면, **혼합 저자
+   * 부분 활성화가 전체 활성화 기준으로 승격된다.** 그 뒤 수렴은 그 세대를 정답으로 게시한다.
+   *
+   * 23·25차가 두 번 진단한 병형("규칙을 세우고 일부 자리에만 적용")의 세 번째 발병이고,
+   * 이번엔 26차의 나 자신이다. 규칙을 만들 때 **자리를 세는 것**이 규칙을 만드는 일의
+   * 절반이다.
+   */
+  it('혼합 저자 부분 활성화는 기준으로 승격되지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const x = OP('X', 'gen-X', '0', '1');
+    const y: ApplyOperation = { ...OP('Y', 'gen-Y', '0', '1'), affectedPlanes: ['stream'] };
+
+    await agent.reserveAll(x, { op: x, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.stage(tupleFor(x, 'http'), null);
+    await agent.commit(tupleFor(x, 'http'), { acceptingGeneration: 'gen-X' });
+    await agent.abort(tupleFor(x, 'stream'));
+
+    await agent.reserve(tupleFor(y, 'stream'));
+    await agent.stage(tupleFor(y, 'stream'), null);
+    await agent.commit(tupleFor(y, 'stream'), { acceptingGeneration: 'gen-Y' });
+    await agent.finishOperation(y, ['stream']);
+
+    const after = new DpAgent(store);
+    expect(after.coordinate('http').activationEpoch, '전제가 틀렸다').toBe('1');
+    expect(
+      after.lastActivated()?.generation,
+      'http 는 X 가 놓았는데 Y 의 부분 활성화가 전체 기준으로 승격됐다',
+    ).toBeUndefined();
+  });
+});
+
+describe('26차 수정이 되돌아가면 빨개진다 (27차 — 회귀 감지가 0 이었다)', () => {
+  /**
+   * 27차가 실측으로 짚었다: 26차가 **재현까지 해서 고친** 두 자리를 통째로 되돌려도
+   * 전 스위트가 초록이었다. 즉 고정 테스트가 없었다.
+   *
+   * 17차 교훈("재현 경로 없는 수정은 다음 회차에 조용히 되돌아온다")이 **그 교훈을
+   * 인용한 커밋 자신**에 걸려 있었다. 반례를 재현했다는 것과 그 수정을 지킨다는 것은
+   * 다른 일이다.
+   */
+  it('failAll 의 평면 판정이 닮음으로 돌아가면 progress 가 거짓이 된다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    // **같은 내용**으로 재점유한다 — epoch 도 digest 도 같아서 닮음으로는 못 가른다.
+    const b: ApplyOperation = { ...OP('B', 'gen-A', '0', '1'), planes: a.planes };
+
+    await agent.reserveAll(a, {
+      op: a, phase: 'reload_intent', reloadAttempts: 2,
+      progress: { http: 'staged', stream: 'staged' },
+    });
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.release(tupleFor(a, plane));
+      await agent.reserve(tupleFor(b, plane));
+      await agent.stage(tupleFor(b, plane), null);
+      await agent.commit(tupleFor(b, plane), { acceptingGeneration: 'gen-A' });
+    }
+
+    const r = await LocalDataplaneDriver.create({ store, effects: new FakeEffects() })
+      .recoverConfig();
+
+    expect(r.progress?.http, 'A 는 아무것도 안 했는데 커밋됐다고 적었다').toBe('failed');
+    expect(r.progress?.stream, 'A 는 아무것도 안 했는데 커밋됐다고 적었다').toBe('failed');
+  });
+
+  it('남이 채운 좌표에 내 지연된 commit 이 도착하면 거부된다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    const b: ApplyOperation = { ...OP('B', 'gen-A', '0', '1'), planes: a.planes };
+
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.stage(tupleFor(a, 'http'), null);
+    // A 가 부작용 전에 물러섰다 — 슬롯과 멱등 기록이 사라진다.
+    await agent.release(tupleFor(a, 'http'));
+    // B 가 같은 좌표를 같은 내용으로 채운다.
+    await agent.reserve(tupleFor(b, 'http'));
+    await agent.stage(tupleFor(b, 'http'), null);
+    await agent.commit(tupleFor(b, 'http'), { acceptingGeneration: 'gen-A' });
+
+    // A 의 지연된 commit 이 이제 도착한다. **아무것도 안 했는데 성공을 받으면 안 된다.**
+    const outcome = await agent.commit(tupleFor(a, 'http'), { acceptingGeneration: 'gen-A' })
+      .then(() => 'ok' as const)
+      .catch((e: unknown) => (e instanceof DpRejection ? e.kind : 'other'));
+
+    expect(outcome, '남이 옮긴 좌표를 보고 내가 커밋했다고 답했다').not.toBe('ok');
   });
 });

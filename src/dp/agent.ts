@@ -492,9 +492,27 @@ function finalizeCandidate(
   //
   // 그래서 **저널**에서 가져온다. 저널의 op 는 실행권 아래서 쓰였으므로 상태다 —
   // 호출자가 준 것이 아니라 우리가 그때 적은 것이다. 16차가 막으려던 것에 해당하지 않는다.
+  // **여기도 서명을 읽는다** (27차 CE-27 — 일곱 번째 층).
+  //
+  // 26차에 좌표에 서명을 붙이고 "부류를 닫았다" 고 적었는데 **거짓이었다.**
+  // `reachedPhase` · `failAll` · commit 재요청은 서명으로 바꿨으면서 **여기를 빠뜨렸다.**
+  // 이 자리는 epoch 만 봤다 — 즉 여전히 닮음이다.
+  //
+  // 그래서 내가 http 만 옮기고 stream 을 포기한 뒤 남이 stream 을 옮기면, **혼합 저자
+  // 부분 활성화가 전체 활성화 기준으로 승격**됐다. 좌표는 둘 다 목표 epoch 에 있으니
+  // 닮음으로는 "도착" 이다. 그리고 그 뒤 수렴이 그 세대를 정답으로 게시한다.
+  //
+  // 이것으로 `pendingEpochs` 가 **후보 신원에 결속돼 있지 않은** 문제도 같이 닫힌다 —
+  // 남의 선언이 실려 있어도, 그 평면들을 후보가 놓지 않았으면 도착이 아니다.
+  //
+  // 23·25·27차가 세 번 같은 진단을 했다: **규칙을 세우고 일부 자리에만 적용.**
+  // 규칙을 만들 때 **자리를 세는 것**이 규칙을 만드는 일의 절반이다.
   const epochs = s.pendingEpochs ?? epochsFromJournal(s, ids);
   const arrived = epochs !== undefined && Object.entries(epochs).every(
-    ([plane, epoch]) => s.planes[plane as Plane]?.activationEpoch === epoch,
+    ([plane, epoch]) => {
+      const at = s.planes[plane as Plane];
+      return at?.activationEpoch === epoch && authoredBy(at, candidate);
+    },
   );
   if (arrived) s.lastActivated = candidate;
   // 뮤테이션 스윕이 이 두 줄을 지워도 아무것도 안 빨개진다고 알려줬다. **동치다** —
