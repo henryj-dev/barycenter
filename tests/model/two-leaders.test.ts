@@ -92,6 +92,8 @@ type Seen = {
   activeOperation?: { operationId: string; transitionId: string; leaderToken: string };
   journal?: {
     phase: string;
+    /** P11 이 보려면 평면별 진행이 있어야 한다. payload 에는 원래 있었다. */
+    progress?: Record<string, string>;
     op: {
       operationId: string;
       transitionId: string;
@@ -411,6 +413,42 @@ function checkProperties(
       }
     }
 
+    // P11 — **평면별 진행도 같은 기준으로 참이어야 한다** (26차 CE-26-A).
+    //
+    // P10 은 저널의 phase 만 본다. 그런데 §3.4 는 절반이 더 있다 — **평면별로 어디까지
+    // 갔는가**(`progress`). 25차가 판정 기준을 `reachedPhase()` 에만 넣고 `failAll` 의
+    // 평면별 판정에 안 넣어서 **한 결과 안에서 phase 와 progress 가 모순**됐는데,
+    // 계측기 넷 중 progress 를 보는 것이 하나도 없어서 아무도 못 잡았다.
+    //
+    // "커밋됐다" 는 곧 "내가 그 좌표를 놨다" 다. 서명으로 묻는다.
+    //
+    // **검출력을 쟀다.** `commit` 이 남의 신원을 서명으로 적는 뮤턴트를 P11 이 잡는다 —
+    // 26차가 "이제 구현도 P10 도 `by` 를 읽으므로 commit 이 `by` 를 잘못 쓰는 버그는
+    // 둘 다 못 잡는다" 고 한 그 구멍이 여기서 닫힌다. **progress 는 러너의 장부이고
+    // `by` 는 commit 이 쓴 것이라 서로 독립이다** — 그래서 대조가 뜻을 갖는다.
+    //
+    // 못 잡는 것도 적는다: `failAll` 이 다시 닮음으로 세는 뮤턴트(CE-26-A 그 자체)는
+    // **살아남는다.** 그 자리가 갈리는 무대가 모델에 없다 — conformance 가 든다.
+    if (s.journal?.progress !== undefined) {
+      const j = s.journal;
+      for (const [plane, mark] of Object.entries(j.progress ?? {})) {
+        if (mark !== 'committed') continue;
+        const at = s.planes[plane as Plane];
+        const by = at?.by;
+        const mine = by !== undefined
+          && by.operationId === j.op.operationId
+          && by.transitionId === j.op.transitionId
+          && BigInt(by.leaderToken) === BigInt(j.op.leaderToken);
+        if (!mine) {
+          bad.push({
+            property: 'P11 커밋됐다고 적은 평면은 내가 놓은 것이다',
+            detail: `${plane} 을 committed 로 적었는데 좌표의 서명은 `
+              + `${by === undefined ? '없다' : `${by.operationId}/${by.transitionId}/${by.leaderToken}`}`,
+          });
+        }
+      }
+    }
+
     // P1 — 낡은 행위자는 **지금 하려는 일**을 바꾸지 못한다.
     //
     // 처음엔 `pendingActivation` 과 `lastActivated` 도 여기서 봤다. **틀렸다** (17차 반례 B).
@@ -445,7 +483,24 @@ function checkProperties(
     const moved = idOf(prev?.lastActivated) !== idOf(s.lastActivated);
     if (moved && s.lastActivated !== undefined) {
       promotions += 1;
-      const arrived = PLANES.every((p) => s.planes[p].activationEpoch !== '0');
+      // **번지가 아니라 신원을 본다** (26차 지적 → 27차 준비). 전에는
+      // `activationEpoch !== '0'` 이었다 — "완전한 후보" 의 뜻을 후보의 목표 epoch 이
+      // 아니라 **모델 시나리오의 0→1 전제**에서 가져온 것이다. 그러면 1→2 전환이 부분
+      // 승격되는 뮤턴트는 양 평면이 0 이 아니므로 그냥 통과한다.
+      //
+      // 24차가 구현에서 진단한 "하드코딩 전제" 병형이 계측기 안에 있었다.
+      // 좌표에 서명이 생겼으니(26차) 이제 **승격된 기록이 그 좌표를 놨는지** 직접 묻는다.
+      //
+      // **이 변경은 검출력을 못 쟀다.** 술어가 엄격해진 것은 분명하지만(어느 epoch 에서든
+      // 통하고, 신원까지 본다), 1→2 부분 승격 뮤턴트를 만들 무대가 모델에 없다.
+      // 재지 않은 것은 재지 않았다고 적는다 — 22차 P8 에서 배운 그대로다.
+      const arrived = PLANES.every((p) => {
+        const by = s.planes[p].by;
+        return by !== undefined
+          && by.operationId === s.lastActivated!.operationId
+          && by.transitionId === s.lastActivated!.transitionId
+          && BigInt(by.leaderToken) === BigInt(s.lastActivated!.leaderToken);
+      });
       if (!arrived) {
         bad.push({
           property: 'P3 부분 후보는 승격되지 않는다',
