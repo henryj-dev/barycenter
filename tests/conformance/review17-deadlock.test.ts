@@ -177,3 +177,74 @@ describe('저널에서 뜻을 가져오되 남의 저널은 믿지 않는다', (
     ).toBeUndefined();
   });
 });
+
+describe('고아 저널을 덮을 때는 닫고 덮는다 (반례 D)', () => {
+  /**
+   * 비종단 저널 + 실행권 없음(고아) 상태에서 새 오퍼레이션이 들어오면, `reserveAll` 이
+   * 그 저널을 **그냥 덮었다.** 옛 전환은 종단 기록 없이 증발하고 **예약이 남는다** —
+   * 그 좌표는 아무도 못 쓴다. 6차 ④ · 16차 ② 와 같은 부류다(이번엔 실행권이 아니라 슬롯).
+   *
+   * 17차 검수가 "미확인" 으로 올렸고, 재현했다.
+   */
+  const orphan = async (): Promise<{ store: MemoryStore; a: ApplyOperation }> => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const a = OP('A', 'gen-A', '0', '1');
+    await agent.reserveAll(a, { op: a, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.writeJournal({
+      op: a, phase: 'published', reloadAttempts: 0,
+      seq: (agent.readJournal()?.seq ?? 0) + 1,
+      progress: { http: 'reserved', stream: 'reserved' },
+    });
+    await agent.finishOperation(a); // 실행권만 놓는다 — 저널과 예약은 남는다
+    return { store, a };
+  };
+
+  it('새 오퍼레이션이 들어와도 옛 예약이 남지 않는다', async () => {
+    const { store } = await orphan();
+    expect(
+      new DpAgent(store).reservationOwner('http', '1'),
+      '전제가 성립하지 않는다 — 고아 예약이 있어야 한다',
+    ).toBeDefined();
+
+    const b = OP('B', 'gen-B', '0', '2');
+    await new DpAgent(store).reserveAll(b, {
+      op: b, phase: 'preflight', reloadAttempts: 0, progress: {},
+    });
+
+    expect(
+      new DpAgent(store).reservationOwner('http', '1'),
+      '옛 예약이 남았다 — 그 좌표는 아무도 못 쓴다',
+    ).toBeUndefined();
+  });
+
+  it('옛 전환이 종단 기록 없이 사라지지 않는다', async () => {
+    const { store } = await orphan();
+    const b = OP('B', 'gen-B', '0', '2');
+    await new DpAgent(store).reserveAll(b, {
+      op: b, phase: 'preflight', reloadAttempts: 0, progress: {},
+    });
+
+    const payload = store.load()!.payload as { terminal?: Record<string, string> };
+    expect(
+      Object.keys(payload.terminal ?? {}),
+      '옛 전환이 종단 기록 없이 증발했다 — 무엇이 됐는지 답할 수 없다',
+    ).not.toHaveLength(0);
+  });
+
+  it('진행 중인 남의 저널은 여전히 못 덮는다 — 실행권이 있으면 막힌다', async () => {
+    const store = new MemoryStore();
+    const a = OP('A', 'gen-A', '0', '1');
+    await new DpAgent(store).reserveAll(a, {
+      op: a, phase: 'preflight', reloadAttempts: 0, progress: {},
+    });
+
+    const b = OP('B', 'gen-B', '0', '2');
+    await expect(
+      new DpAgent(store).reserveAll(b, {
+        op: b, phase: 'preflight', reloadAttempts: 0, progress: {},
+      }),
+      '진행 중인 전환을 밀고 들어갔다',
+    ).rejects.toMatchObject({ kind: 'operation_in_flight' });
+  });
+});

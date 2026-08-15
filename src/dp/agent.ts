@@ -869,7 +869,36 @@ export class DpAgent {
         const mine = existing !== undefined
           && existing.op.operationId === op.operationId
           && existing.op.transitionId === op.transitionId;
-        if (!mine) s.journal = { ...opening, seq: (existing?.seq ?? 0) + 1 };
+        if (!mine) {
+          // **닫고 덮는다** (17차 반례 D). 전에는 남의 비종단 저널을 그냥 덮었고, 그
+          // 전환은 종단 기록 없이 증발하면서 **예약이 남았다** — 그 좌표는 아무도 못 쓴다.
+          // 6차 ④ · 16차 ② 와 같은 부류다(이번엔 실행권이 아니라 슬롯).
+          //
+          // 여기 온 시점에 실행권은 없다(있으면 위에서 `operation_in_flight` 로 막혔다).
+          // 즉 그 저널은 **고아**이고, 닫는 것이 안전하다. 무엇이 됐는지는 남긴다 —
+          // "왜 사라졌나" 에 답할 수 없으면 장애 분석이 근거를 잃는다(I7 과 같은 이유).
+          if (existing !== undefined && !isTerminalPhase(existing.phase)) {
+            // **무엇이 됐는지 남긴다.** 예약만 반납하고 기록을 안 남기면 "그 전환은
+            // 어떻게 끝났나" 에 답할 수 없다 — I7 이 지키려는 것과 같은 것이다.
+            for (const plane of planesOf(existing.op)) {
+              const key = transitionKey(tupleFor(existing.op, plane));
+              if (s.terminal[key] === undefined) s.terminal[key] = 'aborted';
+            }
+            supersede(s, {
+              operationId: existing.op.operationId,
+              transitionId: existing.op.transitionId,
+              leaderToken: normalizeNumeric(existing.op.leaderToken, 'leaderToken'),
+              planes: planesOf(existing.op),
+              epochs: Object.fromEntries(
+                planesOf(existing.op).map((plane) => [
+                  plane,
+                  normalizeNumeric(existing.op.planes[plane]!.target.activationEpoch, 'activationEpoch'),
+                ]),
+              ),
+            });
+          }
+          s.journal = { ...opening, seq: (s.journal?.seq ?? existing?.seq ?? 0) + 1 };
+        }
       }
       return acks;
     });
