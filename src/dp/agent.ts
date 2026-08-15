@@ -501,6 +501,20 @@ function sameRecordIdentity(a: PublishRecord, b: PublishRecord): boolean {
     && a.leaderToken === b.leaderToken;
 }
 
+/**
+ * **어느 절이 방어적인가** (뮤테이션 스윕이 알려줬다).
+ *
+ * 아래를 지워도 529 개가 전부 초록이다 — 지금 도달하는 길이 없다는 뜻이다.
+ *
+ *   · I1 의 예약 토큰 절 (`slot.op.leaderToken > max`) — `acquire` 가 `assertLeader`
+ *     뒤에 오므로 최신보다 높은 토큰의 예약이 만들어지지 않는다.
+ *   · I7 의 종단 **변경** 절 (`now !== was`) — `finalize` 가 이미 종단이면 안 쓴다.
+ *     삭제 절도 마찬가지다(그건 이미 적어 뒀다).
+ *
+ * 남기는 이유는 하나다: **그 전제를 깨는 변경이 오면 여기가 소리를 낸다.** 다만 이
+ * 목록을 근거로 "상태 축은 전부 검사된다" 고 읽으면 안 된다. 실제로 이빨이 확인된 절은
+ * I1 의 실행권 토큰 · I3 의 단조성 · I5 의 새 intent · I6 둘이다.
+ */
 export function assertInvariants(before: AgentState | undefined, next: AgentState): void {
   const big = (v: string): bigint => BigInt(v);
 
