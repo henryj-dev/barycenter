@@ -1195,3 +1195,77 @@ describe('서명 없는 좌표가 영구 봉쇄를 만든다 (28차 CE-28)', () 
     expect(fenced, '신임 리더도 못 들어온다').toBe('ok');
   });
 });
+
+describe('서명 비교의 세 축이 전부 일한다 (28차 — 넷이 미검사였다)', () => {
+  /**
+   * 26차에 `authoredBy` 를 만들며 **"`ownsJournal` 과 같은 삼중 비교다 — id 만으로는
+   * fence 뒤 같은 id 재사용을 못 가른다"** 고 적었다. 그런데 28차에 각 절을 뮤테이션해
+   * 보니 **넷 다 살았다** — `transitionId` 도, `leaderToken` 도, epoch 절도, 정규화도
+   * 아무 테스트가 안 겨눴다. 실제로 일하고 있던 것은 `operationId` 하나뿐이었다.
+   *
+   * 이번 회차의 병("적었으니 됐다")이 **서명 비교 자신**에도 있었다. 근거를 적는 것이
+   * 검사를 대체하면, 세 축 중 둘이 장식이어도 아무도 모른다.
+   *
+   * 그래서 비교를 **직접** 겨눈다. 저널·실행권을 거쳐 가면 그 기계들이 먼저 막아
+   * 정작 비교가 일하는지 못 본다 — 15차에 배운 "픽스처가 통과시킨 것" 과 같은 함정이다.
+   */
+  const withCommitted = async (): Promise<{ store: MemoryStore; op: ApplyOperation }> => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op = OP('A', 'gen-A', '0', '1');
+    await agent.reserveAll(op, { op, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    for (const plane of ['http', 'stream'] as const) {
+      await agent.stage(tupleFor(op, plane), null);
+      await agent.commit(tupleFor(op, plane), { acceptingGeneration: 'gen-A' });
+    }
+    return { store, op };
+  };
+
+  it('operationId 가 같아도 transitionId 가 다르면 내 것이 아니다', async () => {
+    const { store, op } = await withCommitted();
+    const retry: ApplyOperation = { ...op, transitionId: 'A-t2' };
+    expect(
+      new DpAgent(store).movedByMe(retry, 'http'),
+      '앞 전환이 놓은 좌표를 이번 전환의 공로로 셌다',
+    ).toBe(false);
+  });
+
+  it('fence 뒤 같은 id 를 다시 내면 옛 토큰의 좌표는 내 것이 아니다', async () => {
+    const { store, op } = await withCommitted();
+    const reissued: ApplyOperation = { ...op, leaderToken: '11' };
+    expect(
+      new DpAgent(store).movedByMe(reissued, 'http'),
+      '옛 리더가 놓은 좌표를 신임의 공로로 셌다 — 삼중 비교의 세 번째 축이다',
+    ).toBe(false);
+  });
+
+  it('서명이 맞아도 좌표가 다른 epoch 이면 도착이 아니다', async () => {
+    const { store, op } = await withCommitted();
+    const ahead: ApplyOperation = {
+      ...op,
+      planes: {
+        http: {
+          payloadDigest: op.planes.http!.payloadDigest,
+          expectedCurrent: { activationEpoch: '1', membershipRevision: '1' },
+          target: { activationEpoch: '2', membershipRevision: '2' },
+        },
+        stream: op.planes.stream!,
+      },
+    };
+    expect(
+      new DpAgent(store).movedByMe(ahead, 'http'),
+      '서명만 보고 좌표를 안 봤다 — 아직 안 간 곳을 갔다고 셌다',
+    ).toBe(false);
+  });
+
+  it('토큰 표기가 달라도 같은 토큰이면 내 것이다', async () => {
+    const { store, op } = await withCommitted();
+    // `'010'` 과 `'10'` 은 같은 토큰이다 (6차 반례 ⑦ 의 정규화). 정규화를 빼면 **거짓
+    // 음성**이 난다 — 내가 놓은 것을 남의 것으로 읽고 비관적으로 닫는다.
+    const padded: ApplyOperation = { ...op, leaderToken: '010' };
+    expect(
+      new DpAgent(store).movedByMe(padded, 'http'),
+      '표기만 다른 같은 토큰을 남의 것으로 읽었다',
+    ).toBe(true);
+  });
+});
