@@ -1118,13 +1118,18 @@ export class DpAgent {
           `(${op.plane}, ${op.target.activationEpoch}) 는 ${transitionKey(slot.op)} 의 것이다`,
         );
       }
-      // **여기는 지금 도달할 수 없다** (뮤테이션 스윕이 알려줬다). 바로 위의
-      // `canonical(slot.op) !== canonical(op)` 가 `expectedCurrent` 를 포함하므로,
-      // 기대 좌표가 다르면 그쪽에서 `slot_taken` 으로 먼저 걸린다.
+      // **여기가 마지막 문이다.** 한때 "도달 불가" 라고 적었는데 **틀렸다** (17차 검수).
       //
-      // 그래도 남긴다 — `canonical` 에서 좌표를 빼는 변경이 오면 여기가 마지막 문이다.
-      // 다만 **이걸 근거로 "CAS 를 검사한다" 고 읽으면 안 된다.** 실제로 막고 있는 것은
-      // 위의 신원 검사다.
+      // 위의 `canonical` 비교는 **슬롯의 튜플과 요청 튜플** 사이다. 슬롯 주인이 자기
+      // 자신이면 그건 통과한다. 이 검사는 **현재 좌표와 기대 좌표** 사이라 다른 것을 본다.
+      //
+      // 도달하는 길: 같은 평면에 두 슬롯(epoch 1·2)을 잡아 두고 늦은 것을 먼저 commit
+      // 하면 좌표가 2 로 간다. 그 뒤 epoch 1 짜리 commit 이 오면 슬롯 주인은 자기지만
+      // 좌표가 어긋난다 — 여기서 `coordinate_mismatch` 로 막힌다. 이 문을 없애면 좌표가
+      // 2 에서 1 로 되돌아가려다 I3 에 걸린다.
+      //
+      // 뮤테이션이 살아남은 것은 도달 불가라서가 아니라 **그 시퀀스를 지나는 테스트가
+      // 없어서**였다. 스윕 결과를 "도달 불가" 로 읽은 것이 내 실수다.
       if (!sameCoordinate(current, op.expectedCurrent)) {
         throw new DpRejection('coordinate_mismatch', `${op.plane} 좌표가 기대와 다르다`);
       }

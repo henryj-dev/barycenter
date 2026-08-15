@@ -367,3 +367,46 @@ describe('실패로 닫을 때도 실행권을 놓는다', () => {
     expect(next.phase, '실패한 전환이 다음 것을 막고 있다').toBe('activated');
   });
 });
+
+describe('좌표 CAS 는 마지막 문이다 — 도달 불가가 아니다 (17차)', () => {
+  /**
+   * 스윕에서 `if (!sameCoordinate(current, op.expectedCurrent))` 가 살아남기에 **도달
+   * 불가라고 적었다. 틀렸다.** 17차 검수가 반증했고 재현했다.
+   *
+   * 위의 `canonical` 비교는 **슬롯의 튜플과 요청 튜플** 사이다 — 슬롯 주인이 자기
+   * 자신이면 통과한다. 이 검사는 **현재 좌표와 기대 좌표** 사이라 다른 것을 본다.
+   *
+   * 살아남은 이유는 도달 불가가 아니라 **그 시퀀스를 지나는 테스트가 없어서**였다.
+   * 스윕 결과를 잘못 읽은 것이다 — 생존을 "도달 불가" 로 결론내기 전에 길을 찾아봐야 했다.
+   */
+  it('늦은 epoch 이 먼저 넘어간 뒤 옛 commit 은 좌표로 막힌다', async () => {
+    const agent = new DpAgent(new MemoryStore());
+    const early = {
+      leaderToken: '10', operationId: 'X', transitionId: 'X', plane: 'http' as const,
+      expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+      target: { activationEpoch: '1', membershipRevision: '1' },
+      payloadDigest: 'sha256:h-X', targetGeneration: 'gen-X', generationDigest: 'sha256:gen-X',
+    };
+    const late = { ...early, operationId: 'Y', transitionId: 'Y',
+      target: { activationEpoch: '2', membershipRevision: '2' },
+      payloadDigest: 'sha256:h-Y', targetGeneration: 'gen-Y', generationDigest: 'sha256:gen-Y' };
+
+    // 같은 평면에 두 슬롯을 잡는다. `reserve` 원시 연산에는 실행권 검사가 없다.
+    await agent.reserve(early);
+    await agent.reserve(late);
+
+    // 늦은 것을 먼저 넘긴다 — 좌표가 2 로 간다.
+    await agent.stage(late, null);
+    await agent.commit(late, { acceptingGeneration: 'gen-Y' });
+    expect(agent.coordinate('http').activationEpoch, '전제가 성립하지 않는다').toBe('2');
+
+    // 이제 옛 commit 이 온다. 슬롯 주인은 자기 자신이라 신원 검사는 통과한다.
+    await agent.stage(early, null);
+    await expect(
+      agent.commit(early, { acceptingGeneration: 'gen-X' }),
+      '좌표가 지나갔는데 옛 commit 을 받아들였다',
+    ).rejects.toMatchObject({ kind: 'coordinate_mismatch' });
+
+    expect(agent.coordinate('http').activationEpoch, '좌표가 되돌아갔다').toBe('2');
+  });
+});
