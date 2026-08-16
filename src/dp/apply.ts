@@ -392,6 +392,17 @@ export class ApplyRunner {
       // 그래도 바꾼 채로 둔다: 술어가 갈라져 있으면 언젠가 하나가 뒤처진다(CE-35-A 가
       // 바로 그것이었다). **동치를 동치라고 적을 뿐 검출력이 있다고 적지 않는다.**
       if (!ownsJournal(j, bound)) {
+        // **여기는 id 만 본다 — 위임에 의한 무해다** (37차 census).
+        //
+        // 34·35·36차의 census 가 **세 번 다 이 자리를 안 셌다.** 위험 방향(낡은 러너가
+        // 남의 실행권을 놓는 것)은 `finishOperation` 이 홀더 토큰을 보고 막는다. 그래서
+        // 지금은 무해하지만 **근거가 하류에 있다** — `finishOperation` 의 토큰 검사가
+        // 바뀌면 이 자리가 조용히 열린다.
+        //
+        // `ownsJournal` 로 모으지 않는 이유: 낡은 러너가 **자기** 실행권을 놓는 것은
+        // 옳은 일이고, 그때 홀더는 자기 토큰이라 토큰을 봐도 결과가 같다. 즉 여기서
+        // 토큰을 더하는 것은 동치이고, **동치를 넣으면 다음 스윕이 그것을 짚는다**(24차).
+        // 그래서 술어 대신 근거를 적는다.
         const mine = this.agent.activeOperation();
         if (mine?.operationId === bound.operationId && mine.transitionId === bound.transitionId) {
           await this.agent.finishOperation(bound);
@@ -407,6 +418,10 @@ export class ApplyRunner {
       if (isTerminalPhase(j.phase)) {
         // **놓을 것이 있을 때만 쓴다.** `finishOperation` 은 직렬 구간이라 부를 때마다
         // durable write 가 하나 생긴다 — 정상 경로에서 크래시 지점이 늘어난다.
+        // 여기도 id 만 본다 (37차 census — 여섯 번째 자리). 이 분기는 저널이 **내
+        // 것**(바로 위 `ownsJournal` 통과)인 전제 아래 있고, I1 이 홀더 토큰 = 최신
+        // 토큰을 보장하므로 홀더 토큰이 저널과 다른 상태는 불능이다. **구조적 무해**이고,
+        // 위 자리와 달리 하류 위임이 아니다.
         const holder = this.agent.activeOperation();
         if (holder?.operationId === j.op.operationId
           && holder.transitionId === j.op.transitionId) {
