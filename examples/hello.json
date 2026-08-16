@@ -1,0 +1,17 @@
+[
+  {
+    "op": "put", "kind": "pool", "key": "app",
+    "body": { "protocolClass": "http", "algorithm": "round_robin" }
+  },
+  {
+    "op": "put", "kind": "backend", "key": "a-11",
+    "body": { "pool": "app", "host": "demo-backend", "port": 11, "weight": 1 }
+  },
+  {
+    "op": "put", "kind": "listener", "key": "front",
+    "body": {
+      "protocol": "http", "bind": "0.0.0.0", "port": 999, "enabled": true,
+      "http": { "defaultAction": { "pool": "app" } }
+    }
+  }
+]

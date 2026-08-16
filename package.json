@@ -24,7 +24,9 @@
     "test:engine": "./tests/engine/run.sh",
     "typecheck": "tsc --noEmit",
     "test:store": "vitest run tests/store",
-    "build": "./scripts/build.sh"
+    "build": "./scripts/build.sh",
+    "token": "node scripts/token.mjs",
+    "quickstart": "./scripts/quickstart.sh"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
@@ -36,7 +38,8 @@
     "pg": "^8.23.0"
   },
   "bin": {
-    "barycenterd": "./dist/bin/barycenterd.js"
+    "barycenterd": "./dist/bin/barycenterd.js",
+    "bary": "./dist/bin/bary.js"
   },
   "main": "./dist/index.js",
   "files": [

@@ -55,6 +55,38 @@ DESIGN.md    2,400+ 줄
 
 ---
 
+### 제품화 초안 — 남이 띄울 수 있는 물건이 됐다 (2026-08-17)
+
+v0.1 완료 판정은 **테스트가** 통과시킨 것이지 사람이 띄울 수 있다는 뜻은 아니었다.
+그 사이를 메웠다.
+
+```
+docker compose -f deploy/docker-compose.yml up -d --build
+node dist/bin/bary.js apply examples/hello.json
+curl :8999   →   hello from A:11
+```
+
+- `deploy/Dockerfile` — **엔진과 에이전트가 한 컨테이너**다. 쪼갤 수 없다(§3.2 · §11.1,
+  링크 교체가 안 보인다는 실측). 런타임 이미지에는 `npm` 도 devDependency 도 없다.
+- `deploy/docker-compose.yml` — PG + 데이터 플레인 + 예제 백엔드. API 는 **루프백에만** 묶는다.
+- `src/bin/bary.ts` — CLI. **v0.4 의 전체 CLI 가 아니다**(범위를 주석에 밝혔다).
+  매니페스트 문법을 새로 만들지 않고 API 가 받는 patch 배열 그대로 쓴다 — 모양이 둘이면
+  갈라지고, 갈라지면 어느 쪽이 계약인지 아무도 모른다.
+- `scripts/token.mjs` — 토큰 발급. **설정에는 해시만 들어간다.**
+- `scripts/quickstart.sh` — **README 의 절차를 그대로 돌리고 확인한다.** 손으로 확인하는
+  문서는 반드시 썩는다.
+
+**만들면서 나온 것 셋.** `build.sh` 가 bash 전용이라 alpine 빌드에서 `exit 127`(이미지
+안에서도 도는 스크립트인데 최소 셸을 가정하지 않았다). 런타임 이미지에 `npm` 이 없어 또
+127 — 의존성 스테이지를 따로 뺐다. compose 에 처음 적은 토큰 해시는 **내가 지어낸 값**이라
+실제로 계산해 넣었다.
+
+README 의 "Status: not a product yet" 을 사실에 맞췄고, **아직 아닌 것**을 같은 자리에
+적었다 — 리더 선출 없음(두 번째 인스턴스는 자기도 리더라고 믿는다) · 멤버십 평면 없음 ·
+TLS·ACME·GUI 없음.
+
+---
+
 ### v0.1 완료 판정 통과 — `curl :999 → A:11` (2026-08-16)
 
 **제품 표면이 처음으로 생겼다.** 50 회차 동안 이미 지은 것의 정확성에만 썼는데, S19 로

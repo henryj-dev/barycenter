@@ -1,0 +1,72 @@
+# barycenter 최소 배포 — v0.1
+#
+#   cd deploy && docker compose up --build
+#
+# ⚠️ **단일 인스턴스 전제다.** v0.1 에는 리더 선출이 없다 (§3.5 는 있는데 그 토큰을
+# 발급하는 주체가 없다). `BARY_LEADER_TOKEN` 이 환경변수인 것이 그 사실을 드러낸다 —
+# 두 대를 띄우고 같은 PG 를 보게 하면 **둘 다 자기가 리더라고 믿는다.** 늘리려면
+# v0.2 의 리더 선출이 먼저다.
+#
+# ⚠️ **데이터 플레인 포트는 손으로 연다.** 리스너를 새로 만들 때마다 여기 `ports` 에
+# 그 포트를 더해야 밖에서 닿는다. §11.3 이 적은 그대로다 — 임의 포트를 동적으로
+# 노출하는 문제라 v1 권장 배포는 전용 VM + hostNetwork 다.
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: bary
+      POSTGRES_DB: bary
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready` 만으로는 부족하다 — 초기화 중의 임시 서버도 참을 답한다.
+      # 실제 접속으로 확인한다.
+      test: ["CMD-SHELL", "psql -U postgres -d bary -c 'SELECT 1' >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # 예제용 백엔드. **제품의 일부가 아니다** — `examples/hello.json` 의 `:11` 이
+  # 가리킬 곳이 필요해서 둔다. 실제 배포에서는 지운다.
+  demo-backend:
+    image: openresty/openresty:alpine
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mkdir -p /b/logs &&
+        printf 'error_log logs/e.log warn;\npid logs/p.pid;\nevents{worker_connections 64;}\nhttp{access_log off;server{listen 11;location /{return 200 "hello from A:11\\n";}}}\n' > /b/nginx.conf &&
+        exec /usr/local/openresty/bin/openresty -p /b -c /b/nginx.conf -g 'daemon off;'
+
+  dataplane:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+      demo-backend:
+        condition: service_started
+    environment:
+      BARY_DSN: postgres://postgres:bary@db:5432/bary
+      # 토큰은 **해시로** 준다. 평문을 받아 주면 그 편의가 기본값이 되고 이 파일이
+      # 곧 비밀이 된다. 해시 만들기: `npm run token -- <평문>`
+      #
+      # 아래는 평문 `dev-token` 의 해시다. **개발용이다 — 그대로 쓰지 말 것.**
+      BARY_TOKENS: >-
+        [{"name":"dev","scopes":["read","write","apply"],
+          "hash":"sha256:c91cbbedf8c712e8e2b7517ddeca8fe4fde839ebd8339e0b2001363002b37712"}]
+    ports:
+      # 컨트롤 플레인 API. **루프백에만 묶는다** — 인증이 있어도 관리 표면을 기본으로
+      # 열어 두지 않는다.
+      - "127.0.0.1:8088:8088"
+      # 데이터 플레인. 아래는 README 의 예시(`:999`)를 위한 것이다.
+      - "127.0.0.1:8999:999"
+    # 세대와 `current` 링크는 **컨테이너 안에서만** 다뤄야 한다 (§3.2 · §7.2).
+    # 호스트 bind mount 로 빼면 링크 교체가 엔진 쪽에 안 보인다 — 실측했다.
+    volumes:
+      - prefix:/prefix
+
+volumes:
+  pgdata:
+  prefix:

@@ -4,22 +4,66 @@
 
 > *A barycenter is the common center of mass that bodies in a system actually orbit — the point where the whole thing balances.*
 
-> ⚠️ **Status: design + architecture spike. Not a product yet.**
-> The design lives in [`DESIGN.md`](./DESIGN.md) and the test cases derived from it in
-> [`TESTS.md`](./TESTS.md) (both written in Korean). Three rounds of external review are folded
-> in; the rebuttals — including three that were later withdrawn — are recorded in §15.
+> ⚠️ **Status: v0.1 — it runs, and it is a draft.**
+> `docker compose up` gives you a control plane you can drive over REST: a change goes through
+> a changeset, gets planned, committed, rendered, published as an immutable generation, and
+> activated on real nginx — with the activation *proven* before any coordinate moves.
+> The [Quickstart](#quickstart) below ends with `curl` reaching a backend.
 >
-> **The data model, API, and DB schema are deliberately *not* frozen yet** (§12.0). What is
-> implemented is the part whose contract the engine already decides — the config renderer and
-> its validators — plus throwaway spikes that answer the questions the design was betting on.
+> **What it is not yet.** There is no leader election — `BARY_LEADER_TOKEN` is an environment
+> variable, so **a second instance against the same database would believe it is the leader
+> too**. Single instance only. There is no membership plane yet either (v0.3), so changing one
+> backend still costs a full generation switch and a reload. TLS termination, ACME, health
+> probing and the GUI are all later milestones (§12.1).
+>
+> The design lives in [`DESIGN.md`](./DESIGN.md) and the test cases derived from it in
+> [`TESTS.md`](./TESTS.md) (both written in Korean). Fifty rounds of adversarial review are
+> folded in; what each one found — including the times the review was wrong, and the times my
+> own fix opened the next hole — is recorded in [`STATUS.md`](./STATUS.md).
+>
+> **The API and DB schema are still not frozen** (§9.1.1). They get fixed *with* the
+> implementation, and the implementation is not finished.
 
-Run everything with `./scripts/verify.sh` (or `--quick` to skip the Docker-backed suites).
+## Quickstart
+
+Everything below runs from the repository root.
+
+```sh
+docker compose -f deploy/docker-compose.yml up -d --build   # PostgreSQL + data plane + demo backend
+
+export BARY_URL=http://127.0.0.1:8088
+export BARY_TOKEN=dev-token                    # dev only — see `npm run token`
+
+npm ci && npm run build                        # builds the daemon and the CLI
+node dist/bin/bary.js status                   # nothing published yet
+node dist/bin/bary.js apply examples/hello.json
+
+curl http://127.0.0.1:8999/                    # → hello from A:11
+```
+
+`./scripts/quickstart.sh` runs exactly these steps and checks the result, so the instructions
+above cannot rot silently.
+
+What `apply` did, in order: opened a changeset on the current head, accumulated the patch,
+**sealed** it into a plan (showing which sockets it would open — that is where a bind failure
+would surface), committed it (reserving revision *and* a fresh activation epoch), rendered it,
+materialized an immutable generation directory, published it by an atomic symlink swap, sent
+one `SIGHUP`, **read the generation literal baked into that config back over HTTP to prove the
+reload took effect**, and only then moved the plane coordinates.
+
+If any of that fails, the coordinates do not move and `bary` exits non-zero with the reason.
+
+Run all the checks with `./scripts/verify.sh` (or `--quick` to skip the Docker-backed suites).
 
 | | | |
 |---|---|---|
-| `npm test` | 116 | renderer · string contracts · socket overlap · route compiler · engine capabilities |
-| `npm run test:golden` | 8 | rendered output must pass `nginx -t` **on the real engine** |
-| `npm run test:engine` | 43 | nginx/OpenResty behaviours the design takes for granted |
+| `npm test` | 223 | renderer · string contracts · socket overlap · route compiler · engine capabilities |
+| `npm run test:conformance` | 381 | counterexamples reproduced from 50 review rounds |
+| `npm run test:model` | 13 | a scheduler *generates* interleavings and hits properties P0–P11 |
+| `npm run test:store` | 19 | changeset → plan → commit on **real PostgreSQL** |
+| `npm run test:golden` | 10 | rendered output must pass `nginx -t` **on the real engine** |
+| `npm run test:e2e` | 24 | the whole chain on real nginx, including `curl :999 → A:11` |
+| `npm run test:engine` | 65 | nginx/OpenResty behaviours the design takes for granted |
 | `./spike/s1-s5/run.sh` | 8 | reload-free membership changes across HTTP/TCP/UDP |
 | `./spike/s7/run.sh` | 9 | proving a reload actually took effect |
 | `./spike/s8/run.sh` | 11 | rolling a certificate back to an earlier generation |
