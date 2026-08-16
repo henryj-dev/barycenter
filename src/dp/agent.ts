@@ -868,11 +868,30 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
       );
     }
   }
+  // **"지워지지 않는다" 에서 "서 있는 자리의 근거는 지워지지 않는다" 로 좁혔다** (빚 갚기).
+  //
+  // 원래 절은 근거를 하나도 못 지우게 했고, 그래서 이 표가 **무한히 자랐다** — 측정했다:
+  // 전환 200 개에 항목 200 개다. 이 표는 사후 감사용이고 프로덕션 독자가 없어서
+  // 보존 창을 두는 것이 그 목적에 맞다.
+  //
+  // 그러나 **지금 서 있는 좌표의 근거**는 다르다. 그건 과거가 아니라 현재에 대한 물음이고
+  // ("우리는 왜 여기 있나"), 지우면 답할 사람이 없다. 그것만 지킨다 — 그리고 이 절은
+  // 원래 절과 달리 **뜻이 있다**: 지우면 안 되는 것을 이름 지어 말한다.
+  //
+  // **다만 이빨은 재 보니 조건부다.** 서 있는 자리를 지우는 뮤턴트를 넣었더니 잡은 것은
+  // 이 절이 아니라 conformance 테스트였다 — `prune` 이 `assertInvariants` **앞에서**
+  // 돌기 때문에, 근거가 만들어진 **그 쓰기에서** 지워지면 `before` 에 없어서 이 비교가
+  // 못 본다. 나중 쓰기에서 지우는 경우만 잡는다.
+  //
+  // 원래 절(검출력 0)보다는 낫지만 "이빨이 있다" 고 적을 수는 없다. **검출기는 테스트다.**
+  const standing = new Set(
+    (Object.keys(next.planes) as Plane[]).map((p) => `${p}:${next.planes[p].activationEpoch}`),
+  );
   for (const key of Object.keys(before.activationEvidence)) {
-    if (next.activationEvidence[key] === undefined) {
+    if (next.activationEvidence[key] === undefined && standing.has(key)) {
       throw new InvariantViolation(
-        'I7 근거는 지워지지 않는다',
-        `${key} 로 옮긴 근거가 사라졌다 — 왜 옮겼는지 답할 수 없게 된다`,
+        'I7 서 있는 자리의 근거는 지워지지 않는다',
+        `${key} 로 옮긴 근거가 사라졌다 — 지금 왜 여기 있는지 답할 수 없게 된다`,
       );
     }
   }
@@ -1855,6 +1874,17 @@ const key = (op: OperationTuple, step: Step): string =>
 const COMPLETED_RETENTION = 64;
 
 /**
+ * `activationEvidence` 를 몇 개까지 들고 갈 것인가.
+ *
+ * 이 표는 **사후 감사**용이다 — "왜 이 좌표로 옮겼나". 프로덕션 독자가 없다(`evidenceFor`
+ * 를 부르는 것은 테스트뿐이다). 그래서 "최근 것을 답할 수 있다" 로 족하고, 창세부터의
+ * 전부를 들고 있을 이유가 없다.
+ *
+ * **지금 서 있는 좌표의 근거는 창 밖이어도 안 지운다** — 그건 지금 답해야 할 물음이다.
+ */
+const EVIDENCE_RETENTION = 64;
+
+/**
  * **자란 것을 자른다** (빚 갚기).
  *
  * 22~27차가 여섯 번 지적한 것: `completed` 는 전환마다 영구 누적돼 **무한히 자란다.**
@@ -1868,7 +1898,28 @@ const COMPLETED_RETENTION = 64;
  * 진행 중인 전환(`activeOperation`)과 저널이 가리키는 전환은 **자르지 않는다** — 그건
  * 지금 답해야 할 재요청이다.
  */
+/**
+ * 근거 기록을 자른다.
+ *
+ * `terminal` 은 **안 자른다.** 그건 감사 기록이 아니라 **부활 방지 장치**다 —
+ * `admit` 이 지연 도착한 RPC 를 `aborted`/`failed` 로 거부하는 근거이고, 지우면 운영자가
+ * 포기한 전환이 되살아난다. 토큰이 낡은 것만 자르는 규칙도 안전하지 않다: 후보가 fence 를
+ * 건너 승계될 수 있어(14차 고아 방지) 낡은 토큰의 종단 기록을 지금 후보가 읽는다
+ * (`candidateArrived` 의 원장 폴백). **그래서 남긴다 — 자를 규칙을 못 찾은 것이지
+ * 안 자라는 것이 아니다.**
+ */
+function pruneEvidence(s: AgentState): void {
+  const keys = Object.keys(s.activationEvidence);
+  if (keys.length <= EVIDENCE_RETENTION) return;
+  const standing = new Set(
+    (Object.keys(s.planes) as Plane[]).map((p) => `${p}:${s.planes[p].activationEpoch}`),
+  );
+  const drop = keys.filter((k) => !standing.has(k)).slice(0, keys.length - EVIDENCE_RETENTION);
+  for (const k of drop) delete s.activationEvidence[k];
+}
+
 function prune(s: AgentState): void {
+  pruneEvidence(s);
   const keys = Object.keys(s.completed);
   if (keys.length === 0) return;
   const transitionOf = (k: string): string => k.split(':').slice(0, 2).join(':');

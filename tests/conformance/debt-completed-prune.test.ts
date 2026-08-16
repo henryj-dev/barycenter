@@ -144,3 +144,48 @@ describe('방패가 사라진 뒤 — 측정한 것만 적는다', () => {
     expect(late, '잘린 기록 자리에서 새 전환이 시작됐다 — 되살아났다').toBe('terminal');
   });
 });
+
+describe('근거 기록도 자란다 — 절반만 자를 수 있다', () => {
+  /**
+   * `completed` 를 자르고 나서 재 봤더니 **`terminal` 과 `activationEvidence` 도 선형으로
+   * 자라고 있었다.** 빚이 하나인 줄 알았는데 셋이었다.
+   *
+   * ```
+   * n=50   completed=150  terminal=50   evidence=50
+   * n=200  completed=192  terminal=200  evidence=200
+   * ```
+   *
+   * `activationEvidence` 는 잘랐다 — **사후 감사용이고 프로덕션 독자가 없다**
+   * (`evidenceFor` 를 부르는 것은 테스트뿐이다). 다만 **지금 서 있는 좌표의 근거**는
+   * 창 밖이어도 안 지운다. 그건 과거가 아니라 현재에 대한 물음이다.
+   *
+   * `terminal` 은 **못 잘랐다.** 그건 감사 기록이 아니라 부활 방지 장치다 — 지우면
+   * 운영자가 포기한 전환이 되살아난다. 토큰이 낡은 것만 자르는 규칙도 안전하지 않다:
+   * 후보가 fence 를 건너 승계될 수 있어 낡은 토큰의 종단 기록을 지금 후보가 읽는다.
+   * **자를 규칙을 못 찾은 것이지 안 자라는 것이 아니다** — 한계 목록에 그렇게 적었다.
+   */
+  it('근거 기록이 유계다', async () => {
+    const at = async (n: number): Promise<number> => {
+      const store = new MemoryStore();
+      const agent = new DpAgent(store);
+      for (let i = 1; i <= n; i += 1) {
+        await transition(agent, OP(`op-${i}`, String(i - 1), String(i)));
+      }
+      const p = store.load()!.payload as { activationEvidence: Record<string, unknown> };
+      return Object.keys(p.activationEvidence).length;
+    };
+    expect(await at(200), '근거 기록이 전환 수만큼 자란다').toBe(await at(100));
+  });
+
+  it('지금 서 있는 자리의 근거는 자르지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    for (let i = 1; i <= 200; i += 1) {
+      await transition(agent, OP(`op-${i}`, String(i - 1), String(i)));
+    }
+    expect(
+      new DpAgent(store).evidenceFor('http', '200'),
+      '지금 여기 있는 이유를 답할 수 없게 됐다',
+    ).toBeDefined();
+  });
+});
