@@ -40,6 +40,10 @@ echo "════════════════════════�
 
 run "typecheck            " npx tsc --noEmit
 run "표면 (계약 고정)     " node scripts/surface.mjs --check
+
+# **재현물 게이트** (48차 처방 B). 39·40차에 규칙을 산문으로 세웠는데 46차에 또 어겼다 —
+# 규칙이 산문이라 안 지켜진다. 기본은 직전 커밋을 본다.
+[ $QUICK -eq 0 ] && run "재현물 (핀 검사)     " node scripts/pinned.mjs HEAD~1
 run "unit                 " npm test --silent
 run "conformance (반례)   " npm run test:conformance --silent
 run "모델 (스케줄 생성)   " npx vitest run tests/model --silent
