@@ -507,7 +507,12 @@ function candidateArrived(
     // 서명이 있으면 서명이 답한다. 없으면(26차 이전 상태) **신원 있는 다른 증거**를
     // 읽는다 — `terminal` 원장의 키는 `operationId:transitionId:plane` 이다.
     return at.by === undefined
-      ? s.terminal[`${candidate.operationId}:${candidate.transitionId}:${plane}`] === 'activated'
+      // 키에 토큰이 들어갔다 (44차) — 후보의 토큰으로 조회한다. 손으로 만드는 자리라
+      // `transitionKey` 와 갈릴 수 있어 **모양을 같이 둔다.**
+      ? s.terminal[
+        `${candidate.operationId}:${candidate.transitionId}:`
+        + `${normalizeNumeric(candidate.leaderToken, 'leaderToken')}:${plane}`
+      ] === 'activated'
       : authoredBy(at, candidate);
   });
 }
@@ -1232,15 +1237,9 @@ export class DpAgent {
         // (42차 테스트가 초록이던 것은 좌표가 겹쳐 `slot_taken` 이 임계구역을 통째로
         // 롤백해 줬기 때문이다 — **우연한 방패**가 자기 회귀 테스트 안에서 재발했다.)
         const mine = new Set(planesOf(op).map((plane) => transitionKey(tupleFor(op, plane))));
-        const liveElsewhere = (plane: Plane): boolean =>
-          Object.values(s.reservations[plane] ?? {}).some(
-            (slot) => sameTransitionName(slot.op, stale.op) && !ownsSlotOp(slot.op, stale.op),
-          );
         for (const plane of planesOf(stale.op)) {
           const key = transitionKey(tupleFor(stale.op, plane));
-          if (s.terminal[key] === undefined && !mine.has(key) && !liveElsewhere(plane)) {
-            s.terminal[key] = 'aborted';
-          }
+          if (s.terminal[key] === undefined && !mine.has(key)) s.terminal[key] = 'aborted';
         }
         supersede(s, {
           operationId: stale.op.operationId,
@@ -1747,7 +1746,21 @@ export class DpAgent {
       // 실제 좌표는 http=1 / stream=0 인데. 전 평면이 넘어갔을 때만 "여기로 되돌린다"
       // 고 말할 수 있다.
       // 완결의 뜻은 실행권이 안다 — `reserveAll` 이 **전체** 오퍼레이션을 보고 적었다.
-      const declared = s.activeOperation?.epochs;
+      //
+      // **그 실행권이 내 것인지 본다** (44차 R4). 여기는 어느 census 도 안 센 자리였고,
+      // 대조가 아예 없었다 — 홀더가 남의 것이면 **남의 선언이 내 후보의 완결 뜻**이 된다.
+      // 17차가 `pendingEpochs` 를 만든 이유가 바로 "완결의 뜻을 호출자에게서 받지 않는다"
+      // 였는데, **홀더에게서 받으면서 그 홀더가 누구인지는 안 봤다.**
+      //
+      // 주석은 "실행권이 안다" 고 적혀 있었다. 맞는 말인데 **어느 실행권인지가 빠졌다** —
+      // 근거를 적을 때 주어를 빠뜨리면 그 자리는 검사되지 않는다.
+      //
+      // **다만 이 가드는 지금 검출력이 0 이다** (재 봤다 — 빼도 600 개가 전부 초록).
+      // 44차 R4 의 경로를 **키에 신원을 넣은 수정이 이미 닫았기** 때문이다. 그래도 두는
+      // 이유는 주석이 말하는 술어와 코드를 맞추기 위해서다 — **"고쳤다" 가 아니라
+      // "맞췄다" 이고, 검출력이 있다고 적지 않는다.**
+      const holder = s.activeOperation;
+      const declared = holder !== undefined && ownsSlotOp(holder, op) ? holder.epochs : undefined;
       if (declared !== undefined) s.pendingEpochs = declared;
       s.pendingActivation = {
         generation: op.targetGeneration,
@@ -2116,8 +2129,27 @@ function prune(s: AgentState): void {
 const transitionOfOp = (op: OperationTuple): string =>
   `${op.operationId}\u0000${op.transitionId}`;
 
+/**
+ * 종단 원장의 키. **토큰이 들어간다** (44차 — 부류를 채널째 닫는다).
+ *
+ * 원래는 `opId:tid:plane` 이라 **신원이 없었다.** 그래서 같은 이름을 승계한 신임과 옛
+ * 전환이 **같은 칸을 쓰고**, 고아 청소가 옛 것을 닫는 스탬프가 신임까지 죽였다
+ * (43차 CE-43-A). 34차 B 는 자기-찍기만 막았고, 43차는 그 위에 "예약이 살아 있으면
+ * 안 찍는다" 는 **휴리스틱**을 얹었다 — 그것이 44차 CE-44-A 를 만들었다:
+ * 낡은 토큰의 잔존 슬롯이 **방패가 되어 찍었어야 할 고아가 부활**했다.
+ *
+ * **휴리스틱은 채널을 닫는 모양이 아니었다.** 43차 검수가 정확히 진단했다 —
+ * *"닫으려면 이름 원장에 신원을 넣거나 스탬프 자체를 없애야 한다."* 넣는다.
+ *
+ * 그러면 옛 X/10 의 스탬프는 `X:X:10:http` 에, 신임 X/11 의 조회는 `X:X:11:http` 에
+ * 간다 — **한 칸을 다투지 않는다.** 지연 RPC 는 자기 칸에서 여전히 거부되고
+ * (`assertLeader` 가 못 막는 동일 토큰 경우까지), 살아 있는 남을 죽이지 않는다.
+ *
+ * 대가는 **구버전 상태의 1 회성 창**이다 — 토큰 없는 옛 키는 조회에 안 걸려 그 전환의
+ * 지연 RPC 가 한 번 통과할 수 있다. 26차 `by` 의 창과 같은 부류이고 방향도 같다.
+ */
 const transitionKey = (op: OperationTuple): string =>
-  `${op.operationId}:${op.transitionId}:${op.plane}`;
+  `${op.operationId}:${op.transitionId}:${normalizeNumeric(op.leaderToken, 'leaderToken')}:${op.plane}`;
 
 /**
  * 토큰 검사 + 재요청 판정. 재요청이면 캐시된 ACK 를 돌려준다.
