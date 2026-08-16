@@ -200,7 +200,7 @@ export type AgentState = {
    * 뮤테이션 스윕이 지켜 주지 못한다(재현 경로 없는 수정은 다음 회차에 조용히 되돌아온다 —
    * 이 시리즈가 배운 그대로다). **가지치기가 그 경로를 만든다.** 그러니 둘은 한 커밋이다.
    */
-  completed: Record<string, { tuple: string; payloadDigest: string; ack: PlaneAck }>;
+  completed: Record<string, { tuple: string; payloadDigest: string; ack: PlaneAck; transition?: string }>;
   /** 끝난 전환. 지연된 RPC 가 되살리지 못하게 막는다. */
   terminal: Record<string, TerminalKind>;
   /**
@@ -1922,13 +1922,13 @@ function prune(s: AgentState): void {
   pruneEvidence(s);
   const keys = Object.keys(s.completed);
   if (keys.length === 0) return;
-  const transitionOf = (k: string): string => k.split(':').slice(0, 2).join(':');
+  const transitionOf = (k: string): string => s.completed[k]?.transition ?? k;
   const live = new Set<string>();
   if (s.activeOperation !== undefined) {
-    live.add(`${s.activeOperation.operationId}:${s.activeOperation.transitionId}`);
+    live.add(`${s.activeOperation.operationId}\u0000${s.activeOperation.transitionId}`);
   }
   if (s.journal !== undefined) {
-    live.add(`${s.journal.op.operationId}:${s.journal.op.transitionId}`);
+    live.add(`${s.journal.op.operationId}\u0000${s.journal.op.transitionId}`);
   }
   // 삽입 순서가 곧 시간 순서다 — 오래된 전환부터 나온다.
   const order: string[] = [];
@@ -1944,6 +1944,15 @@ function prune(s: AgentState): void {
     if (drop.has(transitionOf(k))) delete s.completed[k];
   }
 }
+
+/**
+ * 전환의 이름. **키가 아니라 값으로 들고 다닌다.**
+ *
+ * `\0` 로 잇는 이유는 그것이 id 에 못 들어가는 유일한 문자라서다 — 콜론은 들어갈 수 있고,
+ * 들어가면 `a`/`b:c` 와 `a:b`/`c` 가 같은 이름이 된다.
+ */
+const transitionOfOp = (op: OperationTuple): string =>
+  `${op.operationId}\u0000${op.transitionId}`;
 
 const transitionKey = (op: OperationTuple): string =>
   `${op.operationId}:${op.transitionId}:${op.plane}`;
@@ -2005,6 +2014,14 @@ function record(s: AgentState, op: OperationTuple, step: Step, result: PlaneStat
     transitionId: op.transitionId,
     cached: false,
   };
-  s.completed[key(op, step)] = { tuple: canonical(op), payloadDigest: op.payloadDigest, ack };
+  s.completed[key(op, step)] = {
+    tuple: canonical(op),
+    payloadDigest: op.payloadDigest,
+    ack,
+    // **어느 전환의 기록인지 적어 둔다** (34차 검수 A). 자를 때 키를 되쪼개면
+    // id 에 콜론이 있을 때 조립과 해체가 어긋난다 — `admit` 은 정확한 조회만 했지
+    // 되쪼갠 적이 없고, 그 문자열을 구분자로 **처음 신뢰한 것이 가지치기**였다.
+    transition: transitionOfOp(op),
+  };
   return ack;
 }

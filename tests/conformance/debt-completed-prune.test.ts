@@ -189,3 +189,34 @@ describe('근거 기록도 자란다 — 절반만 자를 수 있다', () => {
     ).toBeDefined();
   });
 });
+
+describe('가지치기는 키를 되쪼개지 않는다 (34차 검수 A)', () => {
+  /**
+   * 검수가 짚었다: `prune` 이 `completed` 키를 `split(':')` 로 **역파싱**해 전환을 묶었다.
+   * 그 키는 `admit` 이 `operationId:transitionId:plane:step` 으로 **조립한** 것이고,
+   * id 에 콜론이 있으면 조립과 해체가 어긋난다. **`admit` 은 정확한 조회만 했지 되쪼갠
+   * 적이 없다 — 이 문자열을 구분자로 처음 신뢰한 것이 `prune`** 이다.
+   *
+   * **도달하는 실패는 못 만들었다.** 그룹이 충돌하려면 옛 전환이 보존 창 안에 있으면서
+   * 잘려야 하는데, 진행 중인 전환이 실행권을 쥐고 있는 동안에는 새 전환이 못 들어와
+   * 그룹 수가 안 는다. 그래서 **안 갈리는 테스트를 남기지 않는다** — 이 레포에서 안
+   * 갈리는 테스트는 자산이 아니라 거짓 안심이다.
+   *
+   * 그래도 되쪼개기는 없앴다. **못 연 것과 안전한 것은 다르고**, 내가 새로 만든 신뢰
+   * 경계는 안 만드는 편이 낫다. 여기 남기는 것은 그 사실의 기록이다.
+   */
+  it('전환 이름을 기록에 함께 적어 둔다 — 파싱하지 않는다', async () => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    const op: ApplyOperation = { ...OP('x', '0', '1'), operationId: 'a:b', transitionId: 'c' };
+    await agent.reserveAll(op, { op, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.stage(tupleFor(op, 'http'), null);
+
+    const payload = store.load()!.payload as {
+      completed: Record<string, { transition?: string }>;
+    };
+    const entry = Object.values(payload.completed)[0];
+    expect(entry?.transition, '전환 이름이 기록에 없다 — 자를 때 키를 되쪼개야 한다')
+      .toBe('a:b\u0000c');
+  });
+});
