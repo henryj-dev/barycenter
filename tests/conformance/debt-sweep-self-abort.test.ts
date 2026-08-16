@@ -73,7 +73,11 @@ it('재현 B — 같은-id 비종단 고아 저널 위의 재발급은 자기 �
       // **키가 바뀌었다** (44차 — 토큰이 들어갔다). 옛 포맷으로 조회하면 무엇이 찍혀도
       // `undefined` 라 이 단언이 **공허해진다** — 45차가 짚었다. 두 포맷을 다 본다.
       ledger: after.terminal['X:X:10:http'] ?? after.terminal['X:X:http'],
-      cacheAlive: 'X:X:http:reserve' in after.completed, // 캐시는 멀쩡하다 — 가지치기 무관
+      // **또 공허해졌다** (49차 E-49-a). 48차에 캐시 키에도 토큰을 넣었으므로 이
+      // 포맷은 **이제 절대 안 쓰인다** — `false` 가 공허하게 참이다. 세 줄 위
+      // `ledger` 주석이 정확히 이 함정을 문서화해 놓고 **같은 편집에서 재범했다.**
+      // 진짜 키로 본다: 청소는 terminal 스탬프만 찍지 캐시를 안 지우므로 살아 있다.
+      cacheAlive: 'X:X:10:http:reserve' in after.completed,
       journal: after.journal?.phase,
     },
     '청소가 자기 이름을 찍어 스스로를 거부한다 — 진단과 원장이 갈린다',
@@ -95,7 +99,7 @@ it('재현 B — 같은-id 비종단 고아 저널 위의 재발급은 자기 �
     first: 'ok',
     second: 'ok',
     ledger: 'aborted',
-    cacheAlive: false,
+    cacheAlive: true,
     journal: 'preflight',
   });
 });
