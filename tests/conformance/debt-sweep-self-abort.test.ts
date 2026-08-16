@@ -70,7 +70,9 @@ it('재현 B — 같은-id 비종단 고아 저널 위의 재발급은 자기 �
     {
       first,
       second,
-      ledger: after.terminal['X:X:http'],          // 진단은 aborted 라는데 원장엔 없다
+      // **키가 바뀌었다** (44차 — 토큰이 들어갔다). 옛 포맷으로 조회하면 무엇이 찍혀도
+      // `undefined` 라 이 단언이 **공허해진다** — 45차가 짚었다. 두 포맷을 다 본다.
+      ledger: after.terminal['X:X:10:http'] ?? after.terminal['X:X:http'],
       cacheAlive: 'X:X:http:reserve' in after.completed, // 캐시는 멀쩡하다 — 가지치기 무관
       journal: after.journal?.phase,
     },

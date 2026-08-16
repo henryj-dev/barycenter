@@ -1127,7 +1127,7 @@ export class DpAgent {
 
   /** 전환이 어떻게 끝났는지. 아직이면 undefined. */
   terminalOf(op: OperationTuple): TerminalKind | undefined {
-    return this.snapshot().terminal[transitionKey(op)];
+    return terminalOf(this.snapshot(), op);
   }
 
   /** 진행 중인 apply 저널. 없으면 undefined. */
@@ -1211,7 +1211,16 @@ export class DpAgent {
       const staleIsMine = ownsJournal(stale, op);
       if (opening !== undefined && stale !== undefined && !staleIsMine
         && !isTerminalPhase(stale.phase)) {
-        // **자기 이름은 안 찍는다** (34차 검수 B). `transitionKey` 에는 토큰이 없다 —
+        // **자기 이름은 안 찍는다** (34차 검수 B).
+        //
+        // ⚠️ **아래 서술은 44차 이전 것이다.** 그때 `transitionKey` 에는 토큰이 없었고,
+        // 그래서 이 가드가 필요했다. **44차에 키에 토큰이 들어가면서 이 가드는 구조적으로
+        // 사문이 됐다** — `staleIsMine` 이 거짓이면 토큰이 다르므로 키가 겹칠 수 없다.
+        // 45차가 "죽은 가드에 산 서사가 붙어 있다" 고 짚었다. **지우지 않는 이유는 그
+        // 이력이 왜 이 모양인지 설명하기 때문이고, 현재형으로 읽히지 않게 표시한다.**
+        //
+        // ── 이하 44차 이전의 기록 ──
+        // `transitionKey` 에는 토큰이 없다 —
         // `opId:tid:plane` 이다. 그래서 같은 id 를 새 토큰으로 재발급하면 고아가 된 옛
         // 전환과 **키가 같다.** 그대로 찍으면 몇 줄 아래 `admit` 이 그것을 읽고
         // **자기를 거부한다.**
@@ -1227,6 +1236,7 @@ export class DpAgent {
         // 안 고쳤다** — "이름을 붙이는 것과 전 자리를 고치는 것은 다른 일이다" 의 네 번째
         // 재연이다.
         //
+        // (아래도 44차 이전의 기록이다 — 지금은 키에 토큰이 있다.)
         // `transitionKey` 는 `opId:tid:plane` 이라 **토큰이 없다.** 그래서 옛 X/10 을
         // 닫는 스탬프가 같은 이름을 쓰는 **신임 X/11 까지** 죽인다. 신임은 자기 stage 가
         // `terminal` 로 거부되고, `release()` 마저 종단을 보고 일찍 돌아가 **예약을 반납할
@@ -1794,7 +1804,7 @@ export class DpAgent {
   release(op: OperationTuple): Promise<void> {
     return this.serial((s) => {
       assertLeader(s, op.leaderToken);
-      if (s.terminal[transitionKey(op)] !== undefined) return;
+      if (terminalOf(s, op) !== undefined) return;
       if (ownsSlot(s, op)) {
         delete s.reservations[op.plane][op.target.activationEpoch];
       }
@@ -1991,7 +2001,7 @@ function finalize(s: AgentState, op: OperationTuple, how: TerminalKind): void {
   assertLeader(s, op.leaderToken);
   s.maxLeaderToken = maxToken(s.maxLeaderToken, op.leaderToken);
 
-  const already = s.terminal[transitionKey(op)];
+  const already = terminalOf(s, op);
   if (already !== undefined) {
     // 같은 방식으로 다시 끝내는 것은 멱등이다. 다른 방식이면 종단 상태 오염이다.
     if (already === how) return;
@@ -2145,11 +2155,34 @@ const transitionOfOp = (op: OperationTuple): string =>
  * 간다 — **한 칸을 다투지 않는다.** 지연 RPC 는 자기 칸에서 여전히 거부되고
  * (`assertLeader` 가 못 막는 동일 토큰 경우까지), 살아 있는 남을 죽이지 않는다.
  *
- * 대가는 **구버전 상태의 1 회성 창**이다 — 토큰 없는 옛 키는 조회에 안 걸려 그 전환의
- * 지연 RPC 가 한 번 통과할 수 있다. 26차 `by` 의 창과 같은 부류이고 방향도 같다.
+ * ⚠️ **44차에 여기 적은 가격표가 거짓이었다** (45차가 재현으로 뒤집었다).
+ *
+ * *"26차 `by` 의 창과 같은 부류이고 방향도 같다"* 고 적었는데 **방향이 반대였다.**
+ * `by` 의 창은 **비관**(덜 인정 — "남의 공로를 흡수하는 것보다 비관이 싸다")이고
+ * 34차 캐시 창도 비관이었다. 그런데 이 창은 **낙관**이다 — 토큰 없는 옛 키가 조회에
+ * 안 걸려 **운영자가 포기한 전환이 업그레이드 뒤 좌표를 옮긴다.**
+ *
+ * 이 시리즈가 1 회성 창을 축 밖 '한계' 로 승인해 온 근거는 매번 **방향의 안전**이었다.
+ * 그 근거가 무너졌으므로 가격표 오류가 아니라 반례다. **비관으로 되돌린다** — 조회는
+ * 옛 키도 같이 본다(`legacyTerminalKey`). 새 쓰기는 옛 키를 만들지 않으므로 43차
+ * CE-43-A(정당한 승계 오살)는 다시 안 열린다: 옛 키에 걸리는 것은 **44차 이전 코드가
+ * 남긴 기록뿐**이다.
  */
 const transitionKey = (op: OperationTuple): string =>
   `${op.operationId}:${op.transitionId}:${normalizeNumeric(op.leaderToken, 'leaderToken')}:${op.plane}`;
+
+/**
+ * 44차 **이전** 포맷의 키 — 토큰이 없다.
+ *
+ * 읽기에서만 쓴다. 쓰기는 절대 이 모양을 만들지 않는다. 구버전 상태를 읽는 동안만
+ * 살아 있고, 그 상태가 새 쓰기로 덮이면 자연히 사라진다.
+ */
+const legacyTerminalKey = (op: OperationTuple): string =>
+  `${op.operationId}:${op.transitionId}:${op.plane}`;
+
+/** 이 전환이 끝났는가 — **옛 포맷도 본다** (45차 CE-45-A). */
+const terminalOf = (s: AgentState, op: OperationTuple): TerminalKind | undefined =>
+  s.terminal[transitionKey(op)] ?? s.terminal[legacyTerminalKey(op)];
 
 /**
  * 토큰 검사 + 재요청 판정. 재요청이면 캐시된 ACK 를 돌려준다.
@@ -2169,7 +2202,26 @@ function admit(s: AgentState, op: OperationTuple, step: Step): PlaneAck | undefi
   //
   // 이 구분을 뭉개면 둘 중 하나가 깨진다. 종단 전부를 거부하면 복구가 실패하고,
   // 종단 전부를 통과시키면 abort 된 전환이 되살아난다.
-  const already = s.terminal[transitionKey(op)];
+  //
+  // ── **포기는 전환에 붙지 이름에 붙지 않는다** (45차 계약 판정) ──
+  //
+  // 44차에 키에 토큰을 넣으면서 **이 원장의 뜻이 바뀌었다.** 전에는 "이 **이름**은
+  // 끝났다" 였고 지금은 "이 **전환(토큰 포함)**은 끝났다" 다. 45차가 그 차이를 짚으며
+  // *"운영자의 포기가 fence 를 건너 존속하지 않게 됐다 — 어느 쪽이 계약인지 적어라"*
+  // 고 요구했다. 적는다.
+  //
+  // **전환에 붙는다.** 근거:
+  //   · 이름에 붙이면 **정당한 승계가 오살된다** — 43차 CE-43-A 가 그것이었고, 신임이
+  //     같은 이름으로 이어받는 것은 이 설계가 인정하는 경로다(14차 고아 방지).
+  //   · 옛 리더의 포기는 **그 리더의 시도**에 대한 판단이다. 신임이 같은 이름을 다시
+  //     내는 것은 **컨트롤 플레인의 결정**이고, DP 가 그 결정을 대신 막을 근거가 없다.
+  //   · DP 가 막아야 하는 것은 **낡은 행위자의 부활**이고, 토큰 범위 원장이 정확히
+  //     그것만 막는다.
+  //
+  // 대가: 운영자가 abort 한 뒤 신임이 같은 이름을 재발급하면 DP 는 통과시킨다.
+  // **그 게이트는 컨트롤 플레인에 있어야 한다** — v0.2 에서 그것을 만들 때 이 문장을
+  // 근거로 삼아라. 여기 안 적으면 다음 사람이 "DP 가 막아 준다" 고 믿는다.
+  const already = terminalOf(s, op);
   if (already === 'aborted' || already === 'failed') {
     throw new DpRejection('terminal', `${transitionKey(op)} 는 이미 ${already} 로 끝났다`, already);
   }
