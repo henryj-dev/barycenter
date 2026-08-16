@@ -23,6 +23,9 @@
  * 그건 원래 검수로만 잡히는 축이고, 카운터와 분리한 현행 구조가 맞다 — 48차 판정이다.
  */
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 
@@ -49,35 +52,67 @@ if (marks.length === 0) {
   process.exit(1);
 }
 
+/**
+ * **본체를 건드리지 않는다** (49차 — 게이트 자신의 결함 넷 중 둘).
+ *
+ * 첫 판은 `git checkout base -- src/` 로 **작업 트리를 덮었다.** 49차 검수가 실측했다:
+ *   · 미커밋 src 수정이 **소리 없이 사라진다** — `verify.sh` 가 기본으로 이걸 돌린다
+ *   · 지운 파일이 **작업 트리와 인덱스에 부활**한다 (`checkout head` 는 못 지운다)
+ *   · 새 파일이 안 지워져 "부모" 실행이 부모가 아니게 되고, **정당한 커밋을 오차단**한다
+ *
+ * **13차에 스윕이 정확히 이 사고를 냈다** — 본체를 제자리에서 변이시키다 커밋에 뮤턴트가
+ * 섞였고, 그때 배운 것이 *"도구가 본체를 건드리는 한 사고는 반드시 난다"* 였다.
+ * **그 교훈을 알면서 같은 모양을 만들었다.** 별도 worktree 로 옮긴다 — 스윕이 그랬듯이.
+ */
+function makeWorktree(ref) {
+  const dir = mkdtempSync(join(tmpdir(), 'barycenter-pinned-'));
+  const tree = join(dir, 'tree');
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', tree, ref], { stdio: 'pipe' });
+  symlinkSync(join(process.cwd(), 'node_modules'), join(tree, 'node_modules'), 'dir');
+  return { dir, tree };
+}
+
+function dropWorktree(w) {
+  try {
+    execFileSync('git', ['worktree', 'remove', '--force', w.tree], { stdio: 'pipe' });
+  } catch {
+    // 이미 사라졌으면 그만이다.
+  }
+  rmSync(w.dir, { recursive: true, force: true });
+}
+
 let failed = 0;
 for (const mark of marks) {
   if (mark.startsWith('none')) {
+    // **근거를 요구한다** (49차 ⓐ). 맨 `none` 도 통과했다 — 문서가 요구하는 형식조차
+    // 기계가 안 봤다. 근거의 질은 여전히 사람이 봐야 한다.
+    if (!/^none\s+[—-]\s+\S/.test(mark)) {
+      console.error(`FAIL  ${mark} — \`none\` 뒤에 근거를 적어라 (\`none — <근거>\`).`);
+      failed = 1;
+      continue;
+    }
     console.log(`건너뜀 — ${mark}`);
     continue;
   }
-  // 부모 트리로 src 를 되돌리고, 지금의 테스트를 그 위에 돌린다.
-  //
-  // **인자를 통째로 쪼개면 안 된다.** `-t "따옴표 있는 이름"` 을 `split(/\s+/)` 하면
-  // 따옴표가 조각나 vitest 가 **아무 테스트도 안 고르고 초록으로 끝난다** — 게이트가
-  // "지키는 게 없다" 고 오판한다. 만들자마자 그 오판을 했고, 손으로 돌려 보고 알았다.
-  // **계측기를 만들 때마다 계측기 자신에게 결함이 있었다**(스윕·P8·P10·P11·census).
   const m = /^(\S+)(?:\s+-t\s+"(.+)")?$/.exec(mark);
   const argv = m === null ? [mark] : [m[1], ...(m[2] === undefined ? [] : ['-t', m[2]])];
+
+  // **부모 트리 전체**를 별도 worktree 에 세우고, 지금의 테스트만 얹는다.
+  // 파일 삭제·추가도 그대로 반영된다 — `checkout -- src/` 가 못 하던 것이다.
+  const w = makeWorktree(base);
   try {
-    execFileSync('git', ['checkout', base, '--', 'src/'], { stdio: 'pipe' });
+    execFileSync('git', ['checkout', head, '--', 'tests/'], { cwd: w.tree, stdio: 'pipe' });
     let red = false;
     try {
-      const out = execFileSync('npx', ['vitest', 'run', ...argv], { encoding: 'utf8' });
-      // **초록이어도 "고른 게 없으면" 초록이 아니다.** 0 건 실행은 실패로 센다.
+      const out = execFileSync('npx', ['vitest', 'run', ...argv], {
+        cwd: w.tree, encoding: 'utf8',
+      });
       if (/No test files found|Tests +0 passed/.test(out)) {
         console.error(`FAIL  ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
         failed = 1;
         continue;
       }
     } catch (e) {
-      // **던졌다고 다 빨간 것이 아니다.** 없는 파일·오타난 표식도 던진다 — 그걸 "빨갛다"
-      // 로 세면 **거짓 표식이 게이트를 통과한다.** 만들자마자 그 구멍을 냈고(두 번째
-      // 버그다), 일부러 틀린 표식을 넣어 보고 알았다.
       const text = `${e.stdout ?? ''}${e.stderr ?? ''}`;
       if (/No test files found|Tests +0 (passed|failed)/.test(text)) {
         console.error(`FAIL  ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
@@ -93,7 +128,12 @@ for (const mark of marks) {
       failed = 1;
     }
   } finally {
-    execFileSync('git', ['checkout', head, '--', 'src/'], { stdio: 'pipe' });
+    dropWorktree(w);
   }
 }
+
+// **못 잡는 것을 적어 둔다** (49차 E1·ⓔ). 새 심볼을 만들고 그 심볼만 만지는 테스트를
+// 핀으로 걸면 부모에서 **무조건** 빨갛다 — 검출력 0 인 핀이 통과한다. 그리고 표식이
+// 그 수정과 무관해도 빨갛기만 하면 통과한다. **기계는 "빨간가" 만 알고 "무엇을 지키는가"
+// 는 모른다** — 그 축은 검수가 본다.
 process.exit(failed);
