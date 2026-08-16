@@ -56,6 +56,7 @@ else
     echo "        단위 테스트만 보려면 ./scripts/verify.sh --quick"
     FAILED=1
   else
+    run "store (실물 PG)      " npm run test:store --silent
     run "golden (nginx -t)    " npm run test:golden --silent
     run "e2e (실제 nginx)      " npm run test:e2e --silent
     run "engine facts         " ./tests/engine/run.sh

@@ -105,7 +105,15 @@ for (const mark of marks) {
   // 파일 삭제·추가도 그대로 반영된다 — `checkout -- src/` 가 못 하던 것이다.
   const w = makeWorktree(base);
   try {
-    execFileSync('git', ['checkout', head, '--', 'tests/'], { cwd: w.tree, stdio: 'pipe' });
+    // 테스트 **하네스**를 얹는다 — `tests/` 와 러너 설정.
+    //
+    // 처음엔 `tests/` 만 얹었다. 그랬더니 **새 테스트 디렉토리를 만든 커밋에서 게이트가
+    // "고른 테스트가 0 건" 으로 오차단했다** — 부모의 `vitest.config.ts` 는 그 디렉토리를
+    // 모르니 파일을 아예 못 찾는다. 게이트의 계약은 *"지금의 테스트를 부모의 `src/` 에
+    // 대고 돌린다"* 이고, 러너 설정은 재는 대상이 아니라 **재는 도구** 쪽이다.
+    // 대상(`src/`)은 부모 것을 그대로 둔다.
+    execFileSync('git', ['checkout', head, '--', 'tests/', 'vitest.config.ts'],
+      { cwd: w.tree, stdio: 'pipe' });
     let red = false;
     try {
       const out = execFileSync('npx', ['vitest', 'run', ...argv], {

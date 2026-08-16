@@ -2,13 +2,15 @@
   "name": "barycenter",
   "version": "0.0.0",
   "private": true,
-  "description": "Control plane for nginx \u2014 HTTP/TCP/UDP reverse proxying and load balancing",
+  "description": "Control plane for nginx — HTTP/TCP/UDP reverse proxying and load balancing",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "verify": "./scripts/verify.sh",
     "verify:quick": "./scripts/verify.sh --quick",
@@ -20,11 +22,16 @@
     "test:golden": "vitest run tests/golden",
     "test:e2e": "vitest run tests/e2e",
     "test:engine": "./tests/engine/run.sh",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:store": "vitest run tests/store"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "@types/pg": "^8.21.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
   }
 }
