@@ -507,12 +507,16 @@ function candidateArrived(
     // 서명이 있으면 서명이 답한다. 없으면(26차 이전 상태) **신원 있는 다른 증거**를
     // 읽는다 — `terminal` 원장의 키는 `operationId:transitionId:plane` 이다.
     return at.by === undefined
-      // 키에 토큰이 들어갔다 (44차) — 후보의 토큰으로 조회한다. 손으로 만드는 자리라
-      // `transitionKey` 와 갈릴 수 있어 **모양을 같이 둔다.**
-      ? s.terminal[
-        `${candidate.operationId}:${candidate.transitionId}:`
-        + `${normalizeNumeric(candidate.leaderToken, 'leaderToken')}:${plane}`
-      ] === 'activated'
+      // **`terminalOf` 를 쓴다** (46차). 손으로 키를 조립하던 자리라 **옛 포맷을 못
+      // 봤다** — 레거시 상태에서 옛 키로 적힌 `activated` 증거를 영영 못 보고 승격이
+      // 실패한다(46차가 실측했다: `baseline = undefined`, 커밋된 테스트는 `gen-A` 를
+      // 약속한다). 방향은 비관이지만 **커밋된 주장 하나가 거짓이 됐다.**
+      ? terminalOf(s, {
+        operationId: candidate.operationId,
+        transitionId: candidate.transitionId,
+        leaderToken: candidate.leaderToken,
+        plane: plane as Plane,
+      }) === 'activated'
       : authoredBy(at, candidate);
   });
 }
@@ -1249,7 +1253,20 @@ export class DpAgent {
         const mine = new Set(planesOf(op).map((plane) => transitionKey(tupleFor(op, plane))));
         for (const plane of planesOf(stale.op)) {
           const key = transitionKey(tupleFor(stale.op, plane));
-          if (s.terminal[key] === undefined && !mine.has(key)) s.terminal[key] = 'aborted';
+          // **옛 포맷도 본다** (46차). 45차에 "읽는 자리 넷을 `terminalOf` 하나로
+          // 모았다" 고 적었는데 **여섯이었다** — 이 가드와 `candidateArrived` 가 남았다.
+          // 기계로 세지 않고 눈으로 세서 틀렸다.
+          //
+          // 여기가 새 키만 보면, 레거시 세계에서 이미 `activated` 로 끝난 평면에
+          // `aborted` 를 덮어 찍는다 — `terminalOf` 는 새 키를 먼저 보므로 그 거짓이
+          // 참을 영구히 가린다. `finalize` 는 같은 상황에서 "종단 오염" 으로 던지는데
+          // 스윕은 그것을 우회한다.
+          //
+          // **그 뒤집기를 내 손으로는 재현 못 했다.** 46차 검수가 재현했다고 적었고
+          // 기전은 코드로 확인된다 — **못 연 것이지 없는 것이 아니다.**
+          if (terminalOf(s, tupleFor(stale.op, plane)) === undefined && !mine.has(key)) {
+            s.terminal[key] = 'aborted';
+          }
         }
         supersede(s, {
           operationId: stale.op.operationId,
@@ -2168,20 +2185,32 @@ const transitionOfOp = (op: OperationTuple): string =>
  * CE-43-A(정당한 승계 오살)는 다시 안 열린다: 옛 키에 걸리는 것은 **44차 이전 코드가
  * 남긴 기록뿐**이다.
  */
-const transitionKey = (op: OperationTuple): string =>
+/** 원장 조회에 필요한 것만 — `OperationTuple` 도 후보 기록도 이 모양을 만족한다. */
+type TerminalRef = {
+  operationId: string; transitionId: string; leaderToken: string; plane: Plane;
+};
+
+const transitionKey = (op: TerminalRef): string =>
   `${op.operationId}:${op.transitionId}:${normalizeNumeric(op.leaderToken, 'leaderToken')}:${op.plane}`;
 
 /**
  * 44차 **이전** 포맷의 키 — 토큰이 없다.
  *
- * 읽기에서만 쓴다. 쓰기는 절대 이 모양을 만들지 않는다. 구버전 상태를 읽는 동안만
- * 살아 있고, 그 상태가 새 쓰기로 덮이면 자연히 사라진다.
+ * 읽기에서만 쓴다. 쓰기는 절대 이 모양을 만들지 않는다.
+ *
+ * ⚠️ **"자연히 사라진다" 고 적었던 것은 거짓이다** (46차). 새 쓰기가 옛 모양을 안
+ * 만들므로 **옛 키는 아무것에도 덮이지 않고 영원히 조회된다.** "1 회성 창" 이 아니라
+ * **영구**이고, 그 범위에서는 44차 이전 의미론(이름 단위 봉인)이 그대로 산다 —
+ * 옛 `aborted` 는 미래의 어떤 토큰이 와도 그 이름을 막는다.
+ *
+ * 의도한 방향(비관)이지만 **"1 회성" 이라는 말이 틀렸다.** 가지치기를 넣는다면 이
+ * 자리가 계약이 바뀌는 지점이다.
  */
-const legacyTerminalKey = (op: OperationTuple): string =>
+const legacyTerminalKey = (op: TerminalRef): string =>
   `${op.operationId}:${op.transitionId}:${op.plane}`;
 
 /** 이 전환이 끝났는가 — **옛 포맷도 본다** (45차 CE-45-A). */
-const terminalOf = (s: AgentState, op: OperationTuple): TerminalKind | undefined =>
+const terminalOf = (s: AgentState, op: TerminalRef): TerminalKind | undefined =>
   s.terminal[transitionKey(op)] ?? s.terminal[legacyTerminalKey(op)];
 
 /**
