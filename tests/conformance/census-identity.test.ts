@@ -88,7 +88,10 @@ describe('신원 비교 자리는 세어져 있다', () => {
    * 재발했다.** 지문도 `!==` 형을 빠뜨려 `releaseHolderSlots` 를 놓쳤다 — 그래서
    * "셋" 이라는 숫자도 틀렸다. 넷이다.
    */
-  it('토큰까지 대조하는 자리는 넷이다', () => {
+  // **계측기가 제 몫을 했다** (41차). CE-41-A 를 고치며 `ownsSlotOp` 을 넣자 이 테스트가
+  // 즉시 빨개졌다 — 새 자리가 판정 없이 지나가지 않는다는 것이 이 계측의 목적이고,
+  // 그것이 실제로 일어난 첫 사례다. 넷 → 다섯.
+  it('토큰까지 대조하는 자리는 다섯이다', () => {
     // 토큰 대조의 지문은 `=== normalizeNumeric(` 이다. 그 자리를 감싸는 함수 이름을
     // 역방향으로 찾는다. (첫 시도는 "본문 600 자 안에 `normalizeNumeric`" 으로 느슨하게
     // 잡아 `tupleFor` 까지 걸렸다 — **계측기가 자기 첫 판정에서 틀렸다.**)
@@ -109,6 +112,6 @@ describe('신원 비교 자리는 세어져 있다', () => {
     expect(
       [...new Set(owners)].sort(),
       '토큰을 대조하는 자리가 늘었다 — 늘리는 것 자체는 좋지만 census 의 전제가 바뀐다',
-    ).toEqual(['authoredBy', 'finishOperation', 'ownsJournal', 'releaseHolderSlots']);
+    ).toEqual(['authoredBy', 'finishOperation', 'ownsJournal', 'ownsSlotOp', 'releaseHolderSlots']);
   });
 });

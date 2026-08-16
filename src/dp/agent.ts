@@ -686,6 +686,22 @@ function authoredBy(
       === normalizeNumeric(who.leaderToken, 'leaderToken');
 }
 
+/**
+ * 이 슬롯이 **이 전환의 것**인가 (41차 CE-41-A).
+ *
+ * `ownsJournal` 과 같은 삼중 비교인데 대상이 저널이 아니라 예약이다. 자리가 갈리면
+ * 언젠가 하나가 뒤처지므로 술어를 따로 두되 같은 모양으로 쓴다.
+ */
+type Identity = { operationId: string; transitionId: string; leaderToken: string };
+
+function ownsSlotOp(slot: Identity | undefined, op: Identity): boolean {
+  if (slot === undefined) return false;
+  return slot.operationId === op.operationId
+    && slot.transitionId === op.transitionId
+    && normalizeNumeric(slot.leaderToken, 'leaderToken')
+      === normalizeNumeric(op.leaderToken, 'leaderToken');
+}
+
 export function ownsJournal(j: JournalEntry | undefined, op: ApplyOperation): boolean {
   if (j === undefined) return false;
   return j.op.operationId === op.operationId
@@ -1261,12 +1277,22 @@ export class DpAgent {
           op.planes[plane]!.target.activationEpoch, 'activationEpoch',
         );
         const slot = s.reservations[plane]?.[epoch];
-        // id 만 본다 (39차 census). **위 홀더 부재 가드가 전제다** — 신임의 슬롯은
-        // 홀더 없이 존재할 수 없으므로, 홀더가 없으면 남은 슬롯은 낡은 것뿐이다.
-        // 위임형 근거이고, **검증물은 없다**(그 가드를 지우는 뮤턴트를 안 만들어 봤다).
-        // 규칙대로 **불가지로 적는다** — "무해하다" 가 아니라 "가르는 무대를 못 찾았다".
-        if (slot?.op.operationId === op.operationId
-          && slot.op.transitionId === op.transitionId) {
+        // **토큰까지 본다** (41차 CE-41-A).
+        //
+        // 40차에 여기 "불가지" 라벨을 붙이며 *"신임의 슬롯은 홀더 없이 존재할 수 없으므로
+        // 홀더가 없으면 남은 슬롯은 낡은 것뿐이다"* 라고 적었다. **거짓이었고, 반박이
+        // 이 파일 100 줄 아래에 이미 있었다** — `reclaimOperation` 의 주석이
+        // *"비종단 저널인데 실행권이 없는 상태가 만들어질 수 있다 … **예약 슬롯은 그대로
+        // 남아 있으므로**"* 라고 적어 놓았다. 내가 쓴 전제를 이 레포가 이미 반박하고
+        // 있었는데 **같은 파일을 안 읽었다.**
+        //
+        // 그러면 같은 id 를 승계한 신임의 슬롯이 홀더 없이 존재하고, 낡은 러너의 지연
+        // 반납이 id 만 보고 **그것을 지운다** — 그 좌표를 남이 잡을 수 있게 된다.
+        // 9차 반례 ③ 부류다.
+        //
+        // **그리고 이 자리를 찾아 준 것은 "불가지" 라벨이다.** "무해하다" 고 적었으면
+        // 아무도 안 봤다. 그게 40차 규칙의 값이다.
+        if (ownsSlotOp(slot?.op, op)) {
           delete s.reservations[plane][epoch];
         }
       }
