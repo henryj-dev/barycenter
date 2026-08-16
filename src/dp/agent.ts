@@ -1101,9 +1101,15 @@ export class DpAgent {
       // 여기 오는 시점에 실행권은 없다(있으면 위에서 `operation_in_flight` 로 막혔다).
       // 그 저널은 고아이므로 닫는 것이 안전하다.
       const stale = s.journal;
-      const staleIsMine = stale !== undefined
-        && stale.op.operationId === op.operationId
-        && stale.op.transitionId === op.transitionId;
+      // **토큰까지 본다** (빚 갚기 — 가지치기와 한 커밋). 21차에 신원 비교를
+      // `ownsJournal()` 로 모아 놓고 **정작 이 자리가 그것을 안 썼다.** id 만 비교하면
+      // fence 뒤 신임이 **같은 id** 를 다시 낼 때 옛 저널을 "내 것" 으로 읽어 청소하지
+      // 않고, 조용히 물러나 홀더를 남긴 채 **다음 오퍼레이션이 영구 봉쇄**된다.
+      //
+      // 23차가 이 경로를 **모의**로 재현하며 "캐시가 지우고 있을 뿐" 이라고 적었다.
+      // 이제 가지치기가 실물이라 그 방패가 없어졌고, 경로가 진짜로 열렸다 —
+      // `debt-completed-prune.test.ts` 가 그것이다.
+      const staleIsMine = ownsJournal(stale, op);
       if (opening !== undefined && stale !== undefined && !staleIsMine
         && !isTerminalPhase(stale.phase)) {
         for (const plane of planesOf(stale.op)) {
@@ -1429,6 +1435,8 @@ export class DpAgent {
         const next = structuredClone((stored?.payload as AgentState | undefined) ?? initial());
         // 알려지지 않은 필드(다른 컴포넌트의 것)를 보존한 채로 우리 몫만 바꾼다.
         const result = mutate(next);
+        // **여기서 자란 것을 자른다.** `completed` 는 전환마다 영구 누적돼 무한히 컸다.
+        prune(next);
         // **상태가 store 로 내려가는 유일한 통로다.** 여기서 불변식을 본다 (13차 검수).
         assertInvariants(stored?.payload as AgentState | undefined, next);
         try {
@@ -1833,6 +1841,59 @@ type Step = 'reserve' | 'stage' | 'commit' | 'health';
 const key = (op: OperationTuple, step: Step): string =>
   `${op.operationId}:${op.transitionId}:${op.plane}:${step}`;
 /** 전환 단위 키. abort 는 단계가 아니라 전환 전체를 끝낸다. */
+/**
+ * `completed` 를 몇 전환까지 들고 갈 것인가.
+ *
+ * 이 표는 **재요청 판정**에 쓴다 — "이 요청 이미 처리했나". 재요청은 무한히 늦게 올 수
+ * 있으므로 원칙적으로는 영원히 들고 있어야 하지만, 실제로는 그 사이에 전환이 64 개
+ * 지나갔다면 그 요청을 보낸 쪽은 이미 오래전에 죽었거나 fence 됐다.
+ *
+ * 잘린 뒤 늦게 도착한 재요청은 `terminal` 거부를 받는다. **거짓말이 아니다** — 그
+ * 전환은 실제로 끝났다. 캐시가 있을 때와 다른 것은 "성공했다" 대신 "이미 끝났다" 로
+ * 답한다는 것뿐이고, 둘 다 참이다.
+ */
+const COMPLETED_RETENTION = 64;
+
+/**
+ * **자란 것을 자른다** (빚 갚기).
+ *
+ * 22~27차가 여섯 번 지적한 것: `completed` 는 전환마다 영구 누적돼 **무한히 자란다.**
+ * 그런데 이 표는 자라면서 **우연히 방패 노릇도 하고 있었다** — id 만 비교하는 자리들이
+ * 안전한 이유가 "같은 id 의 옛 전환이 늘 이 표에 남아 있어서 `admit` 이 먼저 거부한다"
+ * 였다. 그래서 **가지치기와 신원 비교는 한 커밋이어야 한다**(23차 규칙). 그 커밋이 이것이다.
+ *
+ * 자르는 기준은 **전환 단위**다. 한 전환의 단계 기록을 절반만 남기면 재요청 판정이
+ * 반쪽이 되어 더 나쁘다.
+ *
+ * 진행 중인 전환(`activeOperation`)과 저널이 가리키는 전환은 **자르지 않는다** — 그건
+ * 지금 답해야 할 재요청이다.
+ */
+function prune(s: AgentState): void {
+  const keys = Object.keys(s.completed);
+  if (keys.length === 0) return;
+  const transitionOf = (k: string): string => k.split(':').slice(0, 2).join(':');
+  const live = new Set<string>();
+  if (s.activeOperation !== undefined) {
+    live.add(`${s.activeOperation.operationId}:${s.activeOperation.transitionId}`);
+  }
+  if (s.journal !== undefined) {
+    live.add(`${s.journal.op.operationId}:${s.journal.op.transitionId}`);
+  }
+  // 삽입 순서가 곧 시간 순서다 — 오래된 전환부터 나온다.
+  const order: string[] = [];
+  for (const k of keys) {
+    const t = transitionOf(k);
+    if (!order.includes(t)) order.push(t);
+  }
+  const drop = new Set(
+    order.filter((t) => !live.has(t)).slice(0, Math.max(0, order.length - COMPLETED_RETENTION)),
+  );
+  if (drop.size === 0) return;
+  for (const k of keys) {
+    if (drop.has(transitionOf(k))) delete s.completed[k];
+  }
+}
+
 const transitionKey = (op: OperationTuple): string =>
   `${op.operationId}:${op.transitionId}:${op.plane}`;
 
