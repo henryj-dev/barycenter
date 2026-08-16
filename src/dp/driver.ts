@@ -443,11 +443,6 @@ export class LocalDataplaneDriver implements DataplaneDriver {
       : { kind: 'diverged', expected: now, found };
   }
 
-  #stillBaseline(expected: PublishRecord): boolean {
-    const now = this.agent.lastActivated();
-    return now !== undefined && sameRecord(now, expected);
-  }
-
   #observe(): Promise<PublishedState> {
     return this.#budget(() => this.effects.observePublished());
   }

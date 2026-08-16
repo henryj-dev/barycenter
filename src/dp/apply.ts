@@ -399,10 +399,23 @@ export class ApplyRunner {
         // 지금은 무해하지만 **근거가 하류에 있다** — `finishOperation` 의 토큰 검사가
         // 바뀌면 이 자리가 조용히 열린다.
         //
-        // `ownsJournal` 로 모으지 않는 이유: 낡은 러너가 **자기** 실행권을 놓는 것은
-        // 옳은 일이고, 그때 홀더는 자기 토큰이라 토큰을 봐도 결과가 같다. 즉 여기서
-        // 토큰을 더하는 것은 동치이고, **동치를 넣으면 다음 스윕이 그것을 짚는다**(24차).
-        // 그래서 술어 대신 근거를 적는다.
+        // ⚠️ **37차에 여기 "동치다" 라고 적었는데 거짓이었다** (38차가 재현으로 뒤집었다).
+        //
+        // 이 분기는 **낡은 러너 + 같은 id 신임 홀더**로도 도달한다 —
+        // `debt-evidence-pollution` 이 정확히 그 경로를 지난다. 그때
+        // `finishOperation(bound=낡은 것)` 이 불리고, 하류 `finalizeCandidate` 의 **id 게이트**가
+        // **신임의 미완 후보를 durable 하게 지운다.** 토큰을 더하면 그 변이 자체가 없다 —
+        // **관측상 동치일지언정 기계적으로 동치가 아니다.**
+        //
+        // 35차에 같은 모양의 "동치" 주장이 거짓으로 판명됐고, **그 사건을 인용한 회차에서
+        // 또 적었다.** 무해한 이유는 동치가 아니라 **자가 치유**다: 삭제 창 동안 저널이
+        // 비종단이라 수렴은 계속 `unfinished` 를 답하고(오답 창 없음), 신선한 commit 이
+        // 후보를 재생성한다.
+        //
+        // **위임 대상은 셋이다** — `finishOperation` 의 홀더 토큰 검사 · `ownsSlot` 의
+        // canonical 대조 · 그리고 `finalizeCandidate`/`candidateArrived` 의 **수렴성**.
+        // 셋째는 토큰 검사가 아니라 **비국소 성질**이라, commit 의 후보 재생성이나
+        // `candidateArrived` 를 바꾸면 이 자리가 조용히 열린다.
         const mine = this.agent.activeOperation();
         if (mine?.operationId === bound.operationId && mine.transitionId === bound.transitionId) {
           await this.agent.finishOperation(bound);
@@ -418,10 +431,15 @@ export class ApplyRunner {
       if (isTerminalPhase(j.phase)) {
         // **놓을 것이 있을 때만 쓴다.** `finishOperation` 은 직렬 구간이라 부를 때마다
         // durable write 가 하나 생긴다 — 정상 경로에서 크래시 지점이 늘어난다.
-        // 여기도 id 만 본다 (37차 census — 여섯 번째 자리). 이 분기는 저널이 **내
-        // 것**(바로 위 `ownsJournal` 통과)인 전제 아래 있고, I1 이 홀더 토큰 = 최신
-        // 토큰을 보장하므로 홀더 토큰이 저널과 다른 상태는 불능이다. **구조적 무해**이고,
-        // 위 자리와 달리 하류 위임이 아니다.
+        // 여기도 id 만 본다 (37차 census — 여섯 번째 자리).
+        //
+        // ⚠️ **37차에 "I1 이 보장하므로 불능" 이라고 적었는데 거짓이었다** (38차 재현).
+        // **I1 은 홀더 = 최신 토큰만 보장하지 홀더 = 저널 토큰은 보장하지 않는다.**
+        // `reserveAll` 을 `opening` **없이** 부르면(공개 표면의 선택 인자) 저널 정리·개방이
+        // 통째로 건너뛰어져 **저널 X/10(superseded) + 홀더 X/11** 이 공존한다.
+        //
+        // 그래서 이 자리도 **위 자리와 같은 하류 위임**이다 — "구조적" 이라는 구분 자체가
+        // 틀렸다. 위임 대상도 같다.
         const holder = this.agent.activeOperation();
         if (holder?.operationId === j.op.operationId
           && holder.transitionId === j.op.transitionId) {

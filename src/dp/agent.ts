@@ -187,8 +187,14 @@ export type AgentState = {
    * 이 표는 전환마다 영구 누적된다 — 즉 **무한히 자란다.** 언젠가 잘라야 한다. 그런데
    * ⚠️ **아래 서술은 22~27차의 것이고 지금은 낡았다** (37차 검수). 가지치기는 **이미
    * 실물**이고("가지치기가 그 경로를 만든다 … 둘은 한 커밋이다" 는 완료된 일이다),
-   * 열거된 다섯 중 셋(`reserveAll` 고아 청소 · `driveLoop` · `finalizeCandidate` 경유)은
-   * **이미 토큰을 본다**(빚갚기 · 34~36차). 남은 것은 `epochsFromJournal` 과 원장 폴백이다.
+   * 열거된 다섯 중 셋(`reserveAll` 고아 청소 · `driveLoop` · `EffectTimeout` 정리)이
+   * **이미 토큰을 본다**(빚갚기 · 34차 C). 남은 둘은 `epochsFromJournal` 과
+   * `finalizeCandidate` 이고, **둘 다 아직 id 만 본다** — `finalizeCandidate` 의 안전은
+   * 하류 `candidateArrived`/`authoredBy`(26~30차)가 맡는다.
+   *
+   * (37차에 이 현행화를 쓰면서 **구성원을 틀리게 적었다** — `EffectTimeout` 정리를
+   * 빼고 `finalizeCandidate` 를 넣었다. 38차가 짚었다. **거짓 기록을 고치는 회차에
+   * 같은 부류를 남기는 것이 세 회차째다.**)
    *
    * 그대로 두는 이유는 그 시절의 판단이 왜 그랬는지가 기록으로 값이 있어서다. **다만
    * 현재 상태로 읽으면 거짓이다** — 36차가 거짓 기록 셋을 고친 바로 그 회차에 같은
