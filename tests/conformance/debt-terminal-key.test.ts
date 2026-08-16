@@ -167,10 +167,18 @@ describe('포기의 범위 — 계약', () => {
       .then(() => 'ok').catch((e: unknown) => (e as { kind?: string }).kind ?? 'other');
 
     // ② 신임의 재발급 — 컨트롤 플레인의 결정이므로 DP 는 안 막는다.
+    //
+    // **48차에 고쳤다.** 전에는 `terminalOf === undefined` 만 보고 **재발급을 실행하지
+    // 않았다** — 픽스처가 통과시킨 것이다. 그 사이 멱등 캐시(두 번째 이름 원장)가 실제
+    // 재발급을 `tuple_mismatch` 로 막고 있었고, **이 테스트가 지키던 계약이 거짓이었는데
+    // 초록이었다**(48차 CE-48-A). 이제 실제로 재발급해 본다.
     await agent.fence('11');
-    const reissue = new DpAgent(store).terminalOf(tupleFor(x11, 'http'));
+    const reissue = await agent
+      .reserveAll(x11, { op: x11, phase: 'preflight', reloadAttempts: 0, progress: {} })
+      .then(() => 'ok')
+      .catch((e: unknown) => (e as { kind?: string }).kind ?? 'other');
 
     expect({ revive, reissue }, '포기의 범위가 계약과 다르다')
-      .toEqual({ revive: 'terminal', reissue: undefined });
+      .toEqual({ revive: 'terminal', reissue: 'ok' });
   });
 });

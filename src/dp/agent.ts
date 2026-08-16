@@ -2046,8 +2046,24 @@ function assertLeader(s: AgentState, token: string): void {
  */
 type Step = 'reserve' | 'stage' | 'commit' | 'health';
 /** **plane 이 들어가야 한다.** 빠지면 한 평면의 ACK 를 다른 평면이 훔친다 (5차 반례). */
+/**
+ * 멱등 캐시의 키. **토큰이 들어간다** (48차 CE-48-A).
+ *
+ * 43차 검수의 처방은 *"이름 원장에 신원을 넣어라"* 였고, 44차에 그것을 **종단 원장에만**
+ * 적용했다. **이름 원장은 둘이다** — 종단(`terminal`)과 멱등 캐시(`completed`).
+ * 한쪽만 고쳐서, 45차에 적은 계약(*"신임 리더가 같은 이름을 다시 내면 DP 는
+ * 통과시킨다"*)이 **현행 세계에서 거짓**이었다: 옛 전환의 캐시 기록이 남아 있는 한
+ * 신임의 같은-이름 재발급이 `tuple_mismatch` 로 결정적으로 거부된다.
+ *
+ * "부류를 이름 붙이고 한 자리만 고친다" 의 재연이고, 이번엔 레거시 창이 아니라
+ * **현행 세계**다. 47차가 "본체 부류는 닫혔다" 고 판정한 것도 그래서 기각됐다.
+ *
+ * 토큰을 넣으면 두 이름-원장이 **같은 범위**(전환, 토큰)를 갖는다. 같은 토큰의 재요청은
+ * 여전히 자기 칸에서 캐시 히트하고, 신임의 재발급만 새 칸을 받는다.
+ */
 const key = (op: OperationTuple, step: Step): string =>
-  `${op.operationId}:${op.transitionId}:${op.plane}:${step}`;
+  `${op.operationId}:${op.transitionId}:${normalizeNumeric(op.leaderToken, 'leaderToken')}`
+  + `:${op.plane}:${step}`;
 /** 전환 단위 키. abort 는 단계가 아니라 전환 전체를 끝낸다. */
 /**
  * `completed` 를 몇 전환까지 들고 갈 것인가.
