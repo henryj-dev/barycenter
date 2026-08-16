@@ -61,7 +61,44 @@ export class StoreLockLost extends Error {
   }
 }
 
-type LockRecord = { pid: number; nonce: string };
+/**
+ * 락 레코드.
+ *
+ * `startedAt` 이 왜 있는가 — **컨테이너에서 pid 생존 판정이 무의미하기 때문이다.**
+ *
+ * 원래는 pid 만 보고 "살아 있으면 남의 락" 으로 판단했고, pid 재사용은 *잔여 경합*이라고
+ * 적어 뒀다. 그런데 §11.1 이 규정한 배포 형태(DP 컨테이너 안의 에이전트)에서는 그게 잔여
+ * 경합이 아니라 **확정**이다. 데몬은 언제나 pid 1 근처이고, 재기동하면 그 자리에 새
+ * 프로세스가 다시 선다. 그래서 **자기가 남긴 락을 자기가 회수하지 못하고** 데몬이 아예
+ * 못 뜬다. v0.1 e2e 를 짜다가 실제로 이걸로 막혔다:
+ *
+ *   기동 실패: StoreLocked: 다른 프로세스(pid 1)가 이 상태를 쓰고 있다
+ *
+ * pid 에 **프로세스 시작 시각**을 붙이면 재사용이 구별된다. 같은 pid 라도 시작 시각이
+ * 다르면 다른 프로세스다. Linux 는 `/proc/<pid>/stat` 의 22번째 필드가 그것이다.
+ *
+ * 읽을 수 없는 플랫폼(macOS 등)에서는 `undefined` 로 두고 **옛 동작 그대로** 간다 —
+ * 모르는 것을 안다고 하지 않는다. 옛 락 파일에 이 필드가 없는 경우도 같다.
+ */
+type LockRecord = { pid: number; nonce: string; startedAt?: string };
+
+/**
+ * 프로세스 시작 시각. 못 읽으면 `undefined`.
+ *
+ * 값의 의미는 플랫폼마다 다르다 — 비교만 하고 해석하지 않는다.
+ */
+function startTimeOf(pid: number): string | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // comm 필드가 괄호 안에 있고 공백을 품을 수 있다. **뒤에서부터 센다.**
+    const after = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    // stat 의 3번째 필드(state)가 여기서 인덱스 0 이므로 22번째 필드는 인덱스 19 다.
+    const t = after[19];
+    return t === undefined || t === '' ? undefined : t;
+  } catch {
+    return undefined;
+  }
+}
 
 /** 상태를 읽기만 하는 핸들. **`save` 가 없다** — 타입에도 런타임에도. */
 export class ReadOnlyFileStore {
@@ -107,9 +144,13 @@ export class FileStore implements DurableStore {
   /**
    * 상태 파일을 연다. **락을 잡지 못하면 열리지 않는다.**
    *
-   * 락은 프로세스가 죽으면 남는다. 그래서 잡고 있던 pid 가 살아 있는지 확인하고, 죽었으면
-   * 회수한다. pid 재사용이라는 잔여 경합이 있다 — 같은 pid 로 다른 프로세스가 떠 있으면
-   * 살아 있다고 잘못 본다. 그때는 열리지 않을 뿐이라 **안전한 쪽으로 틀린다.**
+   * 락은 프로세스가 죽으면 남는다. 그래서 잡고 있던 프로세스가 아직 그 자리에 있는지
+   * 확인하고, 아니면 회수한다. **pid 만으로는 안 된다** — 컨테이너에서 데몬은 늘 같은
+   * 낮은 pid 를 쓰므로 재기동하면 자기가 남긴 락을 자기가 못 회수한다. 그래서 pid 에
+   * 프로세스 시작 시각을 붙여 재사용을 가른다 (`LockRecord.startedAt`).
+   *
+   * 시작 시각을 못 읽는 플랫폼에서는 옛 동작(pid 생존)으로 물러난다. 그때 남는 경합은
+   * 열리지 않는 쪽으로 틀리므로 **안전한 쪽으로 틀린다.**
    */
   static open(path: string): FileStore {
     mkdirSync(dirname(path), { recursive: true });
@@ -135,7 +176,11 @@ export class FileStore implements DurableStore {
       // 남이 빈 파일을 읽고 "망가진 락" 으로 판단해 지울 수 있다 (6차 지적).
       // `link` 는 대상이 있으면 EEXIST 로 실패하므로 만들기와 걸기가 한 번에 끝난다.
       const tmp = `${lockPath}.new-${process.pid}-${nonce}`;
-      writeLockFile(tmp, { pid: process.pid, nonce });
+      const mine = startTimeOf(process.pid);
+      writeLockFile(tmp, {
+        pid: process.pid, nonce,
+        ...(mine === undefined ? {} : { startedAt: mine }),
+      });
       try {
         linkSync(tmp, lockPath);
         unlinkSync(tmp);
@@ -149,7 +194,7 @@ export class FileStore implements DurableStore {
       }
 
       const holder = readLock(lockPath);
-      if (holder === undefined || isAlive(holder.pid)) {
+      if (holder === undefined || stillHolding(holder)) {
         // 읽을 수 없는 락은 **살아 있는 것으로 취급한다.** 지우는 쪽으로 틀리면
         // 두 writer 가 열린다 — 안 열리는 쪽으로 틀리는 게 낫다.
         throw new StoreLocked(holder?.pid ?? -1);
@@ -280,11 +325,28 @@ function readLock(lockPath: string): LockRecord | undefined {
   try {
     const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as Partial<LockRecord>;
     return typeof parsed.pid === 'number' && typeof parsed.nonce === 'string'
-      ? { pid: parsed.pid, nonce: parsed.nonce }
+      ? {
+          pid: parsed.pid, nonce: parsed.nonce,
+          ...(typeof parsed.startedAt === 'string' ? { startedAt: parsed.startedAt } : {}),
+        }
       : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 락을 남긴 그 프로세스가 **아직 그 자리에 있는가.**
+ *
+ * pid 가 살아 있다는 것만으로는 부족하다 — 재사용된 pid 일 수 있고, 컨테이너에서는
+ * 그게 예외가 아니라 기본이다. 시작 시각을 양쪽 다 읽을 수 있을 때만 그걸로 가른다.
+ * 한쪽이라도 모르면 **살아 있는 쪽으로** 틀린다 (안 열리는 쪽이 안전하다).
+ */
+function stillHolding(holder: LockRecord): boolean {
+  if (!isAlive(holder.pid)) return false;
+  const now = startTimeOf(holder.pid);
+  if (holder.startedAt === undefined || now === undefined) return true;
+  return holder.startedAt === now;
 }
 
 function isAlive(pid: number): boolean {

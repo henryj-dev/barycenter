@@ -140,8 +140,6 @@ const DEFAULT_POLL: PollPolicy = {
 export class ApplyRunner {
   private readonly poll: PollPolicy;
   private history: Phase[] = [];
-  /** 마지막 실패 사유. 결과에 실어 운영자가 원인을 알 수 있게 한다. */
-  private lastFailure: string | undefined;
 
   /**
    * **DpAgent 가 durable 상태를 소유한다.** 저널과 좌표가 서로 다른 소유자를 가지면
@@ -716,7 +714,6 @@ export class ApplyRunner {
 
   /** 전 평면을 실패로 닫는다. 슬롯을 반납해야 좌표가 영구히 잠기지 않는다. */
   private async failAll(j: JournalEntry, reason?: string): Promise<void> {
-    if (reason !== undefined) this.lastFailure = reason;
     // **넘어간 평면을 실패라고 적지 않는다** (13차 반례 ③ · 15차에 고쳤다).
     //
     // 전에는 `progressOf(op, 'failed')` 로 **전부** 실패라고 적었다. 좌표가 이미 옮겨 간
@@ -752,7 +749,11 @@ export class ApplyRunner {
     // **또 하나의 도달 불가 분기**라 다음 스윕이 똑같이 짚는다. 못 오는 길에 방어를
     // 세우는 대신 못 온다는 사실을 적는다.
     const phase = this.agent.reachedPhase() as ApplyPhase;
-    await ignoreConflict(this.write(next(j, { phase, progress })));
+    // **사유를 저널에 적는다.** 여기 안 적으면 재기동·승계 뒤에 사라진다.
+    await ignoreConflict(this.write(next(j, {
+      phase, progress,
+      ...(reason === undefined ? {} : { failure: reason }),
+    })));
     await this.agent.finishOperation(j.op);
   }
 
@@ -864,6 +865,7 @@ function resultOf(j: JournalEntry): ApplyResult {
     progress: { http: progress.http, stream: progress.stream },
     partialTransition: j.phase === 'partially_activated' || j.phase === 'partial_exhausted',
     ...(j.evidence ? { evidence: j.evidence } : {}),
+    ...(j.failure === undefined ? {} : { failure: j.failure }),
   };
 }
 

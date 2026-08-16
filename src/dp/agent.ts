@@ -297,6 +297,16 @@ export type JournalEntry = {
   progress?: Partial<Record<Plane, PlaneProgress>>;
   /** 마지막으로 관측한 활성화 증거 (§6.3). */
   evidence?: ActivationEvidence;
+  /**
+   * 실패했다면 왜 (§6.2 — *조용히 실패하지 않는다*).
+   *
+   * **저널에 적는다.** 러너 인스턴스의 필드로만 들고 있으면 재기동·승계 뒤에 사유가
+   * 사라지고, `recoverConfig()` 가 이어받은 전환은 "failed" 라고만 답한다. 실제로 그
+   * 상태였다 — `ApplyResult.failure` 는 타입에 있는데 `resultOf` 가 안 실었고
+   * `lastFailure` 는 **쓰기만 하고 아무도 읽지 않는 필드**였다. v0.1 배선을 하다가
+   * apply 가 `{"phase":"failed"}` 만 돌려줘서 원인을 못 찾고서야 알았다.
+   */
+  failure?: string;
 };
 
 /**

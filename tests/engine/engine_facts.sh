@@ -716,6 +716,56 @@ http {
 }
 EOF
 
+# ─────────────────────────────────────────────────────────────────────────
+# E62 — `include` 의 상대경로는 무엇을 기준으로 풀리는가
+#
+# 설계가 여기 걸려 있다. §6.3 은 활성화를 **세대별 렌더 리터럴**로 판정하라고 하는데,
+# 그 리터럴은 모델의 일부가 아니라서 렌더러가 굽지 못한다. 세대 안의 `admin/` 조각으로
+# 빼려면 `include` 가 **conf_prefix**(= conf 파일의 디렉토리) 기준이어야 한다 —
+# `ssl_certificate` 가 그런 것처럼(§7.2). prefix(`-p`) 기준이라면 `current` 심볼릭 링크를
+# 지나도 항상 같은 파일을 읽어 **세대 결박이 성립하지 않는다.**
+
+p=$(mkprefix E62)
+mkdir -p "$p/gen1/admin" "$p/gen2/admin" "$p/admin"
+for g in gen1 gen2; do
+  cat > "$p/$g/nginx.conf" <<EOF
+error_log logs/error.log warn;
+pid logs/nginx.pid;
+events { worker_connections 64; }
+http { include admin/*.conf; server { listen 19620; return 200 "root"; } }
+EOF
+  echo "server { listen 19621; location = /g { return 200 \"$g\"; } }" > "$p/$g/admin/marker.conf"
+done
+# **prefix 쪽 미끼.** conf_prefix 기준이면 이건 절대 안 읽힌다.
+echo 'server { listen 19622; location = /g { return 200 "PREFIX"; } }' > "$p/admin/marker.conf"
+ln -sfn "$p/gen1" "$p/current"
+
+if "$BIN" -t -p "$p" -c current/nginx.conf >/dev/null 2>&1; then
+  ok E62.1 "**빈 glob include 도 통과한다** — admin 조각이 없는 세대도 유효하다"
+else
+  bad E62.1 "include admin/*.conf 가 설정을 깨뜨린다"
+fi
+
+"$BIN" -p "$p" -c current/nginx.conf >/dev/null 2>&1
+i=0; while [ ! -s "$p/logs/nginx.pid" ] && [ $i -lt 50 ]; do i=$((i+1)); sleep 0.1; done
+if [ -s "$p/logs/nginx.pid" ]; then
+  r=$(body 19621 /g x)
+  [ "$r" = gen1 ] && ok E62.2 "**include 는 conf_prefix 기준이다** — current 링크를 지나 세대 자신의 admin 을 읽는다 ($r)" \
+                  || bad E62.2 "기대 gen1, 실제 '$r'"
+  r=$(body 19622 /g x)
+  [ -z "$r" ] && ok E62.3 "**prefix(-p) 쪽의 같은 이름은 안 읽힌다** — 미끼가 로드되지 않았다" \
+              || bad E62.3 "prefix 쪽 조각이 읽혔다: '$r' — 세대 결박이 성립하지 않는다"
+
+  ln -sfn "$p/gen2" "$p/current.tmp" && mv -T "$p/current.tmp" "$p/current"
+  kill -HUP "$(cat "$p/logs/nginx.pid")" 2>/dev/null; sleep 1.0
+  r=$(body 19621 /g x)
+  [ "$r" = gen2 ] && ok E62.4 "**링크 교체 + HUP 이 마커를 옮긴다** — 세대별 리터럴이 성립한다 ($r)" \
+                  || bad E62.4 "기대 gen2, 실제 '$r' — HUP 뒤에도 옛 조각을 읽는다"
+  stop_ng "$p"
+else
+  bad E62 "기동 실패"
+fi
+
 log ""
 log "=============================================================="
 log " PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP"

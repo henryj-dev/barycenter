@@ -189,6 +189,22 @@ export function readManifest(prefix: string, generation: string): GenerationMani
  *
  * manifest 를 믿고 넘어가면 manifest 만 맞고 내용이 바뀐 세대를 활성화한다.
  */
+/**
+ * 세대 디렉토리 안의 **모든 파일**을 상대경로로 훑는다.
+ *
+ * 빈 디렉토리는 나오지 않는다 — manifest 가 파일만 담으므로 대조 단위도 파일이어야
+ * 한다. 디렉토리를 대조 단위로 삼았다가 `admin/` 을 "모르는 파일" 로 오판했다.
+ */
+function walkFiles(dir: string, prefix = ''): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...walkFiles(join(dir, entry.name), rel));
+    else out.push(rel);
+  }
+  return out;
+}
+
 export function verifyGeneration(
   prefix: string,
   generation: string,
@@ -228,11 +244,21 @@ export function verifyGeneration(
     actual[rel] = sha256(readFileSync(path));
   }
   // manifest 에 없는 파일이 디렉토리에 있으면 그것도 불일치다.
-  const onDisk = readdirSync(dir).filter((f) => f !== MANIFEST_NAME);
+  //
+  // **하위 디렉토리까지 내려간다.** 처음엔 `readdirSync(dir)` 한 겹만 봤고, 그건 세대가
+  // 평평할 때만 맞는다. §7.2 의 레이아웃은 처음부터 중첩이다 —
+  // `http/`, `stream/`, `lua/`, `certs/<certificate_id>/`. v0.1 이 `admin/marker.conf`
+  // 하나를 넣자마자 걸렸다:
+  //
+  //   세대 'r3-e2' 에 manifest 에 없는 'admin' 가 있다
+  //
+  // 디렉토리 이름을 파일 이름과 대조하고 있었으니 당연히 안 맞는다. **설계가 이미 말한
+  // 모양을 검사기가 못 읽고 있었다.**
   const known = new Set(Object.keys(manifest.files));
-  for (const f of onDisk) {
-    if (!known.has(f)) {
-      throw new GenerationError('digest_mismatch', `세대 '${generation}' 에 manifest 에 없는 '${f}' 가 있다`);
+  for (const rel of walkFiles(dir)) {
+    if (rel === MANIFEST_NAME) continue;
+    if (!known.has(rel)) {
+      throw new GenerationError('digest_mismatch', `세대 '${generation}' 에 manifest 에 없는 '${rel}' 이 있다`);
     }
   }
 

@@ -23,7 +23,8 @@
     "test:e2e": "vitest run tests/e2e",
     "test:engine": "./tests/engine/run.sh",
     "typecheck": "tsc --noEmit",
-    "test:store": "vitest run tests/store"
+    "test:store": "vitest run tests/store",
+    "build": "./scripts/build.sh"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
@@ -33,5 +34,15 @@
   },
   "dependencies": {
     "pg": "^8.23.0"
-  }
+  },
+  "bin": {
+    "barycenterd": "./dist/bin/barycenterd.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "DESIGN.md",
+    "LICENSE"
+  ]
 }

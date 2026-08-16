@@ -1,0 +1,18 @@
+{
+  // 배포용 빌드. 개발 설정(`tsconfig.json`)은 `noEmit` 이라 타입만 본다.
+  //
+  // `moduleResolution` 을 **nodenext** 로 바꾼다. 개발에서는 `bundler` 라 확장자 규칙이
+  // 느슨하지만, Node 가 직접 실행하는 산출물은 ESM 규칙을 그대로 따라야 한다 —
+  // 소스가 이미 `./x.js` 로 쓰고 있으므로(TS 관례) 그대로 나가면 맞는다.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    "declaration": true,
+    "sourceMap": true
+  },
+  "include": ["src"]
+}

@@ -431,8 +431,34 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
 
   const top: ConfNode[] = [block('events', [], [directive('worker_connections', [num(1024)])])];
 
+  /**
+   * **세대에 결박된 admin 조각을 끌어들인다** (§7.2 레이아웃의 `http/admin.conf`).
+   *
+   * §6.3 은 활성화를 *세대별 렌더 리터럴*로 판정하라고 한다 — S7 의 A4.3 이 shared dict
+   * 마커로는 "누가 응답했는가" 를 말할 수 없음을 실측했다. 그러려면 세대마다 다른
+   * 리터럴이 conf 안에 있어야 하는데, 그 리터럴은 **모델의 일부가 아니다.**
+   *
+   * 그래서 렌더러는 자리만 낸다. 세대 번호를 `render()` 인자로 받으면 *같은 모델 → 같은
+   * digest* 가 깨지고, plan 이 렌더러 드리프트를 잡는 근거가 사라진다.
+   *
+   * 상대경로인 것이 핵심이다. `include` 는 `ssl_certificate` 와 똑같이 **conf_prefix**
+   * (= conf 파일이 있는 디렉토리) 기준으로 풀린다 — 실측했다(E62). 그래서
+   *   · `-c current/nginx.conf`         → 활성 세대의 admin
+   *   · `-t -c generations/N/nginx.conf` → 그 세대 자신의 admin (게시 전 검증)
+   * 양쪽 모두 자기 세대를 가리킨다. prefix(`-p`) 쪽에 같은 이름을 둬도 안 읽힌다.
+   *
+   * 빈 glob 도 통과하므로(E62) admin 조각이 없는 세대도 유효하다.
+   */
+  const adminInclude = directive('include', [lit('admin/*.conf')]);
+
   // ── http ──
-  if (httpListeners.length > 0) {
+  // **http 블록은 항상 낸다.** 모델에 http 리스너가 없어도 마커를 서빙할 자리가
+  // 필요하다 — 활성화를 증명하지 못하면 apply 가 좌표를 못 옮긴다. 이건 v0.1 의
+  // 명시적 선택이다: **데이터 플레인은 언제나 admin http 서버를 띄운다.**
+  //
+  // `planes` 는 그대로 모델에서 나온다. admin 블록은 상태 평면을 구성하지 않는다 —
+  // 세대마다 마커 리터럴만 다르고 좌표도 멤버십도 안 든다.
+  {
     const routesByListener = new Map<string, HttpRoute[]>();
     for (const r of model.httpRoutes) {
       const list = routesByListener.get(r.listener);
@@ -453,7 +479,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
       }
     }
 
-    const children: ConfNode[] = [];
+    const children: ConfNode[] = [adminInclude];
     // E7 — 내장 변수가 아니므로 반드시 함께 렌더한다. 그리고 정확히 한 번만.
     if (anyWebsocket) {
       children.push(
@@ -474,7 +500,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
         ...httpServerBlocks(l, routesByListener.get(l.key) ?? [], poolsWithBackends),
       );
     }
-    if (children.length > 0) top.push(block('http', [], children));
+    top.push(block('http', [], children));
   }
 
   // ── stream ──
