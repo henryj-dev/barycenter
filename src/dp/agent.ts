@@ -1131,9 +1131,21 @@ export class DpAgent {
       const staleIsMine = ownsJournal(stale, op);
       if (opening !== undefined && stale !== undefined && !staleIsMine
         && !isTerminalPhase(stale.phase)) {
+        // **자기 이름은 안 찍는다** (34차 검수 B). `transitionKey` 에는 토큰이 없다 —
+        // `opId:tid:plane` 이다. 그래서 같은 id 를 새 토큰으로 재발급하면 고아가 된 옛
+        // 전환과 **키가 같다.** 그대로 찍으면 몇 줄 아래 `admit` 이 그것을 읽고
+        // **자기를 거부한다.**
+        //
+        // 게다가 그 쓰기는 `serial()` 이 예외와 함께 버리므로 **원장에는 남지도 않는다** —
+        // "이미 aborted 로 끝났다" 고 답하는데 원장에는 그 기록이 없다. 진단이 거짓이고,
+        // 같은 id 재발급이 결정적으로 반복 거부된다.
+        //
+        // 안 찍어도 잃는 것이 없다: 옛 전환은 바로 아래 `supersede` 로 닫히고, 그 토큰의
+        // 지연 RPC 는 `assertLeader` 가 fence 로 이미 막는다.
+        const mine = new Set(planesOf(op).map((plane) => transitionKey(tupleFor(op, plane))));
         for (const plane of planesOf(stale.op)) {
           const key = transitionKey(tupleFor(stale.op, plane));
-          if (s.terminal[key] === undefined) s.terminal[key] = 'aborted';
+          if (s.terminal[key] === undefined && !mine.has(key)) s.terminal[key] = 'aborted';
         }
         supersede(s, {
           operationId: stale.op.operationId,
@@ -1922,6 +1934,10 @@ function prune(s: AgentState): void {
   pruneEvidence(s);
   const keys = Object.keys(s.completed);
   if (keys.length === 0) return;
+  // ⚠️ **구버전 항목의 1 회성 창** (34차 검수). `transition` 필드가 없는 항목은 키
+  // 전체가 그룹명이 된다 — 그러면 한 전환의 단계 셋이 각각 딴 그룹으로 세어져 보존 창이
+  // 좁아지고, `live` 셋(`\0` 이음)과는 절대 안 맞아 **업그레이드 직후 한 번 무보호**다.
+  // 26차 `by` 부재의 창과 같은 계열이고, 방향은 안전하다(덜 보존할 뿐 오답을 만들지 않는다).
   const transitionOf = (k: string): string => s.completed[k]?.transition ?? k;
   const live = new Set<string>();
   if (s.activeOperation !== undefined) {
