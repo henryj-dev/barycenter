@@ -131,3 +131,61 @@ it('제3자가 들어와도 신임의 예약과 전환이 살아남는다', asyn
     '제3자가 신임의 좌표를 가로채고 신임의 전환까지 죽였다',
   ).toEqual({ outcome: 'rejected', slotOwner: 'X', xTerminal: undefined });
 });
+
+/**
+ * **CE-43-A — 제3자가 신임의 전환에 종단을 찍는다** (43차 검수)
+ *
+ * CE-42 를 고치며 커밋 메시지에 이렇게 적었다 — *"청소가 `terminal` 을 찍는데
+ * `transitionKey` 에 토큰이 없어 신임의 전환까지 죽는다. 34차 B 가 자기-찍기만 막았고
+ * **제3자 경유는 열려 있었다**."* **그리고 그 줄을 안 고쳤다.** 슬롯 대조만 고쳤다.
+ *
+ * *"이름을 붙이는 것과 전 자리를 고치는 것은 다른 일이다"* 의 **네 번째 재연**이다.
+ *
+ * 게다가 **CE-42 테스트가 우연한 방패로 초록이었다.** 거기서는 제3자가 같은 좌표를
+ * 겨눠 `acquire` 가 `slot_taken` 을 던지고, `serial()` 이 임계구역을 통째로 버려
+ * **종단 스탬프까지 롤백**된다. 좌표를 한 칸만 비켜 놓으면 아무것도 안 던지고 전부
+ * 저장된다 — 이 레포가 이름 붙인 "우연한 방패" 가 자기 회귀 테스트 안에서 재발했다.
+ */
+it('제3자가 다른 좌표를 잡아도 신임의 전환을 죽이지 않는다', async () => {
+  const store = new MemoryStore();
+  const agent = new DpAgent(store);
+  const x10 = OP('10');
+  const x11 = OP('11');
+  // **좌표를 한 칸 비킨다** — 다음 세대를 미는 지극히 정상적인 오퍼레이션이다.
+  const y11: ApplyOperation = {
+    ...OP('11'),
+    operationId: 'Y',
+    transitionId: 'Y',
+    planes: {
+      http: {
+        expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+        target: { activationEpoch: '2', membershipRevision: '2' },
+        payloadDigest: 'sha256:hy',
+      },
+      stream: {
+        expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+        target: { activationEpoch: '2', membershipRevision: '2' },
+        payloadDigest: 'sha256:sy',
+      },
+    },
+  };
+
+  await agent.reserveAll(x10, {
+    op: x10, phase: 'preflight', reloadAttempts: 0, progress: {},
+  });
+  await agent.finishOperation(x10, ['http', 'stream']);
+  await agent.fence('11');
+  for (const plane of ['http', 'stream'] as const) {
+    await agent.release(tupleFor(x11, plane));
+    await agent.reserve(tupleFor(x11, plane));
+  }
+
+  await agent.reserveAll(y11, {
+    op: y11, phase: 'preflight', reloadAttempts: 0, progress: {},
+  });
+
+  expect(
+    new DpAgent(store).terminalOf(tupleFor(x11, 'http')),
+    '제3자가 신임의 전환을 aborted 로 찍었다 — 운영자는 포기한 적이 없다',
+  ).toBeUndefined();
+});

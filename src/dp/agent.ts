@@ -694,6 +694,23 @@ function authoredBy(
  */
 type Identity = { operationId: string; transitionId: string; leaderToken: string };
 
+/**
+ * **이름이 같은가** — 토큰은 일부러 안 본다.
+ *
+ * 신원 비교 자리를 마흔 회차 동안 여섯 번 세었고 매번 뭔가 나왔다. 뿌리는 "id 만 보는
+ * 자리" 가 흩어져 있어서가 아니라 **"이름을 묻는 것" 과 "그 전환인지 묻는 것" 이 같은
+ * 모양으로 쓰여** 어느 쪽 의도인지 자리마다 다시 판정해야 했기 때문이다.
+ *
+ * 그래서 물음을 둘로 갈라 이름을 준다. **이름을 묻는 자리는 이것을 쓴다** — 그러면
+ * "왜 토큰을 안 보나" 라는 물음이 자리마다가 아니라 **이 함수 하나에** 붙는다.
+ */
+function sameTransitionName(
+  a: { operationId: string; transitionId: string },
+  b: { operationId: string; transitionId: string },
+): boolean {
+  return a.operationId === b.operationId && a.transitionId === b.transitionId;
+}
+
 function ownsSlotOp(slot: Identity | undefined, op: Identity): boolean {
   if (slot === undefined) return false;
   return slot.operationId === op.operationId
@@ -1200,10 +1217,30 @@ export class DpAgent {
         //
         // 안 찍어도 잃는 것이 없다: 옛 전환은 바로 아래 `supersede` 로 닫히고, 그 토큰의
         // 지연 RPC 는 `assertLeader` 가 fence 로 이미 막는다.
+        // **살아 있는 전환에는 안 찍는다** (43차 CE-43-A). 34차 B 가 **자기**-찍기만
+        // 막았고, 42차 커밋이 *"제3자 경유는 열려 있었다"* 고 **이름 붙여 놓고 그 줄을
+        // 안 고쳤다** — "이름을 붙이는 것과 전 자리를 고치는 것은 다른 일이다" 의 네 번째
+        // 재연이다.
+        //
+        // `transitionKey` 는 `opId:tid:plane` 이라 **토큰이 없다.** 그래서 옛 X/10 을
+        // 닫는 스탬프가 같은 이름을 쓰는 **신임 X/11 까지** 죽인다. 신임은 자기 stage 가
+        // `terminal` 로 거부되고, `release()` 마저 종단을 보고 일찍 돌아가 **예약을 반납할
+        // 수도 없다.**
+        //
+        // 그 이름이 **지금 쓰이고 있으면** 안 찍는다. 판정은 예약이 한다 — 같은 이름의
+        // 슬롯이 **다른 토큰**으로 살아 있으면 그건 승계된 신임의 것이다.
+        // (42차 테스트가 초록이던 것은 좌표가 겹쳐 `slot_taken` 이 임계구역을 통째로
+        // 롤백해 줬기 때문이다 — **우연한 방패**가 자기 회귀 테스트 안에서 재발했다.)
         const mine = new Set(planesOf(op).map((plane) => transitionKey(tupleFor(op, plane))));
+        const liveElsewhere = (plane: Plane): boolean =>
+          Object.values(s.reservations[plane] ?? {}).some(
+            (slot) => sameTransitionName(slot.op, stale.op) && !ownsSlotOp(slot.op, stale.op),
+          );
         for (const plane of planesOf(stale.op)) {
           const key = transitionKey(tupleFor(stale.op, plane));
-          if (s.terminal[key] === undefined && !mine.has(key)) s.terminal[key] = 'aborted';
+          if (s.terminal[key] === undefined && !mine.has(key) && !liveElsewhere(plane)) {
+            s.terminal[key] = 'aborted';
+          }
         }
         supersede(s, {
           operationId: stale.op.operationId,
@@ -1897,9 +1934,13 @@ function supersede(s: AgentState, holder: ActiveOperation): void {
   }
 
   const j = s.journal;
-  const sameOp = j !== undefined
-    && j.op.operationId === holder.operationId
-    && j.op.transitionId === holder.transitionId;
+  // **이름만 본다 — 일부러다** (43차 정오표). `supersede` 는 fence 와 고아 청소 둘에서
+  // 불리고, 둘 다 "이 이름의 전환을 접는다" 가 목적이다. 토큰까지 보면 fence 가 **낡은
+  // 토큰의 저널**을 못 닫아 그 이름이 영영 안 걷힌다 — 그게 20차 CE-1 이 고친 증상이다.
+  //
+  // 43차가 "20 자리 중 유일하게 근거 주석이 없다" 고 짚었다. 근거가 없던 것이지 근거가
+  // 틀렸던 것은 아니지만, **근거 없는 자리는 다음 사람이 "통일" 한다.**
+  const sameOp = j !== undefined && sameTransitionName(j.op, holder);
   // **종단은 덮지 않는다** (8차 반례 ②). 이미 activated 로 끝난 것을 superseded 로
   // 바꾸면 좌표와 저널이 다른 말을 한다.
   if (sameOp && j !== undefined && !isTerminalPhase(j.phase)) {
