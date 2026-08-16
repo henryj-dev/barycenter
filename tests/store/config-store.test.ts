@@ -9,22 +9,24 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ConfigStore, StoreError, type PatchOp } from '../../src/store/config-store.js';
-import { Db, DSN, dockerAvailable, reset, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+
+const PG = pgFor('store');
 
 let db: Db;
 let store: ConfigStore;
 
 beforeAll(async () => {
   if (!dockerAvailable()) throw new Error('도커가 없다 — 이 스위트는 실물 PG 를 쓴다');
-  startPg();
-  db = new Db(DSN);
+  startPg(PG);
+  db = new Db(PG.dsn);
   await db.migrate();
   store = new ConfigStore(db);
 }, 180_000);
 
 afterAll(async () => {
   await db?.close();
-  stopPg();
+  stopPg(PG);
 });
 
 beforeEach(async () => {
@@ -285,6 +287,112 @@ describe('정본 저장소', () => {
     expect(plan.impact.affectedListeners).toEqual([
       { key: 'front', protocol: 'http', bind: '0.0.0.0', port: 999 },
     ]);
+  });
+
+  describe('롤백 (§5.3)', () => {
+    it('**head 를 뒤로 옮기지 않는다** — 그 시점 내용으로 새 리비전을 만든다', async () => {
+      await commitAll(minimal);                                    // r2
+      await commitAll([PUT('backend', 'a-12', {
+        pool: 'app', host: '10.0.0.2', port: 12, weight: 1,
+      })]);                                                        // r3
+
+      const rolled = await store.rollbackTo('2', 't');
+      expect(rolled.revision).toBe('4');                           // **앞으로** 갔다
+      expect(rolled.rollbackOf).toBe('2');
+      expect((await store.head()).revision).toBe('4');
+
+      // 내용은 r2 와 같다.
+      expect(await store.modelAt('4')).toEqual(await store.modelAt('2'));
+      // 그리고 r3 은 그대로 남아 있다 — 되돌린다고 역사를 지우지 않는다.
+      expect((await store.modelAt('3')).backends).toHaveLength(2);
+    });
+
+    it('**리소스 테이블도 되돌린다** — 모든 종류가', async () => {
+      await commitAll(minimal);                                    // r2
+      // **종류마다 하나씩 더한다.** 처음엔 백엔드만 더해 놓고 재 봤는데, 그러면 풀·리스너·
+      // 라우트를 안 되돌려도 테스트가 통과한다 — 변이로 확인하고서야 알았다.
+      await commitAll([
+        PUT('pool', 'extra', { protocolClass: 'tcp', algorithm: 'round_robin' }),
+        PUT('backend', 'a-12', { pool: 'app', host: '10.0.0.2', port: 12, weight: 1 }),
+        PUT('backend', 'x-1', { pool: 'extra', host: '10.0.0.3', port: 13, weight: 1 }),
+        PUT('listener', 'raw', {
+          protocol: 'tcp', bind: '0.0.0.0', port: 998, enabled: true, defaultPool: 'extra',
+        }),
+        PUT('httpRoute', 'r1', {
+          listener: 'front', hosts: ['a.test'], priority: 1,
+          action: { kind: 'proxy', pool: 'app', websocket: false },
+        }),
+      ]);                                                          // r3
+
+      const rolled = await store.rollbackTo('2', 't');
+      const model = await store.modelAt(rolled.revision);
+      expect(model.pools.map((p) => p.key)).toEqual(['app']);
+      expect(model.backends.map((b) => b.key)).toEqual(['a-11']);
+      expect(model.listeners.map((l) => l.key)).toEqual(['front']);
+      expect(model.httpRoutes).toEqual([]);
+
+      // 스냅샷만 새로 적고 테이블을 그대로 두면, 여기서 head 는 r2 내용인데 다음 커밋은
+      // r3 내용에서 출발하는 — 아무도 이해할 수 없는 상태가 된다.
+      const after = await commitAll([PUT('backend', 'a-99', {
+        pool: 'app', host: '10.0.0.9', port: 19, weight: 1,
+      })]);
+      const next = await store.modelAt(after.revision);
+      expect(next.pools.map((p) => p.key)).toEqual(['app']);
+      expect(next.backends.map((b) => b.key)).toEqual(['a-11', 'a-99']);
+      expect(next.listeners.map((l) => l.key)).toEqual(['front']);
+    });
+
+    it('롤백은 **풀의 CASCADE 에 기대어** 백엔드를 치운다 (§4.0)', async () => {
+      // `rollbackTo` 가 `backends` 를 명시적으로 안 지운다. 그 근거가 이 CASCADE 이고,
+      // 근거를 안 재면 나중에 FK 정책이 RESTRICT 로 바뀌었을 때 **롤백이 조용히
+      // 옛 백엔드를 남긴다.** 명시적 DELETE 를 지운 대신 이걸 둔다.
+      await commitAll(minimal);
+      const before = (await db.query('SELECT count(*)::int AS n FROM backends')).rows[0];
+      expect(before?.['n']).toBe(1);
+      // 리스너가 RESTRICT 로 풀을 붙잡고 있으므로 **롤백과 같은 순서**로 지운다.
+      // (처음엔 풀부터 지우려다 RESTRICT 에 막혔다 — 그 자체가 §4.0 이 의도한 동작이다.)
+      await db.query(`DELETE FROM listeners`);
+      await db.query(`DELETE FROM pools WHERE key = 'app'`);
+      const after = (await db.query('SELECT count(*)::int AS n FROM backends')).rows[0];
+      expect(after?.['n']).toBe(0);
+    });
+
+    it('**epoch 는 재사용하지 않는다** (§3.3-1 · S19)', async () => {
+      const first = await commitAll(minimal);
+      const second = await commitAll([PUT('backend', 'a-12', {
+        pool: 'app', host: '10.0.0.2', port: 12, weight: 1,
+      })]);
+      const rolled = await store.rollbackTo('2', 't');
+      // 옛 내용으로 되돌아가면서 **옛 epoch 로 되돌아가면** 지연된 RPC 가 되살아난다.
+      // S11 이 재현하고 S19 가 합성을 확인한 그 규칙이다.
+      expect(BigInt(rolled.activationEpoch)).toBeGreaterThan(BigInt(second.activationEpoch));
+      expect(BigInt(second.activationEpoch)).toBeGreaterThan(BigInt(first.activationEpoch));
+    });
+
+    it('미래·현재 리비전으로는 못 되돌린다', async () => {
+      await commitAll(minimal);
+      await expect(store.rollbackTo('2', 't')).rejects.toMatchObject({
+        status: 409, code: 'not_past',
+      });
+      await expect(store.rollbackTo('99', 't')).rejects.toMatchObject({
+        status: 404, code: 'unknown_revision',
+      });
+    });
+
+    it('롤백은 **`/apply` 가 그대로 소비할 plan** 을 남긴다', async () => {
+      await commitAll(minimal);
+      await commitAll([PUT('backend', 'a-12', {
+        pool: 'app', host: '10.0.0.2', port: 12, weight: 1,
+      })]);
+      const rolled = await store.rollbackTo('2', 't');
+      const plan = await store.getPlan(rolled.planId);
+      // 롤백만의 적용 경로를 따로 두면 그 경로만 덜 검증된다 — 정작 급할 때 쓰는 것이
+      // 가장 안 밟힌 경로가 된다.
+      expect(plan.state).toBe('committed');
+      expect(plan.targetRevision).toBe(rolled.revision);
+      expect(plan.activationEpoch).toBe(rolled.activationEpoch);
+      expect(plan.changesetId).toBeNull();
+    });
   });
 
   it('모든 변경이 감사에 남는다 (§5.1)', async () => {

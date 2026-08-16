@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 
 import { render } from '../conf/render.js';
 import type { ControlPlane } from '../control/plane.js';
+import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
 import type { Db } from '../store/pg.js';
 import { can, TokenAuth, type Principal, type Scope } from './auth.js';
@@ -35,6 +36,7 @@ export type ApiOptions = {
   store: ConfigStore;
   control: ControlPlane;
   auth: TokenAuth;
+  election: LeaderElection;
   /** 본문 상한. 없으면 한 요청이 프로세스를 삼킬 수 있다. */
   maxBodyBytes?: number;
 };
@@ -191,6 +193,26 @@ const ROUTES: Route[] = [
     json(c.res, 200, await api.store.getPlan(c.params['id'] ?? ''));
   }),
 
+  /**
+   * 롤백 (§5.3).
+   *
+   * **과거 리비전을 `/apply` 로 되돌리는 경로는 없다** — 일반 apply 는 언제나 head 만
+   * 적용한다. 되돌리려면 여기를 지나야 하고, 여기는 head 를 뒤로 옮기는 대신 그 시점의
+   * 내용으로 **새 리비전**을 만든다.
+   *
+   * 스코프는 `apply` 다. 되돌리는 것은 고치는 것보다 무거운 권한이지 가벼운 권한이
+   * 아니다 — 트래픽이 즉시 바뀐다.
+   */
+  route('POST', '/api/v1/rollback', 'apply', async (c, api) => {
+    const to = field(c.body, 'to_revision');
+    const note = (c.body as { note?: unknown } | null)?.note;
+    const rolled = await api.store.rollbackTo(to, c.who.name,
+      typeof note === 'string' ? note : undefined);
+    // 만들기만 하고 적용은 `/apply` 가 한다. 롤백만의 적용 경로를 따로 두면 그 경로만
+    // 덜 검증된다 — 정작 급할 때 쓰는 경로가 가장 안 밟힌 경로가 된다.
+    json(c.res, 200, rolled);
+  }),
+
   // ── 적용·관찰 ──────────────────────────────────────────────────────────
   route('POST', '/api/v1/apply', 'apply', async (c, api) => {
     json(c.res, 200, await api.control.apply(field(c.body, 'plan_id'), c.who.name));
@@ -295,6 +317,24 @@ async function handle(
     return;
   }
 
+  // **스탠바이는 읽기만 답한다** (§3.5 · §11.4).
+  //
+  // `apply` 만 막고 `write` 는 열어 둘까 고민했는데, 그러면 스탠바이에 커밋해 놓고
+  // 적용이 안 되는 상태를 사람이 만들 수 있다. head 는 PG 가 직렬화하니 안전하긴 하지만
+  // **안전한 것과 이해할 수 있는 것은 다르다.** 리더 하나만 쓴다.
+  //
+  // **503 이지 403 이 아니다.** 권한이 없는 것이 아니라 *여기서는* 못 하는 것이고,
+  // 다른 인스턴스에서는 되고 이 인스턴스도 승격되면 된다.
+  if (hit.r.scope !== 'read' && !api.election.state.isLeader) {
+    const s = api.election.state;
+    json(res, 503, {
+      code: 'not_leader',
+      message: `이 인스턴스는 리더가 아니다 — ${s.reason ?? '리더가 아니다'}`,
+      holder: s.holder,
+    }, { 'retry-after': '5' });
+    return;
+  }
+
   const params: Record<string, string> = {};
   hit.r.keys.forEach((k, i) => {
     params[k] = decodeURIComponent(hit.m?.[i + 1] ?? '');
@@ -310,6 +350,12 @@ async function handle(
         code: e.code, message: e.message,
         ...(e.detail === undefined ? {} : { detail: e.detail }),
       });
+      return;
+    }
+    // 라우팅 시점에 리더였는데 부작용 직전에 아니게 된 경우다. 창이 있다는 사실
+    // 자체는 못 없앤다 — 닫는 것은 DP Agent 의 토큰 비교다 (§3.5).
+    if (e instanceof NotLeader) {
+      json(res, e.status, { code: e.code, message: e.message }, { 'retry-after': '5' });
       return;
     }
     throw e;

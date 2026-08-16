@@ -102,6 +102,49 @@ async function hitDataPlane(host = 'anything'): Promise<string> {
   }
 }
 
+/** 데몬에 넘길 토큰 명세. 평문은 안 넘어간다 — 해시만. */
+const tokensEnv = (): string => JSON.stringify([{
+  name: 'tester',
+  hash: `sha256:${execFileSync('node', ['-e',
+    `process.stdout.write(require('crypto').createHash('sha256').update('${TOKEN}').digest('hex'))`,
+  ]).toString()}`,
+  scopes: ['read', 'write', 'apply'],
+}]);
+
+/**
+ * `:999 → A:11` 이 서비스되는 상태로 만든다.
+ *
+ * **테스트마다 자기 상태를 세운다.** 앞 테스트가 남긴 상태에 기대면 순서가 바뀌는 순간
+ * 깨지고, 그 실패는 원인이 자기 자신이 아니라 남이라 찾기 어렵다 — 실제로 그렇게 두
+ * 건이 깨졌다.
+ */
+async function ensureServing(): Promise<void> {
+  if (await hitDataPlane() === '200:BACKEND_A_11') return;
+  const head = await api('GET', '/api/v1/config/head');
+  const cs = await api('POST', '/api/v1/changesets', { base_revision: head.body.revision });
+  await api('PATCH', `/api/v1/changesets/${cs.body.id}`, {
+    patch: [
+      { op: 'put', kind: 'pool', key: 'app', body: { protocolClass: 'http', algorithm: 'round_robin' } },
+      { op: 'put', kind: 'backend', key: 'a-11', body: { pool: 'app', host: '127.0.0.1', port: 11, weight: 1 } },
+      {
+        op: 'put', kind: 'listener', key: 'front',
+        body: {
+          protocol: 'http', bind: '0.0.0.0', port: 999, enabled: true,
+          http: { defaultAction: { pool: 'app' } },
+        },
+      },
+    ],
+  });
+  const plan = await api('POST', `/api/v1/changesets/${cs.body.id}/plan`);
+  await api('POST', `/api/v1/changesets/${cs.body.id}/commit`, { plan_id: plan.body.id });
+  const op = await api('POST', '/api/v1/apply', { plan_id: plan.body.id });
+  if (op.body.phase !== 'activated') {
+    throw new Error(`상태 복구 실패: ${JSON.stringify(op.body)}`);
+  }
+  const got = await waitFor(() => hitDataPlane(), (v) => v === '200:BACKEND_A_11');
+  if (got !== '200:BACKEND_A_11') throw new Error(`상태 복구 뒤에도 트래픽이 없다: ${got}`);
+}
+
 function tearDown(): void {
   quiet('rm', '-f', DP);
   quiet('rm', '-f', PG);
@@ -130,12 +173,7 @@ beforeAll(async () => {
     '-e', 'BARY_PREFIX=/prefix',
     '-e', 'BARY_LISTEN=0.0.0.0:8088',
     '-e', 'BARY_ADMIN_PORT=19999',
-    '-e', 'BARY_LEADER_TOKEN=1',
-    '-e', `BARY_TOKENS=[{"name":"tester","hash":"sha256:${
-      execFileSync('node', ['-e',
-        `process.stdout.write(require('crypto').createHash('sha256').update('${TOKEN}').digest('hex'))`,
-      ]).toString()
-    }","scopes":["read","write","apply"]}]`,
+    '-e', `BARY_TOKENS=${tokensEnv()}`,
     '-e', 'BARY_RELOAD_CMD=kill -HUP $(cat /prefix/logs/nginx.pid)',
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
@@ -376,6 +414,149 @@ describe('v0.1 완료 판정', () => {
     expect(after.body.planes.http.activationEpoch).toBe(before.body.planes.http.activationEpoch);
     expect(after.body.head).toBe(before.body.head);
   }, 180_000);
+
+  it('**리더 토큰이 선출에서 온다** — 환경변수가 아니다 (§3.5)', async () => {
+    const st = await api('GET', '/api/v1/status');
+    expect(st.body.leader.isLeader).toBe(true);
+    // 토큰이 실제로 DP 의 좌표 봉투에 실렸는지 본다. `BARY_LEADER_TOKEN` 은 이제 없다.
+    expect(BigInt(st.body.leader.token as string)).toBeGreaterThan(0n);
+    expect(st.body.leader.since).toMatch(/^\d{4}-/);
+  });
+
+  it('**스탠바이는 쓰기를 거부한다** — 503 이지 403 이 아니다', async () => {
+    // 같은 PG 를 보는 둘째 인스턴스를 띄운다. **advisory lock 은 하나만 준다.**
+    const NAME = 'bary-v01-standby';
+    quiet('rm', '-f', NAME);
+    docker('run', '-d', '--name', NAME, '--network', NET,
+      '-p', `${API_PORT + 10}:8088`,
+      '-v', `${process.cwd()}:/app:ro`,
+      '-e', 'BARY_DSN=postgres://postgres:bary@bary-v01-pg:5432/bary',
+      '-e', 'BARY_PREFIX=/standby-prefix',
+      '-e', 'BARY_LISTEN=0.0.0.0:8088',
+      '-e', 'BARY_NODE_NAME=standby',
+      '-e', `BARY_TOKENS=${tokensEnv()}`,
+      '--entrypoint', '/bin/sh', IMAGE, '-c', [
+        'apk add --no-cache nodejs >/dev/null 2>&1',
+        'mkdir -p /standby-prefix/logs /standby-prefix/state',
+        'exec node /app/dist/bin/barycenterd.js',
+      ].join(' && '));
+    try {
+      const up = await waitFor(async () => {
+        try {
+          return (await fetch(`http://127.0.0.1:${API_PORT + 10}/healthz`,
+            { signal: AbortSignal.timeout(2000) })).ok;
+        } catch {
+          return false;
+        }
+      }, (ok) => ok, 120_000);
+      expect(up, `스탠바이가 안 떴다:\n${docker('logs', '--tail', '20', NAME)}`).toBe(true);
+
+      const at = async (method: string, path: string, body?: unknown): Promise<ApiResult> => {
+        const r = await fetch(`http://127.0.0.1:${API_PORT + 10}${path}`, {
+          method,
+          headers: {
+            authorization: `Bearer ${TOKEN}`,
+            ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        const text = await r.text();
+        try {
+          return { status: r.status, body: JSON.parse(text) };
+        } catch {
+          return { status: r.status, body: text };
+        }
+      };
+
+      // **읽기는 답한다.** 스탠바이를 죽여 버리면 오케스트레이터가 재시작 루프를 돌고
+      // 그건 "리더가 아니다" 가 아니라 "고장" 으로 보인다.
+      const head = await at('GET', '/api/v1/config/head');
+      expect(head.status).toBe(200);
+
+      const st = await at('GET', '/api/v1/status');
+      expect(st.body.leader.isLeader).toBe(false);
+      expect(st.body.leader.reason).toMatch(/다른 인스턴스가 리더/);
+
+      // **쓰기는 503.** 권한이 없는 것(403)이 아니라 *여기서는* 못 하는 것이다.
+      const cs = await at('POST', '/api/v1/changesets', { base_revision: '1' });
+      expect(cs.status).toBe(503);
+      expect(cs.body.code).toBe('not_leader');
+
+      const applied = await at('POST', '/api/v1/apply', { plan_id: 'x' });
+      expect(applied.status).toBe(503);
+    } finally {
+      quiet('rm', '-f', NAME);
+    }
+  }, 180_000);
+
+  it('**오래된 세대가 치워진다** — 무한히 쌓이지 않는다 (§8.4 수동 상한)', async () => {
+    await ensureServing();
+    const list = (): string[] =>
+      docker('exec', DP, 'sh', '-c', 'ls /prefix/generations').split(/\s+/).filter(Boolean);
+    const before = list();
+    // 상한(기본 10)을 넘도록 여러 번 적용한다. 매번 내용이 달라야 새 세대가 생긴다.
+    for (let i = 0; i < 12; i += 1) {
+      const head = await api('GET', '/api/v1/config/head');
+      const cs = await api('POST', '/api/v1/changesets', { base_revision: head.body.revision });
+      await api('PATCH', `/api/v1/changesets/${cs.body.id}`, {
+        patch: [{
+          op: 'put', kind: 'backend', key: `b-${i}`,
+          body: { pool: 'app', host: '127.0.0.1', port: 11, weight: i + 1 },
+        }],
+      });
+      const plan = await api('POST', `/api/v1/changesets/${cs.body.id}/plan`);
+      await api('POST', `/api/v1/changesets/${cs.body.id}/commit`, { plan_id: plan.body.id });
+      const op = await api('POST', '/api/v1/apply', { plan_id: plan.body.id });
+      expect(op.body.phase, JSON.stringify(op.body.detail)).toBe('activated');
+    }
+    const after = list();
+    // 12 번을 더 돌렸는데 세대 수가 그만큼 안 늘었으면 치워진 것이다.
+    expect(after.length).toBeLessThan(before.length + 12);
+    // **활성 세대와 bootstrap 은 남아 있다** (§8.4 GC root).
+    const st = await api('GET', '/api/v1/status');
+    expect(after).toContain(st.body.published.record.generation);
+    expect(after).toContain('bootstrap');
+    // 그리고 트래픽은 멀쩡하다 — 치우다가 활성 세대를 건드리면 여기서 드러난다.
+    expect(await hitDataPlane()).toBe('200:BACKEND_A_11');
+  }, 300_000);
+
+  it('**롤백이 트래픽을 되돌린다** — head 는 앞으로 가면서 (§5.3 · S19)', async () => {
+    await ensureServing();
+    const good = (await api('GET', '/api/v1/config/head')).body.revision as string;
+    expect(await hitDataPlane()).toBe('200:BACKEND_A_11');
+
+    // 망가뜨린다 — 기본 동작을 거부로 바꾼다.
+    const cs = await api('POST', '/api/v1/changesets', { base_revision: good });
+    await api('PATCH', `/api/v1/changesets/${cs.body.id}`, {
+      patch: [{
+        op: 'put', kind: 'listener', key: 'front',
+        body: {
+          protocol: 'http', bind: '0.0.0.0', port: 999, enabled: true,
+          http: { defaultAction: 'reject' },
+        },
+      }],
+    });
+    const bad = await api('POST', `/api/v1/changesets/${cs.body.id}/plan`);
+    await api('POST', `/api/v1/changesets/${cs.body.id}/commit`, { plan_id: bad.body.id });
+    expect((await api('POST', '/api/v1/apply', { plan_id: bad.body.id })).body.phase)
+      .toBe('activated');
+    expect(await waitFor(() => hitDataPlane(), (v) => v !== '200:BACKEND_A_11'))
+      .not.toBe('200:BACKEND_A_11');
+
+    // 되돌린다.
+    const rolled = await api('POST', '/api/v1/rollback', { to_revision: good });
+    expect(rolled.status).toBe(200);
+    // **head 는 앞으로 간다** — 되돌린 리비전보다 크다 (§5.3).
+    expect(BigInt(rolled.body.revision as string)).toBeGreaterThan(BigInt(good));
+    expect(rolled.body.rollbackOf).toBe(good);
+
+    const op = await api('POST', '/api/v1/apply', { plan_id: rolled.body.planId });
+    expect(op.body.phase, JSON.stringify(op.body.detail)).toBe('activated');
+    // **트래픽이 돌아왔다.**
+    expect(await waitFor(() => hitDataPlane(), (v) => v === '200:BACKEND_A_11'))
+      .toBe('200:BACKEND_A_11');
+  }, 300_000);
 
   it('감사에 who/what/revision 이 남는다 (§5.1)', async () => {
     const audit = await api('GET', '/api/v1/audit?limit=500');

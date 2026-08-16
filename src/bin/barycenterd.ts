@@ -15,11 +15,13 @@
  */
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { promisify } from 'node:util';
 
 import { createApi } from '../api/server.js';
 import { TokenAuth, type TokenSpec } from '../api/auth.js';
 import { ControlPlane } from '../control/plane.js';
+import { LeaderElection } from '../control/leader.js';
 import { LocalDataplaneDriver } from '../dp/driver.js';
 import { FsEffects } from '../dp/effects-fs.js';
 import { FileStore } from '../dp/store-fs.js';
@@ -56,7 +58,8 @@ export async function main(): Promise<void> {
   const adminPort = Number(env('BARY_ADMIN_PORT', '19999'));
   const [host, port] = env('BARY_LISTEN', '127.0.0.1:8088').split(':');
 
-  const db = new Db(env('BARY_DSN'));
+  const dsn = env('BARY_DSN');
+  const db = new Db(dsn);
   const applied = await db.migrate();
   if (applied.length > 0) console.log(`마이그레이션 적용: ${applied.join(', ')}`);
 
@@ -105,15 +108,42 @@ export async function main(): Promise<void> {
     effects,
   });
 
-  // §3.5 — 어떤 오퍼레이션보다 먼저 펜싱을 끝낸다.
-  const leaderToken = env('BARY_LEADER_TOKEN', '1');
-  const fenced = await driver.fence(leaderToken);
-  console.log(`fence: token=${leaderToken} maxToken=${fenced.maxToken}`);
+  // ── 리더 선출 (§3.5) ────────────────────────────────────────────────
+  //
+  // **못 되면 죽지 않는다.** 스탠바이는 읽기로 서비스하면서 기다린다 — §11.4 의 콜드
+  // 스탠바이가 그 모양이다. 죽어 버리면 오케스트레이터가 재시작 루프를 돌고, 그건
+  // "리더가 아니다" 가 아니라 "고장" 으로 보인다.
+  const election = new LeaderElection(dsn, env('BARY_NODE_NAME', `${hostname()}:${port}`));
+  const became = await election.tryAcquire();
 
-  const control = new ControlPlane(db, store, driver, { prefix, leaderToken, adminPort });
+  if (became) {
+    // §3.5 — **어떤 operation 보다 먼저** 펜싱을 끝낸다. 이게 ACK 되기 전에 낸 변이는
+    // 전부 거부된다.
+    const token = election.assertLeader();
+    const fenced = await driver.fence(token);
+    console.log(`리더가 됐다: token=${token} (DP maxToken=${fenced.maxToken})`);
+  } else {
+    console.log(`스탠바이로 뜬다 — ${election.state.reason}. 읽기만 답한다.`);
+  }
+
+  // 리더가 아니면 주기적으로 다시 시도한다. 앞선 리더가 죽으면 락이 풀린다.
+  const retry = setInterval(() => {
+    if (election.state.isLeader) return;
+    void election.tryAcquire().then(async (got) => {
+      if (!got) return;
+      const token = election.assertLeader();
+      const fenced = await driver.fence(token);
+      console.log(`리더로 승격됐다: token=${token} (DP maxToken=${fenced.maxToken})`);
+    }).catch((e: unknown) => {
+      console.error(`승격 시도 실패: ${String(e)}`);
+    });
+  }, Number(env('BARY_ELECTION_INTERVAL_MS', '5000')));
+  retry.unref();
+
+  const control = new ControlPlane(db, store, driver, election, { prefix, adminPort });
   const auth = new TokenAuth(loadTokens());
 
-  const server = createApi({ db, store, control, auth });
+  const server = createApi({ db, store, control, auth, election });
   await new Promise<void>((resolve) => {
     server.listen(Number(port), host, resolve);
   });
@@ -121,7 +151,11 @@ export async function main(): Promise<void> {
 
   const stop = (): void => {
     server.close(() => {
-      void db.close().then(() => process.exit(0));
+      // **물러난 것을 적고 나간다.** 락은 세션 종료로 어차피 풀리지만, 깨끗하게 물러난
+      // 것과 죽은 것을 나중에 구분할 수 있어야 한다.
+      void election.release()
+        .then(() => db.close())
+        .then(() => process.exit(0));
     });
   };
   process.on('SIGTERM', stop);

@@ -46,7 +46,6 @@ COPY --from=build /src/dist ./dist
 ENV BARY_PREFIX=/prefix \
     BARY_LISTEN=0.0.0.0:8088 \
     BARY_ADMIN_PORT=19999 \
-    BARY_LEADER_TOKEN=1 \
     BARY_RELOAD_CMD="kill -HUP \$(cat /prefix/logs/nginx.pid)" \
     BARY_CONFIGTEST_CMD="/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t"
 

@@ -13,20 +13,17 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
-import type { DataplaneDriver } from '../dp/driver.js';
+import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { materializeGeneration } from '../dp/materialize.js';
+import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
 import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
 import type { Db, Row } from '../store/pg.js';
+import type { LeaderElection } from './leader.js';
 
 export type ControlPlaneOptions = {
   /** `/etc/barycenter` 에 해당. `generations/` 와 `current` 가 여기 있다. */
   prefix: string;
-  /**
-   * §3.5 리더 토큰. **v0.1 에는 리더 선출이 없다** — 단일 인스턴스 전제이고 토큰은
-   * 설정으로 준다. 여기 값이 밖에서 온다는 사실 자체가 v0.2 의 숙제를 가리킨다.
-   */
-  leaderToken: string;
   /**
    * 활성 세대 마커를 서빙할 포트 (§6.3-4).
    *
@@ -34,6 +31,13 @@ export type ControlPlaneOptions = {
    */
   adminPort: number;
   renderCaps?: RenderCapabilities;
+  /**
+   * 남길 세대 수 (§9.1.1 — v0.1 은 GC 원장 대신 **수동 상한**이다).
+   *
+   * 활성·서빙 세대는 이 수와 무관하게 남는다. 0 이면 청소를 아예 안 한다 —
+   * 디버깅용이고, **기본값으로 두면 디스크가 무한히 자란다.**
+   */
+  keepGenerations?: number;
 };
 
 export type OperationView = {
@@ -66,10 +70,22 @@ server {
 `;
 
 export class ControlPlane {
+  /**
+   * 직전 apply 에서 읽은 DP 상태. **청소가 보호 대상을 고를 때만 쓴다.**
+   *
+   * 판정에는 절대 쓰지 않는다 — 캐시된 상태로 판정하면 그 사이 남이 옮긴 좌표를 못 본다.
+   */
+  private lastStatus: DriverStatus | undefined;
+
   constructor(
     private readonly db: Db,
     private readonly store: ConfigStore,
     private readonly driver: DataplaneDriver,
+    /**
+     * §3.5 — 토큰은 **선출에서 온다.** v0.1 까지는 환경변수였고, 그건 DP 가 그렇게
+     * 정교하게 방어하는 값을 아무도 발급하지 않는다는 뜻이었다.
+     */
+    private readonly election: LeaderElection,
     private readonly opts: ControlPlaneOptions,
   ) {}
 
@@ -117,6 +133,7 @@ export class ControlPlane {
     });
 
     const status = await this.driver.status();
+    this.lastStatus = status;
     // **설정 전환은 언제나 두 평면을 옮긴다** (10차 반례 ②, `assertEnvelope`).
     //
     // 처음엔 `rendered.planes` 만 선언했다가 `envelope_mismatch` 로 막혔고, 그게 옳다.
@@ -146,8 +163,13 @@ export class ControlPlane {
       };
     }
 
+    // **부작용 직전에 다시 묻는다.** 기동 때 리더였다는 기억으로는 부족하다 — 그 사이
+    // 세션이 끊겼으면 락은 이미 풀렸고 신임이 fence 를 지났을 수 있다. 그래도 창은
+    // 남고, 그 창은 여기서 못 닫는다. 닫는 것은 DP Agent 의 토큰 비교다 (§3.5).
+    const leaderToken = this.election.assertLeader();
+
     const op: ApplyOperation = {
-      leaderToken: this.opts.leaderToken,
+      leaderToken,
       operationId: randomUUID(),
       transitionId: `r${plan.targetRevision}`,
       affectedPlanes: [...PLANES],
@@ -175,6 +197,9 @@ export class ControlPlane {
 
     if (result.phase === 'activated') {
       await this.db.query(`UPDATE plans SET state='applied' WHERE id=$1`, [planId]);
+      // **활성화가 끝난 뒤에 치운다.** 앞에서 치우면 방금 만든 것을 지울 수 있고,
+      // 실패했을 때 치우면 되돌아갈 자리를 지운다.
+      this.sweep(generation, by);
     }
     return {
       id: op.operationId, planId, revision: plan.targetRevision,
@@ -195,6 +220,7 @@ export class ControlPlane {
   /** §5.2 `GET /status` — 4-way + 미완 전환. */
   async status(): Promise<{
     head: string;
+    leader: unknown;
     published: unknown;
     planes: unknown;
     lastEvidence: unknown;
@@ -212,6 +238,9 @@ export class ControlPlane {
     )).rows.map((r) => ({ planId: String(r['id']), revision: String(r['target_revision']) }));
     return {
       head: head.revision,
+      // **숨기지 않는다.** 스탠바이가 자기를 리더처럼 보이게 하면 운영자는 왜 apply 가
+      // 503 인지 알 수 없다.
+      leader: this.election.state,
       published: st.published,
       planes: st.planes,
       lastEvidence: st.lastEvidence,
@@ -226,6 +255,7 @@ export class ControlPlane {
    * `status().unfinished` 에 값이 있으면 이걸 부르면 된다.
    */
   async recover(by: string): Promise<ApplyResult> {
+    this.election.assertLeader();
     // **먼저 누구 것인지 묻는다.** `recoverConfig()` 는 `ApplyResult` 만 돌려주고 거기엔
     // `operationId` 가 없다 — 이어받은 뒤에는 저널이 닫혀 있을 수 있어서 나중에 물으면
     // 늦는다. `status().unfinished` 가 그 신원을 든다.
@@ -294,6 +324,38 @@ export class ControlPlane {
       return undefined;
     }
     return this.findOperation(planId);
+  }
+
+  /**
+   * 오래된 세대를 치운다 (§8.4 의 수동 상한판).
+   *
+   * **보호 대상을 호출자가 준다.** 지금 활성인 것, 방금 만든 것, 그리고 저널에 남은
+   * 미완 전환의 세대다. 여기서 추측하면 추측이 틀렸을 때 활성 세대를 지운다 — S8 이
+   * 실측했듯 트래픽은 계속 흐르고 **다음 reload 만 실패하므로 한동안 아무도 모른다.**
+   *
+   * 실패해도 apply 를 실패시키지 않는다. 치우기는 부수적인 일이고, 그것 때문에 성공한
+   * 활성화를 실패로 보고하면 운영자가 잘못된 판단을 한다. 대신 **감사에 남긴다.**
+   */
+  private sweep(justMade: string, by: string): void {
+    const keep = this.opts.keepGenerations ?? DEFAULT_KEEP;
+    if (keep <= 0) return;
+    try {
+      const st = this.lastStatus;
+      const protect = [
+        justMade,
+        ...(st?.published.kind === 'owned' ? [st.published.record.generation] : []),
+        ...(st?.published.kind === 'inconsistent' && st.published.generation !== undefined
+          ? [st.published.generation] : []),
+        ...(st?.unfinished !== undefined ? [st.unfinished.generation] : []),
+      ];
+      const out = sweepGenerations({ prefix: this.opts.prefix, keep, protect });
+      if (out.removed.length > 0 || out.failed.length > 0) {
+        void this.store.audit(by, 'generations.sweep', 'dataplane', undefined, out);
+      }
+    } catch (e) {
+      void this.store.audit(by, 'generations.sweep.failed', 'dataplane', undefined,
+        { error: String(e) });
+    }
   }
 
   private async recordPhase(id: string, phase: string, detail: unknown): Promise<void> {

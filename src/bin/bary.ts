@@ -11,6 +11,7 @@
  *   bary get <listeners|pools|backends|routes|model|rendered>
  *   bary apply <파일.json>      매니페스트 한 장을 changeset 한 바퀴로 밀어 넣는다
  *   bary plan  <파일.json>      커밋하지 않고 영향만 본다
+ *   bary rollback <리비전>      그 시점 내용으로 새 리비전을 만들고 적용한다
  *   bary audit [n]
  *
  * 환경변수: `BARY_URL`(기본 http://127.0.0.1:8088) · `BARY_TOKEN`
@@ -65,6 +66,7 @@ const usage = (): never => {
   bary get <무엇>                listeners | pools | backends | routes | model | rendered
   bary plan <파일.json>          커밋하지 않고 영향만 본다
   bary apply <파일.json>         changeset → plan → commit → apply 한 바퀴
+  bary rollback <리비전>          그 시점 내용으로 **새 리비전**을 만들고 적용한다
   bary audit [개수]
 
 환경변수: BARY_URL (기본 ${URL_BASE}) · BARY_TOKEN`);
@@ -110,6 +112,24 @@ async function main(): Promise<void> {
       const path = what === 'model' || what === 'rendered'
         ? `/api/v1/config/${what}` : `/api/v1/${what}`;
       show(must(await call('GET', path), what));
+      return;
+    }
+    case 'rollback': {
+      const to = arg ?? usage();
+      const rolled = must(
+        await call('POST', '/api/v1/rollback', { to_revision: to }), 'rollback',
+      ) as { revision: string; planId: string; rollbackOf: string };
+      // **head 는 앞으로 간다.** 되돌리는 것이 아니라 그 시점 내용으로 새 리비전을 만든다.
+      console.error(`r${rolled.rollbackOf} 의 내용으로 r${rolled.revision} 을 만들었다`);
+      const op = must(await call('POST', '/api/v1/apply', { plan_id: rolled.planId }), 'apply') as {
+        phase: string; detail?: { failure?: string };
+      };
+      show(op);
+      if (op.phase !== 'activated') {
+        console.error(`활성화되지 않았다: ${op.phase}${
+          op.detail?.failure === undefined ? '' : ` — ${op.detail.failure}`}`);
+        process.exit(1);
+      }
       return;
     }
     case 'audit': {

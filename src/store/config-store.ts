@@ -64,7 +64,7 @@ export type Head = { revision: string; etag: string };
 
 export type PlanRecord = {
   id: string;
-  changesetId: string;
+  changesetId: string | null;
   state: string;
   baseRevision: string;
   model: Model;
@@ -609,6 +609,91 @@ export class ConfigStore {
     return out;
   }
 
+  /**
+   * 롤백 — **head 를 뒤로 옮기지 않는다** (§5.3).
+   *
+   * *"`R1` 의 내용으로 새 `ConfigRevision R3` 을 만들고 `rollback_of: R1` 을 붙인다.
+   * head 는 앞으로만 간다."*
+   *
+   * 왜 head 를 되돌리면 안 되는가. desired 가 `R2` 인데 runtime 만 `R1` 로 되돌리면
+   * reconciler 가 다시 `R2` 를 적용해 버리고, 반대로 head 를 `R1` 로 되돌리면 리비전
+   * 단조 계약이 깨진다. 새 리비전을 만드는 것이 둘 다 피하는 유일한 길이다.
+   *
+   * **리소스 테이블도 그 시점으로 되돌린다.** 스냅샷만 새로 적고 테이블을 그대로 두면
+   * 다음 changeset 이 *되돌리지 않은* 상태 위에 앉는다 — head 는 R1 내용인데 다음
+   * 커밋은 R2 내용에서 출발하는, 아무도 이해할 수 없는 상태가 된다.
+   *
+   * S8(인증서 세대 결박)과 S19(clone + 새 epoch)가 증명한 경로가 여기서 시작된다.
+   * epoch 는 `commit` 과 같은 규칙으로 **새로** 뽑는다 — 옛 값을 재사용하지 않는다.
+   */
+  async rollbackTo(revision: string, by: string, note?: string): Promise<{
+    revision: string; activationEpoch: string; rollbackOf: string; planId: string;
+  }> {
+    const out = await this.db.tx(async (c) => {
+      const headRow = (await c.query('SELECT revision FROM config_head FOR UPDATE')).rows[0];
+      const head = text(headRow ?? {}, 'revision');
+
+      const src = (await c.query(
+        'SELECT model FROM config_revisions WHERE revision = $1', [revision],
+      )).rows[0];
+      if (src === undefined) {
+        throw new StoreError(404, 'unknown_revision', `리비전 ${revision} 이 없다`);
+      }
+      if (BigInt(revision) >= BigInt(head)) {
+        throw new StoreError(409, 'not_past',
+          `r${revision} 은 과거가 아니다 (head=r${head}) — 롤백은 뒤로만 간다`);
+      }
+      const model = src['model'] as Model;
+
+      // **테이블을 그 시점 모델로 되돌린다.** 지우고 다시 넣는다 — 부분 갱신으로는
+      // "그 시점에 없던 리소스" 를 없앨 수 없다.
+      const target = text(
+        (await c.query(`SELECT nextval('config_revision_seq') AS v`)).rows[0] ?? {}, 'v');
+      // 참조하는 쪽부터 지운다. 라우트 → 리스너 → 풀 순서다.
+      //
+      // **`backends` 는 명시적으로 안 지운다** — `pools` 삭제가 CASCADE 로 데려간다
+      // (§4.0: Pool → Backend 는 CASCADE). 처음엔 넣어 뒀는데, 변이 검사에서 그 줄을
+      // 지워도 **아무 테스트도 안 깨졌다.** 도달 불가한 방어는 방어가 아니라 죽은
+      // 코드이고, "여기서 다 지운다" 는 말을 반쯤 거짓으로 만든다(24차에 배운 것).
+      // 대신 그 CASCADE 의존을 테스트로 못 박았다.
+      await c.query(`DELETE FROM http_routes`);
+      await c.query(`DELETE FROM passthrough_routes`);
+      await c.query(`DELETE FROM listeners`);
+      await c.query(`DELETE FROM pools`);
+      for (const op of opsOf(model)) await applyOp(c, op, target, by).catch(translate);
+
+      // 되돌린 결과가 지금도 유효한지 **다시 본다.** 엔진 capability 나 검증 규칙이
+      // 그 사이 바뀌었을 수 있다 — 옛 리비전이라고 무조건 통과시키지 않는다.
+      const restored = await readModel(c);
+      renderOrThrow(restored);
+
+      const epoch = text(
+        (await c.query(`SELECT nextval('activation_epoch_seq') AS v`)).rows[0] ?? {}, 'v');
+      await c.query(
+        `INSERT INTO config_revisions (revision,parent,rollback_of,model,created_by,note)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [target, head, revision, JSON.stringify(restored), by,
+          note ?? `r${revision} 로 롤백`],
+      );
+      await c.query('UPDATE config_head SET revision = $1', [target]);
+
+      // 적용은 별도다 — plan 을 하나 만들어 **`/apply` 가 그대로 소비**하게 한다.
+      // 롤백만의 적용 경로를 따로 두면 그 경로만 덜 검증된다.
+      const planId = randomUUID();
+      await c.query(
+        `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
+                            renderer_version,expires_at,state,target_revision,activation_epoch)
+         VALUES ($1,NULL,$2,$3,$4,$5,$6,now() + interval '24 hours','committed',$7,$8)`,
+        [planId, head, JSON.stringify(restored),
+          JSON.stringify({ rollbackOf: revision }), renderOrThrow(restored).digest,
+          RENDERER_VERSION, target, epoch],
+      );
+      return { revision: target, activationEpoch: epoch, rollbackOf: revision, planId };
+    });
+    await this.audit(by, 'rollback', out.rollbackOf, undefined, out, out.revision);
+    return out;
+  }
+
   async getPlan(planId: string): Promise<PlanRecord> {
     const r = (await this.db.query(
       `SELECT id, changeset_id, state, base_revision, model, impact, render_digest,
@@ -617,7 +702,10 @@ export class ConfigStore {
     )).rows[0];
     if (r === undefined) throw new StoreError(404, 'unknown_plan', `plan ${planId} 이 없다`);
     return {
-      id: text(r, 'id'), changesetId: text(r, 'changeset_id'), state: text(r, 'state'),
+      id: text(r, 'id'),
+      // 롤백 plan 에는 changeset 이 없다 (003 마이그레이션).
+      changesetId: maybeText(r, 'changeset_id') ?? null,
+      state: text(r, 'state'),
       baseRevision: text(r, 'base_revision'), model: r['model'] as Model,
       impact: r['impact'] as Impact, renderDigest: text(r, 'render_digest'),
       rendererVersion: text(r, 'renderer_version'),
@@ -643,6 +731,25 @@ export class ConfigStore {
 }
 
 // ── 보조 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 모델 하나를 **처음부터 만드는** patch 로 편다.
+ *
+ * 순서가 중요하다 — 풀이 백엔드보다, 리스너가 라우트보다 먼저다. 복합 FK 가 참조
+ * 대상을 요구하므로 순서가 틀리면 DB 가 막는다(그건 좋은 일이다. 조용히 통과하는
+ * 것보다 낫다).
+ */
+function opsOf(model: Model): PatchOp[] {
+  const put = (kind: ResourceKind, key: string, body: unknown): PatchOp =>
+    ({ op: 'put', kind, key, body });
+  return [
+    ...model.pools.map((p) => put('pool', p.key, p)),
+    ...model.backends.map((b) => put('backend', b.key, b)),
+    ...model.listeners.map((l) => put('listener', l.key, l)),
+    ...model.httpRoutes.map((r) => put('httpRoute', r.key, r)),
+    ...model.passthroughRoutes.map((r) => put('passthroughRoute', r.key, r)),
+  ];
+}
 
 /** PATCH 시점의 모양 검사. 여기서 걸리는 것은 **400** 이다 (타입·구문). */
 function shapeCheck(op: PatchOp): void {

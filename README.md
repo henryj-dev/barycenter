@@ -10,11 +10,13 @@
 > activated on real nginx — with the activation *proven* before any coordinate moves.
 > The [Quickstart](#quickstart) below ends with `curl` reaching a backend.
 >
-> **What it is not yet.** There is no leader election — `BARY_LEADER_TOKEN` is an environment
-> variable, so **a second instance against the same database would believe it is the leader
-> too**. Single instance only. There is no membership plane yet either (v0.3), so changing one
-> backend still costs a full generation switch and a reload. TLS termination, ACME, health
-> probing and the GUI are all later milestones (§12.1).
+> **What it is not yet.** There is no membership plane (v0.3), so changing a single backend
+> still costs a full generation switch and a reload. TLS termination, ACME, health probing and
+> the GUI are all later milestones (§12.1). Leader election exists (a PostgreSQL advisory lock
+> issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
+> not_leader` to writes) — but **failover is not automatic**: each data plane carries its own
+> nginx, so extra instances are cold standbys, and moving traffic is still DNS or an upstream
+> L4's job (§11.4).
 >
 > The design lives in [`DESIGN.md`](./DESIGN.md) and the test cases derived from it in
 > [`TESTS.md`](./TESTS.md) (both written in Korean). Fifty rounds of adversarial review are
@@ -39,6 +41,8 @@ node dist/bin/bary.js status                   # nothing published yet
 node dist/bin/bary.js apply examples/hello.json
 
 curl http://127.0.0.1:8999/                    # → hello from A:11
+
+node dist/bin/bary.js rollback 1               # roll back to revision 1 — head still moves forward
 ```
 
 `./scripts/quickstart.sh` runs exactly these steps and checks the result, so the instructions
