@@ -27,7 +27,7 @@ import {
   type Plane,
   type PlaneProgress,
 } from './operation.js';
-import { DpRejection, tupleFor } from './agent.js';
+import { DpRejection, ownsJournal, tupleFor } from './agent.js';
 
 export type Phase = ApplyPhase;
 
@@ -340,9 +340,14 @@ export class ApplyRunner {
       // 저널을 열었을 수 있고, 그걸 failAll 하면 진행 중인 남의 일을 망가뜨린다.
       // 11차에 넣은 deadline 이 만든 구멍이다 — 고치면서 또 열었다.
       const j = this.agent.readJournal();
-      const mine = j !== undefined
-        && j.op.operationId === bound.operationId
-        && j.op.transitionId === bound.transitionId;
+      // **토큰까지 본다** (C — 34차 검수). id 만 보면 낡은 러너가 **같은 id 로 재발급된
+      // 신임 저널**을 제 것으로 읽고, 예산 만료 시 `failAll` 로 **진행 중인 신임 전환을
+      // 닫는다.** 그때 쓰는 토큰이 저널의 것(= 피해자의 것)이라 `assertLeader` 도
+      // `writeJournal` 도 `finishOperation` 도 전부 통과한다 — 아무도 못 막는다.
+      //
+      // 9·10차가 `releaseHolderSlots`·`finishOperation` 에서 고친 것의 **마지막 잔재**다.
+      // 그 둘은 토큰을 보는데 여기만 안 봤다.
+      const mine = ownsJournal(j, bound);
       if (mine && j !== undefined) {
         await this.failAll(j, e.message);
         return { ...resultOf(this.agent.readJournal() ?? j), failure: e.message };
@@ -364,7 +369,8 @@ export class ApplyRunner {
       // 실행권이 남아 그 뒤 모든 오퍼레이션이 `operation_in_flight` 로 막힌다 — 상태는
       // 내내 정합하므로 불변식도 P0~P7 도 무풍이고, **일이 안 되는 것**만 남는다.
       // 20차가 "계측기가 전부 나쁜 일만 본다" 고 한 그 사각이다.
-      if (j.op.operationId !== bound.operationId || j.op.transitionId !== bound.transitionId) {
+      // 여기도 같은 비교다 (C). `ownsJournal` 하나로 모은다 — 자리가 둘이면 갈린다.
+      if (!ownsJournal(j, bound)) {
         const mine = this.agent.activeOperation();
         if (mine?.operationId === bound.operationId && mine.transitionId === bound.transitionId) {
           await this.agent.finishOperation(bound);

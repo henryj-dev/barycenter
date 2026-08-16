@@ -666,7 +666,7 @@ function authoredBy(
       === normalizeNumeric(who.leaderToken, 'leaderToken');
 }
 
-function ownsJournal(j: JournalEntry | undefined, op: ApplyOperation): boolean {
+export function ownsJournal(j: JournalEntry | undefined, op: ApplyOperation): boolean {
   if (j === undefined) return false;
   return j.op.operationId === op.operationId
     && j.op.transitionId === op.transitionId
