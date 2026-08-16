@@ -1,0 +1,131 @@
+# S19 — 롤백 경로 합성 스파이크 (DESIGN.md §12.0, §3.3, §6.5, §7.2, §8.4)
+#
+# ⚠️ 버릴 코드다. 검증할 불변식만 최소로 재현한다.
+#
+# S8 과 S11 은 각각 통과했다. 그런데 둘이 요구하는 것이 롤백에서 **정면으로 만난다**:
+#
+#   S8 (§7.2)  인증서는 세대 안에 결박된다 → 롤백하려면 **옛 세대의 자료를 되살려야** 한다
+#   S11 (§3.3) activation_epoch 는 절대 재사용하지 않는다 → 롤백도 **새 epoch 를 써야** 한다
+#
+# 세대에는 epoch 가 **구워져** 있으므로(§6.5-1), 옛 세대를 그대로 다시 게시하면 epoch 가
+# 재사용된다. 그래서 §3.3 은 롤백을 이렇게 정의했다 — *"옛 topology 와 TLS 자료를 새 세대로
+# clone 하고 새 epoch 리터럴을 구워 활성화한다."*
+#
+# **이 파일이 재현하는 것은 그 clone 이 실제로 성립하는가다.**
+#
+#   · 인증서는 conf_prefix 기준 상대경로 `certs/` — 세대에 결박된다 (S8)
+#   · balancer 는 **세대에 구워진 epoch 리터럴**로 자기 슬롯만 본다 (§6.5-1, S11 P8)
+#   · admin 은 epoch 엄격 단조 + 리더 토큰 펜싱 (§3.3, §3.5)
+#   · `/whoami` 가 **워커가 실제로 들고 있는 epoch 리터럴**을 불어준다
+#     → 컨트롤 플레인이 믿는 epoch 와 워커가 쓰는 epoch 가 갈라지는지 잰다
+#
+# __EPOCH__ 는 러너가 세대마다 치환한다. 실제 구현에서는 세대 manifest 의
+# activation_epoch 가 렌더에 구워진다.
+
+worker_processes 2;
+daemon off;
+error_log logs/error.log warn;
+events { worker_connections 256; }
+
+http {
+    access_log off;
+    lua_shared_dict bary 1m;
+
+    # 이 세대가 속한 활성화 epoch. **렌더 시점에 고정된다.**
+    # 롤백 clone 이 이 줄을 다시 굽지 않으면 워커는 옛 슬롯을 본다 — 그게 S19 의 핵심 질문.
+    init_worker_by_lua_block { _G.GEN_EPOCH = __EPOCH__ }
+
+    # ── 백엔드 ─────────────────────────────────────────────────────────
+    server { listen 127.0.0.1:9001; location / { return 200 "BACKEND_A"; } }
+    server { listen 127.0.0.1:9002; location / { return 200 "BACKEND_B"; } }
+    server { listen 127.0.0.1:9003; location / { return 200 "BACKEND_C"; } }
+
+    # ── admin (S11 과 같은 규칙) ────────────────────────────────────────
+    server {
+        listen 127.0.0.1:8081;
+
+        # /stage?token=T&epoch=E   body=peers
+        location /stage {
+            content_by_lua_block {
+                local d = ngx.shared.bary
+                local token = tonumber(ngx.var.arg_token) or 0
+                local epoch = tonumber(ngx.var.arg_epoch) or 0
+                local seen = d:get("token") or 0
+                if token < seen then
+                    ngx.status = 409; ngx.say("STALE_LEADER seen=", seen); return
+                end
+                d:set("token", token)
+                local active = d:get("active_epoch") or 0
+                if epoch < active then
+                    ngx.status = 409; ngx.say("EPOCH_MISMATCH active=", active); return
+                end
+                ngx.req.read_body()
+                d:set("slot:" .. epoch, ngx.req.get_body_data() or "")
+                ngx.say("STAGED epoch=", epoch)
+            }
+        }
+
+        # /activate?token=T&epoch=E — 엄격 단조. 롤백도 새 epoch 를 쓴다 (§3.3-1).
+        location /activate {
+            content_by_lua_block {
+                local d = ngx.shared.bary
+                local token = tonumber(ngx.var.arg_token) or 0
+                local epoch = tonumber(ngx.var.arg_epoch) or 0
+                local seen = d:get("token") or 0
+                if token < seen then
+                    ngx.status = 409; ngx.say("STALE_LEADER seen=", seen); return
+                end
+                d:set("token", token)
+                local active = d:get("active_epoch") or 0
+                if epoch <= active then
+                    ngx.status = 409; ngx.say("NOT_MONOTONIC active=", active); return
+                end
+                if not d:get("slot:" .. epoch) then
+                    ngx.status = 409; ngx.say("NOT_STAGED epoch=", epoch); return
+                end
+                d:set("active_epoch", epoch)
+                ngx.say("ACTIVE epoch=", epoch)
+            }
+        }
+
+        location /state {
+            content_by_lua_block {
+                local d = ngx.shared.bary
+                ngx.say("active=", d:get("active_epoch") or 0, " token=", d:get("token") or 0)
+            }
+        }
+    }
+
+    # ── 대상 ───────────────────────────────────────────────────────────
+    upstream app {
+        server 0.0.0.1:1;
+        balancer_by_lua_block {
+            local balancer = require "ngx.balancer"
+            -- **자기 세대의 epoch 슬롯만** 본다 (§6.5-1). active_epoch 를 보지 않는다.
+            local peers = ngx.shared.bary:get("slot:" .. _G.GEN_EPOCH)
+            if not peers or peers == "" then
+                return ngx.exit(503)   -- staging 안 된 세대는 조용히 옛 peer 로 안 흐른다
+            end
+            local h, p = peers:match("^([^,]+):(%d+)")
+            assert(balancer.set_current_peer(h, tonumber(p)))
+        }
+    }
+
+    server {
+        listen 127.0.0.1:8080;
+        location / { proxy_pass http://app; }
+
+        # **워커가 실제로 들고 있는 epoch 리터럴.** 컨트롤 플레인이 믿는 값과 갈라지면
+        # 여기서 드러난다 — 롤백 clone 이 재렌더인지 복사인지를 가르는 자리다.
+        location = /whoami { content_by_lua_block { ngx.print(_G.GEN_EPOCH) } }
+    }
+
+    # 인증서 세대 결박 (S8) — 경로는 conf_prefix 기준 상대경로다 (§7.2).
+    server {
+        listen 127.0.0.1:8443 ssl;
+        server_name _;
+        ssl_certificate     certs/fullchain.pem;
+        ssl_certificate_key certs/privkey.pem;
+        return 200 "tls";
+    }
+}

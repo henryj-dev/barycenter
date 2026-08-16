@@ -24,6 +24,7 @@ Run everything with `./scripts/verify.sh` (or `--quick` to skip the Docker-backe
 | `./spike/s7/run.sh` | 9 | proving a reload actually took effect |
 | `./spike/s8/run.sh` | 11 | rolling a certificate back to an earlier generation |
 | `./spike/s11/run.sh` | 14 | epoch fencing under contention |
+| `./spike/s19/run.sh` | 16 | rolling back by cloning the old material under a **new** epoch |
 
 ### What the spikes settled
 
@@ -39,6 +40,16 @@ Run everything with `./scripts/verify.sh` (or `--quick` to skip the Docker-backe
 - **Reusing an epoch on rollback is an ABA hazard.** Splitting "which topology" from "which
   activation" and never reusing an activation number is what makes a late in-flight RPC from a
   deposed leader harmless.
+
+- **Rollback is the one place the two hardest constraints collide — and how you clone decides it.**
+  Certificates must live *inside* the generation (so a rollback restores them), but an activation
+  epoch must never be reused (so a late RPC can't take effect) — and the epoch is *baked into* the
+  generation. The design's answer is to clone the old material into a new generation and re-render
+  a fresh epoch; S19 confirms both hold at once. It also shows the two plausible shortcuts each
+  break in a way traffic won't reveal: `cp -r` carries the old epoch literal along, leaving workers
+  reading a slot the control plane no longer writes to — **a generation deaf to health updates that
+  still looks healthy** — and symlinking the certificates instead of copying them survives right up
+  until GC reclaims the old generation, at which point the next reload fails.
 
 ---
 

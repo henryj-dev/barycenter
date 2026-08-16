@@ -63,6 +63,7 @@ else
     run "spike S7             " ./spike/s7/run.sh
     run "spike S8             " ./spike/s8/run.sh
     run "spike S11            " ./spike/s11/run.sh
+    run "spike S19            " ./spike/s19/run.sh
   fi
 fi
 
