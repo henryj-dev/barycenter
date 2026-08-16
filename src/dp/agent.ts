@@ -1071,7 +1071,12 @@ export class DpAgent {
         const epoch = owner.epochs[plane];
         if (epoch === undefined) continue;
         const slot = s.reservations[plane]?.[epoch];
-        if (slot?.op.operationId === op.operationId && slot.op.transitionId === op.transitionId) {
+        // 여기도 같은 술어를 쓴다 (42차 — 부류를 다 센다). 바로 위 외곽 가드가 홀더를
+        // 토큰까지 대조하므로 **구조적으로는 동치**로 보인다. 그런데 "구조적 무해" 는
+        // 내가 두 번 틀린 논증이고(37차 I1 · 40차 슬롯 전제), 둘 다 **같은 파일 안에
+        // 반박이 있었다.** 동치라면 바꿔도 아무것도 안 깨지고, 아니라면 이것이 옳다.
+        // **부류를 이름 붙였으면 전 자리를 센다** — 이번 회차의 값이 그것이다.
+        if (ownsSlotOp(slot?.op, op)) {
           delete s.reservations[plane][epoch];
         }
       }
@@ -1879,7 +1884,14 @@ function supersede(s: AgentState, holder: ActiveOperation): void {
     if (epoch === undefined) continue;
     const slot = s.reservations[plane]?.[epoch];
     if (slot === undefined) continue;
-    if (slot.op.operationId === holder.operationId && slot.op.transitionId === holder.transitionId) {
+    // **토큰까지 본다** (42차 CE-42). 41차에 `releaseStaleSlots` 를 고치며
+    // *"9차 반례 ③ 부류다"* 라고 **부류를 지목해 놓고 한 자리만 고쳤다** — 같은 대조가
+    // 여기 남아 있었고, 제3자가 같은 좌표로 들어오면 고아 청소가 이것을 불러
+    // **신임의 살아 있는 예약을 지운다.**
+    //
+    // *"이름을 붙이는 것과 전 자리를 고치는 것은 다른 일이다"* 를 40차에 적고,
+    // 41차가 그 재연을 짚고, **41차 커밋 자신이 세 번째로 재연했다.**
+    if (ownsSlotOp(slot.op, holder)) {
       delete s.reservations[plane][epoch];
     }
   }
