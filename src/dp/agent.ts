@@ -2082,6 +2082,10 @@ const key = (op: OperationTuple, step: Step): string =>
  * 있으므로 원칙적으로는 영원히 들고 있어야 하지만, 실제로는 그 사이에 전환이 64 개
  * 지나갔다면 그 요청을 보낸 쪽은 이미 오래전에 죽었거나 fence 됐다.
  *
+ * ⚠️ **이 근거는 그룹이 이름 단위일 때 붕괴했다** (E-50-3). 재발급 전환의 그룹 위치가
+ * 옛 토큰의 첫 삽입 위치라, 방금 끝난 전환이 **11 개 만에** 잘렸다. 그룹에 토큰을 넣어
+ * 고쳤고, 이제 창이 실제로 전환을 센다.
+ *
  * 잘린 뒤 늦게 도착한 재요청은 `terminal` 거부를 받는다. **거짓말이 아니다** — 그
  * 전환은 실제로 끝났다. 캐시가 있을 때와 다른 것은 "성공했다" 대신 "이미 끝났다" 로
  * 답한다는 것뿐이고, 둘 다 참이다.
@@ -2107,7 +2111,10 @@ const EVIDENCE_RETENTION = 64;
  * 안전한 이유가 "같은 id 의 옛 전환이 늘 이 표에 남아 있어서 `admit` 이 먼저 거부한다"
  * 였다. 그래서 **가지치기와 신원 비교는 한 커밋이어야 한다**(23차 규칙). 그 커밋이 이것이다.
  *
- * 자르는 기준은 **전환 단위**다. 한 전환의 단계 기록을 절반만 남기면 재요청 판정이
+ * 자르는 기준은 **전환 단위**다 — 그리고 44·48차 이후 "전환" 에는 **토큰이 들어간다.**
+ * (빚갚기 재검수 E-50-2: 이 문장이 참인 동안 코드는 **이름 단위**였다. 원장의 단위를
+ * 바꾸면서 이 문장은 그대로 뒀고, 그래서 이름을 잘못 붙인 채로 읽혔다.)
+ * 한 전환의 단계 기록을 절반만 남기면 재요청 판정이
  * 반쪽이 되어 더 나쁘다.
  *
  * 진행 중인 전환(`activeOperation`)과 저널이 가리키는 전환은 **자르지 않는다** — 그건
@@ -2151,13 +2158,19 @@ function prune(s: AgentState): void {
   // 좁아지고, `live` 셋(`\0` 이음)과는 절대 안 맞아 **업그레이드 직후 한 번 무보호**다.
   // 26차 `by` 부재의 창과 같은 계열이고, 방향은 안전하다(덜 보존할 뿐 오답을 만들지 않는다).
   const transitionOf = (k: string): string => s.completed[k]?.transition ?? k;
+  // **토큰까지 넣는다** (빚갚기 재검수 CE-50-A). 44·48차에 원장의 단위를
+  // (전환, 토큰)으로 바꾸면서 **자르는 쪽의 단위를 안 바꿨다** — 같은 이름의 재발급이
+  // 한 그룹으로 붕괴해 그룹 수가 안 늘고, 가지치기가 한 항목도 안 지웠다.
+  // 실측: 재발급 80 회에 240 항목, 160 회에 480 — 정확히 선형이다.
+  //
+  // 48차 이전에는 키에 토큰이 없어 재발급이 **같은 키를 덮어썼으므로** 이 축이 없었다.
+  // 내가 키를 바꾸면서 그 축을 열었다. **"자리를 다 안 센다" 의 재연이다.**
+  const nameOf = (op: { operationId: string; transitionId: string; leaderToken: string }): string =>
+    `${op.operationId}\u0000${op.transitionId}`
+    + `\u0000${normalizeNumeric(op.leaderToken, 'leaderToken')}`;
   const live = new Set<string>();
-  if (s.activeOperation !== undefined) {
-    live.add(`${s.activeOperation.operationId}\u0000${s.activeOperation.transitionId}`);
-  }
-  if (s.journal !== undefined) {
-    live.add(`${s.journal.op.operationId}\u0000${s.journal.op.transitionId}`);
-  }
+  if (s.activeOperation !== undefined) live.add(nameOf(s.activeOperation));
+  if (s.journal !== undefined) live.add(nameOf(s.journal.op));
   // 삽입 순서가 곧 시간 순서다 — 오래된 전환부터 나온다.
   const order: string[] = [];
   for (const k of keys) {
@@ -2180,7 +2193,8 @@ function prune(s: AgentState): void {
  * 들어가면 `a`/`b:c` 와 `a:b`/`c` 가 같은 이름이 된다.
  */
 const transitionOfOp = (op: OperationTuple): string =>
-  `${op.operationId}\u0000${op.transitionId}`;
+  `${op.operationId}\u0000${op.transitionId}`
+  + `\u0000${normalizeNumeric(op.leaderToken, 'leaderToken')}`;
 
 /**
  * 종단 원장의 키. **토큰이 들어간다** (44차 — 부류를 채널째 닫는다).

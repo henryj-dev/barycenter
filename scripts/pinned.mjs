@@ -30,7 +30,11 @@ import { join } from 'node:path';
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 
 const base = process.argv[2] ?? 'HEAD~1';
-const head = 'HEAD';
+// **sha 로 고정한다.** worktree 안에서 `HEAD` 는 그 worktree 의 HEAD — 즉 **부모**다.
+// 문자열 `'HEAD'` 를 넘기면 "지금 테스트를 얹는다" 가 아니라 **부모 테스트를 도로
+// 얹는** 것이 되고, 게이트가 정당한 핀을 "안 지킨다" 고 오판한다.
+// **게이트 자신의 세 번째 버그다** — 만들면서 둘, 49차가 넷, 그리고 이것.
+const head = git('rev-parse', 'HEAD');
 
 const touchedSrc = git('diff', '--name-only', `${base}..${head}`, '--', 'src/').length > 0;
 if (!touchedSrc) {

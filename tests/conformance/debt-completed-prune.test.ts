@@ -247,7 +247,90 @@ describe('가지치기는 키를 되쪼개지 않는다 (34차 검수 A)', () =>
       completed: Record<string, { transition?: string }>;
     };
     const entry = Object.values(payload.completed)[0];
+    // **토큰이 들어갔다** (빚갚기 재검수 CE-50-A). 44·48차에 원장 단위가 (전환, 토큰)이
+    // 됐는데 이 필드만 이름에 남아 있었고, 그래서 재발급이 한 그룹으로 붕괴해 가지치기가
+    // 영영 안 돌았다.
     expect(entry?.transition, '전환 이름이 기록에 없다 — 자를 때 키를 되쪼개야 한다')
-      .toBe('a:b\u0000c');
+      .toBe('a:b\u0000c\u000010');
   });
+});
+
+/**
+ * **CE-50-A — 48차가 빚갚기 ①을 무너뜨렸다**
+ *
+ * 빚갚기 ①의 헤드라인 주장은 *"전환을 많이 흘려도 기록이 유계다"* 였다.
+ * **48차에 캐시 키에 토큰을 넣으면서 그것이 거짓이 됐다.**
+ *
+ * ```
+ * key()           opId : tid : token : plane : step   ← 48차에 토큰이 들어갔다
+ * transition 필드  opId \0 tid                        ← 그룹핑은 이름 그대로
+ * ```
+ *
+ * 그래서 **같은 이름의 재발급이 전부 한 그룹으로 붕괴**한다. 그룹 수가 안 늘어
+ * `order.length ≤ 64` 가 영원히 참이고, **가지치기가 한 항목도 안 지운다.**
+ * 48차 이전에는 키에 토큰이 없어 재발급이 같은 키를 덮어썼으므로 이 축이 없었다.
+ *
+ * 45차 계약이 *"신임 리더가 같은 이름을 다시 내면 DP 는 통과시킨다"* 고 명시적으로
+ * 허용한 경로다 — 즉 정상 운영에서 리더가 교체될 때마다 자란다.
+ *
+ * **"자리를 다 안 센다" 의 재연이다.** 원장의 단위를 (전환, 토큰)으로 바꾸면서
+ * 그 원장을 **자르는 쪽의 단위**를 안 바꿨다.
+ */
+it('같은 이름을 fence 마다 재발급해도 기록이 유계다', async () => {
+  const at = async (rounds: number): Promise<number> => {
+    const store = new MemoryStore();
+    const agent = new DpAgent(store);
+    for (let i = 1; i <= rounds; i += 1) {
+      await agent.fence(String(10 + i));
+      const op: ApplyOperation = {
+        ...OP('X', String(i - 1), String(i)),
+        leaderToken: String(10 + i),
+      };
+      await agent.reserveAll(op, { op, phase: 'preflight', reloadAttempts: 0, progress: {} });
+      await agent.stage(tupleFor(op, 'http'), null);
+      await agent.commit(tupleFor(op, 'http'), { acceptingGeneration: op.targetGeneration });
+      await agent.finishOperation(op, ['http']);
+    }
+    return completedSize(store);
+  };
+  expect(await at(160), '리더 교체마다 기록이 자란다 — 유계가 아니다').toBe(await at(80));
+});
+
+/**
+ * **CE-50-B — 보존 창이 이름을 센다**
+ *
+ * 그룹이 이름 단위라, 재발급 전환의 그룹 위치가 **옛 토큰의 첫 삽입 위치**다.
+ * 그래서 방금 끝난 전환인데 **가장 오래된 것으로 세어져 잘린다.**
+ *
+ * `COMPLETED_RETENTION` 의 근거는 *"그 사이 전환 64 개가 지나갔다면 보낸 쪽은 이미
+ * 죽었거나 fence 됐다"* 였는데, 재발급 이름에서는 **11 개 만에 잘린다.**
+ */
+it('보존 창은 전환을 센다 — 이름이 아니라', async () => {
+  const store = new MemoryStore();
+  const agent = new DpAgent(store);
+  const x10 = OP('X', '0', '1');
+  await transition(agent, x10);
+  for (let i = 2; i <= 61; i += 1) {
+    await transition(agent, OP(`f-${i}`, String(i - 1), String(i)));
+  }
+  await agent.fence('11');
+  const x11: ApplyOperation = { ...OP('X', '61', '62'), leaderToken: '11' };
+  await agent.reserveAll(x11, { op: x11, phase: 'preflight', reloadAttempts: 0, progress: {} });
+  await agent.stage(tupleFor(x11, 'http'), null);
+  await agent.commit(tupleFor(x11, 'http'), { acceptingGeneration: x11.targetGeneration });
+  await agent.finishOperation(x11, ['http']);
+  for (let i = 63; i <= 72; i += 1) {
+    const op: ApplyOperation = { ...OP(`g-${i}`, String(i - 1), String(i)), leaderToken: '11' };
+    await agent.reserveAll(op, { op, phase: 'preflight', reloadAttempts: 0, progress: {} });
+    await agent.stage(tupleFor(op, 'http'), null);
+    await agent.commit(tupleFor(op, 'http'), { acceptingGeneration: op.targetGeneration });
+    await agent.finishOperation(op, ['http']);
+  }
+
+  // X/11 은 11 번째로 최근이다 — 창 64 안이어야 한다.
+  const late = await new DpAgent(store)
+    .commit(tupleFor(x11, 'http'), { acceptingGeneration: x11.targetGeneration })
+    .then((a) => (a.cached ? 'cached' : 'fresh'))
+    .catch((e: unknown) => (e as { kind?: string }).kind ?? 'other');
+  expect(late, '방금 끝난 재발급 전환이 이름 때문에 잘렸다').toBe('cached');
 });
