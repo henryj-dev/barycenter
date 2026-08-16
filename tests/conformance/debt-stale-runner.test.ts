@@ -22,7 +22,7 @@ import { expect, it } from 'vitest';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
 import type {
-  ApplyLease, ApplyOperation, Checked, PublishRecord,
+  ActivationEvidence, ApplyLease, ApplyOperation, Checked, PublishRecord,
 } from '../../src/dp/operation.js';
 
 const OP = (
@@ -83,6 +83,24 @@ class GatedPublish extends FakeEffects {
     this.enter();
     await this.gate;
     return super.publish(record, lease); // lease.assertValid() 는 여기서 돈다
+  }
+}
+
+/** 활성화 **관측**에서 멈춘다 — 토큰이 없는 경로라 낡은 러너가 fence 를 산 채로 건넌다. */
+class GatedObserve extends FakeEffects {
+  entered: Promise<void>;
+  private enter!: () => void;
+  private gate: Promise<void>;
+  open!: () => void;
+  constructor() {
+    super();
+    this.entered = new Promise((r) => { this.enter = r; });
+    this.gate = new Promise((r) => { this.open = r; });
+  }
+  override async observeActivation(): Promise<ActivationEvidence | undefined> {
+    this.enter();
+    await this.gate;
+    return super.observeActivation();
   }
 }
 
@@ -272,7 +290,11 @@ it('CE-35-A — fence 뒤 같은 id 재발급이 중간 오퍼레이션 없이�
  * 자기 저널을 열어 놨다. id 만 보면 낡은 러너가 **신임의 저널을 계속 몬다** — 8차 반례
  * ③ 이 지목한 그것이다("옛 러너가 신임 오퍼레이션을 대신 끝까지 몰았다").
  */
-it('낡은 러너가 루프를 돌아도 신임 저널을 몰지 않는다', async () => {
+// **제목을 고쳤다** (36차 검수). 전에는 "낡은 러너가 루프를 돌아도" 였는데 **거짓이다** —
+// 러너는 루프에 못 돌아오고 publish 안 `lease.assertValid()` 에서 `stale_leader` 로 죽는다.
+// 그래서 이 테스트는 `driveLoop` 의 소유 검사에 **검출력이 0** 이다(36차 실측).
+// 지금 지키는 것은 "게이트에 걸린 낡은 러너가 승계 뒤 신임 저널을 안 건드린다" 뿐이다.
+it('게이트에 걸린 낡은 러너는 승계된 저널을 건드리지 않는다', async () => {
   const store = new MemoryStore();
   const zero = { epoch: '0', rev: '0' };
   const one = { epoch: '1', rev: '1' };
@@ -313,4 +335,60 @@ it('낡은 러너가 루프를 돌아도 신임 저널을 몰지 않는다', asy
   });
 
   await old;
+});
+
+/**
+ * **CE-36-A — 같은 병의 세 번째 자리** (36차 검수)
+ *
+ * `apply.ts` 의 증거 쓰기 자리는 주석이 **"내 저널에만 쓴다"**(8차 반례 ③)인데 정작
+ * **id 만 비교한다.** 34차 C 가 이 병형("쓰는 토큰이 저널의 것 — 피해자의 것")을 두
+ * 자리에서 고치면서 **이 자리를 안 셌고**, 35차의 전수 조사도 놓쳤다.
+ *
+ * 그리고 이 재현은 35차에 내가 적은 **"동치" 주장이 거짓임**을 보인다. 나는
+ * *"fence 뒤에는 낡은 토큰의 쓰기가 agent 층에서 전부 `stale_leader` 로 막히므로 낡은
+ * 러너는 그 검사에 닿기 전에 죽는다"* 고 적었다. **`awaitActivation` 은 토큰이 없는
+ * 관측 경로다** — 낡은 러너는 거기서 fence 를 **산 채로 건넌다.** 뮤테이션이 아무도
+ * 안 죽인 것은 "도달 불가" 가 아니라 **"스위트가 못 가른다"** 였다. 그 둘을 뒤바꾸는
+ * 것이 이 레포가 반복해 앓은 병이고, 나는 그 병을 안다고 적은 회차에서 그것을 했다.
+ *
+ * **다만 증거 오염까지는 내 손으로 재현 못 했다.** 이 시나리오에서 낡은 러너는 게이트를
+ * 건넌 **뒤 첫 쓰기**에서 `stale_leader` 로 죽는다. 검수자는 다른 배치로 오염을 봤다고
+ * 적었고 나는 그 배치를 못 만들었다 — **못 연 것이지 없는 것이 아니다.**
+ *
+ * 그래서 이 테스트가 지금 지키는 것은 **"낡은 러너가 fence 를 산 채로 건너도 신임
+ * 저널이 오염되지 않는다"** 이고, 그 이상을 주장하지 않는다.
+ */
+it('CE-36-A — 낡은 러너의 지연 관측이 남의 저널에 실리지 않는다', async () => {
+  const store = new MemoryStore();
+  const zero = { epoch: '0', rev: '0' };
+  const one = { epoch: '1', rev: '1' };
+
+  const oldAgent = new DpAgent(store);
+  const gate = new GatedObserve();
+  const x10 = OP('X', '10', 'gen-old', zero, one);
+  // 세상이 옛 세대를 받아들였다고 보고하게 한다 — 그래야 관측이 증거를 돌려주고
+  // 쓰기가 일어난다. (처음엔 이걸 안 세워 관측이 `undefined` 를 돌려줬고, 테스트가
+  // **아무것도 안 재면서 초록**이었다. 픽스처가 통과시킨 것의 또 다른 모양이다.)
+  gate.acceptingGeneration = 'gen-old';
+  const old = new ApplyRunner(oldAgent, gate, FAST).run(x10).catch((e: unknown) => e);
+  await gate.entered;
+
+  // 승계 — 낡은 러너는 관측 게이트에 **산 채로** 걸려 있다.
+  const newAgent = new DpAgent(store);
+  await newAgent.fence('11');
+  const x11 = OP('X', '11', 'gen-new', zero, one);
+  for (const plane of ['http', 'stream'] as const) await newAgent.release(tupleFor(x11, plane));
+  await newAgent.reserveAll(x11, {
+    op: x11, phase: 'preflight', reloadAttempts: 0, progress: {},
+  });
+  const seqBefore = newAgent.readJournal()?.seq;
+
+  gate.open();
+  await old;
+
+  const j = new DpAgent(store).readJournal();
+  expect(
+    { token: j?.op.leaderToken, evidence: j?.evidence?.acceptingGeneration, seq: j?.seq },
+    '낡은 러너가 신임 저널에 자기 관측을 써넣었다 — 쓰는 토큰이 피해자의 것이라 다 통과한다',
+  ).toEqual({ token: '11', evidence: undefined, seq: seqBefore });
 });

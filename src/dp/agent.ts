@@ -1111,6 +1111,12 @@ export class DpAgent {
 
       const holder = s.activeOperation;
       const mine = holder === undefined
+        // **여기는 일부러 id 만 본다** (36차 검수가 주석 부재를 짚었다). 같은 id 를
+        // 새 토큰으로 **승계**하는 것이 정당한 경로이고, 토큰까지 보면 그 승계가 막힌다.
+        // 낡은 호출자는 위 `assertLeader` 가 먼저 죽인다.
+        //
+        // 옆자리들(청소·개방)은 토큰을 본다. **다르다는 것이 의도라는 것을 적어 둔다** —
+        // 안 적으면 다음 사람이 "통일" 하면서 승계를 막는다.
         || (holder.operationId === op.operationId && holder.transitionId === op.transitionId);
       if (!mine) {
         throw new DpRejection(
