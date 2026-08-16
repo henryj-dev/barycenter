@@ -188,3 +188,129 @@ it('C — 낡은 러너의 EffectTimeout 이 같은 id 로 재발급된 신임 �
     '신임 러너가 자기 전환에서 쫓겨났다',
   ).toBe('activated');
 });
+
+/**
+ * **CE-35-A — 한 함수 안에서 두 신원 비교가 갈렸다** (35차 검수)
+ *
+ * `reserveAll` 에는 신원 비교가 셋이다. 빚갚기가 **청소**(고아 저널 정리)만 `ownsJournal`
+ * 로 바꾸고 **개방**(저널 이어받기)을 빠뜨렸다. 그러면 같은 호출 안에서:
+ *
+ * ```
+ * 청소  ownsJournal → "남의 것" → supersede
+ * 개방  id 만       → "내 것"   → 새 저널을 안 연다
+ * ```
+ *
+ * 그 뒤 `driveLoop` 은 (34차 C 수정으로 토큰을 보게 되어) 그 옛 저널을 "남의 것" 으로
+ * 읽고 물러난다. 결과는 `no_operation` **인데 예약은 잡혀 있다** — 진단이 거짓이고,
+ * 같은 좌표를 미는 다른 오퍼레이션이 `slot_taken` 으로 죽는다.
+ *
+ * **C 수정이 이 불일치를 실체화했다.** 그래서 수정 유도 결함이다. 그리고 이 재현은
+ * `driveLoop` 의 토큰 비교도 함께 밟는다 — 그 자리는 `debt-stale-runner` 의 앞 시나리오가
+ * 안 밟아서 **검출력이 0 이었다**(35차 실측).
+ *
+ * 위 "낡은 러너" 시나리오와 달리 **중간에 다른 id 를 끼우지 않는다.** 끼우면 저널이
+ * 밀려나 이 자리를 안 지나간다 — `debt-completed-prune` 의 같은-id 재발급 테스트가
+ * 그래서 통과했고, 그 제목이 거짓이었다.
+ */
+it('CE-35-A — fence 뒤 같은 id 재발급이 중간 오퍼레이션 없이도 자리를 잡는다', async () => {
+  const store = new MemoryStore();
+  const zero = { epoch: '0', rev: '0' };
+  const one = { epoch: '1', rev: '1' };
+
+  // 1. 낡은 러너가 publish 에서 매달린다.
+  const oldAgent = new DpAgent(store);
+  const oldFx = new HangingPublish();
+  const x10 = OP('X', '10', 'gen-1', zero, one);
+  const stuck = new ApplyRunner(oldAgent, oldFx, { ...FAST, effectTimeoutMs: 600 })
+    .run(x10).catch((e: unknown) => e);
+  await oldFx.entered;
+
+  // 2. 신임이 fence — 저널 X/10 은 superseded 로 닫히고 슬롯·홀더가 반납된다.
+  const newAgent = new DpAgent(store);
+  await newAgent.fence('11');
+  expect(newAgent.readJournal()?.phase, '전제: 저널이 종단으로 닫혔다').toBe('superseded');
+
+  // 3. 같은 id 를 새 토큰으로 재발급한다. **중간 오퍼레이션을 안 끼운다.**
+  //    옛 캐시가 시끄럽게 막으므로 문서화된 처방(`release`)으로 지운다.
+  const x11 = OP('X', '11', 'gen-1', zero, one);
+  for (const plane of ['http', 'stream'] as const) {
+    await newAgent.release(tupleFor(x11, plane));
+  }
+  const result = await new ApplyRunner(newAgent, new FakeEffects(), FAST).run(x11)
+    .catch((e: unknown) => e);
+
+  const after = new DpAgent(store);
+  expect(
+    {
+      phase: result instanceof DpRejection ? result.kind : (result as { phase?: string }).phase,
+      journalOp: after.readJournal()?.op.operationId,
+      journalToken: after.readJournal()?.op.leaderToken,
+      coordinate: after.coordinate('http').activationEpoch,
+      slot: after.reservationOwner('http', '1')?.leaderToken,
+    },
+    '개방 분기가 옛 저널을 "내 것" 으로 읽어 자리를 못 잡았다 — 진단은 no_operation 인데 예약이 남는다',
+  ).toEqual({
+    phase: 'activated',
+    journalOp: 'X',
+    journalToken: '11',
+    coordinate: '1',
+    slot: undefined,
+  });
+
+  await stuck;
+});
+
+/**
+ * **낡은 러너가 루프를 계속 돌 때** (35차 검수 3-A)
+ *
+ * 34차 C 수정은 두 자리를 고쳤다 — `driveInner` 의 catch 와 `driveLoop` 의 소유 검사.
+ * 그런데 재현이 밟은 것은 **앞의 하나뿐**이었다: 낡은 러너가 매달려 있으면 루프를 안
+ * 돌고 바로 catch 로 간다. 35차가 실측했다 — `driveLoop` 을 id-only 로 되돌려도 전
+ * 스위트가 초록이었다. **커밋은 두 자리를 고쳤다고 적었는데 재현이 지킨 것은 한 자리다.**
+ *
+ * 여기서는 낡은 러너가 **게이트에서 풀려 루프를 계속 돈다.** 그 사이 신임이 같은 id 로
+ * 자기 저널을 열어 놨다. id 만 보면 낡은 러너가 **신임의 저널을 계속 몬다** — 8차 반례
+ * ③ 이 지목한 그것이다("옛 러너가 신임 오퍼레이션을 대신 끝까지 몰았다").
+ */
+it('낡은 러너가 루프를 돌아도 신임 저널을 몰지 않는다', async () => {
+  const store = new MemoryStore();
+  const zero = { epoch: '0', rev: '0' };
+  const one = { epoch: '1', rev: '1' };
+
+  const oldAgent = new DpAgent(store);
+  const gate = new GatedPublish();
+  const x10 = OP('X', '10', 'gen-1', zero, one);
+  const old = new ApplyRunner(oldAgent, gate, FAST).run(x10).catch((e: unknown) => e);
+  await gate.entered;
+
+  // 신임이 승계하고 같은 id 로 자기 저널을 연다.
+  const newAgent = new DpAgent(store);
+  await newAgent.fence('11');
+  const x11 = OP('X', '11', 'gen-1', zero, one);
+  for (const plane of ['http', 'stream'] as const) await newAgent.release(tupleFor(x11, plane));
+  await newAgent.reserveAll(x11, {
+    op: x11, phase: 'preflight', reloadAttempts: 0, progress: {},
+  });
+  expect(newAgent.readJournal()?.op.leaderToken, '전제: 신임 저널이 열렸다').toBe('11');
+
+  // 게이트를 연다 — 낡은 러너가 루프로 돌아온다.
+  gate.open();
+  const oldResult = await old;
+
+  const after = new DpAgent(store);
+  expect(
+    {
+      old: oldResult instanceof DpRejection ? oldResult.kind : (oldResult as { phase?: string }).phase,
+      journalToken: after.readJournal()?.op.leaderToken,
+      journalOwner: after.readJournal()?.op.operationId,
+      holderToken: after.activeOperation()?.leaderToken,
+    },
+    '낡은 러너가 신임의 저널을 계속 몰았다 — 8차 반례 ③ 의 재발이다',
+  ).toMatchObject({
+    journalToken: '11',
+    journalOwner: 'X',
+    holderToken: '11',
+  });
+
+  await old;
+});

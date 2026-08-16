@@ -370,6 +370,17 @@ export class ApplyRunner {
       // 내내 정합하므로 불변식도 P0~P7 도 무풍이고, **일이 안 되는 것**만 남는다.
       // 20차가 "계측기가 전부 나쁜 일만 본다" 고 한 그 사각이다.
       // 여기도 같은 비교다 (C). `ownsJournal` 하나로 모은다 — 자리가 둘이면 갈린다.
+      //
+      // **다만 이 절은 지금 가드 아래서 동치다** (35차 실측). fence 뒤에는 낡은 토큰의
+      // 쓰기가 agent 층에서 전부 `stale_leader` 로 막히므로, 낡은 러너는 이 검사에
+      // 닿기 전에 죽는다. 뮤테이션으로 확인했다 — id-only 로 되돌려도 아무도 안 죽는다.
+      //
+      // **위쪽 `driveInner` 의 `mine` 은 다르다.** 거기서 `failAll` 이 쓰는 토큰은
+      // `bound` 가 아니라 **저널의 것 — 즉 피해자의 것**이라 agent 층 검사를 통과한다.
+      // 그래서 그쪽만 하중을 받았다. 같은 술어인데 한쪽만 일하는 이유가 그것이다.
+      //
+      // 그래도 바꾼 채로 둔다: 술어가 갈라져 있으면 언젠가 하나가 뒤처진다(CE-35-A 가
+      // 바로 그것이었다). **동치를 동치라고 적을 뿐 검출력이 있다고 적지 않는다.**
       if (!ownsJournal(j, bound)) {
         const mine = this.agent.activeOperation();
         if (mine?.operationId === bound.operationId && mine.transitionId === bound.transitionId) {

@@ -304,7 +304,14 @@ export class LocalDataplaneDriver implements DataplaneDriver {
     // 모수로 삼아, 한 평면짜리 봉투가 오면 나머지가 옛 세대인데도 "전부 넘어갔다" 가
     // 됐다. `reachedPhase()` 는 저널에서 평면 집합을 가져온다 — 넘길 수가 없으니
     // 잘못 넘길 수도 없다.
-    await this.agent.closeJournal(op, this.agent.reachedPhase() ?? 'failed');
+    // 폴백을 안 단다 (35차 검수). 여기 오려면 저널이 있어야 하므로 `reachedPhase()` 가
+    // `undefined` 를 줄 수 없고, `closeJournal` 은 저널이 없으면 어차피 no-op 다.
+    // **24차와 25차에 같은 모양을 두 번 지우고 여기 세 번째를 남겼다** — 규칙을 세운
+    // 사람이 그 규칙을 못 지키는 자리가 매번 하나씩 남는다.
+    await this.agent.closeJournal(
+      op,
+      this.agent.reachedPhase() as 'activated' | 'partial_exhausted' | 'failed',
+    );
     if (refused.length > 0) {
       throw new DpRejection('terminal', `일부 평면이 이미 끝나 있었다 — ${refused.join(', ')}`);
     }

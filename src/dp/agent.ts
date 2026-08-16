@@ -883,7 +883,15 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
   // 돌기 때문에, 근거가 만들어진 **그 쓰기에서** 지워지면 `before` 에 없어서 이 비교가
   // 못 본다. 나중 쓰기에서 지우는 경우만 잡는다.
   //
-  // 원래 절(검출력 0)보다는 낫지만 "이빨이 있다" 고 적을 수는 없다. **검출기는 테스트다.**
+  // 원래 절(검출력 0)보다는 낫다.
+  //
+  // **처음엔 "검출기는 테스트다" 라고 적었는데, 무대가 없어서였다** (35차 검수 3-B).
+  // 두 평면을 같이 미는 시나리오에서는 서 있는 근거가 늘 최신이라 보존 창만으로 살아남아
+  // 이 절을 안 지나간다. **한 평면을 세워 두고 다른 평면만 옮기면** 세워 둔 근거가 창
+  // 밖으로 밀리고, 그때 이 절이 **실제로 발화한다**(뮤테이션으로 확인).
+  //
+  // "이빨이 없다" 가 아니라 **"그 이빨을 지나가는 무대가 없었다"** 였다. 둘은 다르다 —
+  // 이 레포가 반복해서 뒤바꾼 그 둘이다.
   const standing = new Set(
     (Object.keys(next.planes) as Plane[]).map((p) => `${p}:${next.planes[p].activationEpoch}`),
   );
@@ -1186,9 +1194,17 @@ export class DpAgent {
       // 같은 오퍼레이션의 저널이 이미 있으면 그대로 둔다. 이어받는 것이다.
       if (opening !== undefined) {
         const existing = s.journal;
-        const mine = existing !== undefined
-          && existing.op.operationId === op.operationId
-          && existing.op.transitionId === op.transitionId;
+        // **토큰까지 본다** (35차 CE-35-A). 몇 줄 위 청소는 `ownsJournal` 로 토큰을 보는데
+        // 여기만 id 를 봤다 — **한 함수 안에서 두 판정이 갈렸다.** 청소는 "남의 것" 이라
+        // supersede 하는데 개방은 "내 것" 이라 새 저널을 안 열었고, 그 뒤 `driveLoop` 가
+        // (34차 C 수정으로 토큰을 보게 되어) 그 저널을 "남의 것" 으로 읽고 물러났다.
+        // 결과는 `no_operation` + **예약 잔존**이다 — 진단이 거짓이고, 같은 좌표를 미는
+        // 다른 오퍼레이션이 `slot_taken` 으로 죽는다.
+        //
+        // 빚갚기가 "가지치기와 신원 비교는 한 커밋"(23차 규칙)을 자처해 놓고 이 함수의
+        // 세 자리 중 하나를 빠뜨렸다. **자리를 세는 것이 규칙을 만드는 일의 절반이다** —
+        // 27차에 같은 말을 적고 또 그랬다.
+        const mine = ownsJournal(existing, op);
         if (!mine) {
           s.journal = { ...opening, seq: (s.journal?.seq ?? existing?.seq ?? 0) + 1 };
         }
@@ -1917,8 +1933,17 @@ const EVIDENCE_RETENTION = 64;
  * `admit` 이 지연 도착한 RPC 를 `aborted`/`failed` 로 거부하는 근거이고, 지우면 운영자가
  * 포기한 전환이 되살아난다. 토큰이 낡은 것만 자르는 규칙도 안전하지 않다: 후보가 fence 를
  * 건너 승계될 수 있어(14차 고아 방지) 낡은 토큰의 종단 기록을 지금 후보가 읽는다
- * (`candidateArrived` 의 원장 폴백). **그래서 남긴다 — 자를 규칙을 못 찾은 것이지
- * 안 자라는 것이 아니다.**
+ * (`candidateArrived` 의 원장 폴백). **그래서 남긴다.**
+ *
+ * 다만 **"자를 규칙이 없다" 는 과장이었다** (35차 검수). 규칙의 얼개는 있다 —
+ * **목표 epoch 이 좌표에 추월된 항목은 구조적으로 부활 불가**다: 재획득은
+ * `epoch_not_monotonic`/`coordinate_mismatch` 에, commit 은 `not_staged` 에 막힌다.
+ * 걸리는 것은 지금 `terminal` **키에 epoch 이 없다**는 것이고(값에 적어야 한다 —
+ * `completed` 의 `transition` 과 같은 모양), I7 첫 절도 같이 좁혀야 하며, 서 있는
+ * epoch 의 `activated` 와 후보가 참조하는 것은 보존해야 한다.
+ *
+ * **설계 스케치이고 프로토타입은 안 했다.** 재현 경로 없이 넣지 않는다 — 이 표를
+ * 잘못 자르면 운영자가 포기한 전환이 되살아난다. 다음 회차의 일로 남긴다.
  */
 function pruneEvidence(s: AgentState): void {
   const keys = Object.keys(s.activationEvidence);

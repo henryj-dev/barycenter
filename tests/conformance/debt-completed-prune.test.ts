@@ -95,7 +95,14 @@ describe('방패가 사라진 뒤 — 측정한 것만 적는다', () => {
    * **그래서 여기서는 재현된 것만 단언한다.** 여섯 회차의 서술을 그대로 테스트로 옮기면
    * 이 레포가 스스로 금지한 짓(재현 안 되는 주장을 자산처럼 쌓는 것)이 된다.
    */
-  it('fence 뒤 같은 id 를 새 토큰으로 내면 그 전환의 것으로 자리를 잡는다', async () => {
+  // **제목을 고쳤다** (35차 검수). 전에는 "fence 뒤 같은 id 를 새 토큰으로 내면 그
+  // 전환의 것으로 자리를 잡는다" 였는데 **거짓이었다** — 중간에 다른 id 전환 90 개가
+  // 저널을 밀어냈기 때문에 통과하는 것이고, 중간 오퍼레이션이 없으면 자리를 못 잡았다
+  // (CE-35-A). **검증한 부분집합에서 일반화한** 정확히 그 병이다. 다음 사람이 이 제목을
+  // 믿으면 CE-35-A 를 "닫힌 부류" 로 읽는다.
+  //
+  // 중간 오퍼레이션 없는 경우는 `debt-stale-runner.test.ts` 의 CE-35-A 가 든다.
+  it('중간 오퍼레이션이 저널을 밀어낸 뒤라면 같은 id 재발급이 자리를 잡는다', async () => {
     const store = new MemoryStore();
     const agent = new DpAgent(store);
 
@@ -177,15 +184,39 @@ describe('근거 기록도 자란다 — 절반만 자를 수 있다', () => {
     expect(await at(200), '근거 기록이 전환 수만큼 자란다').toBe(await at(100));
   });
 
-  it('지금 서 있는 자리의 근거는 자르지 않는다', async () => {
+  /**
+   * **처음 쓴 테스트는 픽스처가 통과시켰다** (35차 검수 3-B).
+   *
+   * 전환 200 개를 두 평면 다 밀고 epoch 200 의 근거를 확인했는데, 그러면 **서 있는
+   * 좌표의 근거가 늘 가장 최신**이라 보존 창만으로 살아남는다 — `!standing.has(k)`
+   * 필터를 지운 뮤턴트가 전 스위트를 통과했다. 즉 그 테스트는 보호절을 **안 쟀다.**
+   *
+   * 하중을 걸려면 **한 평면은 세워 두고 다른 평면만 계속 옮겨야** 한다. 그러면 세워 둔
+   * 평면의 근거가 창 밖으로 밀려나고, 보호절만이 그것을 지킨다.
+   */
+  it('한 평면을 세워 두고 다른 평면만 옮겨도 서 있는 자리의 근거는 남는다', async () => {
     const store = new MemoryStore();
     const agent = new DpAgent(store);
-    for (let i = 1; i <= 200; i += 1) {
-      await transition(agent, OP(`op-${i}`, String(i - 1), String(i)));
+    // http 를 1 에 세운다.
+    await transition(agent, OP('base', '0', '1'));
+
+    // stream 만 120 번 옮긴다 — http 의 근거가 보존 창 밖으로 밀려난다.
+    for (let i = 1; i <= 120; i += 1) {
+      const base = OP(`s-${i}`, String(i - 1), String(i));
+      const op: ApplyOperation = {
+        ...base,
+        affectedPlanes: ['stream'],
+        planes: { stream: base.planes.http! },
+      };
+      await agent.reserveAll(op, { op, phase: 'preflight', reloadAttempts: 0, progress: {} });
+      await agent.stage(tupleFor(op, 'stream'), null);
+      await agent.commit(tupleFor(op, 'stream'), { acceptingGeneration: op.targetGeneration });
+      await agent.finishOperation(op, ['stream']);
     }
+
     expect(
-      new DpAgent(store).evidenceFor('http', '200'),
-      '지금 여기 있는 이유를 답할 수 없게 됐다',
+      new DpAgent(store).evidenceFor('http', '1'),
+      'http 는 여전히 epoch 1 에 서 있는데 왜 거기 있는지 답할 수 없게 됐다',
     ).toBeDefined();
   });
 });
