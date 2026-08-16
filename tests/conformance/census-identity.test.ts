@@ -68,26 +68,47 @@ describe('신원 비교 자리는 세어져 있다', () => {
    * 우회로가 생긴다 — 그때 이 테스트가 알려 준다.
    */
   /**
-   * **전제가 틀렸다는 것을 계측기가 첫 실행에서 알려 줬다.** 39차 검수는 "공인 헬퍼는
-   * `ownsJournal`·`authoredBy` 둘" 이라고 적었고 나도 그렇게 못박으려 했는데,
-   * 실제로는 **셋**이다 — `assertInvariants` 안의 I1 검사가 토큰을 대조한다.
+   * ⚠️ **39차에 여기 적은 서사는 거짓이었다** (40차가 뒤집었다).
    *
-   * 여섯 번의 손 census 가 이것도 안 셌다. **자리를 세는 계측기를 만들자마자 그 계측기가
-   * 일곱 번째를 찾았다** — 손으로 세는 것을 그만두는 것이 옳았다는 증거다.
+   * 그때 이렇게 적었다 — *"계측기가 첫 실행에서 `assertInvariants` 의 I1 토큰 대조를
+   * 찾았다. 일곱 번째다. 계측기가 나를 고쳤다."* **전부 틀렸다.**
+   *
+   * `assertInvariants` 는 720~935 행이고 그 안에 `normalizeNumeric` 이 **하나도 없다**
+   * (I1 은 `big(x) !== max` 형이라 지문 밖이다). 계측기가 잡은 것은 `finishOperation` 의
+   * 자리 — **10차부터 있던 것**이다. 첫 판이 최상위 `function` 선언만 찾아서 850 줄짜리
+   * 클래스 구간을 직전 최상위 함수 이름으로 오귀속했고, **나는 그 잘못된 이름표에 맞는
+   * 이야기를 지어 냈다.** I1 이 실제로 토큰을 보긴 하므로 이야기가 그럴듯했을 뿐이다.
+   *
+   * 그리고 **계측기의 초록이 계측기 자신의 버그에 의존했다** — 귀속을 고치자마자 빨개졌다.
+   * 40차가 뮤턴트로 실증하기를, 그 850 줄 안에 새 토큰 대조를 넣어도 집합이 안 변해
+   * **검출력이 정확히 0** 이었다.
+   *
+   * 이것이 이 시리즈에서 제일 나쁜 실패다. **"작성자가 새로 쓴 근거가 거짓" 병이
+   * 재발하지 않았다고 선언한 바로 그 커밋에서, 그 병을 끝내려고 만든 계측기 안에서
+   * 재발했다.** 지문도 `!==` 형을 빠뜨려 `releaseHolderSlots` 를 놓쳤다 — 그래서
+   * "셋" 이라는 숫자도 틀렸다. 넷이다.
    */
-  it('토큰까지 대조하는 자리는 셋이다', () => {
+  it('토큰까지 대조하는 자리는 넷이다', () => {
     // 토큰 대조의 지문은 `=== normalizeNumeric(` 이다. 그 자리를 감싸는 함수 이름을
     // 역방향으로 찾는다. (첫 시도는 "본문 600 자 안에 `normalizeNumeric`" 으로 느슨하게
     // 잡아 `tupleFor` 까지 걸렸다 — **계측기가 자기 첫 판정에서 틀렸다.**)
-    const agent = readFileSync(join(SRC, 'agent.ts'), 'utf8');
-    const owners = [...agent.matchAll(/=== normalizeNumeric\(/g)].map((m) => {
-      const before = agent.slice(0, m.index);
-      const fn = [...before.matchAll(/^(?:export )?function (\w+)\(/gm)].pop();
-      return fn?.[1] ?? '(모듈 최상위)';
-    });
+    // **최상위 함수와 클래스 메서드를 둘 다 본다.** 첫 판(39차)은 최상위 `function`
+    // 선언만 찾아서, `DpAgent` 메서드 안의 자리를 **직전 최상위 함수로 오귀속**했다 —
+    // 그 구간이 850 줄이라 그 안의 모든 자리가 같은 이름표를 받았다.
+    const owners: string[] = [];
+    let current = '(모듈 최상위)';
+    for (const file of ['agent.ts', 'apply.ts', 'driver.ts', 'operation.ts']) {
+      readFileSync(join(SRC, file), 'utf8').split('\n').forEach((text) => {
+        const top = /^(?:export )?(?:async )?function (\w+)\(/.exec(text);
+        const method = /^  (?:private |readonly |static |async |#)*(\w+)[(<]/.exec(text);
+        if (top !== null) current = top[1]!;
+        else if (method !== null) current = method[1]!;
+        if (/(===|!==) normalizeNumeric\(/.test(text)) owners.push(current);
+      });
+    }
     expect(
       [...new Set(owners)].sort(),
       '토큰을 대조하는 자리가 늘었다 — 늘리는 것 자체는 좋지만 census 의 전제가 바뀐다',
-    ).toEqual(['assertInvariants', 'authoredBy', 'ownsJournal']);
+    ).toEqual(['authoredBy', 'finishOperation', 'ownsJournal', 'releaseHolderSlots']);
   });
 });

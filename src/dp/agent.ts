@@ -706,7 +706,10 @@ function sameRecordIdentity(a: PublishRecord, b: PublishRecord): boolean {
 /**
  * **어느 절이 방어적인가** (뮤테이션 스윕이 알려줬다).
  *
- * 아래를 지워도 529 개가 전부 초록이다 — 지금 도달하는 길이 없다는 뜻이다.
+ * 아래를 지워도 529 개가 전부 초록이다 — **"스위트가 못 가른다" 는 뜻이지 "도달하는
+ * 길이 없다" 는 뜻이 아니다** (40차 지적). 원래 뒤엣말로 적혀 있었다. 같은 파일 아래쪽에
+ * 그 오독을 "내 실수" 라고 이름 붙여 놓고, 이 문장은 안 고쳤다 — **이름을 붙이는 것과
+ * 전 자리를 고치는 것은 다른 일이다.**
  *
  *   · I1 의 예약 토큰 절 (`slot.op.leaderToken > max`) — `acquire` 가 `assertLeader`
  *     뒤에 오므로 최신보다 높은 토큰의 예약이 만들어지지 않는다.
@@ -1258,6 +1261,10 @@ export class DpAgent {
           op.planes[plane]!.target.activationEpoch, 'activationEpoch',
         );
         const slot = s.reservations[plane]?.[epoch];
+        // id 만 본다 (39차 census). **위 홀더 부재 가드가 전제다** — 신임의 슬롯은
+        // 홀더 없이 존재할 수 없으므로, 홀더가 없으면 남은 슬롯은 낡은 것뿐이다.
+        // 위임형 근거이고, **검증물은 없다**(그 가드를 지우는 뮤턴트를 안 만들어 봤다).
+        // 규칙대로 **불가지로 적는다** — "무해하다" 가 아니라 "가르는 무대를 못 찾았다".
         if (slot?.op.operationId === op.operationId
           && slot.op.transitionId === op.transitionId) {
           delete s.reservations[plane][epoch];
@@ -1465,6 +1472,15 @@ export class DpAgent {
       // **소유권은 슬롯이 아니라 `activeOperation` 이 갖는다.** 슬롯은 commit 하면서
       // 사라지므로 그걸로 검사하면 자기 종단 기록조차 막힌다. 전역 실행권 하나로 본다.
       const holder = s.activeOperation;
+      // id 만 본다 (39차 census). **근거는 상류가 아니라 두 줄 위의 자기 펜싱이다** —
+      // 이 함수가 스스로 `assertLeader` 를 부른다. 40차가 짚기를, 39차 커밋이 "러너의
+      // `ownsJournal` 게이트들이 먼저 걸러 낸다" 고 적었다는데 **그 문장은 레포에 없다**
+      // (python 의 `if ... in s` 가 조용히 통과해 주석이 안 들어갔고, 나는 안 넣은 것을
+      // 커밋 메시지에 적었다). 그래서 이번엔 **넣고 확인한다.**
+      //
+      // 다만 `assertLeader` 는 낡은 토큰만 막지 **피해자 토큰은 못 막는다.** 그 경로의
+      // 방패는 러너 쪽 `ownsJournal` 게이트들(36차)이고, 그건 이 자리에서 보이지 않는
+      // 위임이다. **검증물 없음 — 불가지.**
       const mine = holder !== undefined
         && holder.operationId === entry.op.operationId
         && holder.transitionId === entry.op.transitionId;
