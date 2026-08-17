@@ -42,8 +42,13 @@ node dist/bin/bary.js apply examples/hello.json
 
 curl http://127.0.0.1:8999/                    # → hello from A:11
 
+node dist/bin/bary.js apply examples/l4.json   # TCP :998 and UDP :997 alongside it
 node dist/bin/bary.js rollback 1               # roll back to revision 1 — head still moves forward
 ```
+
+Every listener needs its port published. The compose file maps the three the examples use;
+add a line for each new one. Publishing arbitrary ports dynamically is its own problem (§11.3),
+which is why the recommended v1 deployment is a dedicated VM with host networking.
 
 `./scripts/quickstart.sh` runs exactly these steps and checks the result, so the instructions
 above cannot rot silently.
@@ -66,7 +71,7 @@ Run all the checks with `./scripts/verify.sh` (or `--quick` to skip the Docker-b
 | `npm run test:model` | 13 | a scheduler *generates* interleavings and hits properties P0–P11 |
 | `npm run test:store` | 19 | changeset → plan → commit on **real PostgreSQL** |
 | `npm run test:golden` | 10 | rendered output must pass `nginx -t` **on the real engine** |
-| `npm run test:e2e` | 24 | the whole chain on real nginx, including `curl :999 → A:11` |
+| `npm run test:e2e` | 35 | the whole chain on real nginx — HTTP, TCP, UDP and SNI pass-through |
 | `npm run test:engine` | 65 | nginx/OpenResty behaviours the design takes for granted |
 | `./spike/s1-s5/run.sh` | 8 | reload-free membership changes across HTTP/TCP/UDP |
 | `./spike/s7/run.sh` | 9 | proving a reload actually took effect |

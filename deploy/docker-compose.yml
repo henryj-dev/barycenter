@@ -37,9 +37,12 @@ services:
     image: openresty/openresty:alpine
     entrypoint: ["/bin/sh", "-c"]
     command:
+      # http :11 · tcp :12 · udp :13 — `examples/hello.json` 과 `examples/l4.json` 이
+      # 가리키는 곳이다. stream 쪽은 `return` 으로 답한다: `ngx.say` 는 **UDP 컨텍스트에서
+      # 비활성**이라(`API disabled in the current context`) TCP 에서만 되고 UDP 에서 죽는다.
       - >-
         mkdir -p /b/logs &&
-        printf 'error_log logs/e.log warn;\npid logs/p.pid;\nevents{worker_connections 64;}\nhttp{access_log off;server{listen 11;location /{return 200 "hello from A:11\\n";}}}\n' > /b/nginx.conf &&
+        printf 'error_log logs/e.log warn;\npid logs/p.pid;\nevents{worker_connections 64;}\nstream{server{listen 12;return "hello from TCP:12";}server{listen 13 udp;return "hello from UDP:13";}}\nhttp{access_log off;server{listen 11;location /{return 200 "hello from A:11\\n";}}}\n' > /b/nginx.conf &&
         exec /usr/local/openresty/bin/openresty -p /b -c /b/nginx.conf -g 'daemon off;'
 
   dataplane:
@@ -64,8 +67,12 @@ services:
       # 컨트롤 플레인 API. **루프백에만 묶는다** — 인증이 있어도 관리 표면을 기본으로
       # 열어 두지 않는다.
       - "127.0.0.1:8088:8088"
-      # 데이터 플레인. 아래는 README 의 예시(`:999`)를 위한 것이다.
-      - "127.0.0.1:8999:999"
+      # 데이터 플레인. **리스너를 새로 만들 때마다 여기 한 줄을 더해야 밖에서 닿는다.**
+      # §11.3 이 적은 그대로다 — 임의 포트를 동적으로 노출하는 문제라, v1 권장 배포는
+      # 전용 VM + hostNetwork 이고 k8s 네이티브는 별도 과제다.
+      - "127.0.0.1:8999:999"          # examples/hello.json — http
+      - "127.0.0.1:8998:998"          # examples/l4.json    — tcp
+      - "127.0.0.1:8997:997/udp"      # examples/l4.json    — udp
     # 세대와 `current` 링크는 **컨테이너 안에서만** 다뤄야 한다 (§3.2 · §7.2).
     # 호스트 bind mount 로 빼면 링크 교체가 엔진 쪽에 안 보인다 — 실측했다.
     volumes:

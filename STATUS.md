@@ -27,6 +27,7 @@ DESIGN.md    2,400+ 줄
 | 골든 | `npm run test:golden` | **10** | `nginx -t` + 런타임 프로브 |
 | e2e | `npm run test:e2e` | **14** | 실제 nginx (그중 6건은 컨테이너 안 에이전트) |
 | 엔진 사실 | `npm run test:engine` | **61** | 설계가 전제한 nginx 동작 |
+| e2e | `npm run test:e2e` | **35** | 실물 nginx — http·tcp·udp·SNI 패스스루 |
 | 스파이크 | `spike/*/run.sh` | **58** | S1·S5·S7·S8·S11·**S19** |
 | 저장소 | `npm run test:store` | **19** | **실물 PG** — changeset·plan·commit·제약 |
 
@@ -52,6 +53,48 @@ DESIGN.md    2,400+ 줄
 | `dp/store-fs.ts` | 파일 저장소 — 원자 교체·손상 탐지·버전 CAS·프로세스 락 |
 | `dp/driver.ts` | `DataplaneDriver` 계약 + 참조 구현 |
 | `index.ts` | **동결 대상 표면** |
+
+---
+
+### v0.2 L4 — "지원한다" 와 "돈다" 사이를 건넜다 (2026-08-17)
+
+모델도 검증기도 렌더러도 tcp·udp·SNI 패스스루를 **전부터 지원했다.** S1 이 세 서브시스템
+전부에서 성립을 증명했고 골든이 `nginx -t` 를 통과시켰다. 그런데 **REST 로 넣어 실제
+트래픽까지 가 본 적이 없었다** — v0.1 e2e 는 http 하나뿐이었고, 그 사이가 v0.1 배선에서
+결함 넷을 낸 자리다.
+
+```
+tcp          :998 → 백엔드 :12
+udp          :997 → 백엔드 :13   (dns 프리셋 — proxy_responses 1)
+passthrough  :996 → SNI 로 갈린다 · TLS 를 종단하지 않는다
+```
+
+**패스스루는 인증서로 판정한다.** 본문만 보면 종단해서 프록시해도 같은 답이 나온다.
+`a.test` 로 붙으면 백엔드 a 의 인증서가, `b.test` 면 b 의 것이 그대로 온다 — 그게
+"종단하지 않는다" 의 **유일한** 증거다. 매칭 없는 SNI 도 SNI 부재도 거부된다(§4.1).
+
+변이 넷으로 판별력을 확인했다 — `listen` 에서 `udp` 제거 · SNI 매칭 무시 · 매칭 없는
+SNI 를 첫 풀로 · 소켓 겹침 탐지 무력화. **각각 자기 테스트가 잡는다.**
+
+#### 이번 실패는 우리 것이 아니라 무대의 것이었다
+
+UDP 백엔드를 `content_by_lua_block { ngx.say(...) }` 로 짰는데 죽었다:
+
+```
+[error] lua entry thread aborted: API disabled in the current context
+        [C]: in function 'say' ... udp client: 127.0.0.1, server: 0.0.0.0:13
+```
+
+**TCP 에서는 멀쩡하고 UDP 에서만 막힌다.** `return` 디렉티브로 바꿨다. UDP 를 실제로 쏴
+보기 전에는 안 드러나는 종류이고, 프로브가 처음 빨간 것은 좋은 신호였다.
+
+#### 예제를 실제로 돌아가게 만들었다
+
+`examples/l4.json` 을 두면서 데모 백엔드에 tcp :12 · udp :13 을 붙이고 compose 에 포트를
+열었다. **문서에만 있는 예제는 예제가 아니다** — 배포에 붙여 셋 다 답하는 것을 확인했다.
+
+**남은 것**: 포트 노출은 여전히 손이다(§11.3). 리스너를 만들 때마다 배포 설정에 한 줄을
+더해야 밖에서 닿는다.
 
 ---
 

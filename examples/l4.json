@@ -1,0 +1,34 @@
+[
+  {
+    "op": "put", "kind": "pool", "key": "tcp-app",
+    "body": { "protocolClass": "tcp", "algorithm": "round_robin" }
+  },
+  {
+    "op": "put", "kind": "backend", "key": "t-12",
+    "body": { "pool": "tcp-app", "host": "demo-backend", "port": 12, "weight": 1 }
+  },
+  {
+    "op": "put", "kind": "listener", "key": "tcp-front",
+    "body": {
+      "protocol": "tcp", "bind": "0.0.0.0", "port": 998, "enabled": true,
+      "defaultPool": "tcp-app"
+    }
+  },
+
+  {
+    "op": "put", "kind": "pool", "key": "udp-app",
+    "body": { "protocolClass": "udp", "algorithm": "round_robin" }
+  },
+  {
+    "op": "put", "kind": "backend", "key": "u-13",
+    "body": { "pool": "udp-app", "host": "demo-backend", "port": 13, "weight": 1 }
+  },
+  {
+    "op": "put", "kind": "listener", "key": "udp-front",
+    "body": {
+      "protocol": "udp", "bind": "0.0.0.0", "port": 997, "enabled": true,
+      "defaultPool": "udp-app",
+      "udp": { "preset": "dns" }
+    }
+  }
+]
