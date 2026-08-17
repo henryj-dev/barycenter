@@ -341,6 +341,11 @@ npm run test:engine     # 엔진 사실 검증
 ./spike/s7/run.sh       # S7 활성화 판정
 ./spike/s8/run.sh       # S8 인증서 세대 롤백
 ./spike/s11/run.sh      # S11 activation_epoch 경합
+./spike/s12/run.sh      # S12 크래시 저널 (실제 프로세스 종료)
+./spike/s16/run.sh      # S16 SNI 별 TLS policy
+./spike/s17/run.sh      # S17 TLS 인증서 선택
+./spike/s18/run.sh      # S18 ACME 상태기계 (Pebble)
+./spike/s19/run.sh      # S19 롤백 경로 합성
 
 BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 ```
@@ -352,20 +357,26 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 
 | 묶음 | 명령 | 결과 |
 |---|---|---|
-| 단위 | `npm test` | **217 PASS** |
-| 표면 (계약 고정) | `node scripts/surface.mjs --check` | **77 심볼 고정** — 카운터는 `SURFACE.txt` 가 답한다 |
-| conformance | `npm run test:conformance` | **347 PASS** — 5~33차 반례 · 크래시 지점 매핑 · 세대 materializer · **DESIGN↔ABI 대조**. 단위와 합쳐 564 건이 전부 **불변식 테스트이기도 하다** |
-| 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **10 PASS** |
-| **e2e (실제 nginx)** | `npm run test:e2e` | **14 PASS** — 저널이 실제 nginx 를 수렴시킨다 (http·stream 두 평면). 그중 6건은 **DP 컨테이너 안에서** `FsEffects` 까지 실물로 돈다 |
+| 단위 | `npm test` | **288 PASS** |
+| 표면 (계약 고정) | `node scripts/surface.mjs --check` | **86 심볼 고정** — 카운터는 `SURFACE.txt` 가 답한다 |
+| conformance | `npm run test:conformance` | **391 PASS** — 5~33차 반례 · 크래시 지점 매핑 · 세대 materializer · **DESIGN↔ABI 대조**. 단위와 합쳐 679 건이 전부 **불변식 테스트이기도 하다** |
+| 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **16 PASS** — TLS 종단 4건 포함 |
+| **e2e (실제 nginx)** | `npm run test:e2e` | **60 PASS** — 저널이 실제 nginx 를 수렴시킨다 (http·stream 두 평면). 그중 6건은 **DP 컨테이너 안에서** `FsEffects` 까지 실물로 돈다 |
 
 > e2e 는 고정 `sleep` 을 쓰지 않는다. **조건이 참이 될 때까지 폴링한다.**
 > 처음엔 고정 대기를 썼다가 간헐적으로 깨졌다 — 간헐적으로 깨지는 테스트는 없느니만
 > 못하다. green 이 될 때까지 다시 돌리는 습관을 들이기 때문이다.
-| 엔진 사실 (E) | `npm run test:engine` | **61 PASS / 1 SKIP** |
+| 엔진 사실 (E) | `npm run test:engine` | **73 PASS / 2 SKIP** |
+| 저장소 (실물 PG) | `npm run test:store` | **55 PASS** — REST 표면 12건 포함 |
 | 스파이크 S1·S5 | `./spike/s1-s5/run.sh` | **8 PASS** |
 | 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS** |
 | 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS** |
 | 스파이크 S11 | `./spike/s11/run.sh` | **14 PASS** |
+| 스파이크 S12 | `./spike/s12/run.sh` | **5 PASS** — 실제 프로세스를 38 지점에서 죽인다 |
+| 스파이크 S16 | `./spike/s16/run.sh` | **5 PASS** |
+| 스파이크 S17 | `./spike/s17/run.sh` | **10 PASS** |
+| 스파이크 S18 | `./spike/s18/run.sh` | **8 PASS** — 실물 ACME(Pebble) |
+| 스파이크 S19 | `./spike/s19/run.sh` | **16 PASS** |
 
 ### 착수 게이트 현황 (§2)
 
@@ -376,12 +387,16 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | ~ | S5 | 이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증 |
 | ~ | S7 | 로그 행 수를 정본 신호로 씀 → 진단용으로 강등하고 판정 계약 재작성 필요 |
 | ~ | S8 | CN 만 비교 / key·SPKI·chain·SNI 별 자료 미검증 |
-| ~ | **S12 크래시 저널** | `ApplyRunner` 로 구현. 저장·부작용의 **모든 직전/직후**를 훑고 관측 우선을 확인. 뮤테이션으로 변별력 검증. **실제 nginx 와 물렸다**(`tests/e2e`). 남은 것: 시크릿 materialize, 평면별 전이, 세대 디렉토리 원자 게시 |
+| ✅ | **S12 크래시 저널** | **열렸다 (2026-08-17).** `process.abort()` 로 실물 `FileStore`·`FsEffects`·nginx 위에서 38 지점을 훑는다 — 전부 수렴, 죽은 주인의 락 회수, 중복 reload 유계. in-process 스윕은 예외로 죽어서 파일시스템이 정상 종료 상태로 남았다 |
+| ✅ | **S16 · S17 TLS 렌더** | **열렸다 (2026-08-17).** 인증서 선택과 SNI 별 policy 가 실제 handshake 에 걸린다. `https` 를 되살린 전제 |
+| ✅ | **S18 ACME** | **열렸다 (2026-08-17).** 실물 CA(Pebble)로 발급 한 바퀴. 의존성 0 — JWS·CSR 을 직접 만든다 |
 | ❌ | S13 GC ledger | 미착수 |
-| ❌ | S2 S3 S4 S6 S9 S10 S14 S15 S16 S17 S18 | 미착수 |
+| ❌ | S2 S3 S4 S6 S9 S10 S14 S15 | 미착수 — 전부 **기능 축소** 등급이다 (떨어져도 설계를 다시 하지 않는다) |
 
-> **"S12 만 남았다"는 판정은 철회됐다.** 스위트가 green 인 것과 게이트가 열리는 것은
-> 다르다. `./scripts/verify.sh` 가 이제 둘을 나눠서 출력한다.
+> **block 등급 셋(S8·S11·S12)이 전부 열렸다.** 그래도 스위트가 green 인 것과 게이트가
+> 열리는 것은 다르다 — `./scripts/verify.sh` 가 둘을 나눠서 출력한다. 지금 A 를 막는 것은
+> 구멍이 아니라 **표면이 안 변한 회차가 없다** 는 것이다 (v0.6 에서 카운터가 0 으로
+> 되돌아갔다).
 
 ---
 

@@ -71,6 +71,7 @@ else
     run "spike S12            " ./spike/s12/run.sh
     run "spike S16            " ./spike/s16/run.sh
     run "spike S17            " ./spike/s17/run.sh
+    run "spike S18            " ./spike/s18/run.sh
     run "spike S19            " ./spike/s19/run.sh
   fi
 fi

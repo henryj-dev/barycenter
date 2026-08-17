@@ -239,7 +239,7 @@ ships both `stream_realip` and `ngx_stream_lua`.
 
 | | | |
 |---|---|---|
-| **v0.0** | Architecture spike, S1–S18 — each with a pass threshold and a decision on failure | ← **in progress: S1 · S7 · S8 · S11 pass; S12 is the last freeze blocker** |
+| **v0.0** | Architecture spike, S1–S19 — each with a pass threshold and a decision on failure | ← **S1 · S7 · S8 · S11 · S12 · S16 · S17 · S18 · S19 pass. All three block-grade gates (S8 · S11 · S12) are open; the rest are scope-reduction grade** |
 | **v0.1** | Typed model, `topology_epoch`, sealed changesets, apply state machine + crash table, DP agent, config AST renderer, minimal auth/audit | |
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap validator, route compiler | ← *proof of concept ends here* |
 | **v0.3** | Membership plane — dual http/stream zones, epoch fencing, health prober, drain observation | |
