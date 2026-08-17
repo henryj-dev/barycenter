@@ -719,6 +719,42 @@ export class ConfigStore {
   }
 
   /**
+   * changeset 을 버린다 (§5.2 `DELETE /changesets/{id}`).
+   *
+   * **행을 지우지 않고 `discarded` 로 옮긴다.** 감사 기록이 가리킬 대상이 사라지면
+   * "누가 무엇을 하려다 접었나" 를 나중에 물을 수 없다 — 그리고 `changesets` 는 §5.3 의
+   * 단회 lifecycle 을 지키는 상태기계라, 상태 하나를 삭제로 대신하면 그 기계에 구멍이
+   * 생긴다.
+   *
+   * **커밋된 것은 못 버린다.** 이미 리비전이 됐으므로 되돌리는 것은 롤백이지 폐기가
+   * 아니다. 여기서 허용하면 "버렸는데 트래픽은 그대로" 인 상태가 표현된다.
+   *
+   * `reopen` 과 같은 이유로 매달린 plan 도 함께 죽인다 — 안 그러면 버린 changeset 의
+   * plan_id 로 commit 하는 경로가 남는다.
+   */
+  async discardChangeset(changesetId: string, by: string): Promise<void> {
+    await this.db.tx(async (c) => {
+      const r = await c.query(
+        `UPDATE changesets SET state='discarded'
+          WHERE id=$1 AND state IN ('open','sealed') RETURNING id`,
+        [changesetId],
+      );
+      if (r.rowCount === 0) {
+        const exists = (await c.query('SELECT state FROM changesets WHERE id=$1', [changesetId]))
+          .rows[0];
+        if (exists === undefined) {
+          throw new StoreError(404, 'not_found', `changeset '${changesetId}' 가 없다`);
+        }
+        throw new StoreError(409, 'not_discardable',
+          `changeset '${changesetId}' 는 ${String(exists['state'])} 다 — open/sealed 만 버릴 수 있다`);
+      }
+      await c.query(`UPDATE plans SET state='expired' WHERE changeset_id=$1 AND state='planned'`,
+        [changesetId]);
+    });
+    await this.audit(by, 'changeset.discard', changesetId, undefined, undefined);
+  }
+
+  /**
    * `plan_id` 를 **단회 소비**한다 (§5.3).
    *
    * 이 순간 `target_revision` 과 `activation_epoch` 를 예약해 artifact 에 결박한다.

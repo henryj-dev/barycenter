@@ -20,7 +20,7 @@ const model: Model = {
     { key: 'raw', protocol: 'tcp', bind: '0.0.0.0', port: 8081, enabled: true, defaultPool: 'q' },
   ],
   httpRoutes: [],
-passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
+  passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
   pools: [
     { key: 'p', protocolClass: 'http', algorithm: 'round_robin' },
     { key: 'q', protocolClass: 'tcp', algorithm: 'round_robin' },

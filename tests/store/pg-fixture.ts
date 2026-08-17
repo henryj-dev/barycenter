@@ -99,8 +99,15 @@ export async function reset(db: Db): Promise<void> {
   // 실제로 `leadership` 을 빠뜨려서 리더 선출 테스트 넷이 깨졌다 — 증상은 "리더가 못
   // 됐다"(`tryAcquire` 가 false)였는데 원인은 코드가 아니라 픽스처였다.
   // **되돌리는 것과 비우는 것은 짝이다.** 하나만 하면 상태가 어긋난다.
+  //
+  // **CASCADE 는 *참조하는* 쪽만 데려간다.** `certificates`·`tls_policies` 는 `listeners`
+  // 가 참조하는 쪽이라 안 딸려온다 — 이름을 적어야 비워진다. 실제로 v0.6 에서 인증서
+  // 행이 테스트 사이에 살아남았고, **읽기 엔드포인트로는 안 보였다**: 그쪽은
+  // `config_revisions.model` 스냅샷을 읽는데 그 표는 목록에 있기 때문이다.
+  // (`tests/store/api.test.ts` 의 '픽스처' 절이 표에 직접 묻는다.)
   await db.query(`TRUNCATE audit, operations, plans, changesets, http_routes,
                            passthrough_routes, backends, listeners, pools,
+                           sni_certificate_bindings, certificates, tls_policies,
                            leadership, config_head, config_revisions
                   RESTART IDENTITY CASCADE`);
   await db.query(`ALTER SEQUENCE config_revision_seq RESTART 1`);

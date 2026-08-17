@@ -138,6 +138,63 @@ const ROUTES: Route[] = [
     json(c.res, 200, { http: m.httpRoutes, passthrough: m.passthroughRoutes });
   }),
 
+  /**
+   * 한 풀의 백엔드만 (§5.2 `GET /pools/{id}/backends`).
+   *
+   * 없는 풀은 **404 다.** 빈 배열로 답하면 "백엔드가 없는 풀" 과 "없는 풀" 이 같은
+   * 응답이 되고, 오타 하나가 조용히 빈 목록으로 보인다.
+   */
+  route('GET', '/api/v1/pools/:id/backends', 'read', async (c, api) => {
+    const m = await api.store.modelAt((await api.store.head()).revision);
+    const key = c.params['id'] ?? '';
+    if (!m.pools.some((p) => p.key === key)) {
+      json(c.res, 404, { error: 'not_found', message: `풀 '${key}' 가 없다` });
+      return;
+    }
+    json(c.res, 200, m.backends.filter((b) => b.pool === key));
+  }),
+
+  /**
+   * 백엔드 하나의 헬스 (§5.2 `GET /backends/{id}/status`).
+   *
+   * **아직 재보지 못한 것과 없는 것을 구분한다.** 모델에 있으면 200 이고, 관측이 없으면
+   * `unknown` 이다 — §6.6 이 그 둘을 다르게 다루는 것과 같은 이유다. 모르는 키만 404 다.
+   */
+  route('GET', '/api/v1/backends/:id/status', 'read', async (c, api) => {
+    const m = await api.store.modelAt((await api.store.head()).revision);
+    const key = c.params['id'] ?? '';
+    const backend = m.backends.find((b) => b.key === key);
+    if (backend === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `백엔드 '${key}' 가 없다` });
+      return;
+    }
+    const row = (await healthRows(api.db)).find((h) => h.backendKey === key);
+    json(c.res, 200, {
+      backend: key, pool: backend.pool, host: backend.host, port: backend.port,
+      ...(row === undefined
+        ? { state: 'unknown', observedAt: null, detail: '아직 관측이 없다' }
+        : { state: row.state, observedAt: row.observedAt, ...(row.detail === undefined ? {} : { detail: row.detail }) }),
+    });
+  }),
+
+  /**
+   * TLS 리소스 읽기 (§5.2).
+   *
+   * **`certificates` 에 자료가 없다는 것이 여기서 계약이 된다** (§8.1). `Certificate` 는
+   * 메타데이터 타입이라 개인키를 담을 자리가 애초에 없지만, 그건 지금의 타입이 그렇다는
+   * 말이지 앞으로도 그렇다는 보장이 아니다 — 그래서 적합성 테스트가 이 응답에
+   * `PRIVATE KEY` 가 없다는 것을 **응답 전체 문자열로** 검사한다.
+   */
+  route('GET', '/api/v1/certificates', 'read', async (c, api) => {
+    json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).certificates);
+  }),
+  route('GET', '/api/v1/tls-policies', 'read', async (c, api) => {
+    json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).tlsPolicies);
+  }),
+  route('GET', '/api/v1/sni-bindings', 'read', async (c, api) => {
+    json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).sniBindings);
+  }),
+
   // ── changeset (유일한 쓰기 경로) ───────────────────────────────────────
   route('POST', '/api/v1/changesets', 'write', async (c, api) => {
     const base = (c.body as { base_revision?: unknown } | null)?.base_revision;
@@ -182,6 +239,13 @@ const ROUTES: Route[] = [
 
   route('POST', '/api/v1/changesets/:id/plan', 'write', async (c, api) => {
     json(c.res, 200, await api.store.plan(c.params['id'] ?? '', c.who.name));
+  }),
+
+  route('DELETE', '/api/v1/changesets/:id', 'write', async (c, api) => {
+    await api.store.discardChangeset(c.params['id'] ?? '', c.who.name);
+    // 본문 없이 204. 버린 것에 대해 돌려줄 내용이 없다.
+    c.res.writeHead(204);
+    c.res.end();
   }),
 
   route('POST', '/api/v1/changesets/:id/reopen', 'write', async (c, api) => {

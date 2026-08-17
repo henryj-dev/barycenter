@@ -27,7 +27,7 @@ let server: import('node:net').Server;
 const model = (): Model => ({
   listeners: [],
   httpRoutes: [],
-passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
+  passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
   pools: [{ key: 'p', protocolClass: 'http', algorithm: 'round_robin' }],
   backends: [
     { key: 'live', pool: 'p', host: '127.0.0.1', port: livePort, weight: 1 },
