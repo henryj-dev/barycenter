@@ -22,9 +22,9 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **259** | 렌더러·검증기·라우트·DP 상태기계 |
+| 단위 | `npm test` | **288** | 렌더러·검증기·라우트·DP 상태기계 |
 | conformance | `npm run test:conformance` | **391** | **검수가 재현한 반례** (5~14차) |
-| 골든 | `npm run test:golden` | **16** | `nginx -t` + 런타임 프로브 (TLS 4건 포함) |
+| 골든 | `npm run test:golden` | **23** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
 | e2e | `npm run test:e2e` | **57** | 실물 nginx — http·tcp·udp·SNI 패스스루·**TLS 종단**. 일부는 컨테이너 안에서 에이전트를 돌린다 |
 | 스파이크 | `spike/*/run.sh` | **86** | S1·S5·S7·S8·S11·S12·S16·S17·**S18**·S19 |
@@ -623,6 +623,48 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### ACME 챌린지 — reload 없이 서빙된다. 그리고 예약 라우트가 도달 불가였다 (2026-08-18)
+
+S18 은 **프로토콜**이 도는지를 쟀다. 제품이 되려면 챌린지를 **nginx 가** 서빙해야 하고,
+그 방식이 갱신 비용을 정한다.
+
+**토큰을 conf 에 실으면 갱신 한 번에 세대 전환이 한 번이다.** 대가는 실측돼 있다 —
+전환당 트래픽 **2.6%** 손실. 인증서가 여럿이고 90 일 주기면 곱해진다. 그래서 shared
+dict 에 넣고 `location ^~ /.well-known/acme-challenge/` 로 낸다. 멤버십 평면이 백엔드에
+대해 푼 문제와 같은 문제, 같은 수법(S1).
+
+골든이 **안 일어난 일**을 잰다: 토큰을 적재해도 **마스터 PID 와 워커 기동 수가 안 변한다.**
+"서빙된다" 만으로는 부족하다 — HUP 을 보내도 그렇게 되기 때문이다.
+
+#### 렌더는 옳았는데 도달할 수가 없었다
+
+예약 라우트를 넣고 돌렸더니 **모든 요청이 `000`** 이었다. conf 를 봐도 멀쩡하고
+`nginx -t` 도 통과한다.
+
+원인은 default server 의 거절을 **server 레벨 `return 444`** 로 내고 있던 것이었다.
+nginx 의 server 레벨 `return` 은 **rewrite 단계**에서 실행되고, 그건 **location 선택보다
+앞이다.** 같은 server 안에 다른 location 이 아무리 있어도 도달하지 못한다.
+
+`location / { return 444; }` 로 옮겨 고쳤다 — 의미는 같고("안 맞으면 끊는다"), 더 긴
+접두사가 이제 이길 수 있다. **v0.1 부터 있던 렌더 형태였고, 지금까지 아무도 그 뒤에
+뭘 놓으려 한 적이 없어서 안 드러났다.**
+
+#### 가로채기
+
+`^~` 는 정규식을 막지만 **더 긴 접두사는 못 막는다** — location 은 최장 접두사가 이긴다.
+사용자가 `/.well-known/acme-challenge/foo` 를 내면 CA 의 요청이 거기로 가고, 증상은
+"챌린지 검증 실패" 다. 인증서 설정을 아무리 봐도 이상이 없다. 검증기가 막는다
+(`acme_path_reserved`).
+
+변이 셋이 각자 잡힌다: 예약 라우트 미출력 / server 레벨 return 으로 되돌리기(도달 불가
+재현) / 가드 끄기.
+
+**ADR-ACME 를 §8.2 에 적었다.** S18 과 이 회차가 잰 것만 확정하고, 주문 durable 스키마·
+갱신 스케줄러·레이트리밋 백오프·EAB·dns-01 프로바이더는 **미정으로 남겼다** — 지금
+정하면 안 짜 본 것을 규범으로 굳힌다.
 
 ---
 

@@ -97,6 +97,23 @@ const CONSERVATIVE: RenderCapabilities = { streamRealip: false };
  */
 export const MEMBERSHIP_DICT = { http: 'bary_http', stream: 'bary_stream' } as const;
 
+/**
+ * ACME http-01 챌린지 토큰이 사는 곳 (§8.2).
+ *
+ * **왜 dict 인가 — reload 를 피하려고.** 챌린지 토큰은 주문마다 바뀌는데, 그걸 conf 에
+ * 실으면 **인증서 갱신 한 번에 세대 전환이 한 번** 붙는다. 이 저장소는 그 대가를
+ * 실측해 뒀다: 세대 전환당 트래픽 2.6% 손실. 인증서가 여럿이면 갱신 주기마다 그게
+ * 곱해진다.
+ *
+ * 멤버십 평면이 백엔드에 대해 푼 문제와 같은 문제이고, 같은 수법으로 푼다 (S1).
+ */
+export const ACME_DICT = 'bary_acme';
+
+/**
+ * ACME http-01 이 쓰는 경로 (RFC 8555 §8.3). **바꿀 수 없다** — CA 가 여기로 온다.
+ */
+export const ACME_PREFIX = '/.well-known/acme-challenge/';
+
 const byKey = <T extends { key: string }>(xs: T[]): T[] =>
   [...xs].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
@@ -284,6 +301,7 @@ function httpServerBlocks(
   routes: HttpRoute[],
   poolsWithBackends: Set<string>,
   tls: TlsContext | undefined,
+  acme: boolean,
 ): ConfNode[] {
   // (호스트, 라우트) 쌍으로 펼친다.
   const byHost = new Map<string, HttpRoute[]>();
@@ -338,6 +356,7 @@ function httpServerBlocks(
         directive('server_name', [nameArg]),
         ...tlsBody,
         ...realipNodes(listener),
+        ...(acme ? [acmeChallengeLocation()] : []),
         ...locations,
       ]),
     );
@@ -499,6 +518,32 @@ function certFor(
   );
 }
 
+/**
+ * ACME http-01 예약 라우트 (§8.2).
+ *
+ * *"시스템 소유 예약 라우트로 렌더되고 사용자가 만들거나 지울 수 없다."* 사용자 라우트가
+ * 이 경로를 가로채면 발급이 조용히 실패한다 — 검증기가 그걸 막고(`acme_path_reserved`),
+ * 렌더러는 여기서 **`^~`** 로 낸다.
+ *
+ * **`^~` 인 이유.** nginx 의 location 은 정규식이 접두사보다 먼저 이긴다. 사용자가
+ * `location ~ \.well-known` 같은 것을 낼 수 있는 표면은 지금 없지만, `^~` 는 "이 접두사가
+ * 맞으면 정규식을 아예 안 본다" 는 뜻이라 **미래의 표면 확장에 대해서도 안전하다.**
+ *
+ * 토큰이 없으면 404 다. **빈 200 을 주면 안 된다** — CA 는 그걸 "틀린 값" 으로 읽고,
+ * 그러면 실패 원인이 "토큰이 없다" 가 아니라 "값이 다르다" 로 보인다.
+ */
+function acmeChallengeLocation(): ConfNode {
+  return block('location', [lit('^~'), lit(ACME_PREFIX)], [
+    directive('default_type', [lit('text/plain')]),
+    lua('content_by_lua_block', `
+      local token = ngx.var.uri:sub(${ACME_PREFIX.length + 1})
+      local v = token ~= "" and ngx.shared.${ACME_DICT}:get("tok:" .. token) or nil
+      if not v then ngx.status = 404; ngx.print("no challenge"); return end
+      ngx.print(v)
+    `),
+  ]);
+}
+
 /** https 렌더에 필요한 문맥. http 리스너에는 `undefined` 다. */
 type TlsContext = {
   listener: HttpsListener;
@@ -511,6 +556,7 @@ function defaultServerBlock(
   listener: HttpListener | HttpsListener,
   poolsWithBackends: Set<string>,
   tls: TlsContext | undefined,
+  acme: boolean,
 ): ConfNode {
   const action = listener.http?.defaultAction ?? 'reject';
   const body: ConfNode[] =
@@ -521,7 +567,16 @@ function defaultServerBlock(
             directive('proxy_set_header', [lit('Host'), variable('host')]),
           ]),
         ]
-      : [directive('return', [num(444)])];
+      // **`location /` 안에 넣는다. server 레벨 `return` 이 아니다.**
+      //
+      // nginx 의 server 레벨 `return` 은 **rewrite 단계**에서 실행되고, 그건 location
+      // 선택보다 **앞이다.** 그래서 같은 server 안에 다른 location 이 아무리 있어도
+      // 도달하지 못한다 — ACME 예약 라우트가 정확히 그렇게 죽어 있었다. conf 는 옳아
+      // 보이고 `nginx -t` 도 통과하는데, 요청이 그냥 끊긴다(curl 은 `000` 으로 본다).
+      //
+      // `location /` 은 모든 경로를 덮으므로 "안 맞으면 끊는다" 는 뜻이 그대로 유지되고,
+      // 더 긴 접두사(`^~ /.well-known/acme-challenge/`)는 이제 이길 수 있다.
+      : [block('location', [lit('/')], [directive('return', [num(444)])])];
 
   // **S17 — TLS 리스너의 default_server 는 선택이 아니다.** 없으면 모르는 SNI 가 첫
   // 블록의 인증서를 받는다(E32 의 TLS 판). 여기 쓰는 인증서는 리스너의
@@ -537,11 +592,15 @@ function defaultServerBlock(
         tls.policy.minVersion, tls.policy.maxVersion,
       );
 
+  // **default_server 에도 낸다.** CA 는 Host 헤더를 도메인으로 보내지만, 그 도메인에
+  // 라우트가 아직 없을 수 있다 — 첫 발급이 정확히 그 상황이다. default 에 없으면
+  // "설정을 먼저 넣어야 인증서를 받고, 인증서가 있어야 설정이 선다" 가 된다.
   return block('server', [], [
     directive('listen', [...listenArgs(listener), lit('default_server')]),
     directive('server_name', [lit('_')]),
     ...tlsBody,
     ...realipNodes(listener),
+    ...(acme ? [acmeChallengeLocation()] : []),
     ...body,
   ]);
 }
@@ -750,6 +809,9 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).
     if (caps.httpLua === true) {
       children.unshift(directive('lua_shared_dict', [lit(MEMBERSHIP_DICT.http), lit('1m')]));
+      // ACME 토큰은 멤버십과 **다른 dict** 다. 같이 쓰면 멤버십 staging 이 토큰을 밀어내고
+      // (dict 는 LRU 로 밀어낸다) 그 실패는 "인증서 발급이 가끔 안 된다" 로 보인다.
+      children.unshift(directive('lua_shared_dict', [lit(ACME_DICT), lit('64k')]));
     }
     // E7 — 내장 변수가 아니므로 반드시 함께 렌더한다. 그리고 정확히 한 번만.
     if (anyWebsocket) {
@@ -779,9 +841,12 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
             })(),
           }
         : undefined;
-      children.push(defaultServerBlock(l, poolsWithBackends, tls));
+      // ACME 예약 라우트는 **Lua 가 있어야** 낸다. 없으면 토큰을 conf 에 실어야 하고,
+      // 그건 갱신마다 세대 전환이다 (§8.2 · ADR-ACME).
+      const acme = caps.httpLua === true;
+      children.push(defaultServerBlock(l, poolsWithBackends, tls, acme));
       children.push(
-        ...httpServerBlocks(l, routesByListener.get(l.key) ?? [], poolsWithBackends, tls),
+        ...httpServerBlocks(l, routesByListener.get(l.key) ?? [], poolsWithBackends, tls, acme),
       );
     }
     top.push(block('http', [], children));

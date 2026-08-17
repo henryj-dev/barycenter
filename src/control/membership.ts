@@ -9,8 +9,22 @@
  * 함수여야 하기 때문이고(그래야 plan 이 렌더러 드리프트를 잡는다), 세대 admin 조각은
  * `include` 가 conf_prefix 기준으로 풀리므로 세대에 결박된다(E62).
  */
-import { render, MEMBERSHIP_DICT, type RenderCapabilities } from '../conf/render.js';
+import { ACME_DICT, render, MEMBERSHIP_DICT, type RenderCapabilities } from '../conf/render.js';
+
 import type { Model } from '../model/provisional.js';
+
+/**
+ * ACME 토큰의 dict 수명 (초).
+ *
+ * **왜 만료를 거는가.** S18 이 실측했다 — 버려진 주문을 **CA 는 안 치운다** (`pending`
+ * 으로 남는다). 우리가 안 치우면 실패한 주문의 토큰이 dict 에 영원히 쌓이고, dict 가
+ * 차면 LRU 가 **살아 있는 토큰을 밀어낸다.** 그때 증상은 "인증서 발급이 가끔 안 된다" 다.
+ *
+ * 30 분은 CA 의 검증이 그보다 훨씬 빨리 끝나기 때문이다(Pebble 은 즉시, Let's Encrypt 는
+ * 보통 수 초). 넉넉하되 유한하게.
+ */
+export const ACME_TTL_SECONDS = 1800;
+
 
 export type Plane = 'http' | 'stream';
 
@@ -103,6 +117,45 @@ server {
                 end
             end
             ngx.print("staged ", n)
+        }
+    }
+
+    # ACME http-01 토큰 적재 (§8.2). **루프백 전용.**
+    #
+    # 멤버십과 같은 이유로 dict 다 — 토큰을 conf 에 실으면 갱신 한 번에 세대 전환이
+    # 한 번 붙고, 그 대가는 실측돼 있다(트래픽 2.6%).
+    #
+    # exptime 을 준다. ACME 주문은 유한하고, 실패한 주문의 토큰이 영원히 남으면
+    # dict 가 찬다 — §8.2 가 "고아 스캔" 을 요구한 것과 같은 문제를 여기서는 만료로
+    # 푼다. S18 이 실측했다: **버려진 주문을 CA 는 안 치운다.**
+    location = /acme {
+        content_by_lua_block {
+            ngx.req.read_body()
+            local body = ngx.req.get_body_data() or ""
+            local d = ngx.shared.${ACME_DICT}
+            local n = 0
+            for line in body:gmatch("[^\\n]+") do
+                local token, value = line:match("^([^=]+)=(.*)$")
+                if token then
+                    local ok, err = d:set("tok:" .. token, value, ${ACME_TTL_SECONDS})
+                    if not ok then ngx.status = 500; ngx.print("set failed: ", err); return end
+                    n = n + 1
+                end
+            end
+            ngx.print("staged ", n)
+        }
+    }
+
+    location = /acme/read {
+        content_by_lua_block {
+            local d = ngx.shared.${ACME_DICT}
+            local out = {}
+            for _, k in ipairs(d:get_keys(0)) do
+                local t = k:match("^tok:(.+)$")
+                if t then out[#out + 1] = t .. "=" .. (d:get(k) or "") end
+            end
+            table.sort(out)
+            ngx.print(table.concat(out, "\\n"))
         }
     }
 

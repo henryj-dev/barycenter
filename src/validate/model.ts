@@ -13,6 +13,7 @@
  */
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
+import { ACME_PREFIX } from '../conf/render.js';
 import { coversHost, parseHashKey, parseHostPattern } from './strings.js';
 import { poolsReachedBy } from './engine-constraints.js';
 import type {
@@ -48,6 +49,8 @@ export type ModelIssueCode =
   | 'sni_binding_conflict'
   /** SNI 바인딩 호스트가 exact 도 1라벨 와일드카드도 아니다. */
   | 'invalid_sni_host'
+  /** 사용자 라우트가 ACME http-01 예약 경로를 가로챈다 (§8.2). */
+  | 'acme_path_reserved'
   // ── 아래는 런타임 해독기(`src/model/decode.ts`)가 낸다 ──
   /** 타입이 다르다. 강제 변환하지 않는다. */
   | 'invalid_type'
@@ -317,6 +320,29 @@ export function validateModel(
     if (r.action.kind === 'proxy') needPool(r.key, r.action.pool, 'tcp');
     if (!wantProtocol(r.key, r.listener, ['tls_passthrough'])) continue;
     r.snis.forEach((h, i) => addRoute(r.listener, `${r.key}#${i}`, h, r.priority));
+  }
+
+  // ── ACME 예약 경로 (§8.2 · ADR-ACME) ────────────────────────────────────
+  //
+  // *"시스템 소유 예약 라우트로 렌더되고 사용자가 만들거나 지울 수 없다."*
+  //
+  // **가로채면 발급이 조용히 실패한다.** 렌더러가 `^~` 로 내지만 그건 정규식만 막는다 —
+  // nginx 의 location 은 **최장 접두사**가 이기므로 사용자가 더 긴 접두사를 내면 그쪽이
+  // 먹는다. 그러면 CA 의 요청이 사용자 라우트로 가고, 증상은 "챌린지 검증 실패" 다.
+  // 인증서 설정을 아무리 봐도 이상이 없어 보인다.
+  for (const r of model.httpRoutes) {
+    const path = r.pathPrefix;
+    if (path === undefined) continue;
+    // 위쪽 경로(`/.well-known/`)는 허용한다 — 더 짧은 접두사라 `^~` 가 이긴다.
+    if (path === ACME_PREFIX || path.startsWith(ACME_PREFIX)) {
+      issues.push({
+        code: 'acme_path_reserved',
+        subjects: [r.key],
+        message:
+          `라우트 '${r.key}' 의 경로 '${path}' 는 ACME http-01 예약 경로다. ` +
+          `여기를 가로채면 인증서 발급이 조용히 실패한다 (§8.2)`,
+      });
+    }
   }
 
   // ── TLS (§4.6, S16·S17) ─────────────────────────────────────────────────
