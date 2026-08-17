@@ -211,20 +211,53 @@ function upstreamBlock(pool: Pool, backends: Backend[], sourceIpVar: string): Co
 function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
   const dict = MEMBERSHIP_DICT[plane];
   // 풀마다 자기 키를 본다. 한 dict 에 여러 풀이 들어가므로 키에 풀 이름이 필요하다.
-  const slotKey = `slot:${upstreamName(pool.key)}:`;
-  return block('upstream', [lit(upstreamName(pool.key))], [
+  const name = upstreamName(pool.key);
+  const slotKey = `slot:${name}:`;
+  return block('upstream', [lit(name)], [
     directive('server', [lit('0.0.0.1:1')]),
     lua('balancer_by_lua_block', `
             local balancer = require "ngx.balancer"
-            local peers = ngx.shared.${dict}:get("${slotKey}" .. (_G.BARY_EPOCH or "0"))
+            local d = ngx.shared.${dict}
+            local peers = d:get("${slotKey}" .. (_G.BARY_EPOCH or "0"))
             if not peers or peers == "" then return ngx.exit(ngx.ERROR) end
             local list = {}
             for hp in peers:gmatch("[^,]+") do list[#list + 1] = hp end
-            local pick = list[math.random(#list)]
-            local h, p = pick:match("^(.*):(%d+)$")
+            local n = #list
+            ${pickExpression(pool)}
+            local h, p = list[idx]:match("^(.*):(%d+)$")
             assert(balancer.set_current_peer(h, tonumber(p)))
         `),
   ]);
+}
+
+/**
+ * 밸런싱 알고리즘을 Lua 로 옮긴다.
+ *
+ * **처음엔 `math.random` 하나로 뒀다가 테스트가 잡았다.** 멤버십 평면이 켜지면 upstream 이
+ * `balancer_by_lua_block` 이 되면서 `ip_hash`/`hash` 디렉티브가 산출물에서 통째로
+ * 사라지는데, 모델은 여전히 `source_ip_hash` 를 표현할 수 있었다 — **필드는 있는데
+ * 아무도 안 지키는** 상태였다. 이 저장소가 반복해서 잡아 온 바로 그 부류다.
+ *
+ * | 알고리즘 | 정적 `server` 줄 | 멤버십 평면 |
+ * |---|---|---|
+ * | `round_robin` | 엔진 기본 | dict 카운터 — **워커 간 공유**다. 워커 로컬로 두면 워커 수만큼 편향된다 |
+ * | `source_ip_hash` | `ip_hash` / `hash $remote_addr` | `crc32($remote_addr) % n` |
+ * | `hash <key>` | `hash $<var> consistent` | `crc32($<var>) % n` |
+ *
+ * **consistent hashing 은 아니다.** 정적 경로의 `consistent` 는 peer 가 바뀔 때 재매핑을
+ * 최소화하는데, 여기 `% n` 은 목록이 바뀌면 거의 전부 재매핑된다. 멤버십이 자주 바뀌는
+ * 것이 이 평면의 이유이므로 **이건 실제로 다른 계약이다** — S15(밸런서 품질)가 잴 축이고,
+ * 지금은 그 사실을 여기 적어 둔다.
+ */
+function pickExpression(pool: Pool): string {
+  if (pool.algorithm === 'round_robin') {
+    // dict 카운터. `incr` 은 원자적이라 워커가 여럿이어도 순서가 섞이지 않는다.
+    return `local c = d:incr("rr:${upstreamName(pool.key)}", 1, 0) or 1
+            local idx = (c % n) + 1`;
+  }
+  const variable = pool.algorithm === 'source_ip_hash' ? 'remote_addr' : hashVariable(pool);
+  return `local key = ngx.var.${variable} or ""
+            local idx = (ngx.crc32_short(key) % n) + 1`;
 }
 
 // ─────────────────────────────────────────────────────────────── http ───────

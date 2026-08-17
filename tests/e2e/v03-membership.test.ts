@@ -303,6 +303,61 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
     expect(back, '살아난 백엔드가 안 돌아왔다').toBe('B11,B12');
   }, 300_000);
 
+  it('**설정 전환 뒤에도 슬롯이 지금 헬스와 일치한다** (§6.5-4 replay 의 자리)', async () => {
+    // staging 은 스냅샷 시점의 헬스로 슬롯을 채운다. 그 시점과 활성화 사이에 백엔드가
+    // 죽으면 **새 epoch 은 옛 멤버십을 들고 서빙을 시작한다.** §6.5 가 cut·replay 를
+    // 요구한 창이다.
+    //
+    // ⚠️ **그 창 자체는 여기서 못 잰다** — staging 과 활성화 사이에 헬스를 바꾸는 것을
+    // 밖에서 결정적으로 만들 방법이 없다. 재는 것은 그 대신 유지되는 **불변식**이다:
+    // 설정 전환이 끝나면 슬롯이 *지금* 헬스와 일치한다.
+    docker('exec', DP, 'sh', '-c',
+      "sed -i 's/listen 11;/listen 1111;/' /backend/nginx.conf"
+      + ' && /usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf -s reload');
+    // 프로버가 내릴 때까지 기다린다.
+    const down = await waitFor(async () => {
+      const h = await api('GET', '/api/v1/health/backends');
+      const m = Object.fromEntries((h.body as { backendKey: string; state: string }[])
+        .map((r) => [r.backendKey, r.state]));
+      return m['b11'] ?? 'none';
+    }, (v) => v === 'unhealthy', 60_000);
+    expect(down).toBe('unhealthy');
+
+    // **설정을 바꿔 새 세대를 만든다.** 죽은 백엔드가 새 epoch 에 실리면 안 된다.
+    const { apply } = await push([{
+      op: 'put', kind: 'listener', key: 'front',
+      body: {
+        protocol: 'http', bind: '0.0.0.0', port: 999, enabled: true,
+        acceptProxyProtocol: undefined,
+        http: { defaultAction: { pool: 'app' } },
+      },
+    }, {
+      op: 'put', kind: 'pool', key: 'app',
+      body: { protocolClass: 'http', algorithm: 'source_ip_hash' },
+    }]);
+    expect(apply.body.phase, JSON.stringify(apply.body.detail)).toBe('activated');
+    expect(apply.body.detail, '설정이 바뀌었으므로 세대 전환이어야 한다')
+      .not.toMatchObject({ membershipOnly: true });
+
+    // 새 epoch 이 죽은 백엔드를 안 든다.
+    const only12 = await waitFor(async () => {
+      const seen = new Set<string>();
+      for (let i = 0; i < 10; i += 1) seen.add(await hit());
+      return [...seen].sort().join(',');
+    }, (v) => v === 'B12', 60_000);
+    expect(only12, '새 세대가 죽은 백엔드를 들고 있다').toBe('B12');
+
+    // 되돌린다.
+    docker('exec', DP, 'sh', '-c',
+      "sed -i 's/listen 1111;/listen 11;/' /backend/nginx.conf"
+      + ' && /usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf -s reload');
+    await waitFor(async () => {
+      const seen = new Set<string>();
+      for (let i = 0; i < 12; i += 1) seen.add(await hit());
+      return [...seen].sort().join(',');
+    }, (v) => v === 'B11,B12', 60_000);
+  }, 300_000);
+
   it('**재기동 뒤에도 헬스 판정이 계속 움직인다** (§6.6 관측 좌표)', async () => {
     // §6.6 은 늦게 끝난 낡은 관측이 최신 판정을 덮는 것을 막으려고 **프로브 시작 순번**을
     // 싣게 한다. 그 순번을 프로세스 메모리에서 1 부터 세면 — 처음에 그렇게 짰다 —

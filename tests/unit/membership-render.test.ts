@@ -68,6 +68,47 @@ describe('멤버십 평면 (§7.3)', () => {
     expect(render(model, ON).conf).toContain('return ngx.exit(ngx.ERROR)');
   });
 
+  it('**알고리즘이 Lua 로 옮겨간다** — 무시되지 않는다', () => {
+    // 처음엔 `math.random` 하나였다. 멤버십 평면이 켜지면 `ip_hash`/`hash` 디렉티브가
+    // 산출물에서 사라지는데 모델은 여전히 `source_ip_hash` 를 표현할 수 있었다 —
+    // **필드는 있는데 아무도 안 지키는** 상태였다. e2e 가 잡았다.
+    const withAlgo = (algorithm: 'round_robin' | 'source_ip_hash' | 'hash', hashKey?: string): string =>
+      render({
+        listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true,
+          http: { defaultAction: { pool: 'p' } } }],
+        httpRoutes: [], passthroughRoutes: [],
+        pools: [{
+          key: 'p', protocolClass: 'http', algorithm,
+          ...(hashKey === undefined ? {} : { hashKey }),
+        }],
+        backends: [{ key: 'p1', pool: 'p', host: '10.2.0.1', port: 11, weight: 1 }],
+      }, ON).conf;
+
+    expect(withAlgo('round_robin')).toContain('d:incr("rr:pool_p", 1, 0)');
+    expect(withAlgo('source_ip_hash')).toContain('ngx.var.remote_addr');
+    expect(withAlgo('source_ip_hash')).toContain('ngx.crc32_short(key)');
+    expect(withAlgo('hash', 'header(x-user)')).toContain('ngx.var.http_x_user');
+    // **무작위는 어디에도 없다.**
+    for (const a of ['round_robin', 'source_ip_hash'] as const) {
+      expect(withAlgo(a)).not.toContain('math.random');
+    }
+  });
+
+  it('**consistent hashing 은 아니다** — 다른 계약이라고 적어 둔다', () => {
+    // 정적 경로의 `hash ... consistent` 는 peer 가 바뀔 때 재매핑을 최소화한다.
+    // 여기 `% n` 은 목록이 바뀌면 거의 전부 재매핑된다. 멤버십이 자주 바뀌는 것이 이
+    // 평면의 이유이므로 **실제로 다른 계약**이고, S15 가 잴 축이다.
+    const conf = render({
+      listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true,
+        http: { defaultAction: { pool: 'p' } } }],
+      httpRoutes: [], passthroughRoutes: [],
+      pools: [{ key: 'p', protocolClass: 'http', algorithm: 'source_ip_hash' }],
+      backends: [{ key: 'p1', pool: 'p', host: '10.2.0.1', port: 11, weight: 1 }],
+    }, ON).conf;
+    expect(conf).toContain('% n');
+    expect(conf).not.toContain('consistent');
+  });
+
   it('**epoch 리터럴을 렌더러가 굽지 않는다** — digest 가 모델만의 함수여야 한다', () => {
     // 세대 번호를 render() 인자로 받으면 같은 모델이 세대마다 다른 digest 를 내고,
     // plan 이 렌더러 드리프트를 잡는 근거(`render_digest`)가 사라진다.

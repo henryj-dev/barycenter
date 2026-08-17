@@ -251,6 +251,30 @@ export class ControlPlane {
 
     if (result.phase === 'activated') {
       await this.db.query(`UPDATE plans SET state='applied' WHERE id=$1`, [planId]);
+      /**
+       * **활성화 직후 헬스를 다시 투영한다** (§6.5-4 replay 의 자리).
+       *
+       * staging 은 스냅샷 시점(T0)의 헬스로 슬롯을 채운다. 그런데 T0 과 활성화 사이에
+       * 백엔드가 죽으면 **새 epoch 은 T0 의 멤버십을 들고 서빙을 시작한다** — 프로버가
+       * 다음으로 판정을 뒤집을 때까지 죽은 peer 가 트래픽을 받는다. §6.5 가 cut 과
+       * replay 를 요구한 것이 이 창 때문이다.
+       *
+       * **이벤트를 재생하는 대신 다시 유도한다.** 이 저장소의 리듀서는 델타가 아니라
+       * *상태*에서 계산하므로(커밋된 모델 ∩ 현재 헬스), 지금 상태로 한 번 더 계산하면
+       * "HWM 이후 이벤트를 순서대로 적용" 과 결과가 같다. 순서를 지킬 것이 없으면
+       * 커서도 필요 없다 — 이벤트 로그는 감사 기록으로 남는다.
+       *
+       * ⚠️ **이 창이 닫혔다는 것은 논증이지 측정이 아니다.** staging 과 활성화 사이에
+       * 헬스를 바꾸는 것을 밖에서 결정적으로 만들 방법이 없어서, 재현물 없이 둔다.
+       * 아래 테스트가 재는 것은 *"활성화 뒤 슬롯이 지금 헬스와 일치한다"* 는 불변식이다.
+       */
+      await this.projectHealth().catch((e: unknown) => {
+        // 실패해도 apply 를 실패시키지 않는다 — 활성화는 이미 끝났고, 다음 헬스 변화가
+        // 같은 일을 한다. 대신 조용히 넘기지 않는다.
+        void this.store.audit(by, 'health.reproject.failed', planId, undefined,
+          { error: String(e) });
+        return undefined;
+      });
       // **활성화가 끝난 뒤에 치운다.** 앞에서 치우면 방금 만든 것을 지울 수 있고,
       // 실패했을 때 치우면 되돌아갈 자리를 지운다.
       this.sweep(generation, by);
