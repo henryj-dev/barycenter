@@ -22,16 +22,18 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **217** | 렌더러·검증기·라우트·DP 상태기계 |
-| conformance | `npm run test:conformance` | **347** | **검수가 재현한 반례** (5~14차) |
-| 골든 | `npm run test:golden` | **10** | `nginx -t` + 런타임 프로브 |
-| e2e | `npm run test:e2e` | **14** | 실제 nginx (그중 6건은 컨테이너 안 에이전트) |
-| 엔진 사실 | `npm run test:engine` | **61** | 설계가 전제한 nginx 동작 |
-| e2e | `npm run test:e2e` | **35** | 실물 nginx — http·tcp·udp·SNI 패스스루 |
-| 스파이크 | `spike/*/run.sh` | **58** | S1·S5·S7·S8·S11·**S19** |
-| 저장소 | `npm run test:store` | **19** | **실물 PG** — changeset·plan·commit·제약 |
+| 단위 | `npm test` | **259** | 렌더러·검증기·라우트·DP 상태기계 |
+| conformance | `npm run test:conformance` | **391** | **검수가 재현한 반례** (5~14차) |
+| 골든 | `npm run test:golden` | **16** | `nginx -t` + 런타임 프로브 (TLS 4건 포함) |
+| 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
+| e2e | `npm run test:e2e` | **57** | 실물 nginx — http·tcp·udp·SNI 패스스루·**TLS 종단**. 일부는 컨테이너 안에서 에이전트를 돌린다 |
+| 스파이크 | `spike/*/run.sh` | **73** | S1·S5·S7·S8·S11·**S16·S17**·S19 |
+| 저장소 | `npm run test:store` | **43** | **실물 PG** — changeset·plan·commit·제약 |
 
-단위와 conformance 456 건은 **전부 불변식 테스트이기도 하다** — `assertInvariants` 가
+(수치는 2026-08-17 `./scripts/verify.sh` 실측이다. e2e 행이 둘로 갈려 하나는 14, 하나는
+35 로 오래 어긋나 있었다 — 합쳐 실측값으로 고쳤다.)
+
+단위와 conformance 650 건은 **전부 불변식 테스트이기도 하다** — `assertInvariants` 가
 `DpAgent.serial()` 에 걸려 있어, 상태가 store 로 내려갈 때마다 I1·I3·I5 를 본다.
 
 `./scripts/verify.sh` 가 전부 돌린다. **스위트 통과와 동결 가능은 다르다** —
@@ -621,6 +623,83 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### v0.6 1단계 — TLS 종단이 섰다. 그리고 갱신이 조용히 무효였다 (2026-08-17)
+
+`https` 는 한동안 **일부러 없는 프로토콜**이었다. §4.6 이 그 자리에 적어 뒀다:
+*"렌더러가 TLS 종단을 내지 못하는데 타입으로 제공하면, v3 처럼 `protocol: 'https'` 가
+평문 `listen 443;` 으로 렌더된다."* 되살리는 조건은 S16·S17 통과였고, 둘 다 열었다.
+
+**S17(인증서 선택, 10 PASS)이 렌더 규칙 둘을 내려 줬다.**
+
+| 실측 | 규칙 |
+|---|---|
+| `server_name *.wild.test` 가 `deep.x.wild.test` 를 삼켜 와일드카드 인증서를 제시한다 (E22.2) | 와일드카드는 **`~^[^.]+\.suffix$` 앵커 정규식**으로 낸다. 나이브한 형태가 곧 **SAN 미커버 제시** — 합격 기준이 겨눈 그 실패다 |
+| `default_server` 가 없으면 모르는 SNI 가 **첫 블록의 인증서**를 받는다 (E32 의 TLS 판) | TLS 리스너마다 반드시 낸다. 멀티테넌트에서 이건 테넌트 간 누수다 |
+
+그리고 `server_name ~*` 는 `nginx -t` 가 거절한다 — `~*` 는 map 전용이고(E21), 패스스루
+SNI map 의 문법을 그대로 옮겨 쓰면 죽는다. 대소문자는 nginx 가 SNI 를 내려서 비교한다.
+
+**S16(SNI 별 policy, 5 PASS)은 `override` 를 살렸다.** 비-default server 의
+`ssl_protocols` 가 실제 handshake 에 걸리고, default 를 엄격하게 뒤집어도 비-default 가
+이긴다. 실패했다면 §12.0 규칙에 따라 그 필드를 **없앴을** 것이다.
+
+#### 계측기가 한 번 답을 뒤집었다
+
+S16 을 처음 잰 지표가 `s_client ... | sed 's/Protocol *: *//'` 였다. 그 줄은 **s_client 가
+자기 설정을 찍는 것**이라 서버가 alert 70 으로 끊어도 그대로 `TLSv1.3` 이 나온다.
+그 지표로는 **모든 조합이 통과로 보였고**, "http 레벨 `ssl_protocols` 조차 안 먹는다" 는
+있을 수 없는 결론이 나왔다 — 그 말이 안 되는 것이 계측기를 의심한 **유일한 단서**였다.
+handshake 성립 여부로 바꾸자 답이 뒤집혔다. 그래서 S16 프로브는 자기 계측기를 먼저
+검증한다(`S16.instrument`).
+
+#### 재면서 찾은 것 셋
+
+**① 인증서를 갱신해도 렌더 산출물이 글자 하나 안 바뀌었다.** 경로가 `certs/<key>/` 뿐이라
+digest 가 같고, apply 는 "산출물이 안 바뀌었다" 를 멤버십 전용 전환의 근거로 쓴다(§6.5).
+그래서 **갱신이 세대를 안 만들고 조용히 성공했다** — 옛 인증서가 계속 제시되는데 응답은
+`activated` 다. 참조는 §4.8 대로 버전 고정이었는데 **그 버전이 렌더까지 안 내려와서**
+아무 효과가 없었다. 이 저장소가 반복해서 밟은 *"필드는 있는데 아무도 안 읽는다"* 의 한
+판이고, **e2e 가 잡았다** — 골든도 단위도 못 잡는다. 경로에 버전을 넣어 고쳤다.
+
+**② `modelAt` 이 스냅샷을 캐스팅했다.** `r['model'] as Model` 은 *지금의* 모양을 옛
+스냅샷이 갖고 있다고 가정한다. 컬렉션 셋을 더하자 v0.6 이전 리비전으로 롤백하면
+`undefined.map` 으로 500 이 났다. 캐스팅은 그 순간까지 아무 말도 안 한다 — 해독을
+거치게 했다.
+
+**③ `http_route_listener_is_http` 가 https 리스너를 막았다.** 001 의 CHECK 가 그때의
+세상("http 라우트는 http 리스너에만")을 굳히고 있었다. TLS 를 종단하고 나면 평범한
+HTTP 다. 넓히되 버리지는 않는다.
+
+#### 무엇이 증거인가
+
+골든(실제 엔진, 4건)이 SNI 별 인증서·다중 라벨 차단·default 폴백·override 를 재고,
+**변이 셋을 전부 잡는다**: 바인딩 무시 / 나이브 `server_name` / `default_server` 제거 —
+마지막은 모르는 SNI 가 옆 테넌트 인증서를 받는 것을 그대로 재현했다.
+
+e2e(전체 스택, 7건)는 REST 로 끝까지 몬다. **판정은 "롤백이 성공했는가" 가 아니라
+"롤백 뒤에 제시되는 인증서가 옛 것인가"** 다 — 이름만으로 참조했다면 여기서 여전히 새
+인증서가 나오고, 그러면서 200 도 잘 나온다. 개인키가 안 나가는 것은 응답 **전체 문자열**로
+검사한다(§8.1); 필드만 보면 다른 필드로 새는 것을 못 잡는다.
+
+#### 대가와 남은 것
+
+**표면 동결 카운터 2 → 0.** 타입 여섯(`Certificate`·`TlsPolicy`·`SniCertificateBinding`·
+`HttpsListener`·`RawTlsBinding`·`TlsVersion`)을 더했으므로 기준을 옮겼다. 13차가 준
+"여러 적대적 회차 동안 표면 무변동" 기준은 처음부터 다시 센다 — **A 게이트가 그만큼
+멀어졌다.** 기능을 넣은 값이다.
+
+**안 한 것을 적어 둔다.** ACME(S18) · HSTS · OCSP stapling · `CipherPolicyRef`(암호군
+정책) · SNI 와 Host 불일치 정책(`reject_421`) · 인증서 만료 감시 · SecretStore GC ·
+CLI/GUI 의 인증서 표면. §4.6 이 이름을 준 것들 중 지금 도는 것은 `min_version`·
+`max_version`·`default_certificate` 셋뿐이다.
+
+**그리고 개인키는 평문이다.** `FsSecretStore` 도 세대 안(`certs/<key>/<version>/`)도
+평문이고, 보호는 파일 권한(0400)과 "메인 DB 가 아니다" 뿐이다. **암호화가 아니다** —
+KMS·Vault 드라이버는 같은 인터페이스 뒤에 따로 붙는다. 세대를 보관하는 만큼 옛 개인키도
+디스크에 남는다(GC 상한이 덮지만, 그 사실 자체는 남는다).
 
 ---
 
