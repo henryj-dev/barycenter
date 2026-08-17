@@ -31,6 +31,8 @@ export type ControlPlaneOptions = {
    */
   adminPort: number;
   renderCaps?: RenderCapabilities;
+  /** 조회한 엔진 정보. `status()` 가 그대로 드러낸다. */
+  engine?: unknown;
   /**
    * 남길 세대 수 (§9.1.1 — v0.1 은 GC 원장 대신 **수동 상한**이다).
    *
@@ -208,6 +210,39 @@ export class ControlPlane {
     };
   }
 
+  /**
+   * 전환을 포기한다 (§5.2 `/operations/{id}/cancel`).
+   *
+   * §5.3 — **조용한 중단은 없다.** 예약한 슬롯을 반납하고 종단 상태로 닫는다.
+   * **이미 활성화된 것을 되돌리지는 않는다** — 되돌리는 것은 롤백이고, 롤백은 새 활성화
+   * 사건이다 (§3.3). 그래서 활성화가 끝난 오퍼레이션은 취소 대상이 아니다.
+   */
+  async cancel(id: string, by: string): Promise<OperationView> {
+    this.election.assertLeader();
+    const r = (await this.db.query(
+      `SELECT id, plan_id, revision, activation_epoch, generation, phase, detail, envelope
+         FROM operations WHERE id=$1`, [id],
+    )).rows[0];
+    if (r === undefined) throw new StoreError(404, 'unknown_operation', `오퍼레이션 ${id} 이 없다`);
+    const phase = String(r['phase']);
+    if (phase === 'activated') {
+      throw new StoreError(409, 'already_activated',
+        '이미 활성화됐다 — 되돌리려면 롤백이다 (§3.3: 롤백은 새 활성화 사건이다)');
+    }
+    const envelope = r['envelope'] as ApplyOperation | null;
+    if (envelope === null) {
+      // 005 이전에 만들어진 행이다. **재구성하지 않는다** — 재구성한 튜플은 슬롯의
+      // 주인으로 인정받지 못해 abort 가 아무것도 안 지운다.
+      throw new StoreError(409, 'no_envelope',
+        '이 오퍼레이션에는 보관된 봉투가 없다 (005 마이그레이션 이전). 재구성하면 정본 '
+        + '튜플이 달라져 취소가 아무것도 못 지운다 — recover 로 이어받아 끝내야 한다');
+    }
+    await this.driver.abortConfig(envelope);
+    await this.recordPhase(id, 'failed', { cancelled: true, by });
+    await this.store.audit(by, 'operation.cancel', id, undefined, { generation: r['generation'] });
+    return this.operation(id);
+  }
+
   async operation(id: string): Promise<OperationView> {
     const r = (await this.db.query(
       `SELECT id, plan_id, revision, activation_epoch, generation, phase, detail
@@ -220,6 +255,7 @@ export class ControlPlane {
   /** §5.2 `GET /status` — 4-way + 미완 전환. */
   async status(): Promise<{
     head: string;
+    engine: unknown;
     leader: unknown;
     published: unknown;
     planes: unknown;
@@ -238,6 +274,9 @@ export class ControlPlane {
     )).rows.map((r) => ({ planId: String(r['id']), revision: String(r['target_revision']) }));
     return {
       head: head.revision,
+      // 엔진이 무엇을 할 수 있는지 드러낸다. 이게 안 보이면 "왜 이 조합이 막히는가" 에
+      // 답할 수 없다 — capability 로 좁힌다면 그 capability 도 보여야 한다.
+      engine: this.opts.engine ?? { probed: false },
       // **숨기지 않는다.** 스탠바이가 자기를 리더처럼 보이게 하면 운영자는 왜 apply 가
       // 503 인지 알 수 없다.
       leader: this.election.state,
@@ -313,10 +352,12 @@ export class ControlPlane {
     op: ApplyOperation, planId: string, revision: string, epoch: string, by: string,
   ): Promise<OperationView | undefined> {
     const r = await this.db.query(
-      `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by)
-       VALUES ($1,$2,$3,$4,$5,'pending',$6)
+      `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by,envelope)
+       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7)
        ON CONFLICT (plan_id) DO NOTHING RETURNING id`,
-      [op.operationId, planId, revision, epoch, op.targetGeneration, by],
+      // **봉투를 그대로 보관한다.** 취소할 때 재구성하면 정본 튜플이 달라져 슬롯의
+      // 주인으로 인정받지 못한다 (§9.2 `abortConfig`).
+      [op.operationId, planId, revision, epoch, op.targetGeneration, by, JSON.stringify(op)],
     );
     if (r.rowCount === 1) {
       await this.db.query(

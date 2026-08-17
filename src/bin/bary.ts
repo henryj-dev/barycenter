@@ -12,6 +12,7 @@
  *   bary apply <파일.json>      매니페스트 한 장을 changeset 한 바퀴로 밀어 넣는다
  *   bary plan  <파일.json>      커밋하지 않고 영향만 본다
  *   bary rollback <리비전>      그 시점 내용으로 새 리비전을 만들고 적용한다
+ *   bary cancel <오퍼레이션>   진행 중인 전환을 포기한다
  *   bary audit [n]
  *
  * 환경변수: `BARY_URL`(기본 http://127.0.0.1:8088) · `BARY_TOKEN`
@@ -67,6 +68,7 @@ const usage = (): never => {
   bary plan <파일.json>          커밋하지 않고 영향만 본다
   bary apply <파일.json>         changeset → plan → commit → apply 한 바퀴
   bary rollback <리비전>          그 시점 내용으로 **새 리비전**을 만들고 적용한다
+  bary cancel <오퍼레이션>        진행 중인 전환을 포기한다 (활성화된 것은 못 되돌린다)
   bary audit [개수]
 
 환경변수: BARY_URL (기본 ${URL_BASE}) · BARY_TOKEN`);
@@ -130,6 +132,11 @@ async function main(): Promise<void> {
           op.detail?.failure === undefined ? '' : ` — ${op.detail.failure}`}`);
         process.exit(1);
       }
+      return;
+    }
+    case 'cancel': {
+      show(must(await call('POST', `/api/v1/operations/${encodeURIComponent(arg ?? usage())}/cancel`),
+        'cancel'));
       return;
     }
     case 'audit': {

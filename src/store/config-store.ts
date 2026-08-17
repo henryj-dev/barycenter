@@ -15,7 +15,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { render, type RenderedConfig } from '../conf/render.js';
+import { render, type RenderCapabilities, type RenderedConfig } from '../conf/render.js';
 import { decodeModel } from '../model/decode.js';
 import { ModelValidationError } from '../validate/model.js';
 import type {
@@ -410,7 +410,17 @@ function translate(e: unknown): never {
 // ── 저장소 ───────────────────────────────────────────────────────────────
 
 export class ConfigStore {
-  constructor(private readonly db: Db) {}
+  /**
+   * **엔진 capability 를 받는다.**
+   *
+   * 전에는 `render(model)` 을 기본값으로 불렀고, 기본값은 보수적(`streamRealip: false`)
+   * 이다. 그 자체는 옳지만 **아무도 진짜 값을 넣어 주지 않아서** 엔진이 할 수 있는 것도
+   * plan 단계에서 막혔다. capability 로 좁힌다고 해 놓고 capability 를 안 물어본 셈이다.
+   */
+  constructor(
+    private readonly db: Db,
+    private readonly caps: RenderCapabilities = { streamRealip: false },
+  ) {}
 
   async head(): Promise<Head> {
     const r = (await this.db.query('SELECT revision FROM config_head')).rows[0];
@@ -425,6 +435,18 @@ export class ConfigStore {
     )).rows[0];
     if (r === undefined) throw new StoreError(404, 'unknown_revision', `리비전 ${revision} 이 없다`);
     return r['model'] as Model;
+  }
+
+  /**
+   * 리비전 하나를 렌더한다.
+   *
+   * **API 가 `render()` 를 직접 부르지 않게 하려고 있다.** 직접 부르면 capability 인자를
+   * 빼먹기 쉽고, 실제로 `/config/rendered` 가 보수적 기본값으로 렌더해서 엔진이 할 수
+   * 있는 조합을 500 으로 답했다 — 저장은 됐는데 읽을 수가 없는 상태였다.
+   * **렌더는 capability 를 아는 쪽에서만 한다.**
+   */
+  async renderAt(revision: string): Promise<RenderedConfig> {
+    return renderOrThrow(await this.modelAt(revision), this.caps);
   }
 
   async createChangeset(baseRevision: string, by: string): Promise<string> {
@@ -483,10 +505,10 @@ export class ConfigStore {
 
     const { model, rendered, before } = await this.db.dryRun(async (c) => {
       const prior = await readModel(c);
-      const beforeConf = safeRender(prior);
+      const beforeConf = safeRender(prior, this.caps);
       for (const op of ops) await applyOp(c, op, baseRevision, by).catch(translate);
       const next = await readModel(c);
-      return { model: next, rendered: renderOrThrow(next), before: beforeConf };
+      return { model: next, rendered: renderOrThrow(next, this.caps), before: beforeConf };
     });
 
     const impact = impactOf(before?.conf ?? '', rendered, model);
@@ -581,7 +603,7 @@ export class ConfigStore {
       // plan 이 통과했다고 지금도 통과하는 것은 아니다 — 그 사이 다른 커밋이 있었으면
       // head 검사가 막지만, 같은 트랜잭션 안의 순서 때문에 달라지는 것이 남는다.
       const model = await readModel(c);
-      const rendered = renderOrThrow(model);
+      const rendered = renderOrThrow(model, this.caps);
 
       const epoch = text(
         (await c.query(`SELECT nextval('activation_epoch_seq') AS v`)).rows[0] ?? {}, 'v');
@@ -668,7 +690,7 @@ export class ConfigStore {
       // 되돌린 결과가 지금도 유효한지 **다시 본다.** 엔진 capability 나 검증 규칙이
       // 그 사이 바뀌었을 수 있다 — 옛 리비전이라고 무조건 통과시키지 않는다.
       const restored = await readModel(c);
-      renderOrThrow(restored);
+      renderOrThrow(restored, this.caps);
 
       const epoch = text(
         (await c.query(`SELECT nextval('activation_epoch_seq') AS v`)).rows[0] ?? {}, 'v');
@@ -688,7 +710,7 @@ export class ConfigStore {
                             renderer_version,expires_at,state,target_revision,activation_epoch)
          VALUES ($1,NULL,$2,$3,$4,$5,$6,now() + interval '24 hours','committed',$7,$8)`,
         [planId, head, JSON.stringify(restored),
-          JSON.stringify({ rollbackOf: revision }), renderOrThrow(restored).digest,
+          JSON.stringify({ rollbackOf: revision }), renderOrThrow(restored, this.caps).digest,
           RENDERER_VERSION, target, epoch],
       );
       return { revision: target, activationEpoch: epoch, rollbackOf: revision, planId };
@@ -773,9 +795,9 @@ function shapeCheck(op: PatchOp): void {
   }
 }
 
-function renderOrThrow(model: Model): RenderedConfig {
+function renderOrThrow(model: Model, caps: RenderCapabilities): RenderedConfig {
   try {
-    return render(model);
+    return render(model, caps);
   } catch (e) {
     if (e instanceof ModelValidationError) {
       throw new StoreError(422, 'invalid_model', e.message, e.issues);
@@ -785,9 +807,9 @@ function renderOrThrow(model: Model): RenderedConfig {
 }
 
 /** 이전 모델이 렌더 안 되는 상태일 수도 있다 (빈 모델 등). 그건 impact 계산의 실패가 아니다. */
-function safeRender(model: Model): RenderedConfig | undefined {
+function safeRender(model: Model, caps: RenderCapabilities): RenderedConfig | undefined {
   try {
-    return render(model);
+    return render(model, caps);
   } catch {
     return undefined;
   }

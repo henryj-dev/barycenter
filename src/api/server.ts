@@ -24,7 +24,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
 
-import { render } from '../conf/render.js';
 import type { ControlPlane } from '../control/plane.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
@@ -114,8 +113,9 @@ const ROUTES: Route[] = [
 
   route('GET', '/api/v1/config/rendered', 'read', async (c, api) => {
     const rev = c.url.searchParams.get('revision') ?? (await api.store.head()).revision;
-    const model = await api.store.modelAt(rev);
-    const r = render(model);
+    // **저장소를 거친다.** 여기서 `render()` 를 직접 부르면 capability 인자를 빼먹고,
+    // 그러면 엔진이 할 수 있는 조합을 못 읽는다 — 실제로 그랬다.
+    const r = await api.store.renderAt(rev);
     json(c.res, 200, { revision: rev, digest: r.digest, planes: r.planes, conf: r.conf });
   }),
 
@@ -220,6 +220,10 @@ const ROUTES: Route[] = [
 
   route('GET', '/api/v1/operations/:id', 'read', async (c, api) => {
     json(c.res, 200, await api.control.operation(c.params['id'] ?? ''));
+  }),
+
+  route('POST', '/api/v1/operations/:id/cancel', 'apply', async (c, api) => {
+    json(c.res, 200, await api.control.cancel(c.params['id'] ?? '', c.who.name));
   }),
 
   route('POST', '/api/v1/recover', 'apply', async (c, api) => {

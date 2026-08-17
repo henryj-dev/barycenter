@@ -289,7 +289,17 @@ function realipNodes(listener: Listener): ConfNode[] {
   if (pp === undefined) return [];
   return [
     ...pp.trustedCidrs.map((cidr) => directive('set_real_ip_from', [lit(cidr)])),
-    directive('real_ip_header', [lit('proxy_protocol')]),
+    // **`real_ip_header` 는 http 전용이다.** stream 의 realip 모듈에는 그 디렉티브가
+    // 아예 없고, 넣으면 `"real_ip_header" directive is not allowed here` 로 기동이
+    // 깨진다. stream 에서는 PROXY 가 유일한 출처라 선언할 것이 없다 — `set_real_ip_from`
+    // 만으로 게이트가 그대로 성립한다(E63.5·E63.6 으로 실측).
+    //
+    // 처음엔 양쪽에 똑같이 냈다가 공식 nginx e2e 가 잡았다. OpenResty 이미지에는
+    // stream_realip 이 없어 그 조합이 애초에 검증기에 막히므로 **기본 이미지로는
+    // 영원히 안 드러나는 자리**였다.
+    ...(listener.protocol === 'http'
+      ? [directive('real_ip_header', [lit('proxy_protocol')])]
+      : []),
   ];
 }
 

@@ -56,6 +56,42 @@ DESIGN.md    2,400+ 줄
 
 ---
 
+### 엔진 capability 를 실제로 물어본다 — 그리고 실물이 결함 셋을 더 냈다 (2026-08-17)
+
+`capabilities.ts` 는 `nginx -V` 를 해석하는 순수 함수로 오래 있었는데 **아무도 부르지
+않았다.** 컨트롤 플레인이 `streamRealip: false` 를 상수로 가정했고, PROXY 신뢰 경계를 넣은
+뒤로 **stream PROXY 수신이 엔진과 무관하게 항상 막혔다** — capability 로 좁힌다면서
+capability 를 안 물어본 셈이다. 기동 때 조회해 `ConfigStore`·`ControlPlane` 에 넘기고
+`/status` 로 드러낸다.
+
+#### 배선이 관측되지 않아 테스트를 하나 더 지었다
+
+변이(데몬이 조회 결과를 안 넘김)를 넣었는데 **아무것도 안 깨졌다.** 기본 이미지
+(OpenResty)에는 `stream_realip` 이 없어 조회 결과가 보수적 기본값과 같기 때문이다 —
+**그 엔진으로는 배선의 유무를 구분할 수 없다.**
+
+그래서 **공식 nginx** 로 도는 e2e 를 따로 지었다(`v02-capability`). E0 이 말한 모듈 분리가
+그대로다 — 공식 nginx 는 `stream_realip` 있고 lua 없음, OpenResty 는 반대. 이제 변이가
+잡힌다.
+
+#### 실물이 낸 결함 셋
+
+| # | 무엇 | 어떻게 드러났나 |
+|---|---|---|
+| ① | `probeEngine` 이 **stdout 만 읽었다** | `nginx -V` 는 **stderr** 로 나온다. 함정을 주석에 적어 놓고 성공 경로에서 그대로 빠졌다 — 종료 코드가 0 이면 언제나 빈 문자열을 파싱했고 "모든 모듈이 없다" 는 **그럴듯한 거짓말**이 나왔다. 단위 테스트가 잡았다 |
+| ② | **`real_ip_header` 를 stream 에도 냈다** | http 전용 디렉티브다. `"real_ip_header" directive is not allowed here` 로 **기동이 깨진다.** 기본 이미지로는 그 조합이 검증기에 막혀 **영원히 안 드러나는 자리**였고, 공식 nginx e2e 가 잡았다. stream 은 `set_real_ip_from` 만으로 게이트가 선다(E63.5·E63.6) |
+| ③ | `/config/rendered` 가 **caps 없이 렌더**했다 | 저장은 됐는데 읽을 수가 없었다. API 가 `render()` 를 직접 부르지 않게 `store.renderAt()` 으로 옮겼다 — **렌더는 capability 를 아는 쪽에서만 한다** |
+
+#### 그리고 조용히 실패하던 자리 하나를 더 닫았다
+
+reload 재전송 상한을 넘겨 닫는 경로가 **사유 없이** 종단했다. `{"phase":"failed"}` 만
+돌아와서 실제로 이번에 두 번 진단이 막혔다. 관측한 증거와 함께 사유를 남긴다.
+
+`POST /operations/{id}/cancel` 도 냈다. **봉투를 보관한다**(005) — 재구성하면 정본 튜플이
+달라져 abort 가 아무것도 못 지운다. 이미 활성화된 것은 취소가 아니라 **롤백**이다(§3.3).
+
+---
+
 ### PROXY 신뢰 경계 — 설계가 "필수" 라고 적은 것이 없었다 (2026-08-17)
 
 §4.7 은 `trusted_proxy_cidrs` 를 *"필수, 비어 있을 수 없다. 없으면 source IP 스푸핑"* 이라고

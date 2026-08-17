@@ -25,6 +25,7 @@ import { LeaderElection } from '../control/leader.js';
 import { LocalDataplaneDriver } from '../dp/driver.js';
 import { FsEffects } from '../dp/effects-fs.js';
 import { FileStore } from '../dp/store-fs.js';
+import { probeEngine } from '../engine/probe.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
 
@@ -63,7 +64,28 @@ export async function main(): Promise<void> {
   const applied = await db.migrate();
   if (applied.length > 0) console.log(`마이그레이션 적용: ${applied.join(', ')}`);
 
-  const store = new ConfigStore(db);
+  // ── 엔진 capability (§7.6) ───────────────────────────────────────────
+  //
+  // **못 물어보면 보수적으로 간다.** 다만 조용히 넘어가지 않는다 — 그렇게 두면 "왜 이
+  // 조합이 막히지" 에 아무도 답할 수 없다. PROXY 신뢰 경계를 넣은 뒤로 stream 수신이
+  // 엔진과 무관하게 막혔던 것이 정확히 그 상태였다.
+  const probe = probeEngine(env('BARY_ENGINE_BIN', '/usr/local/openresty/bin/openresty'));
+  const renderCaps = probe.ok
+    ? { streamRealip: probe.capabilities.supports.streamRealip }
+    : { streamRealip: false };
+  const engineInfo = probe.ok
+    ? {
+        probed: true, via: probe.via,
+        flavor: probe.capabilities.flavor, version: probe.capabilities.version,
+        supports: probe.capabilities.supports,
+      }
+    : { probed: false, reason: probe.reason };
+  console.log(probe.ok
+    ? `엔진: ${probe.capabilities.flavor} ${probe.capabilities.version} `
+      + `(stream_realip=${probe.capabilities.supports.streamRealip})`
+    : `엔진 조회 실패 — 보수적으로 간다: ${probe.reason}`);
+
+  const store = new ConfigStore(db, renderCaps);
 
   const effects = new FsEffects({
     prefix,
@@ -140,7 +162,8 @@ export async function main(): Promise<void> {
   }, Number(env('BARY_ELECTION_INTERVAL_MS', '5000')));
   retry.unref();
 
-  const control = new ControlPlane(db, store, driver, election, { prefix, adminPort });
+  const control = new ControlPlane(db, store, driver, election,
+    { prefix, adminPort, renderCaps, engine: engineInfo });
   const auth = new TokenAuth(loadTokens());
 
   const server = createApi({ db, store, control, auth, election });

@@ -826,6 +826,51 @@ else
   bad E63 "기동 실패"
 fi
 
+# E63.5·E63.6 — **stream 의 realip 은 http 와 모양이 다르다**
+#
+# http 에서는 `set_real_ip_from` + `real_ip_header proxy_protocol` 둘을 낸다. 그대로
+# stream 에도 냈더니 기동이 깨졌다:
+#
+#   [emerg] "real_ip_header" directive is not allowed here
+#
+# stream 의 realip 모듈에는 그 디렉티브가 **아예 없다** — PROXY 가 유일한 출처라 선언할
+# 것이 없기 때문이다. 게이트는 `set_real_ip_from` 만으로 그대로 성립한다.
+#
+# 이 모듈이 없는 빌드에서는 잴 수 없으므로 건너뛴다. 참조 이미지(OpenResty)가 그렇고,
+# 공식 nginx 이미지에는 있다 — E0 이 말한 그 분리다.
+if "$BIN" -V 2>&1 | grep -q -- '--with-stream_realip_module'; then
+  p=$(mkprefix E63s)
+  cat > "$p/conf/nginx.conf" <<'CONF'
+error_log logs/error.log warn;
+pid logs/nginx.pid;
+events { worker_connections 64; }
+stream {
+    server { listen 19750 proxy_protocol; set_real_ip_from 127.0.0.1;
+             return "remote=$remote_addr pp=$proxy_protocol_addr"; }
+    server { listen 19751 proxy_protocol; set_real_ip_from 10.9.9.9;
+             return "remote=$remote_addr pp=$proxy_protocol_addr"; }
+}
+CONF
+  if start_ng "$p"; then
+    sprobe() { printf 'PROXY TCP4 203.0.113.9 10.0.0.1 1234 80\r\n' | timeout 5 nc 127.0.0.1 "$1" 2>/dev/null; }
+    r=$(sprobe 19750)
+    case "$r" in
+      *"remote=203.0.113.9"*) ok E63.5 "**stream 은 set_real_ip_from 만으로 게이트가 선다** — real_ip_header 는 http 전용이고 여기 넣으면 기동이 깨진다 ($r)" ;;
+      *) bad E63.5 "예상 밖: '$r'" ;;
+    esac
+    r=$(sprobe 19751)
+    case "$r" in
+      *"remote=127.0.0.1"*) ok E63.6 "stream 에서도 신뢰 목록에 없으면 안 바뀐다 ($r)" ;;
+      *) bad E63.6 "예상 밖: '$r'" ;;
+    esac
+    stop_ng "$p"
+  else
+    bad E63.5 "기동 실패"
+  fi
+else
+  skip E63.5 "stream_realip 이 없는 빌드다 — 이 축은 tests/e2e/v02-capability.test.ts 가 공식 nginx 로 잰다 (E0 의 모듈 분리)"
+fi
+
 # **stream 에는 그 게이트가 아예 없을 수 있다.** 참조 이미지에 stream_realip 이 없다.
 if "$BIN" -V 2>&1 | grep -q -- '--with-stream_realip_module'; then
   ok E63.4 "이 빌드에는 stream_realip 이 **있다** — stream 에서도 신뢰 경계를 걸 수 있다"

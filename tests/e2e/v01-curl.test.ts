@@ -558,6 +558,37 @@ describe('v0.1 완료 판정', () => {
       .toBe('200:BACKEND_A_11');
   }, 300_000);
 
+  it('**엔진 capability 를 실제로 조회한다** (§7.6)', async () => {
+    // `capabilities.ts` 는 오래 있었지만 **아무도 부르지 않았다.** 컨트롤 플레인이
+    // `streamRealip: false` 를 상수로 가정했고, PROXY 신뢰 경계를 넣은 뒤로 stream
+    // 수신이 엔진과 무관하게 항상 막혔다 — capability 로 좁힌다면서 안 물어본 셈이었다.
+    const st = await api('GET', '/api/v1/status');
+    expect(st.body.engine.probed).toBe(true);
+    expect(st.body.engine.flavor).toBe('openresty');
+    expect(st.body.engine.version).toMatch(/^\d+\.\d+\.\d+$/);
+    // E63.4 가 실측한 사실이 여기 그대로 나타난다.
+    expect(st.body.engine.supports.streamRealip).toBe(false);
+    expect(st.body.engine.supports.sniPassthrough).toBe(true);
+  });
+
+  it('**진행 중인 전환을 취소할 수 있다** — 그리고 활성화된 것은 못 되돌린다', async () => {
+    await ensureServing();
+    // 방금 활성화된 오퍼레이션을 찾는다.
+    const audit = await api('GET', '/api/v1/audit?limit=200');
+    const row = (audit.body as { action: string; subject: string }[])
+      .find((r) => r.action === 'apply');
+    const applied = await api('POST', '/api/v1/apply', { plan_id: row?.subject ?? '' });
+
+    // §3.3 — 되돌리는 것은 취소가 아니라 롤백이다. 취소가 이걸 되돌리면 "포기" 와
+    // "되돌리기" 가 같은 동작이 되고, 그러면 epoch 규칙이 무너진다.
+    const cancelled = await api('POST', `/api/v1/operations/${applied.body.id}/cancel`);
+    expect(cancelled.status).toBe(409);
+    expect(cancelled.body.code).toBe('already_activated');
+
+    // 그리고 트래픽은 그대로다 — 거절된 취소가 아무것도 안 건드렸다.
+    expect(await hitDataPlane()).toBe('200:BACKEND_A_11');
+  }, 120_000);
+
   it('감사에 who/what/revision 이 남는다 (§5.1)', async () => {
     const audit = await api('GET', '/api/v1/audit?limit=500');
     const rows = audit.body as { principal: string; action: string; revision: string | null }[];

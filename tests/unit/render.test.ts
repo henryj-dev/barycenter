@@ -301,6 +301,23 @@ describe('R18 (뒤집힘) — 신뢰 경계를 함께 렌더한다 (§4.7 · E63
     const conf = render(accepting, { streamRealip: true }).conf;
     expect(conf).toContain('listen 9000 proxy_protocol;');
     expect(conf).toContain('set_real_ip_from 10.0.0.0/8;');
+    // **`real_ip_header` 는 http 전용이다** (E63.5). stream 에 내면
+    // `"real_ip_header" directive is not allowed here` 로 기동이 깨진다 —
+    // 공식 nginx e2e 가 그걸 잡았다. stream 은 PROXY 가 유일한 출처라 선언할 것이 없다.
+    expect(conf).not.toContain('real_ip_header');
+  });
+
+  it('**http 리스너에는 `real_ip_header` 를 낸다** — 거기서는 출처가 여럿이다', () => {
+    const web: Model = {
+      ...empty,
+      listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true,
+        acceptProxyProtocol: { trustedCidrs: ['10.0.0.0/8'] },
+        http: { defaultAction: { pool: 'api' } } }],
+      pools: [{ key: 'api', protocolClass: 'http', algorithm: 'round_robin' }],
+      backends: [{ key: 'x', pool: 'api', host: '10.0.2.10', port: 8080, weight: 1 }],
+    };
+    const conf = render(web).conf;
+    expect(conf).toContain('set_real_ip_from 10.0.0.0/8;');
     expect(conf).toContain('real_ip_header proxy_protocol;');
   });
 

@@ -582,7 +582,14 @@ export class ApplyRunner {
           if (j.reloadAttempts >= RELOAD_ATTEMPT_LIMIT) {
             // 상한을 넘었다. 무한 재전송은 워커 세대만 쌓는다 (§6.4 admission control).
             // **실패도 종단이다.** 전 평면의 슬롯을 반납한다.
-            await this.failAll(j);
+            //
+            // **사유를 남긴다.** 여기만 사유 없이 닫고 있었고, 그래서 `{"phase":"failed"}`
+            // 만 돌아왔다 — 실제로 이 자리에서 두 번 진단이 막혔다. 관측한 증거도 함께
+            // 싣는다: 무엇을 보고 활성화가 아니라고 판정했는지가 진단의 전부다.
+            await this.failAll(j,
+              `reload 를 ${RELOAD_ATTEMPT_LIMIT} 번 보냈는데 활성화가 관측되지 않았다`
+              + ` (기대 세대 ${gen}, 관측 ${JSON.stringify(seen ?? null)})`
+              + ' — 엔진의 error log 를 본다');
             break;
           }
           // **이 쓰기를 이긴 러너만 HUP 을 보낸다** (6차 반례 ③). 진 쪽은 다시 읽는다.
