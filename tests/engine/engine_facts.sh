@@ -878,6 +878,44 @@ else
   ok E63.4 "이 빌드에는 stream_realip 이 **없다** — stream 에서는 신뢰 경계를 걸 방법이 없고, 그래서 검증기가 그 조합을 막는다"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────
+# E64 — nginx -t 는 Lua 블록을 **하나도 검증하지 않는다**
+#
+# 멤버십 평면(§7.3 · S1)은 balancer_by_lua_block 위에 선다. 그런데 §6.2 의 게시 전 검사는
+# nginx -t 다. **그 둘이 만나는 지점을 재야 한다** — 게시 전 검사가 밸런서의 문법 오류를
+# 잡는가?
+#
+# **안 잡는다. 하나도.** 그리고 그건 활성화 판정에 그대로 영향을 준다: 세대 마커는
+# `return 200` 이라 Lua 와 무관하게 답하므로, **밸런서가 깨진 세대도 "활성화됐다" 로
+# 판정된다.** 멤버십 평면을 apply 에 붙일 때 활성화 증거를 넓혀야 한다는 뜻이다.
+#
+# **처음 쟀을 때는 "content_by_lua 는 잡는다" 로 나왔다.** 거짓이었다 — 그 케이스만
+# `location` 밖에 블록을 뒀고, 거부 사유가 Lua 문법이 아니라
+# *"directive is not allowed here"* 였다. **거부를 보고 이유를 안 읽었다.**
+# 컨텍스트를 맞춰 다시 재니 넷 다 통과다.
+
+conf_test E64.1 pass "init_by_lua_block 의 문법 오류를 nginx -t 가 안 잡는다" <<'EOF'
+events {}
+http { init_by_lua_block { this is not lua (( } server { listen 19760; return 200; } }
+EOF
+
+conf_test E64.2 pass "balancer_by_lua_block 의 문법 오류도 안 잡는다 — **멤버십 평면이 여기 선다**" <<'EOF'
+events {}
+http { lua_shared_dict d 1m;
+  upstream u { server 0.0.0.1:1; balancer_by_lua_block { this is not lua (( } }
+  server { listen 19761; location / { proxy_pass http://u; } } }
+EOF
+
+conf_test E64.3 pass "init_worker_by_lua_block 도 안 잡는다 — epoch 리터럴이 여기 산다" <<'EOF'
+events {}
+http { init_worker_by_lua_block { this is not lua (( } server { listen 19762; return 200; } }
+EOF
+
+conf_test E64.4 pass "content_by_lua_block **도** 안 잡는다 — location 안에 제대로 둬도 통과한다" <<'EOF'
+events {}
+http { server { listen 19763; location / { content_by_lua_block { this is not lua (( } } } }
+EOF
+
 log ""
 log "=============================================================="
 log " PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP"

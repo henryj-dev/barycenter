@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 79 심볼 · sha256:043a966efa40a5711eb62c1838edfcf9450bc385a84fa68dc425aaec0fef4747
+# 80 심볼 · sha256:dd3e934f251284eddc8bc2906cad1581b7398e0d202cd500a44f7b9bc75fe3a8
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -207,6 +207,11 @@ export declare class LocalDataplaneDriver implements DataplaneDriver {
     reconcileConfig(): Promise<ReconcileResult>;
     status(): Promise<DriverStatus>;
 }
+── MEMBERSHIP_DICT
+MEMBERSHIP_DICT: {
+    readonly http: "bary_http";
+    readonly stream: "bary_stream";
+}
 ── Model
 export type Model = {
     listeners: Listener[];
@@ -375,6 +380,8 @@ export type RejectionKind = 'stale_leader' | 'terminal' | 'slot_taken' | 'not_re
 ── RenderCapabilities
 export type RenderCapabilities = {
     streamRealip: boolean;
+    httpLua?: boolean;
+    streamLua?: boolean;
 };
 ── RenderedConfig
 export type RenderedConfig = {

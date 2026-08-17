@@ -50,7 +50,12 @@ export {
   type ValidationCapabilities,
 } from './validate/model.js';
 
-export { render, type RenderCapabilities, type RenderedConfig } from './conf/render.js';
+export {
+  MEMBERSHIP_DICT,
+  render,
+  type RenderCapabilities,
+  type RenderedConfig,
+} from './conf/render.js';
 
 // ── 2. DP 드라이버 ABI ──────────────────────────────────────────────────
 

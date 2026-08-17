@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { isIPv6 } from 'node:net';
 
 import {
-  block, directive, entry, lit, num, regex, serialize, variable,
+  block, directive, entry, lit, lua, num, regex, serialize, variable,
   type ConfNode, type ConfValue,
 } from './ast.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
@@ -63,10 +63,33 @@ export type RenderedConfig = {
  * 소스IP 해시가 **모든 클라이언트를 한 백엔드로 몰아버린다.** 실측으로 확인한 대체 경로는
  * `$proxy_protocol_addr` 다 — 모듈 없이도 실 클라이언트 IP 를 준다.
  */
-export type RenderCapabilities = { streamRealip: boolean };
+export type RenderCapabilities = {
+  streamRealip: boolean;
+  /**
+   * `ngx_http_lua` / `ngx_stream_lua` — **멤버십 평면의 전제**다 (§7.3 · S1).
+   *
+   * 있으면 upstream 을 `balancer_by_lua_block` 으로 낸다. 그러면 백엔드 목록이 shared
+   * dict 에 살고 **reload 없이** 바뀐다 — S1 이 HTTP·TCP·UDP 세 서브시스템 전부에서
+   * 실증한 경로다.
+   *
+   * 없으면 정적 `server` 줄로 낸다(지금까지의 모양). 그건 열등한 것이 아니라 **다른
+   * 계약**이다 — 백엔드가 바뀔 때마다 세대 전환과 reload 가 필요하다.
+   */
+  httpLua?: boolean;
+  streamLua?: boolean;
+};
 
 /** capability 를 모르면 없는 쪽으로 가정한다. 모르는 것을 할 수 있다고 하지 않는다. */
 const CONSERVATIVE: RenderCapabilities = { streamRealip: false };
+
+/**
+ * 멤버십 평면의 shared dict 이름. 평면마다 **다른 이름**이어야 한다.
+ *
+ * E14 로 실측: 같은 이름을 http 와 stream 에 선언하면
+ * `already declared for a different use` 로 거부된다. 이름이 달라도 서로의 zone 은
+ * 안 보인다(E25 · S5.zones) — §3.4 가 "별개 상태 평면" 이라고 한 것이 이 뜻이다.
+ */
+export const MEMBERSHIP_DICT = { http: 'bary_http', stream: 'bary_stream' } as const;
 
 const byKey = <T extends { key: string }>(xs: T[]): T[] =>
   [...xs].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -165,6 +188,42 @@ function upstreamBlock(pool: Pool, backends: Backend[], sourceIpVar: string): Co
   return block('upstream', [lit(upstreamName(pool.key))], [
     ...algorithmDirectives(pool, sourceIpVar),
     ...servers,
+  ]);
+}
+
+/**
+ * **멤버십 평면 upstream** — 백엔드 목록이 conf 가 아니라 shared dict 에 산다 (§7.3 · S1).
+ *
+ * 정적 `server` 줄과의 차이는 성능이 아니라 **계약**이다. 정적이면 백엔드가 바뀔 때마다
+ * 세대 전환 + reload 가 필요하고, 여기서는 dict 만 바뀌면 다음 연결부터 반영된다.
+ * S1 이 HTTP·TCP·UDP 세 서브시스템 전부에서 reload 0 회로 실증했다.
+ *
+ * 세 가지가 중요하다.
+ *
+ *   1. **자기 epoch 의 슬롯만 본다** (§6.5-1). `_G.BARY_EPOCH` 는 세대의 admin 조각에
+ *      구워진다 — 렌더러가 굽지 않는 이유는 `render_digest` 가 모델만의 함수여야 하기
+ *      때문이다. 이게 있어야 HUP 뒤에도 옛 워커가 E-old 를 계속 쓴다 (§6.5-5).
+ *   2. **슬롯이 없으면 503 으로 끊는다.** 조용히 옛 peer 로 흐르면 §6.5-3 이 막으려던
+ *      바로 그 상태가 된다 — staging 되지 않은 세대가 트래픽을 받는다.
+ *   3. `server 0.0.0.1:1` 은 **자리표시**다. nginx 는 upstream 에 최소 하나의 server 를
+ *      요구하고, `balancer_by_lua` 가 매 연결마다 그것을 대체한다.
+ */
+function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
+  const dict = MEMBERSHIP_DICT[plane];
+  // 풀마다 자기 키를 본다. 한 dict 에 여러 풀이 들어가므로 키에 풀 이름이 필요하다.
+  const slotKey = `slot:${upstreamName(pool.key)}:`;
+  return block('upstream', [lit(upstreamName(pool.key))], [
+    directive('server', [lit('0.0.0.1:1')]),
+    lua('balancer_by_lua_block', `
+            local balancer = require "ngx.balancer"
+            local peers = ngx.shared.${dict}:get("${slotKey}" .. (_G.BARY_EPOCH or "0"))
+            if not peers or peers == "" then return ngx.exit(ngx.ERROR) end
+            local list = {}
+            for hp in peers:gmatch("[^,]+") do list[#list + 1] = hp end
+            local pick = list[math.random(#list)]
+            local h, p = pick:match("^(.*):(%d+)$")
+            assert(balancer.set_current_peer(h, tonumber(p)))
+        `),
   ]);
 }
 
@@ -519,6 +578,10 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     }
 
     const children: ConfNode[] = [adminInclude];
+    // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).
+    if (caps.httpLua === true) {
+      children.unshift(directive('lua_shared_dict', [lit(MEMBERSHIP_DICT.http), lit('1m')]));
+    }
     // E7 — 내장 변수가 아니므로 반드시 함께 렌더한다. 그리고 정확히 한 번만.
     if (anyWebsocket) {
       children.push(
@@ -529,9 +592,9 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
       );
     }
     for (const poolKey of [...usedPools].sort()) {
-      children.push(
-        upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], 'remote_addr'),
-      );
+      children.push(caps.httpLua === true
+        ? membershipUpstream(pools.get(poolKey)!, 'http')
+        : upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], 'remote_addr'));
     }
     for (const l of httpListeners) {
       children.push(defaultServerBlock(l, poolsWithBackends));
@@ -570,10 +633,15 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     }
 
     const children: ConfNode[] = [];
+    if (caps.streamLua === true) {
+      children.push(directive('lua_shared_dict', [lit(MEMBERSHIP_DICT.stream), lit('1m')]));
+      // stream 에도 세대별 admin 조각을 끌어들인다 — epoch 리터럴이 거기 산다.
+      children.push(directive('include', [lit('stream-admin/*.conf')]));
+    }
     for (const poolKey of [...usedPools].sort()) {
-      children.push(
-        upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], 'remote_addr'),
-      );
+      children.push(caps.streamLua === true
+        ? membershipUpstream(pools.get(poolKey)!, 'stream')
+        : upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], 'remote_addr'));
     }
     for (const l of streamListeners) {
       if (l.protocol === 'tls_passthrough') {

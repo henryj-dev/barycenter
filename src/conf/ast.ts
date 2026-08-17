@@ -15,7 +15,17 @@ export type ConfNode =
   | { kind: 'directive'; name: string; args: ConfValue[] }
   | { kind: 'block'; name: string; args: ConfValue[]; children: ConfNode[] }
   /** `map` 블록 안의 "키 값;" — 디렉티브 이름 자리에 사용자 값이 온다. */
-  | { kind: 'entry'; key: ConfValue; value: ConfValue };
+  | { kind: 'entry'; key: ConfValue; value: ConfValue }
+  /**
+   * `*_by_lua_block { ... }` — 본문이 **nginx 값이 아니라 Lua 코드**다.
+   *
+   * `directive` 로는 못 낸다(세미콜론이 붙는다). `lit` 으로도 못 낸다(개행이 제어
+   * 문자로 거부된다 — 그리고 그 거부는 옳다). 그래서 별도 종류로 둔다.
+   *
+   * **사용자 입력이 여기 들어오면 안 된다.** 본문은 렌더러가 쓴 상수여야 한다 —
+   * 값이 아니라 코드라서 인용으로 무해화할 방법이 없다. `lua()` 가 그걸 강제한다.
+   */
+  | { kind: 'lua'; name: string; body: string };
 
 const DIRECTIVE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -100,12 +110,44 @@ function renderValue(v: ConfValue): string {
 
 const INDENT = '    ';
 
+/**
+ * Lua 블록. **본문은 렌더러가 쓴 상수만** 받는다.
+ *
+ * 인용으로 무해화할 수 없는 자리라, 값이 흘러들 수 있는 경로를 아예 막는다 — 균형이
+ * 안 맞는 중괄호는 nginx 의 블록 파싱을 깨뜨리므로 거기서 거른다.
+ */
+export function lua(name: string, body: string): ConfNode {
+  if (!DIRECTIVE_NAME.test(name)) throw new Error(`블록 이름이 아니다: ${JSON.stringify(name)}`);
+  let depth = 0;
+  for (const ch of body) {
+    if (ch === '{') depth += 1;
+    else if (ch === '}') depth -= 1;
+    if (depth < 0) break;
+  }
+  if (depth !== 0) {
+    throw new Error(`Lua 블록의 중괄호가 안 맞는다 (${name}) — nginx 의 블록 파싱이 깨진다`);
+  }
+  return { kind: 'lua', name, body };
+}
+
 export function serialize(nodes: ConfNode[], depth = 0): string {
   const pad = INDENT.repeat(depth);
   let out = '';
   for (const node of nodes) {
     if (node.kind === 'entry') {
       out += `${pad}${renderValue(node.key)} ${renderValue(node.value)};\n`;
+      continue;
+    }
+    if (node.kind === 'lua') {
+      // 본문의 상대 들여쓰기는 유지하고 블록 깊이만 더한다.
+      const lines = node.body.replace(/^\n+|\s+$/g, '').split('\n');
+      const strip = Math.min(...lines.filter((l) => l.trim() !== '')
+        .map((l) => l.length - l.trimStart().length));
+      out += `${pad}${node.name} {\n`;
+      for (const line of lines) {
+        out += line.trim() === '' ? '\n' : `${pad}${INDENT}${line.slice(strip)}\n`;
+      }
+      out += `${pad}}\n`;
       continue;
     }
     const head = [node.name, ...node.args.map(renderValue)].join(' ');

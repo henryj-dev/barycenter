@@ -251,6 +251,70 @@ describe('R17 — 실제 엔진 nginx -t', () => {
     });
   }
 
+  /**
+   * **멤버십 평면** (§7.3 · S1). capability 로 켜지므로 기본 픽스처에는 안 나온다 —
+   * 여기서 따로 실제 엔진에 물린다.
+   *
+   * `balancer_by_lua_block` 은 nginx 가 **Lua 로 컴파일**하는 본문이라, 문법이 틀리면
+   * `nginx -t` 가 잡는다. 렌더러가 문자열을 짜서 내는 유일한 자리이므로 여기가 아니면
+   * 잡을 데가 없다.
+   */
+  it('**멤버십 평면 렌더가 실제 엔진을 통과한다** — 두 서브시스템 다', () => {
+    const model: Model = {
+      ...base,
+      listeners: [
+        { key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true,
+          http: { defaultAction: { pool: 'p' } } },
+        { key: 'raw', protocol: 'tcp', bind: '0.0.0.0', port: 8081, enabled: true,
+          defaultPool: 'q' },
+      ],
+      pools: [
+        { key: 'p', protocolClass: 'http', algorithm: 'round_robin' },
+        { key: 'q', protocolClass: 'tcp', algorithm: 'round_robin' },
+      ],
+      backends: [
+        { key: 'p1', pool: 'p', host: '10.2.0.1', port: 11, weight: 1 },
+        { key: 'q1', pool: 'q', host: '10.2.0.2', port: 12, weight: 1 },
+      ],
+    };
+    const { conf } = render(model, { streamRealip: false, httpLua: true, streamLua: true });
+    expect(conf).toContain('lua_shared_dict bary_http 1m;');
+    expect(conf).toContain('lua_shared_dict bary_stream 1m;');
+    expect(conf).toContain('balancer_by_lua_block {');
+    const err = nginxTest(conf);
+    expect(err, `멤버십 렌더가 거부됐다:\n${conf}\n\n--- stderr ---\n${err}`).toBeNull();
+  });
+
+  /**
+   * **`nginx -t` 는 밸런서의 Lua 를 안 본다** (E64).
+   *
+   * 처음엔 *"Lua 문법이 틀리면 거부된다"* 를 단언했다가 빨갛게 나왔다. 그리고 재보니
+   * **하나도 검증하지 않는다** — `balancer_by_lua_block`·`init_by_lua_block`·
+   * `init_worker_by_lua_block`·`content_by_lua_block` 넷 다 그대로 통과한다.
+   * (중간에 "content_by_lua 는 잡는다" 로 잘못 읽었는데, 그 케이스만 `location` 밖에
+   * 블록을 둬서 나온 **컨텍스트 오류**였다. 거부를 보고 이유를 안 읽은 탓이다.)
+   *
+   * **그래서 위 골든은 "블록 껍데기가 맞다" 까지만 증명한다.** 밸런서가 정말 도는지는
+   * 트래픽으로만 알 수 있고, 세대 마커(`return 200`)는 Lua 와 무관하게 답하므로
+   * **활성화 판정도 그걸 못 잡는다.** 멤버십 평면을 apply 에 붙일 때 활성화 증거를
+   * 넓혀야 한다는 뜻이다 — 여기 적어 둔다.
+   */
+  it('깨진 Lua 밸런서를 `nginx -t` 는 **통과시킨다** — 게시 전 검사의 한계 (E64)', () => {
+    const broken = `events {}
+http {
+    lua_shared_dict bary_http 1m;
+    upstream u {
+        server 0.0.0.1:1;
+        balancer_by_lua_block {
+            this is not lua ((
+        }
+    }
+    server { listen 8080; location / { proxy_pass http://u; } }
+}
+`;
+    expect(nginxTest(broken)).toBeNull();
+  });
+
   it('의도적으로 깨진 conf 는 거부된다 — 하네스가 실제로 검증하고 있음을 확인', () => {
     expect(nginxTest('events {}\nhttp { server { listen 80; not_a_directive on; } }\n')).not.toBeNull();
   });
