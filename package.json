@@ -26,7 +26,8 @@
     "test:store": "vitest run tests/store --no-file-parallelism",
     "build": "./scripts/build.sh",
     "token": "node scripts/token.mjs",
-    "quickstart": "./scripts/quickstart.sh"
+    "quickstart": "./scripts/quickstart.sh",
+    "soak": "node scripts/soak.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
