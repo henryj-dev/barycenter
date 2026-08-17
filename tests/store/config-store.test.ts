@@ -65,6 +65,10 @@ describe('정본 저장소', () => {
     expect(head.etag).toBe('"r1"');
     expect(await store.modelAt('1')).toEqual({
       listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
+      // v0.6 이 더한 컬렉션들. **r1 스냅샷에는 이 키가 아예 없다** — `modelAt` 이
+      // 해독을 거치므로 빈 배열로 채워진다. 캐스팅이었다면 `undefined` 가 나와
+      // 롤백이 `undefined.map` 으로 터졌다 (실제로 그랬다).
+      certificates: [], tlsPolicies: [], sniBindings: [],
     });
   });
 
@@ -322,6 +326,22 @@ describe('정본 저장소', () => {
           listener: 'front', hosts: ['a.test'], priority: 1,
           action: { kind: 'proxy', pool: 'app', websocket: false },
         }),
+        // **TLS 리소스도 종류다** (v0.6). 이걸 안 넣으면 `rollbackTo` 가 인증서·정책을
+        // 안 지워도 테스트가 통과한다 — 위 주석이 백엔드에 대해 적어 둔 것과 같은 함정이다.
+        // 그리고 §4.8 이 요구하는 것이 정확히 이것이다: 롤백이 **인증서까지** 되돌린다.
+        PUT('certificate', 'cert-x', {
+          materialRef: `store://x@${'a'.repeat(32)}`,
+          chainDigest: `sha256:${'0'.repeat(64)}`, keyDigest: `sha256:${'1'.repeat(64)}`,
+        }),
+        PUT('tlsPolicy', 'modern', { minVersion: '1.2' }),
+        PUT('listener', 'sec', {
+          protocol: 'https', bind: '0.0.0.0', port: 997, enabled: true,
+          tls: { policy: 'modern', defaultCertificate: 'cert-x' },
+          http: { defaultAction: 'reject' },
+        }),
+        PUT('sniBinding', 'b-x', {
+          listener: 'sec', hosts: ['a.test'], certificate: 'cert-x',
+        }),
       ]);                                                          // r3
 
       const rolled = await store.rollbackTo('2', 't');
@@ -330,6 +350,9 @@ describe('정본 저장소', () => {
       expect(model.backends.map((b) => b.key)).toEqual(['a-11']);
       expect(model.listeners.map((l) => l.key)).toEqual(['front']);
       expect(model.httpRoutes).toEqual([]);
+      expect(model.certificates).toEqual([]);
+      expect(model.tlsPolicies).toEqual([]);
+      expect(model.sniBindings).toEqual([]);
 
       // 스냅샷만 새로 적고 테이블을 그대로 두면, 여기서 head 는 r2 내용인데 다음 커밋은
       // r3 내용에서 출발하는 — 아무도 이해할 수 없는 상태가 된다.

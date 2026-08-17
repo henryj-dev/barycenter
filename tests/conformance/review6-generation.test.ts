@@ -321,6 +321,7 @@ describe('세대가 구성하는 평면을 오퍼레이션이 전부 선언해�
         key: 'r', listener: 'lh', hosts: ['a.example'], priority: 1,
         action: { kind: 'proxy', pool: 'ph', websocket: false },
       }],
+      certificates: [], tlsPolicies: [], sniBindings: [],
       passthroughRoutes: [],
       pools: [
         { key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' },

@@ -22,7 +22,7 @@ const streamOnly: Model = {
     { key: 'l', protocol: 'tcp', bind: '0.0.0.0', port: 998, enabled: true, defaultPool: 'p' },
   ],
   httpRoutes: [],
-  passthroughRoutes: [],
+  passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
   pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' }],
   backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 11, weight: 1 }],
 };
@@ -35,13 +35,13 @@ const httpOnly: Model = {
     },
   ],
   httpRoutes: [],
-  passthroughRoutes: [],
+  passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
   pools: [{ key: 'app', protocolClass: 'http', algorithm: 'round_robin' }],
   backends: [{ key: 'a', pool: 'app', host: '10.0.0.1', port: 11, weight: 1 }],
 };
 
 const empty: Model = {
-  listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
+  listeners: [], httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [], pools: [], backends: [],
 };
 
 describe('세대에 결박된 admin include (§6.3 · §7.2)', () => {

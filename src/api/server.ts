@@ -30,6 +30,7 @@ import { render as renderMetrics } from '../obs/metrics.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
 import type { Db } from '../store/pg.js';
+import type { SecretStore } from '../dp/secrets.js';
 import { can, TokenAuth, type Principal, type Scope } from './auth.js';
 
 export type ApiOptions = {
@@ -40,6 +41,8 @@ export type ApiOptions = {
   election: LeaderElection;
   /** 본문 상한. 없으면 한 요청이 프로세스를 삼킬 수 있다. */
   maxBodyBytes?: number;
+  /** 인증서 자료 저장소 (§4.8). 없으면 업로드 엔드포인트가 501 이다. */
+  secrets?: SecretStore;
 };
 
 const DEFAULT_MAX_BODY = 4 * 1024 * 1024;
@@ -256,6 +259,59 @@ const ROUTES: Route[] = [
   route('GET', '/metrics', 'read', async (c, api) => {
     c.res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
     c.res.end(renderMetrics(await api.control.gauges()));
+  }),
+
+  /**
+   * 인증서 **자료 업로드** (§4.8 · §8.1).
+   *
+   * ── 왜 changeset 을 안 거치는가 ─────────────────────────────────────
+   *
+   * 자료는 설정이 아니다. changeset → plan → commit → apply 는 **모델**을 옮기는 길이고,
+   * 개인키가 그 길을 지나가면 `config_revisions.model` 스냅샷에 평문으로 남는다 —
+   * §4.8 이 정확히 금지하는 것이다. 그래서 자료는 여기로 들어가 SecretStore 에 앉고,
+   * 설정에는 **불변 버전 참조**만 들어간다.
+   *
+   * 응답은 참조와 digest 뿐이다. **개인키는 어떤 경로로도 안 나간다** (§8.1: *"GUI 는
+   * 개인키를 절대 되돌려주지 않는다"*). 그래서 이 자원에는 GET 이 없다 — 읽을 수 있는
+   * 것을 만들어 두면 언젠가 읽힌다.
+   */
+  route('POST', '/api/v1/certificates/material', 'write', async (c, api) => {
+    const store = api.secrets;
+    if (store === undefined) {
+      json(c.res, 501, { error: 'no_secret_store', message: 'SecretStore 가 설정되지 않았다' });
+      return;
+    }
+    const b = (c.body ?? {}) as Record<string, unknown>;
+    const name = b['name'];
+    const fullchain = b['fullchain'];
+    const privkey = b['privkey'];
+    if (typeof name !== 'string' || typeof fullchain !== 'string' || typeof privkey !== 'string') {
+      json(c.res, 400, {
+        error: 'invalid_body',
+        message: 'name·fullchain·privkey 가 모두 문자열이어야 한다',
+      });
+      return;
+    }
+    // 모양 검사는 여기서 한다. PEM 이 아닌 것을 넣어도 저장은 되지만, 그 세대는
+    // `nginx -t` 에서 죽고 원인은 apply 실패로만 보인다.
+    if (!fullchain.includes('-----BEGIN CERTIFICATE-----')) {
+      json(c.res, 400, { error: 'invalid_body', message: 'fullchain 이 PEM 인증서가 아니다' });
+      return;
+    }
+    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(privkey)) {
+      json(c.res, 400, { error: 'invalid_body', message: 'privkey 가 PEM 개인키가 아니다' });
+      return;
+    }
+    try {
+      const ref = store.put(name, { fullchain, privkey });
+      // **자료를 안 돌려준다.** 참조·digest 만 나간다.
+      json(c.res, 201, {
+        ref: ref.ref, name: ref.name, version: ref.version,
+        chainDigest: ref.chainDigest, keyDigest: ref.keyDigest,
+      });
+    } catch (e) {
+      json(c.res, 400, { error: 'invalid_body', message: (e as Error).message });
+    }
   }),
 
   route('GET', '/api/v1/audit', 'read', async (c, api) => {

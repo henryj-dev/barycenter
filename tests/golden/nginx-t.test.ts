@@ -75,7 +75,7 @@ function nginxProbe(conf: string, probe: string): string {
 }
 
 const base: Model = {
-  listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
+  listeners: [], httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [], pools: [], backends: [],
 };
 
 const fixtures: Array<{ name: string; model: Model }> = [
@@ -153,6 +153,7 @@ const fixtures: Array<{ name: string; model: Model }> = [
         { key: 'w', pool: 'wild', host: '10.1.0.2', port: 443, weight: 1 },
         { key: 'f', pool: 'fb', host: '10.1.0.3', port: 443, weight: 1 },
       ],
+      certificates: [], tlsPolicies: [], sniBindings: [],
       passthroughRoutes: [
         { key: 'p1', listener: 'tls', snis: ['mail.example.com'], priority: 10,
           action: { kind: 'proxy', pool: 'mail' } },
@@ -225,6 +226,7 @@ const fixtures: Array<{ name: string; model: Model }> = [
         { key: 'y', pool: 'a_b', host: '10.0.0.2', port: 11, weight: 1 },
         { key: 'z', pool: 'v6', host: '2001:db8::1', port: 443, weight: 1 },
       ],
+      certificates: [], tlsPolicies: [], sniBindings: [],
       passthroughRoutes: [
         { key: 'r', listener: 'tls', snis: ['default'], priority: 1,
           action: { kind: 'proxy', pool: 'v6' } },

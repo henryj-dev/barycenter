@@ -13,9 +13,11 @@
  */
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
-import { parseHashKey } from './strings.js';
+import { coversHost, parseHashKey, parseHostPattern } from './strings.js';
 import { poolsReachedBy } from './engine-constraints.js';
-import type { Listener, Model, RawListener, RawModel, ProtocolClass } from '../model/provisional.js';
+import type {
+  Listener, Model, RawListener, RawModel, ProtocolClass, SniCertificateBinding,
+} from '../model/provisional.js';
 
 export type ModelIssueCode =
   | 'invalid_bind_address'
@@ -36,6 +38,16 @@ export type ModelIssueCode =
   | 'orphan_backend'
   /** 이 프로토콜에서 의미가 없거나 엔진이 지원하지 않는 옵션. */
   | 'option_not_supported'
+  /** https 리스너가 존재하지 않는 TLS 정책·인증서를 참조한다. */
+  | 'unknown_tls_reference'
+  /** SNI 바인딩이 https 가 아닌 리스너에 붙었다. */
+  | 'sni_binding_protocol_mismatch'
+  /** https 리스너의 라우트 호스트를 덮는 SNI 바인딩이 없다 — 제시할 인증서가 없다. */
+  | 'sni_binding_missing'
+  /** 같은 리스너에서 한 호스트가 두 인증서에 묶였다. */
+  | 'sni_binding_conflict'
+  /** SNI 바인딩 호스트가 exact 도 1라벨 와일드카드도 아니다. */
+  | 'invalid_sni_host'
   // ── 아래는 런타임 해독기(`src/model/decode.ts`)가 낸다 ──
   /** 타입이 다르다. 강제 변환하지 않는다. */
   | 'invalid_type'
@@ -71,11 +83,11 @@ export class ModelValidationError extends Error {
  * `tls_passthrough` 는 TLS 를 종단하지 않고 그대로 흘리므로 TCP 다.
  */
 const classOfListener = (protocol: RawListener['protocol']): ProtocolClass =>
-  protocol === 'http' ? 'http' : protocol === 'udp' ? 'udp' : 'tcp';
+  protocol === 'http' || protocol === 'https' ? 'http' : protocol === 'udp' ? 'udp' : 'tcp';
 
 /** 라우트로 목적지를 가르는 리스너. 나머지는 기본 풀이 유일한 목적지다. */
 const routesTraffic = (protocol: RawListener['protocol']): boolean =>
-  protocol === 'http' || protocol === 'tls_passthrough';
+  protocol === 'http' || protocol === 'https' || protocol === 'tls_passthrough';
 
 /** 렌더 결과에 영향을 주는 엔진 capability 중, 검증이 알아야 하는 것. */
 export type ValidationCapabilities = { streamRealip: boolean };
@@ -207,7 +219,9 @@ export function validateModel(
       });
     };
     notHere('acceptProxyProtocol', l.protocol === 'udp' && l.acceptProxyProtocol !== undefined);
-    notHere('http', l.protocol !== 'http' && l.http !== undefined);
+    // **https 도 `http` 프로필을 쓴다.** TLS 를 종단하고 나면 평범한 HTTP 다.
+    notHere('http', l.protocol !== 'http' && l.protocol !== 'https' && l.http !== undefined);
+    notHere('tls', l.protocol !== 'https' && l.tls !== undefined);
     notHere('udp', l.protocol !== 'udp' && l.udp !== undefined);
     notHere('onUnmatchedSni', l.protocol !== 'tls_passthrough' && l.onUnmatchedSni !== undefined);
     notHere('prereadTimeoutS', l.protocol !== 'tls_passthrough' && l.prereadTimeoutS !== undefined);
@@ -217,7 +231,7 @@ export function validateModel(
       const o = l.onUnmatchedSni;
       if (o !== undefined && o !== 'reject') needPool(l.key, o.pool, 'tcp');
     }
-    if (l.protocol === 'http' && l.http?.defaultAction !== undefined) {
+    if ((l.protocol === 'http' || l.protocol === 'https') && l.http?.defaultAction !== undefined) {
       const a = l.http.defaultAction;
       if (a !== 'reject') needPool(l.key, a.pool, 'http');
     }
@@ -262,14 +276,18 @@ export function validateModel(
    * HTTP 라우트를 TCP 리스너에 붙이면 렌더러는 그 라우트를 **어디에도 넣지 않는다.**
    * stream 서버 블록에는 `server_name` 이 없기 때문이다. 저장은 되고 라우트만 사라진다.
    */
-  const wantProtocol = (routeKey: string, listenerKey: string, want: RawListener['protocol']): boolean => {
+  const wantProtocol = (
+    routeKey: string,
+    listenerKey: string,
+    want: readonly RawListener['protocol'][],
+  ): boolean => {
     const l = listenerByKey.get(listenerKey);
-    if (l === undefined || l.protocol === want) return true;
+    if (l === undefined || want.includes(l.protocol)) return true;
     issues.push({
       code: 'route_protocol_mismatch',
       subjects: [routeKey, listenerKey],
       message:
-        `라우트 '${routeKey}' 는 ${want} 용인데 리스너 '${listenerKey}' 는 ${l.protocol} 다. ` +
+        `라우트 '${routeKey}' 는 ${want.join('/')} 용인데 리스너 '${listenerKey}' 는 ${l.protocol} 다. ` +
         `렌더 결과에서 이 라우트는 사라진다`,
     });
     return false;
@@ -291,13 +309,137 @@ export function validateModel(
 
   for (const r of model.httpRoutes) {
     if (r.action.kind === 'proxy') needPool(r.key, r.action.pool, 'http');
-    if (!wantProtocol(r.key, r.listener, 'http')) continue;
+    // **https 도 http 라우트를 받는다.** TLS 를 종단하고 나면 평범한 HTTP 다.
+    if (!wantProtocol(r.key, r.listener, ['http', 'https'])) continue;
     r.hosts.forEach((h, i) => addRoute(r.listener, `${r.key}#${i}`, h, r.priority, r.pathPrefix));
   }
   for (const r of model.passthroughRoutes) {
     if (r.action.kind === 'proxy') needPool(r.key, r.action.pool, 'tcp');
-    if (!wantProtocol(r.key, r.listener, 'tls_passthrough')) continue;
+    if (!wantProtocol(r.key, r.listener, ['tls_passthrough'])) continue;
     r.snis.forEach((h, i) => addRoute(r.listener, `${r.key}#${i}`, h, r.priority));
+  }
+
+  // ── TLS (§4.6, S16·S17) ─────────────────────────────────────────────────
+  //
+  // 렌더러는 여기서 막힌 것들에 대해 **터진다.** 조용히 default 인증서를 물리면
+  // SAN 미커버 제시가 되고, 그게 S17 합격 기준이 겨눈 실패다.
+  {
+    const certKeys = new Set(model.certificates.map((c) => c.key));
+    const policyKeys = new Set(model.tlsPolicies.map((t) => t.key));
+
+    for (const l of model.listeners) {
+      if (l.protocol !== 'https') continue;
+      // **RawModel 은 `tls` 없는 https 리스너를 표현할 수 있다.** 해독기도 잡지만
+      // (`missing_field`), 검증기가 그걸 전제로 크래시하면 안 된다 — 둘은 각자 완결이다.
+      if (l.tls === undefined) {
+        issues.push({
+          code: 'missing_field',
+          subjects: [l.key],
+          message: `https 리스너 '${l.key}' 에 tls 결박이 없다. 제시할 인증서가 정해지지 않는다`,
+        });
+        continue;
+      }
+      if (!policyKeys.has(l.tls.policy)) {
+        issues.push({
+          code: 'unknown_tls_reference',
+          subjects: [l.key],
+          message: `리스너 '${l.key}' 가 존재하지 않는 TLS 정책 '${l.tls.policy}' 를 참조한다`,
+        });
+      }
+      if (!certKeys.has(l.tls.defaultCertificate)) {
+        issues.push({
+          code: 'unknown_tls_reference',
+          subjects: [l.key],
+          message:
+            `리스너 '${l.key}' 가 존재하지 않는 인증서 '${l.tls.defaultCertificate}' 를 ` +
+            `default 인증서로 참조한다`,
+        });
+      }
+    }
+
+    const bindingsByListener = new Map<string, SniCertificateBinding[]>();
+    for (const b of model.sniBindings) {
+      const l = listenerByKey.get(b.listener);
+      if (l === undefined) {
+        issues.push({
+          code: 'unknown_listener',
+          subjects: [b.key],
+          message: `SNI 바인딩 '${b.key}' 가 존재하지 않는 리스너 '${b.listener}' 를 참조한다`,
+        });
+        continue;
+      }
+      if (l.protocol !== 'https') {
+        issues.push({
+          code: 'sni_binding_protocol_mismatch',
+          subjects: [b.key, b.listener],
+          message:
+            `SNI 바인딩 '${b.key}' 가 ${l.protocol} 리스너 '${b.listener}' 에 붙었다. ` +
+            `TLS 를 종단하지 않는 리스너는 인증서를 제시하지 않는다`,
+        });
+        continue;
+      }
+      if (!certKeys.has(b.certificate)) {
+        issues.push({
+          code: 'unknown_tls_reference',
+          subjects: [b.key],
+          message: `SNI 바인딩 '${b.key}' 가 존재하지 않는 인증서 '${b.certificate}' 를 참조한다`,
+        });
+      }
+      // **호스트 모양.** exact 아니면 `*.suffix` 1라벨 와일드카드뿐이다. `*.a.*.b` 나
+      // 맨 `*` 를 허용하면 렌더가 낼 정규식이 없다.
+      for (const h of b.hosts) {
+        const parsed = parseHostPattern(h);
+        if (!parsed.ok) {
+          issues.push({
+            code: 'invalid_sni_host',
+            subjects: [b.key],
+            message: `SNI 바인딩 '${b.key}' 의 호스트 '${h}': ${parsed.message}`,
+          });
+        }
+      }
+      const list = bindingsByListener.get(b.listener) ?? [];
+      list.push(b);
+      bindingsByListener.set(b.listener, list);
+    }
+
+    // **같은 호스트가 두 인증서에 묶이면 설정이 답을 못 한다.** nginx 는 경고만 내고
+    // 첫 블록에 준다 (E36 의 TLS 판) — `nginx -t` 는 통과하므로 조용한 오동작이다.
+    for (const [listener, list] of bindingsByListener) {
+      const seen = new Map<string, string>();
+      for (const b of list) {
+        for (const h of b.hosts) {
+          const prev = seen.get(h);
+          if (prev !== undefined && prev !== b.certificate) {
+            issues.push({
+              code: 'sni_binding_conflict',
+              subjects: [listener, h],
+              message:
+                `리스너 '${listener}' 에서 호스트 '${h}' 가 인증서 '${prev}' 와 ` +
+                `'${b.certificate}' 둘에 묶였다. 어느 쪽이 제시되는지 설정이 정하지 못한다`,
+            });
+          }
+          seen.set(h, b.certificate);
+        }
+      }
+    }
+
+    // **라우트 호스트마다 인증서가 있어야 한다.** 없으면 렌더러가 그 server 블록에 낼
+    // 인증서가 없다 — default 로 물리면 SAN 미커버 제시가 된다 (S17).
+    for (const r of model.httpRoutes) {
+      const l = listenerByKey.get(r.listener);
+      if (l === undefined || l.protocol !== 'https') continue;
+      const list = bindingsByListener.get(r.listener) ?? [];
+      for (const h of r.hosts) {
+        if (list.some((b) => b.hosts.some((p) => coversHost(p, h)))) continue;
+        issues.push({
+          code: 'sni_binding_missing',
+          subjects: [r.key, h],
+          message:
+            `리스너 '${r.listener}' 의 호스트 '${h}' 를 덮는 SNI 바인딩이 없다. ` +
+            `handshake 에서 제시할 인증서가 정해지지 않는다`,
+        });
+      }
+    }
   }
 
   for (const [listener, inputs] of byListener) {

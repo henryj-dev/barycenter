@@ -40,6 +40,7 @@ const chained: Model = {
   pools: [{ key: 'app', protocolClass: 'tcp', algorithm: 'round_robin', sendProxyProtocol: 'v1' }],
   backends: [{ key: 'a', pool: 'app', host: '10.0.0.1', port: 443, weight: 1 }],
   httpRoutes: [],
+  certificates: [], tlsPolicies: [], sniBindings: [],
   passthroughRoutes: [],
 };
 

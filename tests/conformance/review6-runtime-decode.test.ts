@@ -29,6 +29,7 @@ const backend = (pool: string, key = `b-${pool}`) => ({ key, pool, host: '10.0.0
 const base = (over: Record<string, unknown> = {}): unknown => ({
   listeners: [],
   httpRoutes: [],
+  certificates: [], tlsPolicies: [], sniBindings: [],
   passthroughRoutes: [],
   pools: [httpPool, tcpPool],
   backends: [backend('ph'), backend('pt')],
@@ -93,8 +94,25 @@ describe('① 모르는 enum 값은 거부된다 — 4차·6차에서 두 번 �
   const listener = (over: Record<string, unknown>) =>
     base({ listeners: [{ key: 'l', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true, ...over }] });
 
-  it("protocol: 'https' — 렌더러가 TLS 를 못 내는데 타입에 있으면 평문이 된다", () => {
-    expect(codes(listener({ protocol: 'https', defaultPool: 'pt' }))).toContain('invalid_enum');
+  /**
+   * **이 테스트는 뒤집혔다 (2026-08-17).** 전에는 `protocol: 'https'` 자체가
+   * `invalid_enum` 이어야 했다 — 렌더러가 TLS 를 못 내는데 타입에 있으면 평문
+   * `listen 443;` 이 되기 때문이다.
+   *
+   * S16·S17 이 통과하고 실제 TLS 렌더러가 생겨서 `https` 가 돌아왔다. 그래서 지키는
+   * 것이 *"https 는 없다"* 에서 *"**TLS 결박 없는 https 는 없다**"* 로 옮겼다. 6차가
+   * 잡았던 실패 모드(평문으로 나가는 443)를 여전히 막는데, 이번엔 값이 아니라 모양으로
+   * 막는다.
+   */
+  it("protocol: 'https' 는 **tls 없이는** 안 된다 — 평문 443 이 되던 자리", () => {
+    expect(codes(listener({ protocol: 'https' }))).toContain('missing_field');
+  });
+
+  it('https 는 defaultPool 을 안 받는다 — 판별 유니온에 없는 필드다', () => {
+    expect(codes(listener({
+      protocol: 'https', defaultPool: 'pt',
+      tls: { policy: 'p', defaultCertificate: 'c' },
+    }))).toContain('unknown_field');
   });
 
   it("protocol: 'bogus'", () => {
@@ -192,7 +210,9 @@ describe('③ 모르는 키는 거부된다 — 조용히 무시된 설정이 �
   });
 
   it('모델의 모르는 컬렉션', () => {
-    expect(codes(base({ certificates: [] }))).toContain('unknown_field');
+    // `certificates` 는 v0.6 에서 **진짜 컬렉션이 됐다.** 여기 쓰면 이 테스트가 검사하는
+    // 것이 사라진다 — 실제로 없는 이름을 쓴다.
+    expect(codes(base({ upstreams: [] }))).toContain('unknown_field');
   });
 
   it('프로토콜에 없는 필드는 **그 프로토콜에서** 모르는 키다', () => {

@@ -88,8 +88,8 @@ export function digestOfFiles(
   return sha256(`${canonical}|planes=${[...planes].sort().join(',')}`);
 }
 
-function writeFileDurable(path: string, body: string): void {
-  const fd = openSync(path, 'wx');
+function writeFileDurable(path: string, body: string, mode?: number): void {
+  const fd = openSync(path, 'wx', mode);
   try {
     writeSync(fd, body, 0, 'utf8');
     // 파일 내용을 먼저 내린다. rename 이 먼저 보이면 빈 파일이 정본이 된다.
@@ -120,8 +120,19 @@ export function materializeGeneration(opts: {
   files: Record<string, string>;
   /** 이 세대가 구성하는 평면들. 렌더러가 답한다 (`RenderedConfig.planes`). */
   planes: ('http' | 'stream')[];
+  /**
+   * 파일별 퍼미션. 안 적으면 프로세스 umask 를 따른다.
+   *
+   * **개인키 때문에 생겼다.** §7.2 는 인증서를 세대 **안**에 두라고 하고(S8), 그러면
+   * 개인키가 세대 디렉토리에 앉는다. 기본 umask 로 쓰면 0644 가 되어, `SecretStore` 가
+   * 0400 으로 지킨 것을 세대가 도로 푸는 셈이 된다.
+   *
+   * digest 에는 안 들어간다 — 같은 바이트면 같은 세대다. 퍼미션은 내용이 아니다.
+   */
+  modes?: Record<string, number>;
 }): GenerationManifest {
   const { prefix, generation, files, planes } = opts;
+  const modes = opts.modes ?? {};
   const root = join(prefix, 'generations');
   const target = join(root, generation);
   mkdirSync(root, { recursive: true });
@@ -155,7 +166,7 @@ export function materializeGeneration(opts: {
     for (const [rel, body] of Object.entries(files)) {
       const dest = join(tmp, rel);
       mkdirSync(dirname(dest), { recursive: true });
-      writeFileDurable(dest, body);
+      writeFileDurable(dest, body, modes[rel]);
     }
     // manifest 를 **마지막에** 쓴다. 이게 있으면 나머지도 있다는 뜻이 된다.
     writeFileDurable(join(tmp, MANIFEST_NAME), JSON.stringify(manifest));

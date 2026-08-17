@@ -18,6 +18,7 @@ import { httpAdminConf, slotsOf, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
+import { certificateFiles, type SecretStore } from '../dp/secrets.js';
 import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
 import type { Model } from '../model/provisional.js';
@@ -46,6 +47,13 @@ export type ControlPlaneOptions = {
    * 디버깅용이고, **기본값으로 두면 디스크가 무한히 자란다.**
    */
   keepGenerations?: number;
+  /**
+   * 인증서 자료 저장소 (§4.8).
+   *
+   * **없으면 인증서를 참조하는 모델은 apply 되지 않는다.** 개인키가 없는 세대는
+   * `nginx -t` 에서 죽으므로, 조용히 넘어가면 전환이 실패로만 보이고 원인은 안 보인다.
+   */
+  secrets?: SecretStore;
 };
 
 export type OperationView = {
@@ -96,6 +104,26 @@ export class ControlPlane {
     private readonly election: LeaderElection,
     private readonly opts: ControlPlaneOptions,
   ) {}
+
+  /**
+   * 이 모델이 세대에 넣어야 할 인증서 파일들.
+   *
+   * 인증서가 없으면 빈 맵이고, 그건 v0.1~v0.5 의 모든 모델이다 — TLS 를 안 쓰는 배포에
+   * SecretStore 를 요구하지 않는다.
+   */
+  private certificateFiles(model: Model): { files: Record<string, string>; modes?: Record<string, number> } {
+    if (model.certificates.length === 0) return { files: {} };
+    const store = this.opts.secrets;
+    if (store === undefined) {
+      // **fail closed.** 자료 없이 게시하면 세대가 `nginx -t` 에서 죽고, 실패 이유가
+      // "설정이 이상하다" 로 보인다. 진짜 이유는 여기다.
+      throw new Error(
+        `모델이 인증서 ${model.certificates.length}개를 참조하는데 SecretStore 가 없다. ` +
+        `개인키 없는 세대는 활성화할 수 없다 (§4.8)`,
+      );
+    }
+    return certificateFiles(model.certificates, store);
+  }
 
   /**
    * 커밋된 plan 을 활성화한다 (§5.2 `POST /apply`).
@@ -161,12 +189,18 @@ export class ControlPlane {
       }
     }
 
+    const certFiles = this.certificateFiles(plan.model);
+
     const manifest = materializeGeneration({
       prefix: this.opts.prefix,
       generation,
       planes: rendered.planes,
+      ...(certFiles.modes === undefined ? {} : { modes: certFiles.modes }),
       files: {
         'nginx.conf': rendered.conf,
+        // **인증서 바이트를 세대 안에 넣는다** (§7.2, S8·S19). 바깥 mutable 경로를
+        // 가리키거나 symlink 로 걸면 롤백이 거짓말이 된다.
+        ...certFiles.files,
         ...(membership === undefined
           ? { 'admin/marker.conf': markerConf(generation, this.opts.adminPort) }
           : {

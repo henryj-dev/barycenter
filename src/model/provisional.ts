@@ -10,11 +10,19 @@
 export type ProtocolClass = 'http' | 'tcp' | 'udp';
 
 /**
- * **`https` 는 없다.** 렌더러가 TLS 종단을 내지 못하는데 타입으로 제공하면, v3 처럼
- * `protocol: 'https'` 가 평문 `listen 443;` 으로 렌더된다. S16(SNI 별 TLS policy)·
- * S17(인증서 선택)이 통과하고 실제 TLS 렌더러가 생긴 뒤에 되살린다.
+ * **`https` 가 돌아왔다 (2026-08-17).** 한동안 일부러 빼 뒀다 — 렌더러가 TLS 종단을
+ * 내지 못하는데 타입으로 제공하면, v3 처럼 `protocol: 'https'` 가 평문 `listen 443;`
+ * 으로 렌더되기 때문이다. 되살리는 조건으로 걸어 둔 **S16(SNI 별 TLS policy)·S17(인증서
+ * 선택)이 통과했고**(§12.0), 그 결과가 렌더 규칙 셋으로 내려왔다:
+ *
+ *   ① 와일드카드 `server_name` 은 `~^[^.]+\.suffix$` 앵커 정규식 — `*.x` 는 다중 라벨을
+ *      삼켜 **SAN 미커버 인증서 제시**가 된다 (E22.2).
+ *   ② TLS 리스너마다 `default_server` 를 반드시 낸다 — 없으면 모르는 SNI 가 첫 블록의
+ *      인증서를 받는다 (E32 의 TLS 판).
+ *   ③ TLS policy 는 **각 server 블록 안**에 낸다 — server 레벨이 http 레벨을 덮고,
+ *      SNI 별로 실제 handshake 에 걸린다.
  */
-export type ListenerProtocol = 'http' | 'tls_passthrough' | 'tcp' | 'udp';
+export type ListenerProtocol = 'http' | 'https' | 'tls_passthrough' | 'tcp' | 'udp';
 
 export type UdpPreset = 'dns' | 'wireguard' | 'game_generic' | 'custom';
 
@@ -47,6 +55,57 @@ export type InboundProxyProtocol = {
 };
 
 
+export type TlsVersion = '1.2' | '1.3';
+
+/**
+ * 인증서 **메타데이터**. §4.8 · §8.1
+ *
+ * **자료가 여기 없다.** `materialRef` 는 SecretStore 의 불변 버전 참조
+ * (`store://<name>@<version>`) 이고, 개인키는 그 뒤에 있다 — 메인 DB 에도, 이 타입에도,
+ * API 응답에도 들어가지 않는다.
+ *
+ * 왜 **버전**이 참조에 붙어야 하는가 — S8 이 실측했다. 이름만으로 가리키면 갱신이
+ * 덮어써서, conf 를 롤백해도 **갱신된 인증서가 그대로 제시된다.** 롤백이 거짓말이 된다.
+ */
+export type Certificate = {
+  key: string;
+  /** `store://<name>@<version>`. 버전 없는 참조는 여기 못 들어온다. */
+  materialRef: string;
+  /** 자료를 안 읽고도 세대 결박을 검증할 수 있게 함께 든다. */
+  chainDigest: string;
+  keyDigest: string;
+};
+
+/**
+ * TLS 정책. §4.6
+ *
+ * S16 이 실측했다 — 이 값들은 **비-default server 블록에서도 실제 handshake 에 걸린다.**
+ * 그래서 SNI 별로 다르게 주는 것(`SniCertificateBinding.override`)이 표시만 하고 마는
+ * 거짓말이 아니다.
+ */
+export type TlsPolicy = {
+  key: string;
+  minVersion: TlsVersion;
+  maxVersion?: TlsVersion;
+};
+
+/**
+ * SNI → 인증서 바인딩. §4.6
+ *
+ * **라우트에 붙이지 않는다.** v1 의 설계 오류가 그것이었다 — 인증서와 TLS 버전은 HTTP
+ * Host/path 를 보기 전에 **SNI 로** 선택된다. 라우트에 두면 같은 host 의 path 별 라우트가
+ * 서로 다른 인증서를 갖는 표현이 허용되고, redirect/reject 라우트에도 인증서가 붙는다.
+ */
+export type SniCertificateBinding = {
+  key: string;
+  listener: string;
+  /** handshake 단계의 선택 키. exact 또는 `*.suffix` 1라벨 와일드카드. */
+  hosts: string[];
+  certificate: string;
+  /** S16 이 성립을 실측했으므로 유지한다. 실패했다면 §12.0 규칙에 따라 없앴을 필드다. */
+  override?: { minVersion?: TlsVersion; maxVersion?: TlsVersion };
+};
+
 /**
  * 유효한 SNI 인데 매칭이 없을 때의 동작. §4.1
  *
@@ -78,12 +137,31 @@ export type RawListener = ListenerBase & {
   http?: HttpProfile;
   onUnmatchedSni?: SniOutcome;
   prereadTimeoutS?: number;
+  tls?: RawTlsBinding;
 };
+
+/** 검증 전. `https` 가 아닌 리스너에 붙어 있을 수 있으므로 검증기가 막는다. */
+export type RawTlsBinding = { policy: string; defaultCertificate: string };
 
 export type HttpListener = ListenerBase & {
   protocol: 'http';
   acceptProxyProtocol?: InboundProxyProtocol;
   http?: HttpProfile;
+};
+
+/**
+ * TLS 종단 리스너. §4.6
+ *
+ * `tls` 가 **선택이 아니다.** 인증서 없는 TLS 리스너는 `nginx -t` 가 거절하는 것을 넘어,
+ * "모르는 SNI 에 무엇을 제시할 것인가" 가 비워 둘 수 있는 자리가 아니기 때문이다 —
+ * S17 이 실측했듯 `default_server` 가 없으면 **첫 블록의 인증서**가 나가고, 그건
+ * 멀티테넌트에서 테넌트 간 누수다.
+ */
+export type HttpsListener = ListenerBase & {
+  protocol: 'https';
+  acceptProxyProtocol?: InboundProxyProtocol;
+  http?: HttpProfile;
+  tls: { policy: string; defaultCertificate: string };
 };
 
 export type PassthroughListener = ListenerBase & {
@@ -105,7 +183,12 @@ export type UdpListener = ListenerBase & {
   udp: { preset: UdpPreset };
 };
 
-export type Listener = HttpListener | PassthroughListener | TcpListener | UdpListener;
+export type Listener =
+  | HttpListener
+  | HttpsListener
+  | PassthroughListener
+  | TcpListener
+  | UdpListener;
 
 /**
  * `least_conn` 은 v0 에 없다. stream/http OSS 에 네이티브로 있지만, S1 이 통과해 Lua
@@ -177,6 +260,9 @@ export type Model = {
   passthroughRoutes: PassthroughRoute[];
   pools: Pool[];
   backends: Backend[];
+  certificates: Certificate[];
+  tlsPolicies: TlsPolicy[];
+  sniBindings: SniCertificateBinding[];
 };
 
 /** 검증 전 모델. `validateModel` 의 입력이다. */

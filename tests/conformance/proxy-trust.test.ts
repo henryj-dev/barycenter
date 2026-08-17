@@ -22,7 +22,7 @@ import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
 
 const empty: Model = {
-  listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
+  listeners: [], httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [], pools: [], backends: [],
 };
 
 const withListener = (accept: unknown): unknown => ({

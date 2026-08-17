@@ -20,7 +20,7 @@ const model: Model = {
     { key: 'raw', protocol: 'tcp', bind: '0.0.0.0', port: 8081, enabled: true, defaultPool: 'q' },
   ],
   httpRoutes: [],
-  passthroughRoutes: [],
+passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
   pools: [
     { key: 'p', protocolClass: 'http', algorithm: 'round_robin' },
     { key: 'q', protocolClass: 'tcp', algorithm: 'round_robin' },
@@ -76,7 +76,7 @@ describe('멤버십 평면 (§7.3)', () => {
       render({
         listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true,
           http: { defaultAction: { pool: 'p' } } }],
-        httpRoutes: [], passthroughRoutes: [],
+        httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
         pools: [{
           key: 'p', protocolClass: 'http', algorithm,
           ...(hashKey === undefined ? {} : { hashKey }),
@@ -101,7 +101,7 @@ describe('멤버십 평면 (§7.3)', () => {
     const conf = render({
       listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true,
         http: { defaultAction: { pool: 'p' } } }],
-      httpRoutes: [], passthroughRoutes: [],
+      httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
       pools: [{ key: 'p', protocolClass: 'http', algorithm: 'source_ip_hash' }],
       backends: [{ key: 'p1', pool: 'p', host: '10.2.0.1', port: 11, weight: 1 }],
     }, ON).conf;

@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 80 심볼 · sha256:8723bb9e2e461c6dbe2bcbf2b7995abfa6039b5ad081d242cdbfcf2af38d7248
+# 86 심볼 · sha256:33a705e8fece7e1a47c7054aa9489a5c8ce5c85459312229f8145572523f8850
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -47,6 +47,13 @@ export type Backend = {
     host: string;
     port: number;
     weight: number;
+};
+── Certificate
+export type Certificate = {
+    key: string;
+    materialRef: string;
+    chainDigest: string;
+    keyDigest: string;
 };
 ── Checked
 export type Checked = {
@@ -184,12 +191,22 @@ export type HttpRoute = {
     pathPrefix?: string;
     action: HttpAction;
 };
+── HttpsListener
+export type HttpsListener = ListenerBase & {
+    protocol: 'https';
+    acceptProxyProtocol?: InboundProxyProtocol;
+    http?: HttpProfile;
+    tls: {
+        policy: string;
+        defaultCertificate: string;
+    };
+};
 ── InboundProxyProtocol
 export type InboundProxyProtocol = {
     trustedCidrs: string[];
 };
 ── Listener
-export type Listener = HttpListener | PassthroughListener | TcpListener | UdpListener;
+export type Listener = HttpListener | HttpsListener | PassthroughListener | TcpListener | UdpListener;
 ── ListenerBase
 type ListenerBase = {
     key: string;
@@ -198,7 +215,7 @@ type ListenerBase = {
     enabled: boolean;
 };
 ── ListenerProtocol
-export type ListenerProtocol = 'http' | 'tls_passthrough' | 'tcp' | 'udp';
+export type ListenerProtocol = 'http' | 'https' | 'tls_passthrough' | 'tcp' | 'udp';
 ── LocalDataplaneDriver
 export declare class LocalDataplaneDriver implements DataplaneDriver {
     static create(opts: {
@@ -228,6 +245,9 @@ export type Model = {
     passthroughRoutes: PassthroughRoute[];
     pools: Pool[];
     backends: Backend[];
+    certificates: Certificate[];
+    tlsPolicies: TlsPolicy[];
+    sniBindings: SniCertificateBinding[];
 };
 ── ModelIssue
 export type ModelIssue = {
@@ -236,7 +256,7 @@ export type ModelIssue = {
     message: string;
 };
 ── ModelIssueCode
-export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range';
+export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'sni_binding_conflict' | 'invalid_sni_host' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range';
 ── ModelValidationError
 export declare class ModelValidationError extends Error {
     readonly issues: ModelIssue[];
@@ -350,10 +370,16 @@ export type RawListener = ListenerBase & {
     http?: HttpProfile;
     onUnmatchedSni?: SniOutcome;
     prereadTimeoutS?: number;
+    tls?: RawTlsBinding;
 };
 ── RawModel
 export type RawModel = Omit<Model, 'listeners'> & {
     listeners: RawListener[];
+};
+── RawTlsBinding
+export type RawTlsBinding = {
+    policy: string;
+    defaultCertificate: string;
 };
 ── ReadOnlyFileStore
 export declare class ReadOnlyFileStore {
@@ -398,6 +424,17 @@ export type RenderedConfig = {
     digest: string;
     planes: ('http' | 'stream')[];
 };
+── SniCertificateBinding
+export type SniCertificateBinding = {
+    key: string;
+    listener: string;
+    hosts: string[];
+    certificate: string;
+    override?: {
+        minVersion?: TlsVersion;
+        maxVersion?: TlsVersion;
+    };
+};
 ── SniOutcome
 export type SniOutcome = 'reject' | {
     pool: string;
@@ -432,6 +469,14 @@ export type TcpListener = ListenerBase & {
 };
 ── TerminalKind
 export type TerminalKind = 'activated' | 'failed' | 'aborted';
+── TlsPolicy
+export type TlsPolicy = {
+    key: string;
+    minVersion: TlsVersion;
+    maxVersion?: TlsVersion;
+};
+── TlsVersion
+export type TlsVersion = '1.2' | '1.3';
 ── UdpListener
 export type UdpListener = ListenerBase & {
     protocol: 'udp';
@@ -458,6 +503,7 @@ export declare function materializeGeneration(opts: {
     generation: string;
     files: Record<string, string>;
     planes: ('http' | 'stream')[];
+    modes?: Record<string, number>;
 }): GenerationManifest;
 ── parseModel
 export declare function parseModel(input: unknown, caps?: ValidationCapabilities): DecodeResult;

@@ -115,6 +115,21 @@ export function parseHostPattern(input: string): Result<HostPattern> {
   return ok({ kind: 'wildcard', suffix: r.value });
 }
 
+/**
+ * 이 바인딩 호스트 패턴이 저 호스트를 덮는가.
+ *
+ * `*.example.com` 은 **한 라벨만** 덮는다. X.509 와일드카드가 그렇고(S17), 렌더도 앵커
+ * 정규식으로 그렇게 낸다. 여기서 넓게 잡으면 `deep.x.example.com` 에 커버하지 않는
+ * 인증서를 물리게 된다 — S17 합격 기준이 겨눈 실패다.
+ */
+export function coversHost(pattern: string, host: string): boolean {
+  if (pattern === host) return true;
+  if (!pattern.startsWith('*.')) return false;
+  const suffix = pattern.slice(2);
+  if (!host.endsWith(`.${suffix}`)) return false;
+  return !host.slice(0, host.length - suffix.length - 1).includes('.');
+}
+
 export function validateHeaderName(input: string): Result<string> {
   if (!TOKEN.test(input)) {
     return err('invalid_header_name', `RFC 9110 token 이 아니다: ${JSON.stringify(input)}`);

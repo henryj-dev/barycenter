@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { createApi } from '../api/server.js';
+import { FsSecretStore } from '../dp/secrets.js';
 import { TokenAuth, type TokenSpec } from '../api/auth.js';
 import { render } from '../conf/render.js';
 import { encodeSlots, httpAdminConf, streamAdminConf } from '../control/membership.js';
@@ -128,7 +129,8 @@ function writeBootstrap(prefix: string, adminPort: number, streamAdminPort: numb
 
   // **빈 모델이다.** 아직 아무것도 커밋되지 않았다 — 리스너가 없으니 트래픽 표면도 없고
   // admin 만 선다. 멤버십 dict 는 capability 가 있으면 여기서 이미 선언된다.
-  const empty = { listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [] };
+  const empty = { listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
+    certificates: [], tlsPolicies: [], sniBindings: [] };
   const rendered = render(empty, caps);
   materializeGeneration({
     prefix,
@@ -295,8 +297,17 @@ export async function main(): Promise<void> {
   }, Number(env('BARY_ELECTION_INTERVAL_MS', '5000')));
   retry.unref();
 
+  /**
+   * 인증서 자료 저장소 (§4.8).
+   *
+   * **평문 파일이다.** 보호는 파일 권한과 "메인 DB 가 아니다" 뿐이고 암호화가 아니다 —
+   * KMS·Vault 드라이버는 같은 인터페이스 뒤에 따로 붙는다. 지금 없는 것을 있다고
+   * 적지 않는다.
+   */
+  const secrets = new FsSecretStore(env('BARY_SECRETS', `${prefix}/secrets`));
+
   const control = new ControlPlane(db, store, driver, election,
-    { prefix, adminPort, streamAdminPort, renderCaps, engine: engineInfo });
+    { prefix, adminPort, streamAdminPort, renderCaps, engine: engineInfo, secrets });
 
   // **기동 시 멤버십을 되돌려 놓는다** (§6.4). shared dict 는 프로세스 수명이라 엔진이
   // 재시작하면 슬롯이 통째로 빈다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.
@@ -344,7 +355,7 @@ export async function main(): Promise<void> {
 
   const auth = new TokenAuth(loadTokens());
 
-  const server = createApi({ db, store, control, auth, election });
+  const server = createApi({ db, store, control, auth, election, secrets });
   await new Promise<void>((resolve) => {
     server.listen(Number(port), host, resolve);
   });

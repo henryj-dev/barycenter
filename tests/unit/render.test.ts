@@ -16,6 +16,7 @@ import type { Model } from '../../src/model/provisional.js';
 const empty: Model = {
   listeners: [],
   httpRoutes: [],
+  certificates: [], tlsPolicies: [], sniBindings: [],
   passthroughRoutes: [],
   pools: [],
   backends: [],
@@ -161,6 +162,7 @@ describe('R8 / R9 — SNI 패스스루 (E21, E26)', () => {
       { key: 'w', pool: 'wild', host: '10.1.0.2', port: 443, weight: 1 },
       { key: 'f', pool: 'fallback', host: '10.1.0.3', port: 443, weight: 1 },
     ],
+    certificates: [], tlsPolicies: [], sniBindings: [],
     passthroughRoutes: [
       { key: 'p1', listener: 'tls', snis: ['mail.example.com'], priority: 10, action: { kind: 'proxy', pool: 'mail' } },
       { key: 'p2', listener: 'tls', snis: ['*.example.com'], priority: 5, action: { kind: 'proxy', pool: 'wild' } },
@@ -459,6 +461,7 @@ describe('R20 — 4차 검수 구현 High', () => {
       ],
       pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' }],
       backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 443, weight: 1 }],
+      certificates: [], tlsPolicies: [], sniBindings: [],
       passthroughRoutes: [
         { key: 'r', listener: 'tls', snis: ['default'], priority: 1, action: { kind: 'proxy', pool: 'p' } },
       ],
@@ -478,6 +481,7 @@ describe('R20 — 4차 검수 구현 High', () => {
       ],
       pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' }],
       backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 443, weight: 1 }],
+      certificates: [], tlsPolicies: [], sniBindings: [],
       passthroughRoutes: [
         { key: 'r', listener: 'tls', snis: ['mail.example.com'], priority: 1, action: { kind: 'proxy', pool: 'p' } },
       ],

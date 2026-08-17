@@ -22,7 +22,8 @@ import {
   type ConfNode, type ConfValue,
 } from './ast.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
-import { parseHostPattern } from '../validate/strings.js';
+import { coversHost, parseHostPattern } from '../validate/strings.js';
+import { parseRef } from '../dp/secrets.js';
 import { poolsReachedBy } from '../validate/engine-constraints.js';
 import { ModelValidationError, validateModel } from '../validate/model.js';
 import { decodeModel } from '../model/decode.js';
@@ -30,6 +31,7 @@ import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
 import type {
   HttpListener,
+  HttpsListener,
   PassthroughListener,
   TcpListener,
   UdpListener,
@@ -38,8 +40,12 @@ import type {
   Listener,
   Model,
   PassthroughRoute,
+  Certificate,
   Pool,
+  SniCertificateBinding,
   SniOutcome,
+  TlsPolicy,
+  TlsVersion,
   UdpPreset,
 } from '../model/provisional.js';
 
@@ -150,6 +156,7 @@ function listenArgs(l: Listener): ConfValue[] {
       : [lit(`${bind.value.addr}:${l.port}`)];
   // udp 는 PROXY 수신을 지원하지 않는다 (§4.7). **타입에 그 필드가 없다** — 먼저 좁힌다.
   if (l.protocol !== 'udp' && l.acceptProxyProtocol !== undefined) base.push(lit('proxy_protocol'));
+  if (l.protocol === 'https') base.push(lit('ssl'));
   return base;
 }
 
@@ -273,9 +280,10 @@ function pickExpression(pool: Pool): string {
  * 호스트를 독립 단위로 펼치면 둘 다 사라진다.
  */
 function httpServerBlocks(
-  listener: HttpListener,
+  listener: HttpListener | HttpsListener,
   routes: HttpRoute[],
   poolsWithBackends: Set<string>,
+  tls: TlsContext | undefined,
 ): ConfNode[] {
   // (호스트, 라우트) 쌍으로 펼친다.
   const byHost = new Map<string, HttpRoute[]>();
@@ -318,10 +326,17 @@ function httpServerBlocks(
         ? lit(parsed.value.host)
         : regex(`~^[^.]+\\.${parsed.value.suffix.replace(/\./g, '\\.')}$`);
 
+    // S16 — 인증서와 정책은 **이 server 블록 안**에 낸다. 그래야 SNI 별로 갈린다.
+    const tlsBody = tls === undefined ? [] : (() => {
+      const c = certFor(host, tls.listener, tls.bindings, tls.policy, tls.certs);
+      return tlsNodes(c.cert, c.min, c.max);
+    })();
+
     out.push(
       block('server', [], [
         directive('listen', listenArgs(listener)),
         directive('server_name', [nameArg]),
+        ...tlsBody,
         ...realipNodes(listener),
         ...locations,
       ]),
@@ -395,7 +410,108 @@ function realipNodes(listener: Listener): ConfNode[] {
   ];
 }
 
-function defaultServerBlock(listener: HttpListener, poolsWithBackends: Set<string>): ConfNode {
+/**
+ * 세대 안에서의 인증서 경로. §7.2 · §4.8 · S8
+ *
+ * **conf_prefix 상대경로다.** `ssl_certificate` 는 `include` 와 마찬가지로 conf 파일이
+ * 있는 디렉토리 기준으로 풀린다(E62). 그래서 `current/nginx.conf` 로 띄우든 게시 전
+ * `generations/N/nginx.conf` 를 `nginx -t` 하든 **자기 세대의 자료**를 가리킨다.
+ *
+ * ── 경로에 버전이 들어가는 이유 ─────────────────────────────────────────
+ *
+ * 처음엔 `certs/<key>/` 였다. 그러면 **인증서를 갱신해도 렌더 산출물이 글자 하나 안
+ * 바뀐다** — 경로가 같고 conf 의 나머지도 같으니 digest 가 동일하다. 그리고 apply 는
+ * "산출물이 안 바뀌었다" 를 멤버십 전용 전환의 근거로 쓰므로(§6.5), **갱신이 세대를
+ * 안 만들고 조용히 통과한다.** 옛 인증서가 그대로 제시되는데 apply 는 성공이라고 답한다.
+ *
+ * e2e 가 정확히 이걸로 걸렸다. 참조는 §4.8 대로 버전 고정이었는데, **그 버전이 렌더까지
+ * 내려오지 않아서** 아무 효과가 없었다 — 이 저장소가 반복해서 밟은 *"필드는 있는데
+ * 아무도 안 읽는다"* 의 한 판이다.
+ *
+ * 버전을 경로에 넣으면 갱신이 곧 다른 conf 가 되고, 세대·digest·롤백이 전부 따라온다.
+ */
+export function certPaths(certKey: string, version: string): { chain: string; key: string } {
+  return {
+    chain: `certs/${certKey}/${version}/fullchain.pem`,
+    key: `certs/${certKey}/${version}/privkey.pem`,
+  };
+}
+
+const TLS_ORDER: readonly TlsVersion[] = ['1.2', '1.3'];
+
+/**
+ * min/max 를 `ssl_protocols` 인자들로.
+ *
+ * **한 문자열이 아니라 인자 배열이다.** `TLSv1.2 TLSv1.3` 을 값 하나로 내면 AST 가
+ * 공백 때문에 통째로 인용하고, nginx 는 `invalid value "TLSv1.2 TLSv1.3"` 으로 죽는다.
+ * 디렉티브의 인자 수를 문자열 안에 숨기지 않는다.
+ */
+function sslProtocols(min: TlsVersion, max: TlsVersion | undefined): ConfValue[] {
+  const lo = TLS_ORDER.indexOf(min);
+  const hi = max === undefined ? TLS_ORDER.length - 1 : TLS_ORDER.indexOf(max);
+  return TLS_ORDER.slice(lo, hi + 1).map((v) => lit(`TLSv${v}`));
+}
+
+/**
+ * 한 server 블록의 TLS 디렉티브. S16 · S17
+ *
+ * **policy 를 server 블록 안에 낸다.** S16 이 실측했다 — server 레벨이 http 레벨을 덮고,
+ * 비-default server 의 값도 실제 handshake 에 걸린다. http 레벨에 한 번만 내면 SNI 별
+ * override 가 표시만 하고 마는 거짓말이 된다.
+ */
+function tlsNodes(
+  cert: Certificate, min: TlsVersion, max: TlsVersion | undefined,
+): ConfNode[] {
+  const paths = certPaths(cert.key, parseRef(cert.materialRef).version);
+  return [
+    directive('ssl_certificate', [lit(paths.chain)]),
+    directive('ssl_certificate_key', [lit(paths.key)]),
+    directive('ssl_protocols', sslProtocols(min, max)),
+  ];
+}
+
+/** 리스너의 SNI 바인딩에서 이 호스트의 인증서와 버전 범위를 찾는다. */
+function certFor(
+  host: string,
+  listener: HttpsListener,
+  bindings: SniCertificateBinding[],
+  policy: TlsPolicy,
+  certs: Map<string, Certificate>,
+): { cert: Certificate; min: TlsVersion; max: TlsVersion | undefined } {
+  for (const b of bindings) {
+    if (!b.hosts.some((p) => coversHost(p, host))) continue;
+    const cert = certs.get(b.certificate);
+    if (cert === undefined) {
+      throw new Error(`알 수 없는 인증서가 렌더에 도달했다: '${b.certificate}'`);
+    }
+    return {
+      cert,
+      min: b.override?.minVersion ?? policy.minVersion,
+      // `override.maxVersion` 가 없으면 policy 로 돌아간다. `undefined` 를 "상한 없음"
+      // 으로 읽으면 override 가 정책을 **넓히는** 셈이 된다.
+      max: b.override?.maxVersion ?? policy.maxVersion,
+    };
+  }
+  // 검증기가 이미 막았다 (`sni_binding_missing`). 여기 오면 렌더러가 인증서를 지어내는
+  // 대신 **터진다** — 조용히 default 인증서를 물리면 SAN 미커버 제시가 된다.
+  throw new Error(
+    `SNI 바인딩 없는 호스트가 렌더에 도달했다: 리스너 '${listener.key}' 의 '${host}'`,
+  );
+}
+
+/** https 렌더에 필요한 문맥. http 리스너에는 `undefined` 다. */
+type TlsContext = {
+  listener: HttpsListener;
+  bindings: SniCertificateBinding[];
+  policy: TlsPolicy;
+  certs: Map<string, Certificate>;
+};
+
+function defaultServerBlock(
+  listener: HttpListener | HttpsListener,
+  poolsWithBackends: Set<string>,
+  tls: TlsContext | undefined,
+): ConfNode {
   const action = listener.http?.defaultAction ?? 'reject';
   const body: ConfNode[] =
     action !== 'reject' && poolsWithBackends.has(action.pool)
@@ -407,9 +523,24 @@ function defaultServerBlock(listener: HttpListener, poolsWithBackends: Set<strin
         ]
       : [directive('return', [num(444)])];
 
+  // **S17 — TLS 리스너의 default_server 는 선택이 아니다.** 없으면 모르는 SNI 가 첫
+  // 블록의 인증서를 받는다(E32 의 TLS 판). 여기 쓰는 인증서는 리스너의
+  // `tls.defaultCertificate` 이고, 그 값이 없는 https 리스너는 타입이 표현하지 못한다.
+  const tlsBody = tls === undefined
+    ? []
+    : tlsNodes(
+        tls.certs.get(tls.listener.tls.defaultCertificate)
+          ?? ((): Certificate => {
+            throw new Error(
+              `알 수 없는 default 인증서가 렌더에 도달했다: '${tls.listener.tls.defaultCertificate}'`);
+          })(),
+        tls.policy.minVersion, tls.policy.maxVersion,
+      );
+
   return block('server', [], [
     directive('listen', [...listenArgs(listener), lit('default_server')]),
     directive('server_name', [lit('_')]),
+    ...tlsBody,
     ...realipNodes(listener),
     ...body,
   ]);
@@ -554,9 +685,14 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
    * 그걸 못 하는 경우(stream 인데 `stream_realip` 없음)는 **검증기가 막는다** — 렌더러가
    * 조용히 열등한 대체물을 고르지 않는다.
    */
-  const httpListeners = listeners.filter((l): l is HttpListener => l.protocol === 'http');
+  // **https 도 http 블록에서 산다.** TLS 종단은 stream 이 아니라 http 의 일이다 —
+  // `tls_passthrough` 만 stream 이고, 그쪽은 인증서를 제시하지 않는다 (§4.6).
+  const httpListeners = listeners.filter(
+    (l): l is HttpListener | HttpsListener => l.protocol === 'http' || l.protocol === 'https',
+  );
   const streamListeners = listeners.filter(
-    (l): l is PassthroughListener | TcpListener | UdpListener => l.protocol !== 'http',
+    (l): l is PassthroughListener | TcpListener | UdpListener =>
+      l.protocol !== 'http' && l.protocol !== 'https',
   );
 
   const top: ConfNode[] = [block('events', [], [directive('worker_connections', [num(1024)])])];
@@ -629,10 +765,23 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
         ? membershipUpstream(pools.get(poolKey)!, 'http')
         : upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], 'remote_addr'));
     }
+    const policies = new Map(model.tlsPolicies.map((t) => [t.key, t]));
+    const certs = new Map(model.certificates.map((c) => [c.key, c]));
     for (const l of httpListeners) {
-      children.push(defaultServerBlock(l, poolsWithBackends));
+      const tls: TlsContext | undefined = l.protocol === 'https'
+        ? {
+            listener: l,
+            bindings: byKey(model.sniBindings.filter((b) => b.listener === l.key)),
+            certs,
+            // 검증기가 참조를 이미 봤다. 없으면 인증서를 지어내는 대신 터진다.
+            policy: policies.get(l.tls.policy) ?? ((): TlsPolicy => {
+              throw new Error(`알 수 없는 TLS 정책이 렌더에 도달했다: '${l.tls.policy}'`);
+            })(),
+          }
+        : undefined;
+      children.push(defaultServerBlock(l, poolsWithBackends, tls));
       children.push(
-        ...httpServerBlocks(l, routesByListener.get(l.key) ?? [], poolsWithBackends),
+        ...httpServerBlocks(l, routesByListener.get(l.key) ?? [], poolsWithBackends, tls),
       );
     }
     top.push(block('http', [], children));

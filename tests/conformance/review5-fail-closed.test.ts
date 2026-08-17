@@ -37,6 +37,7 @@ const backend = (pool: string, key = `b-${pool}`) => ({
 const model = (over: Partial<RawModel> = {}): RawModel => ({
   listeners: [],
   httpRoutes: [],
+  certificates: [], tlsPolicies: [], sniBindings: [],
   passthroughRoutes: [],
   pools: [httpPool, tcpPool, udpPool],
   backends: [backend('ph'), backend('pt'), backend('pu')],
@@ -108,6 +109,7 @@ describe('정상 모델은 통과한다', () => {
           listeners: [
             { key: 'lp', protocol: 'tls_passthrough', bind: '0.0.0.0', port: 443, enabled: true },
           ],
+          certificates: [], tlsPolicies: [], sniBindings: [],
           passthroughRoutes: [
             { key: 'r', listener: 'lp', snis: ['a.example'], priority: 1, action: { kind: 'proxy', pool: 'pt' } },
           ],
@@ -174,6 +176,7 @@ describe('⑦b 라우트는 자기 프로토콜의 리스너만 가리킨다', (
       codes(
         model({
           listeners: [{ key: 'lh', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true }],
+          certificates: [], tlsPolicies: [], sniBindings: [],
           passthroughRoutes: [
             { key: 'r', listener: 'lh', snis: ['a.example'], priority: 1, action: { kind: 'proxy', pool: 'pt' } },
           ],

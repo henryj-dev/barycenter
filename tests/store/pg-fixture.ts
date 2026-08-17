@@ -25,9 +25,17 @@ export type PgHandle = { name: string; port: number; dsn: string };
 
 export function pgFor(id: string): PgHandle {
   // 포트는 id 에서 결정적으로 뽑는다. 무작위로 고르면 재현이 안 된다.
+  //
+  // **ephemeral 범위를 피한다.** 전에는 55400+ 를 썼는데, macOS 의 아웃바운드 임시 포트
+  // 범위가 49152–65535 라서 커널이 같은 번호를 먼저 집어가면 컨테이너가 못 뜬다.
+  // 실제로 봤다: `bind: address already in use` 인데 `docker ps` 에는 아무것도 없고,
+  // `netstat` 에 그 포트가 **소스 포트**로 잡힌 바깥 연결 하나가 있었다.
+  //
+  // 무작위로 실패하는 데다 원인이 이 저장소 안에 안 보이므로, 다음 사람은 자기 변경을
+  // 의심하며 시간을 버린다. 등록된 포트 구간(1024–49151) 안으로 내린다.
   let h = 0;
   for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) % 4000;
-  const port = 55400 + h;
+  const port = 45000 + h;
   return { name: `bary-pg-${id}`, port, dsn: `postgres://postgres:bary@127.0.0.1:${port}/bary` };
 }
 

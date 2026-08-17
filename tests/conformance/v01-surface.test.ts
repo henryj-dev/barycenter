@@ -75,6 +75,7 @@ describe('v0.1 표면', () => {
       surface.parseModel({
         listeners: [{ key: 'l', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true }],
         httpRoutes: [],
+        certificates: [], tlsPolicies: [], sniBindings: [],
         passthroughRoutes: [],
         pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin', ...over }],
         backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 80, weight: 1 }],
@@ -91,6 +92,7 @@ describe('v0.1 표면', () => {
       surface.parseModel({
         listeners: [{ key: 'l', protocol, bind: '0.0.0.0', port: 443, enabled: true }],
         httpRoutes: [],
+        certificates: [], tlsPolicies: [], sniBindings: [],
         passthroughRoutes: [],
         pools: [],
         backends: [],
@@ -289,6 +291,7 @@ describe('표면이 실제로 쓸 만한가 — 목록만 맞추면 의미가 �
         { key: 'l', protocol: 'tcp', bind: '0.0.0.0', port: 9000, enabled: true, defaultPool: 'p' },
       ],
       httpRoutes: [],
+      certificates: [], tlsPolicies: [], sniBindings: [],
       passthroughRoutes: [],
       pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' }],
       backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 80, weight: 1 }],

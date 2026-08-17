@@ -20,6 +20,7 @@
 import type {
   InboundProxyProtocol,
   Backend,
+  Certificate,
   HttpAction,
   HttpProfile,
   HttpRoute,
@@ -28,7 +29,10 @@ import type {
   PassthroughAction,
   PassthroughRoute,
   Pool,
+  SniCertificateBinding,
   SniOutcome,
+  TlsPolicy,
+  TlsVersion,
 } from './provisional.js';
 import { validateModel, type ModelIssue, type ValidationCapabilities } from '../validate/model.js';
 
@@ -146,7 +150,8 @@ function optional<T>(v: unknown, decode: () => T | undefined): T | undefined {
 
 // ── enum 목록 — **여기 없는 값은 존재하지 않는다** ───────────────────────
 
-const LISTENER_PROTOCOLS = ['http', 'tls_passthrough', 'tcp', 'udp'] as const;
+const LISTENER_PROTOCOLS = ['http', 'https', 'tls_passthrough', 'tcp', 'udp'] as const;
+const TLS_VERSIONS = ['1.2', '1.3'] as const;
 const PROTOCOL_CLASSES = ['http', 'tcp', 'udp'] as const;
 const ALGORITHMS = ['round_robin', 'source_ip_hash', 'hash'] as const;
 const UDP_PRESETS = ['dns', 'wireguard', 'game_generic', 'custom'] as const;
@@ -286,6 +291,20 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
         ...(http === undefined ? {} : { http }),
       };
     }
+    case 'https': {
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'http', 'tls']);
+      const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
+      const http = optional(v['http'], () => decodeHttpProfile(iss, v['http'], `${path}.http`));
+      // **`tls` 는 필수다.** 없으면 렌더러가 인증서를 지어내거나 평문으로 내야 한다 —
+      // v3 이 정확히 그렇게 깨졌다. 여기서 막는다.
+      const tls = required(iss, v, 'tls', path, () => decodeTlsBinding(iss, v['tls'], `${path}.tls`));
+      if (tls === undefined) return undefined;
+      return {
+        ...head, protocol, tls,
+        ...(accept === undefined ? {} : { acceptProxyProtocol: accept }),
+        ...(http === undefined ? {} : { http }),
+      };
+    }
     case 'tls_passthrough': {
       noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'onUnmatchedSni', 'prereadTimeoutS']);
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
@@ -418,9 +437,99 @@ function decodePassthroughRoute(iss: Issues, v: unknown, path: string): Passthro
   return { key, listener, snis, priority, action };
 }
 
+function decodeTlsBinding(
+  iss: Issues, v: unknown, path: string,
+): { policy: string; defaultCertificate: string } | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['policy', 'defaultCertificate']);
+  const policy = required(iss, v, 'policy', path, () => str(iss, v['policy'], `${path}.policy`));
+  const defaultCertificate = required(iss, v, 'defaultCertificate', path, () =>
+    str(iss, v['defaultCertificate'], `${path}.defaultCertificate`));
+  if (policy === undefined || defaultCertificate === undefined) return undefined;
+  return { policy, defaultCertificate };
+}
+
+/**
+ * 인증서 **메타데이터**를 해독한다.
+ *
+ * **`fullchain`·`privkey` 라는 키는 여기 없다.** `noExtraKeys` 가 그런 입력을 거절한다 —
+ * 자료는 SecretStore 로만 들어가고(§4.8), 모델을 통해 들어오는 경로를 만들지 않는다.
+ * 실수로 넣으면 조용히 무시되는 게 아니라 **에러가 난다.**
+ */
+function decodeCertificate(iss: Issues, v: unknown, path: string): Certificate | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['key', 'materialRef', 'chainDigest', 'keyDigest']);
+  const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
+  const materialRef = required(iss, v, 'materialRef', path, () => str(iss, v['materialRef'], `${path}.materialRef`));
+  const chainDigest = required(iss, v, 'chainDigest', path, () => str(iss, v['chainDigest'], `${path}.chainDigest`));
+  const keyDigest = required(iss, v, 'keyDigest', path, () => str(iss, v['keyDigest'], `${path}.keyDigest`));
+  if (key === undefined || materialRef === undefined || chainDigest === undefined || keyDigest === undefined) {
+    return undefined;
+  }
+  return { key, materialRef, chainDigest, keyDigest };
+}
+
+function decodeTlsPolicy(iss: Issues, v: unknown, path: string): TlsPolicy | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['key', 'minVersion', 'maxVersion']);
+  const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
+  const minVersion = required(iss, v, 'minVersion', path, () =>
+    oneOf(iss, v['minVersion'], `${path}.minVersion`, TLS_VERSIONS));
+  const maxVersion = optional(v['maxVersion'], () =>
+    oneOf(iss, v['maxVersion'], `${path}.maxVersion`, TLS_VERSIONS));
+  if (key === undefined || minVersion === undefined) return undefined;
+  return { key, minVersion, ...(maxVersion === undefined ? {} : { maxVersion }) };
+}
+
+function decodeSniBinding(iss: Issues, v: unknown, path: string): SniCertificateBinding | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['key', 'listener', 'hosts', 'certificate', 'override']);
+  const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
+  const listener = required(iss, v, 'listener', path, () => str(iss, v['listener'], `${path}.listener`));
+  const hosts = required(iss, v, 'hosts', path, () =>
+    arrayOf(iss, v['hosts'], `${path}.hosts`, (h, at) => str(iss, h, at)));
+  const certificate = required(iss, v, 'certificate', path, () => str(iss, v['certificate'], `${path}.certificate`));
+  const override = optional(v['override'], () => decodeTlsOverride(iss, v['override'], `${path}.override`));
+  if (key === undefined || listener === undefined || hosts === undefined || certificate === undefined) {
+    return undefined;
+  }
+  return { key, listener, hosts, certificate, ...(override === undefined ? {} : { override }) };
+}
+
+function decodeTlsOverride(
+  iss: Issues, v: unknown, path: string,
+): { minVersion?: TlsVersion; maxVersion?: TlsVersion } | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['minVersion', 'maxVersion']);
+  const minVersion = optional(v['minVersion'], () => oneOf(iss, v['minVersion'], `${path}.minVersion`, TLS_VERSIONS));
+  const maxVersion = optional(v['maxVersion'], () => oneOf(iss, v['maxVersion'], `${path}.maxVersion`, TLS_VERSIONS));
+  return {
+    ...(minVersion === undefined ? {} : { minVersion }),
+    ...(maxVersion === undefined ? {} : { maxVersion }),
+  };
+}
+
 // ── 입구 ─────────────────────────────────────────────────────────────────
 
-const MODEL_KEYS = ['listeners', 'httpRoutes', 'passthroughRoutes', 'pools', 'backends'] as const;
+const MODEL_KEYS = [
+  'listeners', 'httpRoutes', 'passthroughRoutes', 'pools', 'backends',
+  'certificates', 'tlsPolicies', 'sniBindings',
+] as const;
 
 /**
  * `unknown` 을 `Model` 로 해독한다. **모양과 타입만** 본다 — 참조 무결성 같은 의미
@@ -441,6 +550,9 @@ export function decodeModel(input: unknown): DecodeResult {
       decodePassthroughRoute(iss, v, at)),
     pools: arrayOf(iss, input['pools'] ?? [], 'pools', (v, at) => decodePool(iss, v, at)),
     backends: arrayOf(iss, input['backends'] ?? [], 'backends', (v, at) => decodeBackend(iss, v, at)),
+    certificates: arrayOf(iss, input['certificates'] ?? [], 'certificates', (v, at) => decodeCertificate(iss, v, at)),
+    tlsPolicies: arrayOf(iss, input['tlsPolicies'] ?? [], 'tlsPolicies', (v, at) => decodeTlsPolicy(iss, v, at)),
+    sniBindings: arrayOf(iss, input['sniBindings'] ?? [], 'sniBindings', (v, at) => decodeSniBinding(iss, v, at)),
   };
 
   return iss.failed ? { ok: false, issues: iss.list } : { ok: true, model };

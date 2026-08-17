@@ -12,7 +12,7 @@ import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
 
 const base: Model = {
-  listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
+  listeners: [], httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [], pools: [], backends: [],
 };
 
 const tcp = (bind: string): Model => ({
