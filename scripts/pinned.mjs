@@ -30,30 +30,61 @@ import { join } from 'node:path';
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 
 const base = process.argv[2] ?? 'HEAD~1';
-// **sha 로 고정한다.** worktree 안에서 `HEAD` 는 그 worktree 의 HEAD — 즉 **부모**다.
-// 문자열 `'HEAD'` 를 넘기면 "지금 테스트를 얹는다" 가 아니라 **부모 테스트를 도로
-// 얹는** 것이 되고, 게이트가 정당한 핀을 "안 지킨다" 고 오판한다.
-// **게이트 자신의 세 번째 버그다** — 만들면서 둘, 49차가 넷, 그리고 이것.
 const head = git('rev-parse', 'HEAD');
 
-const touchedSrc = git('diff', '--name-only', `${base}..${head}`, '--', 'src/').length > 0;
-if (!touchedSrc) {
-  console.log('src 변경 없음 — 재현물 게이트를 건너뛴다.');
+/**
+ * **커밋을 하나씩 본다.**
+ *
+ * 처음엔 `base..head` 를 통째로 diff 하고 **HEAD 의 메시지만** 읽었다. 로컬에서 커밋
+ * 하나씩 검사할 때는 맞았지만, CI 가 푸시나 PR 을 볼 때는 거짓이다 —
+ * 커밋 셋을 밀면서 **가운데 것만 `src/` 를 재현물 없이 고쳐도 그냥 지나간다.**
+ * 마지막 커밋이 문서 수정이면 diff 는 여전히 `src/` 를 포함하고, 메시지는 마지막 것만
+ * 읽으니 표식이 없다고 걸리거나 있다고 통과하거나 **둘 다 엉뚱한 커밋 기준**이다.
+ *
+ * 게이트를 CI 에 걸면서 드러났다. 범위를 받는 도구는 범위를 봐야 한다.
+ *
+ * 머지 커밋은 건너뛴다 — 두 부모에 대한 diff 는 "이 커밋이 무엇을 바꿨나" 를 말하지 않고,
+ * 실제 변경은 이미 각 커밋에서 검사된다.
+ */
+const commits = git('rev-list', '--reverse', '--no-merges', `${base}..${head}`)
+  .split('\n').map((x) => x.trim()).filter(Boolean);
+
+if (commits.length === 0) {
+  console.log('검사할 커밋이 없다.');
   process.exit(0);
 }
 
-const message = git('log', '-1', '--format=%B', head);
-const marks = [...message.matchAll(/^Pinned-by:\s*(.+)$/gm)].map((m) => m[1].trim());
+let failed = 0;
+for (const sha of commits) {
+  if (!checkCommit(sha)) failed = 1;
+}
+process.exit(failed);
 
-if (marks.length === 0) {
-  console.error(
-    'src 를 바꿨는데 `Pinned-by:` 가 없다.\n\n'
-    + '  Pinned-by: tests/conformance/foo.test.ts -t "이름"   재현물이 있다\n'
-    + '  Pinned-by: none — <근거>                              없어도 되는 이유를 적는다\n\n'
-    + '40차 규칙: **검증물은 커밋된 산출물이어야 한다.** 46차에 그것을 어겼고 47차가\n'
-    + '재현물을 대신 만들어 줬다. 규칙이 산문이라 안 지켜졌으므로 게이트로 옮겼다.',
-  );
-  process.exit(1);
+/** 커밋 하나를 검사한다. 통과면 true. */
+function checkCommit(sha) {
+  const short = sha.slice(0, 8);
+  const parent = `${sha}^`;
+  const subject = git('log', '-1', '--format=%s', sha);
+
+  if (git('diff', '--name-only', `${parent}..${sha}`, '--', 'src/').length === 0) {
+    console.log(`건너뜀 ${short} — src 변경 없음 (${subject})`);
+    return true;
+  }
+
+  const message = git('log', '-1', '--format=%B', sha);
+  const marks = [...message.matchAll(/^Pinned-by:\s*(.+)$/gm)].map((m) => m[1].trim());
+
+  if (marks.length === 0) {
+    console.error(
+      `FAIL  ${short} — src 를 바꿨는데 \`Pinned-by:\` 가 없다 (${subject})\n\n`
+      + '  Pinned-by: tests/conformance/foo.test.ts -t "이름"   재현물이 있다\n'
+      + '  Pinned-by: none — <근거>                              없어도 되는 이유를 적는다\n\n'
+      + '40차 규칙: **검증물은 커밋된 산출물이어야 한다.** 46차에 그것을 어겼고 47차가\n'
+      + '재현물을 대신 만들어 줬다. 규칙이 산문이라 안 지켜졌으므로 게이트로 옮겼다.',
+    );
+    return false;
+  }
+  return checkMarks(sha, parent, marks, short);
 }
 
 /**
@@ -85,67 +116,64 @@ function dropWorktree(w) {
   rmSync(w.dir, { recursive: true, force: true });
 }
 
-let failed = 0;
-for (const mark of marks) {
-  if (mark.startsWith('none')) {
-    // **근거를 요구한다** (49차 ⓐ). 맨 `none` 도 통과했다 — 문서가 요구하는 형식조차
-    // 기계가 안 봤다. 근거의 질은 여전히 사람이 봐야 한다.
-    if (!/^none\s+[—-]\s+\S/.test(mark)) {
-      console.error(`FAIL  ${mark} — \`none\` 뒤에 근거를 적어라 (\`none — <근거>\`).`);
-      failed = 1;
+function checkMarks(sha, parent, marks, short) {
+  let ok = true;
+    for (const mark of marks) {
+    if (mark.startsWith('none')) {
+      // **근거를 요구한다** (49차 ⓐ). 맨 `none` 도 통과했다 — 문서가 요구하는 형식조차
+      // 기계가 안 봤다. 근거의 질은 여전히 사람이 봐야 한다.
+      if (!/^none\s+[—-]\s+\S/.test(mark)) {
+        console.error(`FAIL  ${short} ${mark} — \`none\` 뒤에 근거를 적어라 (\`none — <근거>\`).`);
+        ok = false;
+        continue;
+      }
+      console.log(`건너뜀 ${short} — ${mark}`);
       continue;
     }
-    console.log(`건너뜀 — ${mark}`);
-    continue;
-  }
-  const m = /^(\S+)(?:\s+-t\s+"(.+)")?$/.exec(mark);
-  const argv = m === null ? [mark] : [m[1], ...(m[2] === undefined ? [] : ['-t', m[2]])];
+    const m = /^(\S+)(?:\s+-t\s+"(.+)")?$/.exec(mark);
+    const argv = m === null ? [mark] : [m[1], ...(m[2] === undefined ? [] : ['-t', m[2]])];
 
-  // **부모 트리 전체**를 별도 worktree 에 세우고, 지금의 테스트만 얹는다.
-  // 파일 삭제·추가도 그대로 반영된다 — `checkout -- src/` 가 못 하던 것이다.
-  const w = makeWorktree(base);
-  try {
-    // 테스트 **하네스**를 얹는다 — `tests/` 와 러너 설정.
-    //
-    // 처음엔 `tests/` 만 얹었다. 그랬더니 **새 테스트 디렉토리를 만든 커밋에서 게이트가
-    // "고른 테스트가 0 건" 으로 오차단했다** — 부모의 `vitest.config.ts` 는 그 디렉토리를
-    // 모르니 파일을 아예 못 찾는다. 게이트의 계약은 *"지금의 테스트를 부모의 `src/` 에
-    // 대고 돌린다"* 이고, 러너 설정은 재는 대상이 아니라 **재는 도구** 쪽이다.
-    // 대상(`src/`)은 부모 것을 그대로 둔다.
-    execFileSync('git', ['checkout', head, '--', 'tests/', 'vitest.config.ts'],
-      { cwd: w.tree, stdio: 'pipe' });
-    let red = false;
+    // **부모 트리 전체**를 별도 worktree 에 세우고, 지금의 테스트만 얹는다.
+    // 파일 삭제·추가도 그대로 반영된다 — `checkout -- src/` 가 못 하던 것이다.
+    const w = makeWorktree(parent);
     try {
-      const out = execFileSync('npx', ['vitest', 'run', ...argv], {
-        cwd: w.tree, encoding: 'utf8',
-      });
-      if (/No test files found|Tests +0 passed/.test(out)) {
-        console.error(`FAIL  ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
-        failed = 1;
-        continue;
+      // 테스트 **하네스**를 얹는다 — `tests/` 와 러너 설정.
+      //
+      // 처음엔 `tests/` 만 얹었다. 그랬더니 **새 테스트 디렉토리를 만든 커밋에서 게이트가
+      // "고른 테스트가 0 건" 으로 오차단했다** — 부모의 `vitest.config.ts` 는 그 디렉토리를
+      // 모르니 파일을 아예 못 찾는다. 게이트의 계약은 *"지금의 테스트를 부모의 `src/` 에
+      // 대고 돌린다"* 이고, 러너 설정은 재는 대상이 아니라 **재는 도구** 쪽이다.
+      // 대상(`src/`)은 부모 것을 그대로 둔다.
+      execFileSync('git', ['checkout', sha, '--', 'tests/', 'vitest.config.ts'],
+        { cwd: w.tree, stdio: 'pipe' });
+      let red = false;
+      try {
+        const out = execFileSync('npx', ['vitest', 'run', ...argv], {
+          cwd: w.tree, encoding: 'utf8',
+        });
+        if (/No test files found|Tests +0 passed/.test(out)) {
+          console.error(`FAIL  ${short} ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
+          ok = false;
+          continue;
+        }
+      } catch (e) {
+        const text = `${e.stdout ?? ''}${e.stderr ?? ''}`;
+        if (/No test files found|Tests +0 (passed|failed)/.test(text)) {
+          console.error(`FAIL  ${short} ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
+          ok = false;
+          continue;
+        }
+        red = true;
       }
-    } catch (e) {
-      const text = `${e.stdout ?? ''}${e.stderr ?? ''}`;
-      if (/No test files found|Tests +0 (passed|failed)/.test(text)) {
-        console.error(`FAIL  ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
-        failed = 1;
-        continue;
+      if (red) {
+        console.log(`ok    ${short} ${mark} — 수정 전에 빨갛다`);
+      } else {
+        console.error(`FAIL  ${short} ${mark} — **수정 전에도 초록이다. 아무것도 안 지킨다.**`);
+        ok = false;
       }
-      red = true;
+    } finally {
+      dropWorktree(w);
     }
-    if (red) {
-      console.log(`ok    ${mark} — 수정 전에 빨갛다`);
-    } else {
-      console.error(`FAIL  ${mark} — **수정 전에도 초록이다. 아무것도 안 지킨다.**`);
-      failed = 1;
-    }
-  } finally {
-    dropWorktree(w);
   }
+  return ok;
 }
-
-// **못 잡는 것을 적어 둔다** (49차 E1·ⓔ). 새 심볼을 만들고 그 심볼만 만지는 테스트를
-// 핀으로 걸면 부모에서 **무조건** 빨갛다 — 검출력 0 인 핀이 통과한다. 그리고 표식이
-// 그 수정과 무관해도 빨갛기만 하면 통과한다. **기계는 "빨간가" 만 알고 "무엇을 지키는가"
-// 는 모른다** — 그 축은 검수가 본다.
-process.exit(failed);

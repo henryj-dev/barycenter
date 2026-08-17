@@ -13,6 +13,20 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CLEAN=0
 [ "${1:-}" = "--clean" ] && CLEAN=1
 
+# **필요한 도구를 먼저 확인한다.**
+#
+# 없으면 엉뚱한 곳에서 엉뚱한 말로 죽는다 — 실제로 `curl` 이 없는 환경에서
+# "데몬이 안 떴다" 고 보고했다. 데몬은 멀쩡히 떠 있었고 못 물어본 것뿐이었다.
+# **없는 것을 없다고 말하지 못하는 진단은 진단이 아니다.**
+missing=""
+for tool in docker curl node; do
+  command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+done
+if [ -n "$missing" ]; then
+  echo "  FAIL  필요한 도구가 없다:$missing"
+  exit 1
+fi
+
 export BARY_URL=http://127.0.0.1:8088
 export BARY_TOKEN=dev-token
 
