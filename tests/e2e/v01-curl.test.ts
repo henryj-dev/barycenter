@@ -186,12 +186,10 @@ beforeAll(async () => {
       'mkdir -p /backend/logs',
       'printf \'error_log logs/e.log warn;\\npid logs/p.pid;\\nevents{worker_connections 64;}\\nhttp{access_log off;server{listen 11;location /{return 200 "BACKEND_A_11";}}}\\n\' > /backend/nginx.conf',
       '/usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf',
-      // 부트스트랩 세대 — 아직 아무 설정도 커밋되지 않았을 때 nginx 가 뜰 자리.
-      // **admin 마커는 비워 둔다.** 여기에 마커를 두면 컨트롤 플레인이 만들지도 않은
-      // 세대가 활성으로 보고돼 첫 활성화 판정이 거짓 양성이 된다.
-      'mkdir -p /prefix/generations/bootstrap/admin',
-      'printf \'error_log logs/error.log warn;\\npid logs/nginx.pid;\\nevents{worker_connections 64;}\\nhttp{access_log off;include admin/*.conf;}\\n\' > /prefix/generations/bootstrap/nginx.conf',
-      'ln -sfn generations/bootstrap /prefix/current',
+      // **부트스트랩도 데몬이 만든다.** 손으로 쓰면 멤버십 dict 와 admin 이 빠지고,
+      // 그러면 §6.5-1 의 "HUP 전 staging" 이 쓸 곳을 못 찾는다 — 실제로 멤버십 평면을
+      // 켜자 이 파일이 통째로 빨개졌다. 배포(`deploy/entrypoint.sh`)와 같은 방식이다.
+      'node /app/dist/bin/barycenterd.js --write-bootstrap',
       '/usr/local/openresty/bin/openresty -p /prefix -c /prefix/current/nginx.conf',
       'exec node /app/dist/bin/barycenterd.js',
     ].join(' && '));

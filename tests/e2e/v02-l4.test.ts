@@ -226,14 +226,12 @@ beforeAll(async () => {
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
       'set -e',
       'apk add --no-cache nodejs openssl >/dev/null 2>&1',
-      'mkdir -p /prefix/logs /prefix/state /prefix/generations/bootstrap/admin',
+      'mkdir -p /prefix/logs /prefix/state /prefix/generations',
       BACKEND_SETUP,
-      `printf '%s' 'error_log logs/error.log warn;
-pid logs/nginx.pid;
-events { worker_connections 64; }
-http { access_log off; include admin/*.conf; }
-' > /prefix/generations/bootstrap/nginx.conf`,
-      'ln -sfn generations/bootstrap /prefix/current',
+      // **부트스트랩도 데몬이 만든다.** 손으로 쓰면 멤버십 dict 와 admin 이 빠지고,
+      // 그러면 §6.5-1 의 "HUP 전 staging" 이 쓸 곳을 못 찾는다 — 실제로 멤버십 평면을
+      // 켜자 이 파일이 통째로 빨개졌다. 배포(`deploy/entrypoint.sh`)와 같은 방식이다.
+      'node /app/dist/bin/barycenterd.js --write-bootstrap',
       '/usr/local/openresty/bin/openresty -p /prefix -c /prefix/current/nginx.conf',
       'exec node /app/dist/bin/barycenterd.js',
     ].join(' && '));

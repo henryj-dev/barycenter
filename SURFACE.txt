@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 80 심볼 · sha256:dd3e934f251284eddc8bc2906cad1581b7398e0d202cd500a44f7b9bc75fe3a8
+# 80 심볼 · sha256:8723bb9e2e461c6dbe2bcbf2b7995abfa6039b5ad081d242cdbfcf2af38d7248
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -65,6 +65,8 @@ export interface DataplaneDriver {
     applyConfig(op: ApplyOperation): Promise<ApplyResult>;
     recoverConfig(): Promise<ApplyResult>;
     abortConfig(op: ApplyOperation): Promise<void>;
+    applyMembership(op: ApplyOperation, plane: Plane, slots: Record<string, string[]>): Promise<PlaneAck>;
+    pushMembershipDirect(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
     reconcileConfig(): Promise<ReconcileResult>;
     status(): Promise<DriverStatus>;
 }
@@ -102,6 +104,8 @@ export interface Effects {
     observePublished(): Promise<PublishedState>;
     signalReload(lease: ApplyLease): Promise<Checked>;
     observeActivation(): Promise<ActivationEvidence | undefined>;
+    stageMembership?(generation: string, plane: Plane, lease: ApplyLease): Promise<Checked>;
+    pushMembership?(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
 }
 ── FileStore
 export declare class FileStore implements DurableStore {
@@ -114,6 +118,8 @@ export declare class FileStore implements DurableStore {
 }
 ── FsEffects
 export declare class FsEffects implements Effects {
+    stageMembership: (generation: string, plane: "http" | "stream", lease: ApplyLease) => Promise<Checked>;
+    pushMembership: (plane: "http" | "stream", epoch: string, slots: Record<string, string[]>) => Promise<void>;
     constructor(opts: FsEffectsOptions);
     preflight(op: ApplyOperation): Promise<PreflightResult>;
     publish(record: PublishRecord, lease: ApplyLease): Promise<Checked>;
@@ -129,6 +135,7 @@ export type FsEffectsOptions = {
     probeConfigTest?: () => Promise<boolean>;
     probeErrorLogLines?: () => Promise<number>;
     configTest?: (generation: string) => Promise<boolean>;
+    pushMembership?: (plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>) => Promise<void>;
 };
 ── GenerationError
 export declare class GenerationError extends Error {
@@ -202,6 +209,8 @@ export declare class LocalDataplaneDriver implements DataplaneDriver {
         maxToken: string;
     }>;
     applyConfig(op: ApplyOperation): Promise<ApplyResult>;
+    applyMembership(op: ApplyOperation, plane: Plane, slots: Record<string, string[]>): Promise<PlaneAck>;
+    pushMembershipDirect(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
     recoverConfig(): Promise<ApplyResult>;
     abortConfig(op: ApplyOperation): Promise<void>;
     reconcileConfig(): Promise<ReconcileResult>;

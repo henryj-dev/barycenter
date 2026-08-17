@@ -1,0 +1,279 @@
+/**
+ * **v0.3 2단계 — reload 없이 백엔드가 바뀐다** (DESIGN.md §6.5 · S1)
+ *
+ * 이 제품의 이유다. S1 이 HTTP·TCP·UDP 세 서브시스템 전부에서 reload 0 회·마스터 PID
+ * 불변으로 실증했고, 그게 설계 전체가 걸려 있던 내기였다. 여기서 그 경로를 **REST 로
+ * 끝까지** 몬다.
+ *
+ * ── 무엇이 판정인가 ──────────────────────────────────────────────────────
+ *
+ * "트래픽이 옮겨갔다" 만으로는 부족하다 — 세대를 새로 만들고 HUP 을 보내도 그렇게 된다.
+ * **안 일어난 일**을 재야 한다.
+ *
+ *   · 마스터 PID 불변        재시작이 아니었다
+ *   · 워커 기동 수 불변      **reload 가 없었다** (HUP 은 워커를 새로 띄운다)
+ *   · 활성 세대 불변         세대 전환이 없었다
+ *   · 세대 디렉토리 수 불변  새 아티팩트를 안 만들었다
+ *
+ * ── 멤버십 평면은 capability 로 켜진다 ──────────────────────────────────
+ *
+ * `*_lua` 가 없는 엔진에서는 백엔드가 conf 에 남고, 그때는 세대 전환 + reload 가 **맞는
+ * 동작**이다. 그건 열등한 게 아니라 다른 계약이다.
+ */
+import { execFileSync } from 'node:child_process';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
+const NET = 'bary-v03-net';
+const PG = 'bary-v03-pg';
+const DP = 'bary-v03-dp';
+const API_PORT = 18501;
+const DATA_PORT = 18502;
+const TOKEN = 'v03-test-token';
+
+const docker = (...args: string[]): string =>
+  execFileSync('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+
+const quiet = (...args: string[]): void => {
+  try {
+    docker(...args);
+  } catch {
+    /* 없으면 그만 */
+  }
+};
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+async function waitFor<T>(probe: () => Promise<T>, ok: (v: T) => boolean, budgetMs = 30_000): Promise<T> {
+  const deadline = Date.now() + budgetMs;
+  let last = await probe();
+  while (!ok(last) && Date.now() < deadline) {
+    await sleep(250);
+    last = await probe();
+  }
+  return last;
+}
+
+type ApiResult = { status: number; body: any };
+
+async function api(method: string, path: string, body?: unknown): Promise<ApiResult> {
+  const r = await fetch(`http://127.0.0.1:${API_PORT}${path}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  const text = await r.text();
+  try {
+    return { status: r.status, body: JSON.parse(text) };
+  } catch {
+    return { status: r.status, body: text };
+  }
+}
+
+/** 데이터 플레인에 진짜 요청. */
+async function hit(): Promise<string> {
+  try {
+    const r = await fetch(`http://127.0.0.1:${DATA_PORT}/`, { signal: AbortSignal.timeout(4000) });
+    return (await r.text()).trim();
+  } catch (e) {
+    return `err:${String(e).slice(0, 40)}`;
+  }
+}
+
+/** **안 일어난 일**을 재기 위한 관측치. */
+function observe(): { master: string; workers: number; generations: number } {
+  const master = docker('exec', DP, 'sh', '-c', 'cat /prefix/logs/nginx.pid').trim();
+  const workers = Number(docker('exec', DP, 'sh', '-c',
+    'grep -c "start worker process" /prefix/logs/error.log 2>/dev/null || echo 0').trim());
+  const generations = Number(docker('exec', DP, 'sh', '-c',
+    'ls /prefix/generations | wc -l').trim());
+  return { master, workers, generations };
+}
+
+/** 한 바퀴: changeset → plan → commit → apply. */
+async function push(patch: unknown[]): Promise<{ apply: ApiResult; plan: ApiResult }> {
+  const head = await api('GET', '/api/v1/config/head');
+  const cs = await api('POST', '/api/v1/changesets', { base_revision: head.body.revision });
+  await api('PATCH', `/api/v1/changesets/${cs.body.id}`, { patch });
+  const plan = await api('POST', `/api/v1/changesets/${cs.body.id}/plan`);
+  if (plan.status !== 200) return { apply: plan, plan };
+  await api('POST', `/api/v1/changesets/${cs.body.id}/commit`, { plan_id: plan.body.id });
+  return { apply: await api('POST', '/api/v1/apply', { plan_id: plan.body.id }), plan };
+}
+
+function tearDown(): void {
+  quiet('rm', '-f', DP);
+  quiet('rm', '-f', PG);
+  quiet('network', 'rm', NET);
+}
+
+beforeAll(async () => {
+  try {
+    docker('version', '--format', '{{.Server.Version}}');
+  } catch {
+    throw new Error('도커가 없다 — 멤버십 평면은 실물로만 잰다');
+  }
+  tearDown();
+  docker('network', 'create', NET);
+  docker('run', '-d', '--name', PG, '--network', NET,
+    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'postgres:17-alpine');
+
+  const hash = execFileSync('node', ['-e',
+    `process.stdout.write(require('crypto').createHash('sha256').update('${TOKEN}').digest('hex'))`,
+  ]).toString();
+
+  docker('run', '-d', '--name', DP, '--network', NET,
+    '-p', `${API_PORT}:8088`, '-p', `${DATA_PORT}:999`,
+    '-v', `${process.cwd()}:/app:ro`,
+    '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
+    '-e', 'BARY_PREFIX=/prefix',
+    '-e', 'BARY_LISTEN=0.0.0.0:8088',
+    '-e', 'BARY_ADMIN_PORT=19999',
+    '-e', 'BARY_STREAM_ADMIN_PORT=19998',
+    '-e', 'BARY_ENGINE_BIN=/usr/local/openresty/bin/openresty',
+    '-e', `BARY_TOKENS=[{"name":"tester","hash":"sha256:${hash}","scopes":["read","write","apply"]}]`,
+    '-e', 'BARY_RELOAD_CMD=kill -HUP $(cat /prefix/logs/nginx.pid)',
+    '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
+    '--entrypoint', '/bin/sh', IMAGE, '-c', [
+      'set -e',
+      'apk add --no-cache nodejs >/dev/null 2>&1',
+      'mkdir -p /prefix/logs /prefix/state /prefix/generations /backend/logs',
+      // 컨트롤 플레인이 **모르는** 백엔드 둘.
+      `printf '%s' 'error_log logs/e.log warn;
+pid logs/p.pid;
+events { worker_connections 64; }
+http { access_log off;
+    server { listen 11; location / { return 200 "B11"; } }
+    server { listen 12; location / { return 200 "B12"; } }
+}
+' > /backend/nginx.conf`,
+      '/usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf',
+      // **부트스트랩도 데몬이 만든다** — 멤버십 dict 가 옛 세대에 이미 있어야 §6.5-1 의
+      // "HUP 전 staging" 이 성립한다.
+      'node /app/dist/bin/barycenterd.js --write-bootstrap',
+      '/usr/local/openresty/bin/openresty -p /prefix -c /prefix/current/nginx.conf',
+      'exec node /app/dist/bin/barycenterd.js',
+    ].join(' && '));
+
+  const up = await waitFor(async () => {
+    try {
+      return (await fetch(`http://127.0.0.1:${API_PORT}/healthz`,
+        { signal: AbortSignal.timeout(2000) })).ok;
+    } catch {
+      return false;
+    }
+  }, (ok) => ok, 120_000);
+  if (!up) throw new Error(`데몬이 안 떴다:\n${docker('logs', '--tail', '40', DP)}`);
+}, 300_000);
+
+afterAll(() => {
+  tearDown();
+});
+
+describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
+  it('엔진이 멤버십 평면을 지원한다 — 그리고 부트스트랩에 dict 가 있다', async () => {
+    const st = await api('GET', '/api/v1/status');
+    expect(st.body.engine.supports.runtimeMembership).toEqual({ http: true, stream: true });
+    // §6.5-1 은 HUP **전에** 적재하라고 한다. 그 시점에 도는 것은 옛 세대이므로,
+    // dict 와 admin 이 **부트스트랩에 이미 있어야** 적재할 곳이 있다.
+    const conf = docker('exec', DP, 'sh', '-c', 'cat /prefix/generations/bootstrap/nginx.conf');
+    expect(conf).toContain('lua_shared_dict bary_http');
+  });
+
+  it('첫 apply — **백엔드가 conf 에 없다**. dict 에 산다', async () => {
+    const { apply } = await push([
+      { op: 'put', kind: 'pool', key: 'app', body: { protocolClass: 'http', algorithm: 'round_robin' } },
+      { op: 'put', kind: 'backend', key: 'b11', body: { pool: 'app', host: '127.0.0.1', port: 11, weight: 1 } },
+      {
+        op: 'put', kind: 'listener', key: 'front',
+        body: {
+          protocol: 'http', bind: '0.0.0.0', port: 999, enabled: true,
+          http: { defaultAction: { pool: 'app' } },
+        },
+      },
+    ]);
+    expect(apply.body.phase, JSON.stringify(apply.body.detail)).toBe('activated');
+    expect(await waitFor(hit, (v) => v === 'B11')).toBe('B11');
+
+    const rendered = await api('GET', '/api/v1/config/rendered');
+    expect(rendered.body.conf).toContain('balancer_by_lua_block');
+    expect(rendered.body.conf).not.toContain('127.0.0.1:11');
+  }, 180_000);
+
+  it('**백엔드를 바꿔도 reload 가 없다** — 이게 v0.3 의 헤드라인이다', async () => {
+    const before = observe();
+    expect(await hit()).toBe('B11');
+
+    const { apply, plan } = await push([
+      { op: 'delete', kind: 'backend', key: 'b11' },
+      { op: 'put', kind: 'backend', key: 'b12', body: { pool: 'app', host: '127.0.0.1', port: 12, weight: 1 } },
+    ]);
+    // plan 이 미리 말한다 — 산출물이 안 바뀌므로 reload 가 필요 없다 (§5.4).
+    expect(plan.body.impact.requiresReload).toBe(false);
+    expect(apply.body.phase, JSON.stringify(apply.body.detail)).toBe('activated');
+    expect(apply.body.detail).toMatchObject({ membershipOnly: true, reload: false });
+
+    // 트래픽이 옮겨갔다.
+    expect(await waitFor(hit, (v) => v === 'B12')).toBe('B12');
+
+    // **그리고 아무것도 안 일어났다.**
+    const after = observe();
+    expect(after.master, '마스터 PID 가 바뀌었다 — 재시작이다').toBe(before.master);
+    expect(after.workers, '워커가 새로 떴다 — reload 가 일어났다').toBe(before.workers);
+    expect(after.generations, '세대가 새로 생겼다').toBe(before.generations);
+    expect(apply.body.activationEpoch, 'epoch 가 움직였다 — 세대 전환이다')
+      .toBe((await api('GET', '/api/v1/status')).body.planes.http.activationEpoch);
+  }, 180_000);
+
+  it('**리스너를 바꾸면 reload 가 있다** — 판정이 무차별이 아니다', async () => {
+    const before = observe();
+    const { apply, plan } = await push([{
+      op: 'put', kind: 'listener', key: 'front',
+      body: {
+        protocol: 'http', bind: '0.0.0.0', port: 999, enabled: true,
+        http: { defaultAction: 'reject' },
+      },
+    }]);
+    expect(plan.body.impact.requiresReload).toBe(true);
+    expect(apply.body.phase, JSON.stringify(apply.body.detail)).toBe('activated');
+    expect(apply.body.detail).not.toMatchObject({ membershipOnly: true });
+
+    const after = observe();
+    expect(after.generations, '세대가 안 생겼다 — 설정 변경인데').toBeGreaterThan(before.generations);
+  }, 180_000);
+
+  it('**재시작이 멤버십을 되돌리지 않는다** — 정본은 head 다 (§6.4)', async () => {
+    // shared dict 는 **프로세스 수명**이다. 엔진이 재시작하면 슬롯이 통째로 비고 밸런서는
+    // 연결을 끊는다(§6.5-3) — 설정은 멀쩡한데 트래픽이 전부 죽는다.
+    //
+    // 그리고 복원의 정본이 **세대 아티팩트면 안 된다.** 아티팩트는 그 세대가 만들어질
+    // 때의 스냅샷이라, 그 뒤의 멤버십 전용 변경(세대를 안 만든다)이 통째로 사라진다.
+    // 실제로 그렇게 만들었다가 :12 로 옮긴 백엔드가 재시작 뒤 :11 로 되살아났다.
+    await push([
+      { op: 'put', kind: 'listener', key: 'front',
+        body: {
+          protocol: 'http', bind: '0.0.0.0', port: 999, enabled: true,
+          http: { defaultAction: { pool: 'app' } },
+        } },
+    ]);
+    expect(await waitFor(hit, (v) => v === 'B12')).toBe('B12');
+
+    docker('restart', DP);
+    const up = await waitFor(async () => {
+      try {
+        return (await fetch(`http://127.0.0.1:${API_PORT}/healthz`,
+          { signal: AbortSignal.timeout(2000) })).ok;
+      } catch {
+        return false;
+      }
+    }, (ok) => ok, 120_000);
+    expect(up, `재기동 실패:\n${docker('logs', '--tail', '20', DP)}`).toBe(true);
+
+    // **head 가 말하는 백엔드로 돌아온다** — 아티팩트가 아니라.
+    expect(await waitFor(hit, (v) => v === 'B12')).toBe('B12');
+  }, 300_000);
+});

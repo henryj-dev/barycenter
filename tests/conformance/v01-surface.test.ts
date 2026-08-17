@@ -19,6 +19,7 @@ import * as surface from '../../src/index.js';
  */
 const FROZEN_VALUES = [
   // 모델과 렌더러
+  'MEMBERSHIP_DICT',
   'ModelValidationError',
   'decodeModel',
   'parseModel',

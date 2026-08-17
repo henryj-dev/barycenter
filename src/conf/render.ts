@@ -606,7 +606,12 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
   }
 
   // ── stream ──
-  if (streamListeners.length > 0) {
+  //
+  // **`streamLua` 가 켜지면 리스너가 없어도 블록을 낸다.** 멤버십 dict 가 여기 살고,
+  // §6.5-1 은 HUP **전에** 적재하라고 한다 — 그 시점에 도는 것은 옛 세대이므로 dict 가
+  // 거기 이미 있어야 한다. 부트스트랩(빈 모델)에 stream 블록이 없으면 첫 stream apply 가
+  // 쓸 곳을 못 찾는다. http 블록을 항상 내는 것과 같은 이유다.
+  if (streamListeners.length > 0 || caps.streamLua === true) {
     const ptByListener = new Map<string, PassthroughRoute[]>();
     for (const r of model.passthroughRoutes) {
       const list = ptByListener.get(r.listener);

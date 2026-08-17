@@ -25,7 +25,7 @@ import type {
   PublishRecord,
 } from './operation.js';
 import { isTerminalPhase, CHECKED_TOKEN, planesOf, provesActivation } from './operation.js';
-import { DpAgent, DpRejection, tupleFor, type DurableStore } from './agent.js';
+import { DpAgent, DpRejection, tupleFor, type DurableStore, type PlaneAck } from './agent.js';
 import { ApplyRunner, type Effects } from './apply.js';
 
 const sameRecord = (a: PublishRecord, b: PublishRecord): boolean =>
@@ -100,6 +100,32 @@ export interface DataplaneDriver {
    * 달라져 슬롯의 주인으로 인정받지 못한다 — 그러면 abort 가 아무것도 못 지운다.
    */
   abortConfig(op: ApplyOperation): Promise<void>;
+
+  /**
+   * **활성 epoch 안에서 멤버십만 옮긴다** (§6.5 · v0.3).
+   *
+   * §9.1.1 이 v0.1 에서 미룬 그 메서드다 — *"구현하지 않은 계약을 먼저 고정했다가 5차
+   * 검수에서 깨진 것이 그것이었다"*. 이제 구현과 함께 붙인다.
+   *
+   * 설정 경로와 다른 점은 **reload 가 없다**는 것이다. 좌표는 `membership_revision` 만
+   * 앞으로 가고 `activation_epoch` 는 그대로다 — 그래서 세대 전환도, HUP 도, 워커 재생성도
+   * 없다. S1 이 HTTP·TCP·UDP 전부에서 실증한 경로이고 이 제품의 이유다.
+   *
+   * 좌표 CAS 는 설정 경로와 **같은 심판**을 지난다 (§3.5 — DP Agent 가 최종 심판이다).
+   * 옛 리더의 늦은 멤버십 갱신은 토큰에서 막힌다.
+   */
+  applyMembership(
+    op: ApplyOperation, plane: Plane, slots: Record<string, string[]>,
+  ): Promise<PlaneAck>;
+
+  /**
+   * 슬롯을 그대로 밀어 넣는다 — **좌표를 안 옮긴다** (§6.4 재시작 복원).
+   *
+   * 새 전환이 아니라 **잃어버린 것을 되돌려 놓는 것**이다. shared dict 는 프로세스
+   * 수명이라 엔진 재시작에 통째로 비는데, 그건 상태가 *바뀐* 것이 아니라 *사라진* 것이다.
+   * 좌표를 옮기면 있지도 않은 전환을 발명하게 된다.
+   */
+  pushMembershipDirect(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
 
   /** 지금 상태. 읽기 전용이라 봉투가 필요 없다. */
   /**
@@ -267,6 +293,33 @@ export class LocalDataplaneDriver implements DataplaneDriver {
 
   applyConfig(op: ApplyOperation): Promise<ApplyResult> {
     return this.#runner().run(op);
+  }
+
+  async applyMembership(
+    op: ApplyOperation, plane: Plane, slots: Record<string, string[]>,
+  ): Promise<PlaneAck> {
+    const target = op.planes[plane];
+    if (target === undefined) {
+      throw new DpRejection('envelope_mismatch', `평면 '${plane}' 의 목표가 없다`);
+    }
+    if (this.effects.pushMembership === undefined) {
+      throw new Error('이 배포는 멤버십 평면을 쓸 수 없다 (pushMembership 없음)');
+    }
+    // **좌표를 먼저 옮긴다.** 부작용이 먼저 나가면, 좌표 CAS 가 거부됐을 때 이미 슬롯이
+    // 바뀐 뒤다 — 옛 리더가 남긴 값이 그대로 서빙된다. Agent 가 최종 심판이므로 그
+    // 심판을 지나기 전에는 아무것도 안 민다 (§3.5).
+    const ack = await this.agent.applyHealth(tupleFor(op, plane), slots);
+    await this.effects.pushMembership(plane, target.target.activationEpoch, slots);
+    return ack;
+  }
+
+  async pushMembershipDirect(
+    plane: Plane, epoch: string, slots: Record<string, string[]>,
+  ): Promise<void> {
+    if (this.effects.pushMembership === undefined) {
+      throw new Error('이 배포는 멤버십 평면을 쓸 수 없다');
+    }
+    await this.effects.pushMembership(plane, epoch, slots);
   }
 
   recoverConfig(): Promise<ApplyResult> {

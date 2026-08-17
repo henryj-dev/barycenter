@@ -825,9 +825,20 @@ function impactOf(beforeConf: string, rendered: RenderedConfig, model: Model): I
       `${m[2] !== undefined ? 'udp' : 'tcp'}://${m[1] ?? ''}`),
   );
   return {
-    // v0.1 에서 백엔드 반영은 **세대 전환**이다 — 멤버십 평면은 v0.3 이다 (§9.1.1).
-    // 그러니 어떤 변경이든 reload 를 요구한다. "멤버십만 바뀌면 아니오" 는 아직 거짓말이다.
-    requiresReload: true,
+    /**
+     * **산출물이 바뀌면 reload 가 필요하다** (§5.4).
+     *
+     * 멤버십 평면이 켜지면 백엔드는 conf 에 없다 — dict 에 산다. 그러니 백엔드만 바뀐
+     * 변경은 렌더 산출물이 **바이트 단위로 같고**, 그때는 세대 전환도 HUP 도 없다.
+     * 판정을 산출물 비교로 두는 이유: "백엔드만 바뀌었나" 같은 다른 근거로 재면 렌더에
+     * 영향을 주는 필드가 하나 늘 때마다 조용히 틀려진다.
+     *
+     * ⚠️ **plan 은 base 리비전과 비교하고, apply 는 지금 서빙 중인 세대와 비교한다.**
+     * 보통 같지만 커밋만 되고 적용은 안 된 리비전이 사이에 있으면 갈릴 수 있다 —
+     * 그때는 plan 이 "reload 없음" 이라고 했는데 apply 가 세대를 만든다. 예측이
+     * 보수적으로 틀리는 쪽이라 두지만, 사실이므로 적어 둔다.
+     */
+    requiresReload: beforeConf !== rendered.conf,
     affectedListeners: model.listeners.map((l) => ({
       key: l.key, protocol: l.protocol, bind: l.bind, port: l.port,
     })),

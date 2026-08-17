@@ -64,6 +64,14 @@ export type FsEffectsOptions = {
    * 없다고 해서 막지는 않는다 — 다만 그만큼 늦게 발견한다.
    */
   configTest?: (generation: string) => Promise<boolean>;
+  /**
+   * 멤버십 슬롯을 적재한다 (§6.5-1). 세대의 `lua/membership.json` 을 읽어 넘긴다.
+   *
+   * **없으면 `stageMembership` 자체가 없다.** 멤버십 평면은 엔진 capability 로 켜지므로,
+   * 못 하는 배포에서 "했다" 고 답하는 것보다 메서드가 아예 없는 편이 정직하다.
+   */
+  pushMembership?: (plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>)
+    => Promise<void>;
 };
 
 /** 내용을 fsync 하고 닫는다. rename 이 먼저 보이면 빈 파일이 정본이 된다. */
@@ -88,6 +96,52 @@ function fsyncDir(path: string): void {
 }
 
 export class FsEffects implements Effects {
+  /**
+   * §6.5-1 staging. **적재하고 되읽어 대조한다.**
+   *
+   * 되읽는 이유: `nginx -t` 는 Lua 를 하나도 검증하지 않는다(E64). admin 조각의 Lua 에
+   * 문법 오류가 있어도 게시 전 검사를 그대로 통과하고, 세대 마커는 `return 200` 이라
+   * Lua 와 무관하게 답하므로 **활성화 판정도 못 잡는다.** 써 놓고 다시 읽는 것이 그
+   * 경로가 실제로 살아 있다는 유일한 증거다.
+   *
+   * ⚠️ 그래도 **밸런서 자체가 도는지는 증명하지 못한다.** `balancer_by_lua_block` 은
+   * 연결이 와야 실행되고, 그건 트래픽으로만 알 수 있다. 여기 적어 둔다.
+   */
+  stageMembership = async (
+    generation: string, plane: 'http' | 'stream', lease: ApplyLease,
+  ): Promise<Checked> => {
+    // **적재할 것이 없는 것과 전송이 없는 것은 다르다.** 순서를 반대로 두면, 멤버십
+    // 평면을 안 쓰는 배포(정적 `server` 줄로 렌더된 세대)에서 apply 가 통째로 죽는다 —
+    // 실제로 그렇게 짰다가 게시 전 검사 conformance 둘이 빨개졌다.
+    const path = join(this.opts.prefix, 'generations', generation, 'lua', 'membership.json');
+    if (!existsSync(path)) {
+      // 정적 `server` 줄로 렌더된 세대다. 적재할 것이 없다 — 실패가 아니다.
+      return lease.assertValid();
+    }
+    const doc = JSON.parse(readFileSync(path, 'utf8')) as {
+      epoch: string; http: Record<string, string[]>; stream: Record<string, string[]>;
+    };
+    const slots = doc[plane];
+    if (Object.keys(slots).length === 0) return lease.assertValid();
+    if (this.opts.pushMembership === undefined) {
+      throw new Error('적재할 멤버십이 있는데 전송이 없다 — pushMembership 을 안 줬다');
+    }
+    const checked = lease.assertValid();
+    await this.pushMembership(plane, doc.epoch, slots);
+    return checked;
+  };
+
+  /** 활성 epoch 의 슬롯을 갈아 끼운다 — **reload 없이** (§6.5). */
+  pushMembership = async (
+    plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>,
+  ): Promise<void> => {
+    const push = this.opts.pushMembership;
+    if (push === undefined) {
+      throw new Error('pushMembership 이 없다 — 멤버십 평면을 쓸 수 없는 배포다');
+    }
+    await push(plane, epoch, slots);
+  };
+
   /** HUP 을 보낸 시점의 error log 줄 수. 그 이후 증가분만 이 전환의 것이다. */
   private watermark: number | undefined;
 

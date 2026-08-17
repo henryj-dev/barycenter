@@ -13,11 +13,13 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
+import { httpAdminConf, slotsOf, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
 import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
+import type { Model } from '../model/provisional.js';
 import type { Db, Row } from '../store/pg.js';
 import type { LeaderElection } from './leader.js';
 
@@ -33,6 +35,8 @@ export type ControlPlaneOptions = {
   renderCaps?: RenderCapabilities;
   /** 조회한 엔진 정보. `status()` 가 그대로 드러낸다. */
   engine?: unknown;
+  /** stream 평면 admin 포트. http 는 `adminPort` 다. */
+  streamAdminPort?: number;
   /**
    * 남길 세대 수 (§9.1.1 — v0.1 은 GC 원장 대신 **수동 상한**이다).
    *
@@ -124,13 +128,57 @@ export class ControlPlane {
     // 리비전만 담으면 같은 내용의 롤백이 옛 디렉토리를 재사용하고, 그러면 세대에 구워진
     // 마커 리터럴이 옛 세대와 같아져 활성화를 구분할 수 없다.
     const generation = `r${plan.targetRevision}-e${plan.activationEpoch}`;
+    // **멤버십 평면이 켜졌으면 자료와 admin 조각을 세대에 싣는다** (§6.5 · §7.2).
+    //
+    // 자료가 세대에 있으므로 `ApplyOperation` 을 넓히지 않는다 — 봉투는 좌표를 나르고
+    // 세대가 자료를 나른다. epoch 리터럴도 여기 있다(렌더러가 굽지 않는 이유는
+    // `render_digest` 가 모델만의 함수여야 하기 때문이다).
+    const caps = this.opts.renderCaps ?? { streamRealip: false };
+    const membership = caps.httpLua === true || caps.streamLua === true
+      ? slotsOf(plan.model, caps) : undefined;
+    const streamAdminPort = this.opts.streamAdminPort ?? this.opts.adminPort + 1;
+
+    /**
+     * **멤버십만 바뀌었는가** (§6.4 드리프트 분리 · §6.5).
+     *
+     * 멤버십 평면이 켜지면 백엔드는 conf 에 없다 — dict 에 산다. 그러니 백엔드만 바뀐
+     * 변경은 **렌더 산출물이 바이트 단위로 같다.** 그게 판정이다: 지금 서빙 중인 세대의
+     * conf digest 와 같으면 세대를 만들 이유가 없다.
+     *
+     * 다른 근거(예: "백엔드 테이블만 바뀌었나")로 판정하고 싶어지는데, 그러면 렌더에
+     * 영향을 주는 필드가 하나 늘 때마다 이 판정이 조용히 틀려진다. **산출물을 비교하는
+     * 것이 정의상 맞다.**
+     */
+    if (membership !== undefined) {
+      const live = await this.activeRenderDigest();
+      if (live !== undefined && live.digest === rendered.digest) {
+        return this.applyMembershipOnly(plan, membership, live.epoch, planId, by);
+      }
+    }
+
     const manifest = materializeGeneration({
       prefix: this.opts.prefix,
       generation,
       planes: rendered.planes,
       files: {
         'nginx.conf': rendered.conf,
-        'admin/marker.conf': markerConf(generation, this.opts.adminPort),
+        ...(membership === undefined
+          ? { 'admin/marker.conf': markerConf(generation, this.opts.adminPort) }
+          : {
+              'admin/marker.conf': httpAdminConf(generation, plan.activationEpoch,
+                this.opts.adminPort),
+              ...(caps.streamLua === true
+                ? {
+                    'stream-admin/membership.conf':
+                      streamAdminConf(plan.activationEpoch, streamAdminPort),
+                  }
+                : {}),
+              'lua/membership.json': JSON.stringify({
+                epoch: plan.activationEpoch,
+                http: membership.http,
+                stream: membership.stream,
+              }, null, 2),
+            }),
       },
     });
 
@@ -207,6 +255,146 @@ export class ControlPlane {
       id: op.operationId, planId, revision: plan.targetRevision,
       activationEpoch: plan.activationEpoch, generation,
       phase: result.phase, detail: result,
+    };
+  }
+
+  /**
+   * 기동 시 멤버십을 **다시 적재한다** (§6.4).
+   *
+   * `lua_shared_dict` 는 **프로세스 수명**이다. 엔진이 재시작하면 슬롯이 통째로 비고,
+   * 밸런서는 §6.5-3 대로 연결을 끊는다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.
+   * 컨테이너를 재시작하고 500 을 받고서야 이 자리를 봤다.
+   *
+   * **정본은 세대 아티팩트가 아니라 head 리비전이다.**
+   *
+   * 처음엔 세대의 `lua/membership.json` 을 되밀었다. 그랬더니 재시작이 **커밋된 멤버십을
+   * 되돌렸다** — 아티팩트는 그 세대가 만들어질 때의 스냅샷이고, 그 뒤의 멤버십 전용
+   * 변경(세대를 안 만든다)이 통째로 사라진다. 실제로 백엔드를 :12 로 옮긴 뒤 재시작했더니
+   * :11 이 되살아났다. §6.4 가 *"옛 부트스트랩만 쓰면 되살아난다"* 고 경고한 그 모양이다.
+   *
+   * ⚠️ **아직 절반이다.** §6.4 는 헬스까지 포함한 *"마지막 호환 멤버십 스냅샷"* 을 별도로
+   * durable 저장하라고 한다. 지금 복원하는 것은 **desired**(커밋된 것)뿐이라, 프로버가
+   * 죽었다고 판정했던 백엔드는 다음 프로브까지 되살아난다. 헬스 프로버(3단계)가 붙어야
+   * 닫히는 자리다 — 안 한 것을 했다고 적지 않는다.
+   */
+  async restageMembership(): Promise<{ epoch: string; planes: string[] } | undefined> {
+    const caps = this.opts.renderCaps ?? { streamRealip: false };
+    if (caps.httpLua !== true && caps.streamLua !== true) return undefined;
+    const st = await this.driver.status();
+    if (st.published.kind !== 'owned') return undefined;
+
+    const head = await this.store.head();
+    const slots = slotsOf(await this.store.modelAt(head.revision), caps);
+    const planes: string[] = [];
+    for (const plane of PLANES) {
+      const epoch = st.planes[plane].activationEpoch;
+      if (epoch === '0') continue;                       // 그 평면은 아직 활성화 안 됐다
+      if (Object.keys(slots[plane]).length === 0) continue;
+      await this.driver.pushMembershipDirect(plane, epoch, slots[plane]);
+      planes.push(plane);
+    }
+    if (planes.length === 0) return undefined;
+    return { epoch: st.planes.http.activationEpoch, planes };
+  }
+
+  /**
+   * 지금 서빙 중인 세대의 렌더 digest 와 epoch.
+   *
+   * **적용된 리비전에서 다시 렌더한다.** 세대 디렉토리의 conf 를 읽어 해시하면 될 것
+   * 같지만, 그건 `rendered.digest`(conf 문자열의 sha256)와 같은 값을 보장하지 않는다 —
+   * manifest 의 digest 는 **파일 집합 + 평면**으로 계산되기 때문이다. 두 수를 비교하려면
+   * 같은 방법으로 만들어야 한다.
+   */
+  private async activeRenderDigest(): Promise<{ digest: string; epoch: string } | undefined> {
+    const r = (await this.db.query(
+      `SELECT revision, activation_epoch::text AS epoch FROM operations
+        WHERE phase = 'activated' ORDER BY activation_epoch DESC LIMIT 1`,
+    )).rows[0];
+    if (r === undefined) return undefined;
+    const model = await this.store.modelAt(String(r['revision']));
+    return {
+      digest: render(model, this.opts.renderCaps ?? { streamRealip: false }).digest,
+      epoch: String(r['epoch']),
+    };
+  }
+
+  /**
+   * **reload 없이** 멤버십만 옮긴다 (§6.5 · S1).
+   *
+   * 세대를 만들지 않고, 게시하지 않고, HUP 도 보내지 않는다. 활성 epoch 의 슬롯을 갈아
+   * 끼우면 다음 연결부터 반영된다 — S1 이 HTTP·TCP·UDP 전부에서 reload 0 회, 마스터 PID
+   * 불변으로 실증한 그 경로다.
+   *
+   * 좌표는 `membership_revision` 만 앞으로 간다. `activation_epoch` 는 그대로다 —
+   * 세대가 안 바뀌었으므로 그게 맞다 (§3.3).
+   */
+  private async applyMembershipOnly(
+    plan: { targetRevision: string | undefined; activationEpoch: string | undefined; model: Model },
+    slots: Record<'http' | 'stream', Record<string, string[]>>,
+    epoch: string, planId: string, by: string,
+  ): Promise<OperationView> {
+    const leaderToken = this.election.assertLeader();
+    const status = await this.driver.status();
+    const operationId = randomUUID();
+    const revision = plan.targetRevision ?? '0';
+
+    const planes: Partial<Record<Plane, PlaneTarget>> = {};
+    const touched: Plane[] = [];
+    for (const plane of PLANES) {
+      const cur = status.planes[plane];
+      // **활성 epoch 안에서만 움직인다.** 다른 epoch 에 있는 평면은 건드리지 않는다 —
+      // 그 평면은 이 세대를 서빙하고 있지 않다.
+      if (cur.activationEpoch !== epoch) continue;
+      if (Object.keys(slots[plane]).length === 0) continue;
+      planes[plane] = {
+        expectedCurrent: {
+          activationEpoch: cur.activationEpoch,
+          membershipRevision: cur.membershipRevision,
+        },
+        target: {
+          activationEpoch: epoch,
+          // **엄격 단조.** Agent 가 그렇지 않으면 거부한다.
+          membershipRevision: String(BigInt(cur.membershipRevision) + 1n),
+        },
+        payloadDigest: revision,
+      };
+      touched.push(plane);
+    }
+    if (touched.length === 0) {
+      throw new StoreError(409, 'no_membership_target',
+        `활성 epoch(${epoch}) 에 있는 평면이 없다 — 멤버십만 옮길 수 없다`);
+    }
+
+    const op: ApplyOperation = {
+      leaderToken, operationId, transitionId: `m${revision}`,
+      // **멤버십은 평면별이다.** 설정 전환이 언제나 두 평면을 옮기는 것과 다르다 —
+      // 하나의 nginx.conf 가 둘을 지배하는 것이 이유였고, 여기서는 conf 를 안 건드린다.
+      affectedPlanes: touched,
+      targetGeneration: status.published.kind === 'owned'
+        ? status.published.record.generation : '',
+      generationDigest: status.published.kind === 'owned'
+        ? status.published.record.generationDigest : '',
+      planes,
+    };
+
+    await this.db.query(
+      `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by,envelope)
+       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7) ON CONFLICT (plan_id) DO NOTHING`,
+      [operationId, planId, revision, epoch, op.targetGeneration, by, JSON.stringify(op)],
+    );
+    for (const plane of touched) {
+      await this.driver.applyMembership(op, plane, slots[plane]);
+    }
+    await this.recordPhase(operationId, 'activated',
+      { membershipOnly: true, planes: touched, reload: false });
+    await this.db.query(`UPDATE plans SET state='applied' WHERE id=$1`, [planId]);
+    await this.store.audit(by, 'apply.membership', planId, undefined,
+      { operationId, epoch, planes: touched, reload: false }, revision);
+
+    return {
+      id: operationId, planId, revision, activationEpoch: epoch,
+      generation: op.targetGeneration, phase: 'activated',
+      detail: { membershipOnly: true, planes: touched, reload: false },
     };
   }
 

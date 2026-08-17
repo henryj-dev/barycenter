@@ -87,6 +87,41 @@ export interface Effects {
    * 표현할 방법이 없었다. S7 은 세대만 보면 못 잡는 실패가 있다는 것을 실증했다.
    */
   observeActivation(): Promise<ActivationEvidence | undefined>;
+  /**
+   * **HUP 전에** 새 epoch 의 멤버십 슬롯을 적재한다 (§6.5-1 staging).
+   *
+   * 순서가 뒤집히면 — 새 워커가 accept 를 시작한 *뒤에* 슬롯을 채우면 — 그 사이 새
+   * 워커는 자기 슬롯이 비어 있어 트래픽을 끊는다(§6.5-3 이 요구하는 동작이다).
+   * 그래서 **게시 뒤, 신호 전**이다.
+   *
+   * **선택적이다.** 멤버십 평면은 엔진 capability(`*_lua`)로 켜지므로, 없는 배포에서는
+   * 이 메서드도 없다. 정적 `server` 줄로 렌더된 세대에는 적재할 것이 없다.
+   *
+   * 자료는 **세대 안에** 있다 (§7.2 `lua/`). 봉투는 좌표를 나르고 자료는 세대가 나른다 —
+   * 그래야 `ApplyOperation` 을 넓히지 않는다.
+   */
+  stageMembership?(generation: string, plane: Plane, lease: ApplyLease): Promise<Checked>;
+  /**
+   * **활성 epoch 안에서** 멤버십만 바꾼다 (§6.5 · §6.4 드리프트 분리).
+   *
+   * `stageMembership` 과의 차이는 시점이다. 저쪽은 *새 epoch 를 준비*하고 HUP 이 뒤따르며,
+   * 이쪽은 **이미 서빙 중인 epoch** 의 슬롯을 갈아 끼운다 — **reload 가 없다.**
+   * S1 이 실증한 경로가 이것이고, 이 제품의 이유다.
+   */
+  /**
+   * **lease 를 안 받는다.** 다른 부작용과 다른 점이다.
+   *
+   * lease 는 apply **실행권**에 매달려 있는데, 멤버십은 그 권한을 기다리면 안 된다 —
+   * §6.5-6 이 *"prepare 동안에도 활성 epoch 는 헬스 갱신을 계속 받는다"* 고 못 박았다.
+   * 설정 전환이 도는 동안 헬스가 멈추면 죽은 백엔드로 트래픽이 계속 간다.
+   *
+   * 그럼 무엇이 지키나 — **좌표 CAS 다.** `applyHealth` 가 토큰과 `(epoch,
+   * membership_revision)` 을 확인하고 통과한 뒤에만 여기 온다. 늦게 착지한 갱신은
+   * 다음 갱신이 덮는다 (§6.4: 멤버십은 드리프트 판정 대상이 아니다 — 항상 움직인다).
+   */
+  pushMembership?(
+    plane: Plane, epoch: string, slots: Record<string, string[]>,
+  ): Promise<void>;
 }
 
 export class CrashInjected extends Error {
@@ -551,6 +586,12 @@ export class ApplyRunner {
           for (const plane of planesOf(j.op)) {
             try {
               await this.agent.stage(tupleFor(j.op, plane), gen);
+              // **좌표를 예약한 뒤 실물을 적재한다** (§6.5-1). 순서가 반대면 예약도 안 된
+              // 슬롯에 자료가 들어간다. 멤버십 평면이 없는 배포에서는 이 메서드가 없다.
+              if (this.effects.stageMembership !== undefined) {
+                await this.budget('stageMembership', () =>
+                  this.effects.stageMembership!(gen, plane, this.agent.lease(j.op)));
+              }
               staged[plane] = 'staged';
               advanced += 1;
             } catch (e) {
