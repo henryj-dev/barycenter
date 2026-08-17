@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
+import { currentHealth, reduceMembership } from './health.js';
 import { httpAdminConf, slotsOf, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { materializeGeneration } from '../dp/materialize.js';
@@ -134,8 +135,11 @@ export class ControlPlane {
     // 세대가 자료를 나른다. epoch 리터럴도 여기 있다(렌더러가 굽지 않는 이유는
     // `render_digest` 가 모델만의 함수여야 하기 때문이다).
     const caps = this.opts.renderCaps ?? { streamRealip: false };
+    // **리듀서를 지난다** (§6.6). 커밋된 모델과 원시 헬스를 합성한 것이 실제 멤버십이다.
+    // 프로버가 죽었다고 본 백엔드가 새 세대의 부트스트랩으로 되살아나면 안 된다 —
+    // §6.4 가 경고한 바로 그 되살아남이다.
     const membership = caps.httpLua === true || caps.streamLua === true
-      ? slotsOf(plan.model, caps) : undefined;
+      ? slotsOf(reduceMembership(plan.model, await currentHealth(this.db)), caps) : undefined;
     const streamAdminPort = this.opts.streamAdminPort ?? this.opts.adminPort + 1;
 
     /**
@@ -284,7 +288,9 @@ export class ControlPlane {
     if (st.published.kind !== 'owned') return undefined;
 
     const head = await this.store.head();
-    const slots = slotsOf(await this.store.modelAt(head.revision), caps);
+    const slots = slotsOf(
+      reduceMembership(await this.store.modelAt(head.revision), await currentHealth(this.db)),
+      caps);
     const planes: string[] = [];
     for (const plane of PLANES) {
       const epoch = st.planes[plane].activationEpoch;
@@ -295,6 +301,46 @@ export class ControlPlane {
     }
     if (planes.length === 0) return undefined;
     return { epoch: st.planes.http.activationEpoch, planes };
+  }
+
+  /**
+   * 헬스가 바뀌었을 때 **서빙 중인 모든 epoch** 에 다시 투영한다 (§6.5-5).
+   *
+   * *"E-old 슬롯은 그 세대를 서빙하는 워커가 전부 사라질 때까지 유지한다. 유지하는
+   * 동안에도 eligibility 는 계속 투영한다 — 옛 워커가 재시도할 때 이미 disabled 된 peer 를
+   * 다시 고르면 안 된다."*
+   *
+   * 좌표를 안 옮긴다. 헬스 반영은 새 전환이 아니라 **같은 epoch 안의 갱신**이고,
+   * §6.4 가 *"멤버십은 드리프트 판정 대상이 아니다 — 항상 움직인다"* 고 한 것이 이것이다.
+   */
+  async projectHealth(): Promise<{ epochs: string[]; planes: string[] } | undefined> {
+    const caps = this.opts.renderCaps ?? { streamRealip: false };
+    if (caps.httpLua !== true && caps.streamLua !== true) return undefined;
+    const st = await this.driver.status();
+    const head = await this.store.head();
+    const model = reduceMembership(await this.store.modelAt(head.revision),
+      await currentHealth(this.db));
+    const slots = slotsOf(model, caps);
+
+    const epochs: string[] = [];
+    const planes: string[] = [];
+    for (const plane of PLANES) {
+      const epoch = st.planes[plane].activationEpoch;
+      if (epoch === '0') continue;
+      if (Object.keys(slots[plane]).length === 0 && model.backends.length > 0) continue;
+      // **의도적 zero-peer 는 그대로 쓴다** (§6.7). 모든 백엔드가 죽었으면 멤버십은
+      // 실제로 비어 있고 요청은 실패해야 한다 — 옛 peer 를 남기면 죽은 백엔드가 계속
+      // 트래픽을 받는다. 갱신 *실패* 의 fail-open 과는 다른 사건이다.
+      await this.driver.pushMembershipDirect(plane, epoch, slots[plane]);
+      epochs.push(epoch);
+      planes.push(plane);
+    }
+    return planes.length > 0 ? { epochs, planes } : undefined;
+  }
+
+  /** 지금 head 모델. 프로버가 무엇을 찔러야 하는지 안다. */
+  async headModel(): Promise<Model> {
+    return this.store.modelAt((await this.store.head()).revision);
   }
 
   /**

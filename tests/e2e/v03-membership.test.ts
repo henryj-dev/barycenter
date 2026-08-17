@@ -246,6 +246,101 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
     expect(after.generations, '세대가 안 생겼다 — 설정 변경인데').toBeGreaterThan(before.generations);
   }, 180_000);
 
+  it('**죽은 백엔드가 슬롯에서 빠진다 — reload 없이** (§6.5 · §6.6)', async () => {
+    // 백엔드 둘을 넣고 하나를 죽인다. 프로버가 판정하고 리듀서가 슬롯을 다시 쓴다.
+    await push([
+      { op: 'put', kind: 'backend', key: 'b11', body: { pool: 'app', host: '127.0.0.1', port: 11, weight: 1 } },
+      { op: 'put', kind: 'listener', key: 'front',
+        body: {
+          protocol: 'http', bind: '0.0.0.0', port: 999, enabled: true,
+          http: { defaultAction: { pool: 'app' } },
+        } },
+    ]);
+    // 둘 다 살아 있으면 응답이 섞인다.
+    const mixed = new Set<string>();
+    for (let i = 0; i < 20; i += 1) mixed.add(await hit());
+    expect(mixed, `둘 다 받아야 한다: ${[...mixed].join()}`).toEqual(new Set(['B11', 'B12']));
+
+    const before = observe();
+
+    // **:11 만 죽인다.** 컨트롤 플레인은 이 사실을 모른다 — 프로버가 알아내야 한다.
+    docker('exec', DP, 'sh', '-c',
+      "sed -i 's/listen 11;/listen 111;/' /backend/nginx.conf"
+      + ' && /usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf -s reload');
+
+    // 프로버가 내리고 리듀서가 반영할 때까지.
+    const only12 = await waitFor(async () => {
+      const seen = new Set<string>();
+      for (let i = 0; i < 10; i += 1) seen.add(await hit());
+      return [...seen].sort().join(',');
+    }, (v) => v === 'B12', 60_000);
+    expect(only12, '죽은 백엔드가 안 빠졌다').toBe('B12');
+
+    // **그리고 reload 는 없었다.** 헬스 반영이 세대 전환이 되면 안 된다 —
+    // 백엔드 하나 죽을 때마다 워커를 새로 띄우면 장수 연결이 계속 끊긴다.
+    const after = observe();
+    expect(after.master).toBe(before.master);
+    expect(after.workers, 'reload 가 일어났다').toBe(before.workers);
+    expect(after.generations, '세대가 생겼다').toBe(before.generations);
+
+    // 판정이 API 로 보인다 — `unknown` 을 숨기지 않는다.
+    const health = await api('GET', '/api/v1/health/backends');
+    const byKey = Object.fromEntries(
+      (health.body as { backendKey: string; state: string }[]).map((r) => [r.backendKey, r.state]));
+    expect(byKey['b11']).toBe('unhealthy');
+    expect(byKey['b12']).toBe('healthy');
+  }, 300_000);
+
+  it('**살아나면 되돌아온다** — 판정이 한 방향이 아니다', async () => {
+    docker('exec', DP, 'sh', '-c',
+      "sed -i 's/listen 111;/listen 11;/' /backend/nginx.conf"
+      + ' && /usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf -s reload');
+    const back = await waitFor(async () => {
+      const seen = new Set<string>();
+      for (let i = 0; i < 12; i += 1) seen.add(await hit());
+      return [...seen].sort().join(',');
+    }, (v) => v === 'B11,B12', 60_000);
+    expect(back, '살아난 백엔드가 안 돌아왔다').toBe('B11,B12');
+  }, 300_000);
+
+  it('**재기동 뒤에도 헬스 판정이 계속 움직인다** (§6.6 관측 좌표)', async () => {
+    // §6.6 은 늦게 끝난 낡은 관측이 최신 판정을 덮는 것을 막으려고 **프로브 시작 순번**을
+    // 싣게 한다. 그 순번을 프로세스 메모리에서 1 부터 세면 — 처음에 그렇게 짰다 —
+    // 재기동한 프로세스의 1 번이 저장된 50 번보다 작아서 **자기 관측을 전부 버린다.**
+    // 헬스가 영영 얼어붙고, 그건 "프로버가 있다" 는 말을 거짓으로 만든다.
+    docker('restart', DP);
+    const up = await waitFor(async () => {
+      try {
+        return (await fetch(`http://127.0.0.1:${API_PORT}/healthz`,
+          { signal: AbortSignal.timeout(2000) })).ok;
+      } catch {
+        return false;
+      }
+    }, (ok) => ok, 120_000);
+    expect(up).toBe(true);
+
+    // 재기동 **뒤에** 백엔드를 죽인다. 판정이 얼어 있으면 영영 안 빠진다.
+    docker('exec', DP, 'sh', '-c',
+      "sed -i 's/listen 12;/listen 122;/' /backend/nginx.conf"
+      + ' && /usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf -s reload');
+    const only11 = await waitFor(async () => {
+      const seen = new Set<string>();
+      for (let i = 0; i < 10; i += 1) seen.add(await hit());
+      return [...seen].sort().join(',');
+    }, (v) => v === 'B11', 60_000);
+    expect(only11, '재기동 뒤 헬스 판정이 얼었다').toBe('B11');
+
+    // 되돌려 놓는다 — 다음 테스트가 이 상태에 기대지 않게.
+    docker('exec', DP, 'sh', '-c',
+      "sed -i 's/listen 122;/listen 12;/' /backend/nginx.conf"
+      + ' && /usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf -s reload');
+    await waitFor(async () => {
+      const seen = new Set<string>();
+      for (let i = 0; i < 12; i += 1) seen.add(await hit());
+      return [...seen].sort().join(',');
+    }, (v) => v === 'B11,B12', 60_000);
+  }, 300_000);
+
   it('**재시작이 멤버십을 되돌리지 않는다** — 정본은 head 다 (§6.4)', async () => {
     // shared dict 는 **프로세스 수명**이다. 엔진이 재시작하면 슬롯이 통째로 비고 밸런서는
     // 연결을 끊는다(§6.5-3) — 설정은 멀쩡한데 트래픽이 전부 죽는다.

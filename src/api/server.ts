@@ -25,6 +25,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { createHash } from 'node:crypto';
 
 import type { ControlPlane } from '../control/plane.js';
+import { healthRows } from '../control/health.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
 import type { Db } from '../store/pg.js';
@@ -232,6 +233,16 @@ const ROUTES: Route[] = [
 
   route('GET', '/api/v1/status', 'read', async (c, api) => {
     json(c.res, 200, await api.control.status());
+  }),
+
+  /**
+   * §5.2 `GET /health/backends`.
+   *
+   * **`unknown` 을 숨기지 않는다.** 아직 재보지 못한 것과 산 것은 다르고, 그 구분이
+   * 없으면 프로버가 죽었는지 백엔드가 다 산 것인지 알 수 없다 (§6.7 프로버 장애).
+   */
+  route('GET', '/api/v1/health/backends', 'read', async (c, api) => {
+    json(c.res, 200, await healthRows(api.db));
   }),
 
   route('GET', '/api/v1/audit', 'read', async (c, api) => {

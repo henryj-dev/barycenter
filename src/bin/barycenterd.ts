@@ -24,6 +24,7 @@ import { createApi } from '../api/server.js';
 import { TokenAuth, type TokenSpec } from '../api/auth.js';
 import { render } from '../conf/render.js';
 import { encodeSlots, httpAdminConf, streamAdminConf } from '../control/membership.js';
+import { HealthProber } from '../control/health.js';
 import { ControlPlane } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
 import { LocalDataplaneDriver } from '../dp/driver.js';
@@ -303,6 +304,38 @@ export async function main(): Promise<void> {
       console.log(`멤버십 재적재: epoch ${restaged.epoch} [${restaged.planes.join(',')}]`);
     }
   }
+  /**
+   * 헬스 프로버 (§6.5 · §6.6).
+   *
+   * **리더만 돈다.** 스탠바이가 함께 찌르면 백엔드가 두 배로 맞고, 무엇보다 두 리듀서가
+   * 같은 슬롯을 서로 다른 관측으로 덮는다 — §6.6 이 *단일 리듀서*를 요구한 이유다.
+   *
+   * 멤버십 평면이 없는 배포에서는 안 돈다. 헬스를 알아도 **반영할 곳이 없기 때문이다** —
+   * 정적 `server` 줄은 세대 전환으로만 바뀐다. 판정만 쌓고 못 쓰는 것보다 안 하는 편이
+   * 정직하다.
+   */
+  const proberOn = renderCaps.httpLua === true || renderCaps.streamLua === true;
+  const prober = new HealthProber(db, {
+    intervalMs: Number(env('BARY_PROBE_INTERVAL_MS', '2000')),
+    timeoutMs: Number(env('BARY_PROBE_TIMEOUT_MS', '1000')),
+    failThreshold: Number(env('BARY_PROBE_FAIL_THRESHOLD', '2')),
+    riseThreshold: Number(env('BARY_PROBE_RISE_THRESHOLD', '1')),
+  });
+  if (proberOn) {
+    prober.start(
+      async () => (election.state.isLeader ? control.headModel() : undefined),
+      async () => {
+        const out = await control.projectHealth();
+        if (out !== undefined) {
+          console.log(`헬스 반영: epoch [${out.epochs.join(',')}] 평면 [${out.planes.join(',')}]`);
+        }
+      },
+    );
+    console.log(`헬스 프로버 시작 (주기 ${env('BARY_PROBE_INTERVAL_MS', '2000')}ms)`);
+  } else {
+    console.log('헬스 프로버 없음 — 멤버십 평면이 꺼진 배포다 (반영할 곳이 없다)');
+  }
+
   const auth = new TokenAuth(loadTokens());
 
   const server = createApi({ db, store, control, auth, election });
@@ -315,6 +348,7 @@ export async function main(): Promise<void> {
     server.close(() => {
       // **물러난 것을 적고 나간다.** 락은 세션 종료로 어차피 풀리지만, 깨끗하게 물러난
       // 것과 죽은 것을 나중에 구분할 수 있어야 한다.
+      prober.stop();
       void election.release()
         .then(() => db.close())
         .then(() => process.exit(0));
