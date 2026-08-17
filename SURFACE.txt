@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 86 심볼 · sha256:33a705e8fece7e1a47c7054aa9489a5c8ce5c85459312229f8145572523f8850
+# 86 심볼 · sha256:ca21bd6d3ad59065f26a30d239ce5754d4bffb2a2315c81c1668d82c9ece82e3
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -256,7 +256,7 @@ export type ModelIssue = {
     message: string;
 };
 ── ModelIssueCode
-export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'sni_binding_conflict' | 'invalid_sni_host' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range';
+export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range';
 ── ModelValidationError
 export declare class ModelValidationError extends Error {
     readonly issues: ModelIssue[];
