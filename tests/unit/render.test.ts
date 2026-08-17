@@ -259,44 +259,80 @@ describe('R15 / R16 — 비활성과 공백', () => {
   });
 });
 
-describe('R18 — stream_realip 부재를 렌더가 흡수한다 (E0 대응)', () => {
-  const acceptingListener: Model = {
+/**
+ * **R18 을 뒤집었다 — 측정이 앞선 답을 반증했다.**
+ *
+ * 원래 R18 은 *"stream_realip 이 없으면 `$proxy_protocol_addr` 로 해시한다"* 였다. 근거는
+ * "모듈 없이도 실 클라이언트 IP 를 준다" 였고, **그 말 자체는 참이다.** 그런데 E63 으로
+ * 재보니 한 가지가 빠져 있었다:
+ *
+ * | 설정 | `$remote_addr` | `$proxy_protocol_addr` |
+ * |---|---|---|
+ * | realip 없음 | 실제 peer | **헤더가 말하는 값** |
+ * | peer 를 신뢰 | 헤더 값 | 헤더 값 |
+ * | peer 를 **불신** | **실제 peer** | 헤더 값 |
+ *
+ * `$proxy_protocol_addr` 는 **어떤 경우에도 게이팅되지 않는다.** 즉 그 값은 실 클라이언트
+ * IP 이면서 동시에 **클라이언트가 정하는 값**이다. 그걸로 해시하면 공격자가 자기를 원하는
+ * 백엔드로 몬다 — 열등한 대체물이 아니라 **틀린 대체물**이었다.
+ *
+ * 이제: 해시는 언제나 `$remote_addr` 이고, 신뢰 경계(`set_real_ip_from`)를 함께 렌더해
+ * 그 변수 자체를 옳게 만든다. 엔진이 못 하면(stream + stream_realip 없음) 검증기가 막는다.
+ */
+describe('R18 (뒤집힘) — 신뢰 경계를 함께 렌더한다 (§4.7 · E63)', () => {
+  const accepting: Model = {
     ...empty,
     listeners: [
       { key: 'edge', protocol: 'tcp', bind: '0.0.0.0', port: 9000, enabled: true,
-        defaultPool: 'app', acceptProxyProtocol: true },
+        defaultPool: 'app', acceptProxyProtocol: { trustedCidrs: ['10.0.0.0/8'] } },
     ],
     pools: [{ key: 'app', protocolClass: 'tcp', algorithm: 'source_ip_hash' }],
     backends: [{ key: 'a', pool: 'app', host: '10.0.0.1', port: 443, weight: 1 }],
   };
 
-  it('PROXY 를 수신하고 stream_realip 이 없으면 $proxy_protocol_addr 로 해시한다', () => {
-    const conf = render(acceptingListener, { streamRealip: false }).conf;
-    expect(conf).toContain('hash $proxy_protocol_addr consistent;');
-    expect(conf).not.toContain('hash $remote_addr');
+  it('**해시는 언제나 `$remote_addr`** — 게이팅되지 않는 변수를 안 쓴다', () => {
+    const conf = render(accepting, { streamRealip: true }).conf;
+    expect(conf).toContain('hash $remote_addr consistent;');
+    expect(conf).not.toContain('$proxy_protocol_addr');
   });
 
-  it('stream_realip 이 있으면 $remote_addr 로 해시한다 — realip 이 이미 덮어썼다', () => {
-    const conf = render(acceptingListener, { streamRealip: true }).conf;
+  it('**스위치와 잠금이 함께 나간다** — `proxy_protocol` 과 `set_real_ip_from`', () => {
+    // 하나만 내면 헤더는 받는데 누구 것이든 받는다.
+    const conf = render(accepting, { streamRealip: true }).conf;
+    expect(conf).toContain('listen 9000 proxy_protocol;');
+    expect(conf).toContain('set_real_ip_from 10.0.0.0/8;');
+    expect(conf).toContain('real_ip_header proxy_protocol;');
+  });
+
+  it('신뢰 대역을 여러 개 주면 전부 렌더한다', () => {
+    const many: Model = {
+      ...accepting,
+      listeners: [{ ...accepting.listeners[0]!, acceptProxyProtocol: {
+        trustedCidrs: ['10.0.0.0/8', '192.168.0.0/16', '2001:db8::/32'],
+      } } as Model['listeners'][number]],
+    };
+    const conf = render(many, { streamRealip: true }).conf;
+    expect(conf.match(/set_real_ip_from/g)).toHaveLength(3);
+    expect(conf).toContain('set_real_ip_from 2001:db8::/32;');
+  });
+
+  it('PROXY 를 수신하지 않으면 realip 을 안 낸다', () => {
+    const noAccept: Model = {
+      ...accepting,
+      listeners: [{ key: 'edge', protocol: 'tcp', bind: '0.0.0.0', port: 9000,
+        enabled: true, defaultPool: 'app' }],
+    };
+    const conf = render(noAccept, { streamRealip: true }).conf;
+    expect(conf).not.toContain('set_real_ip_from');
+    expect(conf).not.toContain('proxy_protocol');
     expect(conf).toContain('hash $remote_addr consistent;');
   });
 
-  it('PROXY 를 수신하지 않으면 모듈 유무와 무관하게 $remote_addr 다', () => {
-    const noAccept: Model = {
-      ...acceptingListener,
-      listeners: acceptingListener.listeners.map((l) => ({ ...l, acceptProxyProtocol: false })),
-    };
-    expect(render(noAccept, { streamRealip: false }).conf).toContain('hash $remote_addr consistent;');
-  });
-
-  it('수신 리스너는 listen 에 proxy_protocol 을 붙인다', () => {
-    expect(render(acceptingListener, { streamRealip: false }).conf).toContain(
-      'listen 9000 proxy_protocol;',
-    );
-  });
-
-  it('capability 를 주지 않으면 보수적으로(모듈 없음) 렌더한다', () => {
-    expect(render(acceptingListener).conf).toContain('hash $proxy_protocol_addr consistent;');
+  it('**stream 인데 모듈이 없으면 렌더가 아니라 검증에서 막힌다**', () => {
+    // 처음엔 "그래도 렌더는 되고 nginx -t 가 막는다" 로 적었는데 틀렸다 —
+    // `render()` 가 `validateModel` 을 자기 안에서 다시 돌리므로(fail closed) 여기서
+    // 이미 던진다. **게시 전보다 저장 전에 막히는 것이 낫다.**
+    expect(() => render(accepting, { streamRealip: false })).toThrow(/stream_realip/);
   });
 });
 
@@ -469,14 +505,20 @@ describe('R21 — 호스트 매칭이 X.509 계약과 엔진 동작에 맞는가
   });
 });
 
-describe('R22 — PROXY 수신 리스너가 공유 풀의 해시를 오염시키지 않는다', () => {
-  // 한 풀을 PROXY 수신 리스너와 일반 리스너가 함께 쓰면, 일반 리스너에서는
-  // $proxy_protocol_addr 가 비어 모든 클라이언트가 한 peer 로 몰린다.
-  const mixed: Model = {
+/**
+ * **R22 도 뒤집혔다.** 원래 규칙은 *"한 풀을 PROXY 수신 리스너와 일반 리스너가 함께 쓰면
+ * 거부한다"* 였고, 이유는 *"일반 리스너에서는 `$proxy_protocol_addr` 가 비어 모든
+ * 클라이언트가 한 peer 로 몰린다"* 였다.
+ *
+ * 그 실패 모드는 **사라졌다** — 이제 해시가 언제나 `$remote_addr` 라 어느 리스너로 와도
+ * 값이 있다. 대신 더 앞의 질문이 규칙이 됐다: **신뢰 경계를 걸 수 있는 엔진인가.**
+ */
+describe('R22 (뒤집힘) — stream 에서 PROXY 를 받으려면 stream_realip 이 있어야 한다', () => {
+  const shared: Model = {
     ...empty,
     listeners: [
       { key: 'edge', protocol: 'tcp', bind: '0.0.0.0', port: 9000, enabled: true,
-        defaultPool: 'shared', acceptProxyProtocol: true },
+        defaultPool: 'shared', acceptProxyProtocol: { trustedCidrs: ['10.0.0.0/8'] } },
       { key: 'direct', protocol: 'tcp', bind: '0.0.0.0', port: 9001, enabled: true,
         defaultPool: 'shared' },
     ],
@@ -484,19 +526,28 @@ describe('R22 — PROXY 수신 리스너가 공유 풀의 해시를 오염시키
     backends: [{ key: 'b', pool: 'shared', host: '10.0.0.1', port: 443, weight: 1 }],
   };
 
-  it('혼합 공유는 저장이 거부된다', () => {
-    expect(() => render(mixed, { streamRealip: false })).toThrow();
+  it('모듈이 없으면 거부된다 — 신뢰 경계를 걸 수 없기 때문이다', () => {
+    expect(() => render(shared, { streamRealip: false })).toThrow(/stream_realip/);
   });
 
-  it('stream_realip 이 있으면 $remote_addr 로 통일되므로 허용된다', () => {
-    expect(() => render(mixed, { streamRealip: true })).not.toThrow();
+  it('**풀 공유 자체는 이제 문제가 아니다** — 두 리스너 다 `$remote_addr` 를 쓴다', () => {
+    // 옛 규칙이 막던 조합이다. 막던 이유(빈 변수)가 사라졌으므로 통과가 옳다.
+    const conf = render(shared, { streamRealip: true }).conf;
+    expect(conf).toContain('hash $remote_addr consistent;');
+    // 신뢰 경계는 **PROXY 를 받는 리스너에만** 붙는다.
+    expect(conf.match(/set_real_ip_from/g)).toHaveLength(1);
   });
 
-  it('해시가 아닌 알고리즘이면 오염될 것이 없다', () => {
-    const rr: Model = {
-      ...mixed,
-      pools: [{ key: 'shared', protocolClass: 'tcp', algorithm: 'round_robin' }],
+  it('**http 리스너는 모듈 유무와 무관하다** — http_realip 은 별개다', () => {
+    const web: Model = {
+      ...empty,
+      listeners: [{ key: 'web', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: true,
+        acceptProxyProtocol: { trustedCidrs: ['172.16.0.0/12'] },
+        http: { defaultAction: { pool: 'api' } } }],
+      pools: [{ key: 'api', protocolClass: 'http', algorithm: 'round_robin' }],
+      backends: [{ key: 'x', pool: 'api', host: '10.0.2.10', port: 8080, weight: 1 }],
     };
-    expect(() => render(rr, { streamRealip: false })).not.toThrow();
+    const conf = render(web, { streamRealip: false }).conf;
+    expect(conf).toContain('set_real_ip_from 172.16.0.0/12;');
   });
 });

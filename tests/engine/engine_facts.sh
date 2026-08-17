@@ -766,6 +766,73 @@ else
   bad E62 "기동 실패"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────
+# E63 — PROXY 헤더의 신뢰 경계는 **어디에** 걸리는가
+#
+# §4.7 이 `trusted_proxy_cidrs` 를 "필수" 라고 못 박았는데 구현은 불리언 하나였고, 렌더러는
+# `stream_realip` 이 없을 때 소스IP 해시를 `$proxy_protocol_addr` 로 계산했다. 근거는
+# *"모듈 없이도 실 클라이언트 IP 를 준다"* 였고 **그 말 자체는 참이다.**
+#
+# 여기서 재는 것은 그 문장에 빠진 절반이다: **그 값을 누가 정하는가.**
+
+p=$(mkprefix E63)
+cat > "$p/conf/nginx.conf" <<'CONF'
+error_log logs/error.log warn;
+pid logs/nginx.pid;
+events { worker_connections 64; }
+http {
+    access_log off;
+    default_type text/plain;
+    server { listen 19730 proxy_protocol;
+             return 200 "remote=$remote_addr pp=$proxy_protocol_addr"; }
+    server { listen 19731 proxy_protocol; set_real_ip_from 127.0.0.1;
+             real_ip_header proxy_protocol;
+             return 200 "remote=$remote_addr pp=$proxy_protocol_addr"; }
+    server { listen 19732 proxy_protocol; set_real_ip_from 10.9.9.9;
+             real_ip_header proxy_protocol;
+             return 200 "remote=$remote_addr pp=$proxy_protocol_addr"; }
+}
+CONF
+
+if start_ng "$p"; then
+  # 공격자가 아무 IP 나 적어 보낸다. peer 는 언제나 127.0.0.1 이다.
+  spoof() {
+    { printf 'PROXY TCP4 203.0.113.9 10.0.0.1 1234 80\r\nGET / HTTP/1.0\r\n\r\n'; sleep 1; } \
+      | timeout 5 nc 127.0.0.1 "$1" 2>/dev/null | tail -1
+  }
+
+  r=$(spoof 19730)
+  case "$r" in
+    *"remote=127.0.0.1"*"pp=203.0.113.9"*)
+      ok E63.1 "**realip 없이는 \$proxy_protocol_addr 가 헤더 값 그대로다** — 클라이언트가 정한다 ($r)" ;;
+    *) bad E63.1 "예상 밖: '$r'" ;;
+  esac
+
+  r=$(spoof 19731)
+  case "$r" in
+    *"remote=203.0.113.9"*)
+      ok E63.2 "신뢰하는 peer 의 헤더는 **\$remote_addr 를 덮는다** ($r)" ;;
+    *) bad E63.2 "예상 밖: '$r'" ;;
+  esac
+
+  r=$(spoof 19732)
+  case "$r" in
+    *"remote=127.0.0.1"*"pp=203.0.113.9"*)
+      ok E63.3 "**신뢰 목록에 없으면 \$remote_addr 는 안 바뀐다** — 여기가 유일한 게이트다. 그런데 \$proxy_protocol_addr 는 **그때도 헤더 값이다** ($r)" ;;
+    *) bad E63.3 "예상 밖: '$r'" ;;
+  esac
+  stop_ng "$p"
+else
+  bad E63 "기동 실패"
+fi
+
+# **stream 에는 그 게이트가 아예 없을 수 있다.** 참조 이미지에 stream_realip 이 없다.
+if "$BIN" -V 2>&1 | grep -q -- '--with-stream_realip_module'; then
+  ok E63.4 "이 빌드에는 stream_realip 이 **있다** — stream 에서도 신뢰 경계를 걸 수 있다"
+else
+  ok E63.4 "이 빌드에는 stream_realip 이 **없다** — stream 에서는 신뢰 경계를 걸 방법이 없고, 그래서 검증기가 그 조합을 막는다"
+fi
+
 log ""
 log "=============================================================="
 log " PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP"

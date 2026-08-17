@@ -35,7 +35,7 @@ const caps = (streamRealip: boolean): EngineCapabilities => ({
 const chained: Model = {
   listeners: [
     { key: 'edge', protocol: 'tcp', bind: '0.0.0.0', port: 9000, enabled: true,
-      defaultPool: 'app', acceptProxyProtocol: true },
+      defaultPool: 'app', acceptProxyProtocol: { trustedCidrs: ['10.0.0.0/8'] } },
   ],
   pools: [{ key: 'app', protocolClass: 'tcp', algorithm: 'round_robin', sendProxyProtocol: 'v1' }],
   backends: [{ key: 'a', pool: 'app', host: '10.0.0.1', port: 443, weight: 1 }],

@@ -652,6 +652,40 @@ type SniCertificateBinding = ResourceMeta & {
 > 수신 활성화와 실 클라이언트 IP 적용은 엔진에서 별개 설정이고 realip 모듈이 필요하다 (§7.6).
 > "UDP 는 실 클라이언트 IP 를 못 얻는다"는 **PROXY 헤더 경로에 한정해서** 참이다.
 
+**구현 (2026-08-17) — 그리고 한동안 이 표가 거짓이었다.**
+
+`trusted_proxy_cidrs` 를 "필수" 라고 적어 놓고 모델에는 **불리언 하나**만 있었다. 즉
+신뢰 경계 없이 PROXY 수신을 켤 수 있었고, 문서만 읽으면 있다고 믿게 되는 상태였다.
+
+**E63 으로 재고 나서야 얼마나 나쁜지가 분명해졌다.**
+
+| 설정 | `$remote_addr` | `$proxy_protocol_addr` |
+|---|---|---|
+| realip 없음 | 실제 peer | **헤더가 말하는 값** |
+| peer 를 신뢰 | 헤더 값 | 헤더 값 |
+| peer 를 **불신** | **실제 peer** | 헤더 값 |
+
+**`$proxy_protocol_addr` 는 어떤 경우에도 게이팅되지 않는다.** 신뢰 경계는 오직 realip 을
+거친 `$remote_addr` 에만 걸린다. 그런데 렌더러는 `stream_realip` 이 없을 때 소스IP 해시를
+바로 그 변수로 계산했다(옛 R18) — *"모듈 없이도 실 클라이언트 IP 를 준다"* 가 근거였고
+그 문장은 참이지만, 빠진 절반이 **"그 값을 클라이언트가 정한다"** 였다. 공격자가 자기를
+원하는 백엔드로 몰 수 있었다.
+
+바꾼 것:
+
+| | 지금 |
+|---|---|
+| 모델 | `acceptProxyProtocol?: { trustedCidrs: string[] }` — **불리언을 안 받는다.** 빈 목록도 거부 |
+| 렌더 | `proxy_protocol` 과 `set_real_ip_from`/`real_ip_header` 가 **함께** 나간다 |
+| 해시 | **언제나 `$remote_addr`.** capability 로 분기하지 않는다 |
+| stream + `stream_realip` 없음 | **검증기가 막는다** — 신뢰 경계를 걸 방법이 없는 조합이다 |
+| DB | `accept_proxy_cidrs text[]`, 빈 배열 금지. **옛 `true` 는 옮기지 않고 끈다** — 신뢰 경계를 지어낼 수 없다 |
+
+아직 없는 것: `real_ip_from_header` · `forwarded_header_policy`. HTTP 헤더 파생은 v0.6 의
+TLS/헤더 정책과 함께 다룬다. **컨트롤 플레인이 엔진 capability 를 조회하지 않는다** —
+`streamRealip` 을 보수적으로 `false` 로 가정하므로, stream PROXY 수신은 지금 항상 막힌다.
+capability 프로브는 별도 과제다.
+
 ### 4.8 Certificate & Secret
 
 | 필드 | 비고 |

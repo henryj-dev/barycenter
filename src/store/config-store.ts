@@ -125,7 +125,7 @@ async function readModel(c: Queryable): Promise<Model> {
   }));
 
   const listeners = (await c.query(
-    `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_protocol,
+    `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
             dp.key AS default_pool, hp.key AS http_default_pool, sp.key AS sni_pool
        FROM listeners l
@@ -140,8 +140,10 @@ async function readModel(c: Queryable): Promise<Model> {
       port: num(r, 'port'),
       enabled: bool(r, 'enabled'),
     };
-    const app = r['accept_proxy_protocol'];
-    const pp = app === null || app === undefined ? {} : { acceptProxyProtocol: app === true };
+    const cidrs = r['accept_proxy_cidrs'];
+    const pp = Array.isArray(cidrs) && cidrs.length > 0
+      ? { acceptProxyProtocol: { trustedCidrs: cidrs as string[] } }
+      : {};
     const protocol = text(r, 'protocol');
     if (protocol === 'http') {
       const hp = maybeText(r, 'http_default_pool');
@@ -296,7 +298,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       const spool = protocol === 'tls_passthrough' && obj(sni)['pool'] !== undefined
         ? await poolRef(c, String(obj(sni)['pool']), `listener '${op.key}'`) : undefined;
       await c.query(
-        `INSERT INTO listeners (id,key,name,protocol,bind,port,enabled,accept_proxy_protocol,
+        `INSERT INTO listeners (id,key,name,protocol,bind,port,enabled,accept_proxy_cidrs,
                                 udp_preset,http_default_pool_id,http_default_pool_cls,
                                 http_default_reject,on_unmatched_sni_pool,on_unmatched_sni_cls,
                                 on_unmatched_sni_reject,preread_timeout_s,
@@ -305,7 +307,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
-           accept_proxy_protocol=EXCLUDED.accept_proxy_protocol,
+           accept_proxy_cidrs=EXCLUDED.accept_proxy_cidrs,
            udp_preset=EXCLUDED.udp_preset,
            http_default_pool_id=EXCLUDED.http_default_pool_id,
            http_default_pool_cls=EXCLUDED.http_default_pool_cls,
@@ -318,7 +320,8 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
-          b['acceptProxyProtocol'] ?? null,
+          // §4.7 — 신뢰 경계 없이는 켤 수 없다. 해독기가 모양을 이미 봤다.
+          obj(b['acceptProxyProtocol'])['trustedCidrs'] ?? null,
           protocol === 'udp' ? obj(b['udp'])['preset'] : null,
           hpool?.[0] ?? null, hpool?.[1] ?? null, da === 'reject' ? true : null,
           spool?.[0] ?? null, spool?.[1] ?? null, sni === 'reject' ? true : null,

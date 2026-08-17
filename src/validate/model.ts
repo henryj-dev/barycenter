@@ -227,34 +227,29 @@ export function validateModel(
     issues.push({ code: 'socket_conflict', subjects: [c.a, c.b], message: c.reason });
   }
 
-  // ── PROXY 수신 리스너와 일반 리스너가 같은 풀을 공유하는가 ──
+  // ── stream 에서 PROXY 를 받으려면 stream_realip 이 있어야 한다 (§4.7 · §7.6 · E63) ──
   //
-  // stream_realip 이 없으면 소스IP 해시가 $proxy_protocol_addr 로 렌더된다(§7.6). 그런데
-  // 같은 풀을 PROXY 를 받지 않는 리스너도 쓰면, 그쪽에서는 그 변수가 **비어 있어**
-  // 모든 클라이언트가 한 peer 로 몰린다. 조용히 망가지므로 저장에서 막는다 (4차 검수).
-  if (!caps.streamRealip) {
-    const hashPools = new Set(
-      model.pools.filter((p) => p.algorithm === 'source_ip_hash' || p.algorithm === 'hash').map((p) => p.key),
-    );
-    const viaProxy = new Set<string>();
-    const viaDirect = new Set<string>();
-    for (const l of model.listeners) {
-      if (!l.enabled) continue;
-      const target = l.acceptProxyProtocol === true && l.protocol !== 'udp' ? viaProxy : viaDirect;
-      for (const pk of poolsReachedBy(l, model)) target.add(pk);
-    }
-    for (const pk of hashPools) {
-      if (viaProxy.has(pk) && viaDirect.has(pk)) {
-        issues.push({
-          code: 'mixed_proxy_protocol_pool',
-          subjects: [pk],
-          message:
-            `풀 '${pk}' 를 PROXY 수신 리스너와 일반 리스너가 함께 쓴다. stream_realip 이 없어 ` +
-            `해시가 $proxy_protocol_addr 로 계산되는데, 일반 리스너에서는 그 값이 비어 모든 ` +
-            `클라이언트가 한 peer 로 몰린다. 풀을 분리하거나 stream_realip 이 있는 엔진을 쓴다.`,
-        });
-      }
-    }
+  // **전에는 없어도 됐다 — 그게 문제였다.** `stream_realip` 이 없으면 소스IP 해시를
+  // `$proxy_protocol_addr` 로 렌더했는데, E63 으로 재보니 그 변수는 realip 설정과 무관하게
+  // **언제나 헤더가 말하는 값**이다. 신뢰 경계는 오직 realip 을 거친 `$remote_addr` 에만
+  // 걸린다. 즉 열등한 대체물이 아니라 **클라이언트가 정하는 값**으로 백엔드를 고르고
+  // 있었다 — 원하는 peer 로 자기를 몰 수 있다.
+  //
+  // 이제 렌더러는 언제나 `set_real_ip_from` 을 함께 낸다. 그 디렉티브를 모르는 엔진에서는
+  // `nginx -t` 가 실패하므로 어차피 못 쓴다. **게시 전에 실패하는 것보다 저장에서 막는
+  // 편이 낫다** — 운영자가 plan 단계에서 알게 된다.
+  for (const l of model.listeners) {
+    if (!l.enabled || l.protocol === 'udp' || l.protocol === 'http') continue;
+    if (l.acceptProxyProtocol === undefined) continue;
+    if (caps.streamRealip) continue;
+    issues.push({
+      code: 'option_not_supported',
+      subjects: [l.key],
+      message:
+        `리스너 '${l.key}' 가 stream 에서 PROXY 를 받으려 하는데 엔진에 stream_realip 이 없다. ` +
+        `그러면 신뢰 경계를 걸 수 없고, 걸지 못한 채로 받으면 클라이언트가 자기 IP 를 정한다. ` +
+        `stream_realip 이 있는 엔진을 쓰거나 이 리스너에서 PROXY 수신을 끈다.`,
+    });
   }
 
   // ── 라우트 ──

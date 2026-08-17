@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 78 심볼 · sha256:cb084702f7334b858e30a65d948b00ce9429b8106434684c88dd0685abd548ed
+# 79 심볼 · sha256:043a966efa40a5711eb62c1838edfcf9450bc385a84fa68dc425aaec0fef4747
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -159,7 +159,7 @@ export type HttpAction = {
 ── HttpListener
 export type HttpListener = ListenerBase & {
     protocol: 'http';
-    acceptProxyProtocol?: boolean;
+    acceptProxyProtocol?: InboundProxyProtocol;
     http?: HttpProfile;
 };
 ── HttpProfile
@@ -176,6 +176,10 @@ export type HttpRoute = {
     priority: number;
     pathPrefix?: string;
     action: HttpAction;
+};
+── InboundProxyProtocol
+export type InboundProxyProtocol = {
+    trustedCidrs: string[];
 };
 ── Listener
 export type Listener = HttpListener | PassthroughListener | TcpListener | UdpListener;
@@ -241,7 +245,7 @@ export type PassthroughAction = {
 ── PassthroughListener
 export type PassthroughListener = ListenerBase & {
     protocol: 'tls_passthrough';
-    acceptProxyProtocol?: boolean;
+    acceptProxyProtocol?: InboundProxyProtocol;
     onUnmatchedSni?: SniOutcome;
     prereadTimeoutS?: number;
 };
@@ -325,7 +329,7 @@ export type PublishedState = {
 export type RawListener = ListenerBase & {
     protocol: ListenerProtocol;
     defaultPool?: string;
-    acceptProxyProtocol?: boolean;
+    acceptProxyProtocol?: InboundProxyProtocol;
     udp?: {
         preset: UdpPreset;
     };
@@ -408,7 +412,7 @@ export type StoredState = {
 export type TcpListener = ListenerBase & {
     protocol: 'tcp';
     defaultPool: string;
-    acceptProxyProtocol?: boolean;
+    acceptProxyProtocol?: InboundProxyProtocol;
 };
 ── TerminalKind
 export type TerminalKind = 'activated' | 'failed' | 'aborted';

@@ -22,6 +22,7 @@ export type {
   HttpAction,
   HttpListener,
   HttpProfile,
+  InboundProxyProtocol,
   HttpRoute,
   Listener,
   Model,

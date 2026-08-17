@@ -126,7 +126,7 @@ function listenArgs(l: Listener): ConfValue[] {
       ? [lit(`[${bind.value.addr}]:${l.port}`), lit('ipv6only=on')]
       : [lit(`${bind.value.addr}:${l.port}`)];
   // udp 는 PROXY 수신을 지원하지 않는다 (§4.7). **타입에 그 필드가 없다** — 먼저 좁힌다.
-  if (l.protocol !== 'udp' && l.acceptProxyProtocol === true) base.push(lit('proxy_protocol'));
+  if (l.protocol !== 'udp' && l.acceptProxyProtocol !== undefined) base.push(lit('proxy_protocol'));
   return base;
 }
 
@@ -230,6 +230,7 @@ function httpServerBlocks(
       block('server', [], [
         directive('listen', listenArgs(listener)),
         directive('server_name', [nameArg]),
+        ...realipNodes(listener),
         ...locations,
       ]),
     );
@@ -272,6 +273,26 @@ function locationBody(r: HttpRoute, poolsWithBackends: Set<string>): ConfNode[] 
  * E32 로 실측: 없으면 모르는 Host 가 **첫 번째 server 블록**으로 조용히 들어간다.
  * 멀티테넌트에서 그건 테넌트 간 누수다. 기본은 `444`(응답 없이 끊기)로 막는다.
  */
+/**
+ * 신뢰 경계 (§4.7 · E63).
+ *
+ * `listen ... proxy_protocol` 만으로는 **누구의 헤더든 받는다.** 실제로 게이팅하는 것은
+ * realip 이고, 신뢰 목록에 없는 peer 가 보낸 헤더는 `$remote_addr` 를 못 바꾼다. 그래서
+ * 이 둘은 **함께** 나가야 한다 — 하나만 내면 스위치는 켜졌는데 잠금이 없다.
+ *
+ * **capability 로 분기하지 않는다.** 엔진에 realip 모듈이 없으면 이 설정은 `nginx -t` 에서
+ * 실패하고, 그 실패는 게시 **전에** 잡힌다(§6.2 preflight). 조용히 열등한 대체물로
+ * 물러나는 것보다 낫다 — 전에 그렇게 하다가 스푸핑 가능한 변수로 해시하고 있었다.
+ */
+function realipNodes(listener: Listener): ConfNode[] {
+  const pp = listener.protocol === 'udp' ? undefined : listener.acceptProxyProtocol;
+  if (pp === undefined) return [];
+  return [
+    ...pp.trustedCidrs.map((cidr) => directive('set_real_ip_from', [lit(cidr)])),
+    directive('real_ip_header', [lit('proxy_protocol')]),
+  ];
+}
+
 function defaultServerBlock(listener: HttpListener, poolsWithBackends: Set<string>): ConfNode {
   const action = listener.http?.defaultAction ?? 'reject';
   const body: ConfNode[] =
@@ -287,6 +308,7 @@ function defaultServerBlock(listener: HttpListener, poolsWithBackends: Set<strin
   return block('server', [], [
     directive('listen', [...listenArgs(listener), lit('default_server')]),
     directive('server_name', [lit('_')]),
+    ...realipNodes(listener),
     ...body,
   ]);
 }
@@ -350,6 +372,7 @@ function passthroughNodes(
 
   const server = block('server', [], [
     directive('listen', listenArgs(listener)),
+    ...realipNodes(listener),
     directive('ssl_preread', [lit('on')]),
     ...(listener.prereadTimeoutS === undefined
       ? []
@@ -371,6 +394,7 @@ function streamServerBlock(listener: TcpListener | UdpListener, pool: Pool | und
     if (preset?.reuseport) args.push(lit('reuseport'));
   }
   children.push(directive('listen', args));
+  children.push(...realipNodes(listener));
   children.push(directive('proxy_pass', [lit(upstreamName(listener.defaultPool))]));
 
   if (preset) {
@@ -413,17 +437,21 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
 
   const listeners = byKey(model.listeners).filter((l) => l.enabled);
 
-  // PROXY 헤더를 받는 리스너로 도달하는 풀은, stream_realip 이 없을 때 $remote_addr 대신
-  // $proxy_protocol_addr 로 해시해야 실 클라이언트 기준이 된다.
-  const viaProxyProtocol = new Set<string>();
-  if (!caps.streamRealip) {
-    for (const l of listeners) {
-      if (l.protocol === 'udp' || l.acceptProxyProtocol !== true) continue;
-      for (const poolKey of poolsReachedBy(l, model)) viaProxyProtocol.add(poolKey);
-    }
-  }
-  const sourceIpVar = (poolKey: string): string =>
-    viaProxyProtocol.has(poolKey) ? 'proxy_protocol_addr' : 'remote_addr';
+  /**
+   * 소스IP 해시는 **언제나 `$remote_addr`** 다.
+   *
+   * 전에는 `stream_realip` 이 없을 때 `$proxy_protocol_addr` 로 바꿔 렌더했다. 실 클라이언트
+   * IP 를 준다는 게 이유였고 그 말 자체는 참이다 — **다만 그 값은 클라이언트가 정한다.**
+   * E63 으로 실측했다: `$proxy_protocol_addr` 는 realip 설정과 무관하게 **언제나 헤더가
+   * 말하는 값**이고, 신뢰 경계는 오직 realip 을 거친 `$remote_addr` 에만 걸린다.
+   *
+   * 그래서 그 변수로 해시하면 **클라이언트가 자기를 원하는 백엔드로 몬다.** 실 클라이언트
+   * 기준이 되는 대신 공격자 기준이 된 셈이었다.
+   *
+   * 지금은 `set_real_ip_from` 을 함께 렌더해 `$remote_addr` 자체를 옳게 만든다. 엔진이
+   * 그걸 못 하는 경우(stream 인데 `stream_realip` 없음)는 **검증기가 막는다** — 렌더러가
+   * 조용히 열등한 대체물을 고르지 않는다.
+   */
   const httpListeners = listeners.filter((l): l is HttpListener => l.protocol === 'http');
   const streamListeners = listeners.filter(
     (l): l is PassthroughListener | TcpListener | UdpListener => l.protocol !== 'http',
@@ -450,6 +478,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
    * 빈 glob 도 통과하므로(E62) admin 조각이 없는 세대도 유효하다.
    */
   const adminInclude = directive('include', [lit('admin/*.conf')]);
+
 
   // ── http ──
   // **http 블록은 항상 낸다.** 모델에 http 리스너가 없어도 마커를 서빙할 자리가
@@ -491,7 +520,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     }
     for (const poolKey of [...usedPools].sort()) {
       children.push(
-        upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], sourceIpVar(poolKey)),
+        upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], 'remote_addr'),
       );
     }
     for (const l of httpListeners) {
@@ -533,7 +562,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     const children: ConfNode[] = [];
     for (const poolKey of [...usedPools].sort()) {
       children.push(
-        upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], sourceIpVar(poolKey)),
+        upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], 'remote_addr'),
       );
     }
     for (const l of streamListeners) {

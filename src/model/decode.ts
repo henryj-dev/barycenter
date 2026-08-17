@@ -18,6 +18,7 @@
  *   3. **강제 변환하지 않는다.** `"8080"` 은 8080 이 아니라 오류다. 변환은 의미를 바꾼다.
  */
 import type {
+  InboundProxyProtocol,
   Backend,
   HttpAction,
   HttpProfile,
@@ -224,6 +225,41 @@ function decodePassthroughAction(iss: Issues, v: unknown, path: string): Passthr
 
 const LISTENER_BASE = ['key', 'protocol', 'bind', 'port', 'enabled'] as const;
 
+/**
+ * 인바운드 PROXY 수신 (§4.7).
+ *
+ * **불리언을 안 받는다.** 옛 모양(`acceptProxyProtocol: true`)을 관대하게 받아 주면 그
+ * 편의가 곧 기본값이 되고, 신뢰 경계 없는 설정이 그대로 굳는다. 명시적으로 거부하고
+ * 무엇으로 바꿔야 하는지 말해 준다.
+ */
+function decodeInboundProxyProtocol(
+  iss: Issues, v: unknown, path: string,
+): InboundProxyProtocol | undefined {
+  if (typeof v === 'boolean') {
+    iss.add('invalid_type', path,
+      'PROXY 수신은 켜고 끄는 값이 아니다. `{ "trustedCidrs": ["10.0.0.0/8"] }` 처럼 '
+      + '**믿어 줄 앞단**을 적어야 한다 — 신뢰 경계가 없으면 클라이언트가 자기 IP 를 정한다');
+    return undefined;
+  }
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['trustedCidrs']);
+  if (v['trustedCidrs'] === undefined) {
+    iss.add('missing_field', `${path}.trustedCidrs`, '필수다 — 비어 있을 수 없다 (§4.7)');
+    return undefined;
+  }
+  const cidrs = arrayOf(iss, v['trustedCidrs'], `${path}.trustedCidrs`,
+    (item, at) => str(iss, item, at));
+  if (cidrs.length === 0) {
+    iss.add('out_of_range', `${path}.trustedCidrs`,
+      '비어 있을 수 없다 — 아무도 안 믿을 거면 PROXY 수신을 켜지 않는다');
+    return undefined;
+  }
+  return { trustedCidrs: cidrs };
+}
+
 function decodeListener(iss: Issues, v: unknown, path: string): Listener | undefined {
   if (!isObject(v)) {
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
@@ -242,7 +278,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
   switch (protocol) {
     case 'http': {
       noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'http']);
-      const accept = optional(v['acceptProxyProtocol'], () => bool(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
+      const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
       const http = optional(v['http'], () => decodeHttpProfile(iss, v['http'], `${path}.http`));
       return {
         ...head, protocol,
@@ -252,7 +288,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
     }
     case 'tls_passthrough': {
       noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'onUnmatchedSni', 'prereadTimeoutS']);
-      const accept = optional(v['acceptProxyProtocol'], () => bool(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
+      const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
       const sni = optional(v['onUnmatchedSni'], () => decodeSniOutcome(iss, v['onUnmatchedSni'], `${path}.onUnmatchedSni`));
       const preread = optional(v['prereadTimeoutS'], () => int(iss, v['prereadTimeoutS'], `${path}.prereadTimeoutS`, 1, 3600));
       return {
@@ -264,7 +300,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
     }
     case 'tcp': {
       noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'defaultPool']);
-      const accept = optional(v['acceptProxyProtocol'], () => bool(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
+      const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
       // 라우트가 없는 리스너는 기본 풀이 **필수**다. 없으면 렌더에서 통째로 빠진다.
       const defaultPool = required(iss, v, 'defaultPool', path, () => str(iss, v['defaultPool'], `${path}.defaultPool`));
       if (defaultPool === undefined) return undefined;

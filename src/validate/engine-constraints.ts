@@ -31,7 +31,7 @@ export type EngineIssue = {
 
 /** PROXY 헤더를 받을 수 있는 것은 TCP 계열 리스너뿐이다. UDP 는 엔진이 지원하지 않는다. */
 const acceptsProxyProtocol = (l: RawListener): boolean =>
-  l.enabled && l.protocol !== 'udp' && l.acceptProxyProtocol === true;
+  l.enabled && l.protocol !== 'udp' && l.acceptProxyProtocol !== undefined;
 
 export function checkEngineConstraints(model: RawModel, caps: EngineCapabilities): EngineIssue[] {
   if (caps.supports.streamRealip) return [];

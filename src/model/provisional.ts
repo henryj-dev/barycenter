@@ -19,6 +19,35 @@ export type ListenerProtocol = 'http' | 'tls_passthrough' | 'tcp' | 'udp';
 export type UdpPreset = 'dns' | 'wireguard' | 'game_generic' | 'custom';
 
 /**
+ * 인바운드 PROXY protocol 수신 (§4.7).
+ *
+ * **불리언이 아니다.** `trustedCidrs` 없이는 "켠다" 를 **표현할 수가 없다** — 이 저장소가
+ * 반복해서 배운 것이 *"표현 가능한 것은 언젠가 들어온다"* 이고, 신뢰 경계 없는 PROXY
+ * 수신은 표현 가능해서는 안 되는 것이다.
+ *
+ * 왜 필수인가 — 엔진으로 실측했다(E63):
+ *
+ * | 설정 | `$remote_addr` | `$proxy_protocol_addr` |
+ * |---|---|---|
+ * | realip 없음 | 실제 peer | **헤더가 말하는 값** |
+ * | peer 를 신뢰 | 헤더 값 | 헤더 값 |
+ * | peer 를 불신 | **실제 peer** | 헤더 값 |
+ *
+ * **`$proxy_protocol_addr` 는 어떤 경우에도 게이팅되지 않는다.** 신뢰 경계는 오직
+ * realip 을 거친 `$remote_addr` 에만 걸린다. 그래서 그 변수로 해시하거나 로깅하면
+ * 값을 **클라이언트가 정한다** — 원하는 백엔드로 자기를 몰 수 있다.
+ */
+export type InboundProxyProtocol = {
+  /**
+   * PROXY 헤더를 믿어 줄 앞단의 CIDR 목록. **비어 있을 수 없다** (§4.7).
+   *
+   * 여기 적힌 대역에서 온 연결에 대해서만 `$remote_addr` 가 헤더 값으로 바뀐다.
+   */
+  trustedCidrs: string[];
+};
+
+
+/**
  * 유효한 SNI 인데 매칭이 없을 때의 동작. §4.1
  *
  * SNI 부재와 파싱 실패(비-TLS 포함)는 **설정 대상이 아니다** — 언제나 reject 다.
@@ -44,7 +73,7 @@ type ListenerBase = {
 export type RawListener = ListenerBase & {
   protocol: ListenerProtocol;
   defaultPool?: string;
-  acceptProxyProtocol?: boolean;
+  acceptProxyProtocol?: InboundProxyProtocol;
   udp?: { preset: UdpPreset };
   http?: HttpProfile;
   onUnmatchedSni?: SniOutcome;
@@ -53,13 +82,13 @@ export type RawListener = ListenerBase & {
 
 export type HttpListener = ListenerBase & {
   protocol: 'http';
-  acceptProxyProtocol?: boolean;
+  acceptProxyProtocol?: InboundProxyProtocol;
   http?: HttpProfile;
 };
 
 export type PassthroughListener = ListenerBase & {
   protocol: 'tls_passthrough';
-  acceptProxyProtocol?: boolean;
+  acceptProxyProtocol?: InboundProxyProtocol;
   onUnmatchedSni?: SniOutcome;
   prereadTimeoutS?: number;
 };
@@ -67,7 +96,7 @@ export type PassthroughListener = ListenerBase & {
 export type TcpListener = ListenerBase & {
   protocol: 'tcp';
   defaultPool: string;
-  acceptProxyProtocol?: boolean;
+  acceptProxyProtocol?: InboundProxyProtocol;
 };
 
 export type UdpListener = ListenerBase & {

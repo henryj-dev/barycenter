@@ -252,7 +252,7 @@ describe('⑦d 엔진이 지원하지 않는 옵션 조합은 거부된다', () 
               port: 53,
               enabled: true,
               defaultPool: 'pu',
-              acceptProxyProtocol: true,
+              acceptProxyProtocol: { trustedCidrs: ['10.0.0.0/8'] },
               udp: { preset: 'dns' },
             },
           ],

@@ -181,14 +181,22 @@ const fixtures: Array<{ name: string; model: Model }> = [
     },
   },
   {
-    name: 'R18 PROXY 수신 + $proxy_protocol_addr 해시 (stream_realip 없는 엔진)',
+    // **R18 이 뒤집힌 자리다.** 옛 케이스는 *"stream + PROXY 를 $proxy_protocol_addr 해시로
+    // 렌더한 결과가 nginx -t 를 통과한다"* 였다. 통과하기는 했지만 그 설정은 **해시 키를
+    // 클라이언트가 정하게** 하고 있었다(E63). 이제 그 조합은 검증기가 막으므로 렌더 자체가
+    // 안 나온다 — 대신 **신뢰 경계가 붙은 http 수신**이 실제 엔진을 통과하는지 본다.
+    //
+    // 이게 중요한 이유: `set_real_ip_from` 과 `real_ip_header proxy_protocol` 은 realip
+    // 모듈이 있어야 하는 디렉티브다. 렌더는 되는데 엔진이 거절하면 게시 전에 죽는다.
+    name: 'R18(뒤집힘) PROXY 수신 + 신뢰 경계 — http realip 이 실제 엔진을 통과한다',
     model: {
       ...base,
       listeners: [
-        { key: 'edge', protocol: 'tcp', bind: '0.0.0.0', port: 9000, enabled: true,
-          defaultPool: 'app', acceptProxyProtocol: true },
+        { key: 'edge', protocol: 'http', bind: '0.0.0.0', port: 9000, enabled: true,
+          acceptProxyProtocol: { trustedCidrs: ['10.0.0.0/8', '2001:db8::/32'] },
+          http: { defaultAction: { pool: 'app' } } },
       ],
-      pools: [{ key: 'app', protocolClass: 'tcp', algorithm: 'source_ip_hash' }],
+      pools: [{ key: 'app', protocolClass: 'http', algorithm: 'source_ip_hash' }],
       backends: [
         { key: 'a', pool: 'app', host: '10.0.0.1', port: 443, weight: 1 },
         { key: 'b', pool: 'app', host: '10.0.0.2', port: 443, weight: 1 },
