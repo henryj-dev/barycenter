@@ -2241,8 +2241,8 @@ k8s 네이티브 배포는 별도 과제.
 | S13 | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 오삭제 0회 + §8.4 GC 각 단계 크래시에서 **누수·이중감소 0회** + GC root 누락 0회 | GC 보수화 |
 | S14 | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL/NXDOMAIN/timeout, 기존 세션 거동 | 폴백 자체가 없음 → 요구 재조정 |
 | S15 | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
-| S16 | SNI 별 TLS policy 렌더 | 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 | `override` 제거 |
-| S17 | TLS 인증서 선택 렌더 | exact / 1라벨 와일드카드 / `default_server` 조합에서 SAN 미커버 인증서 제시 0회 | v0 은 exact host 만 |
+| S16 ✅ | SNI 별 TLS policy 렌더 | 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 | `override` 제거 |
+| S17 ✅ | TLS 인증서 선택 렌더 | exact / 1라벨 와일드카드 / `default_server` 조합에서 SAN 미커버 인증서 제시 0회 | v0 은 exact host 만 |
 | S18 | ACME 상태기계 | 오더·챌린지·재시도·고아 TXT 정리 (v0.6 전) | ACME 범위 축소 |
 | S19 ✅ | **롤백 경로 합성** | 옛 topology·TLS 자료를 **새 세대로 clone 하고 새 epoch 를 구워** 활성화. S8(세대 결박)과 S11(새 epoch)이 함께 성립하는가 | 설계 재작업 (block) |
 
@@ -2335,6 +2335,50 @@ block 이다** — 활성화를 판정하지 못하면 상태기계를 고정할
 **렌더 입력**이어야 한다.
 
 **S19 는 프로젝트 block 이었고, 해제됐다.**
+
+**S16·S17 실행 결과 (2026-08-17).** `./spike/s16/run.sh` → 5 PASS, `./spike/s17/run.sh` → 10 PASS.
+
+이 둘은 **`https` 리스너 프로토콜을 되살리는 전제**다. §4.6 이 `https` 를 일부러 빼면서
+*"S16·S17 통과와 실제 TLS 렌더러가 생긴 뒤에 되살린다"* 고 적어 둔 그 게이트다.
+
+**S17 — 인증서 선택은 성립한다. 단, 렌더 규칙 둘이 붙는다.**
+
+| 사실 | 렌더 규칙 |
+|---|---|
+| `server_name *.wild.test` 는 **다중 라벨을 삼킨다**(E22.2). `deep.x.wild.test` 가 와일드카드 인증서를 받는데, X.509 와일드카드는 한 라벨만 커버한다 | 와일드카드는 **`~^[^.]+\.suffix$` 앵커 정규식**으로 낸다. 나이브한 형태는 **SAN 미커버 인증서 제시**가 된다 — 합격 기준이 겨눈 바로 그 실패다 |
+| **`server_name ~*` 는 `nginx -t` 가 거절한다** (`pcre2_compile() failed: quantifier does not follow a repeatable item`). `~*` 는 map 전용이다(E21) | 패스스루 SNI map 의 문법을 그대로 옮겨 쓰면 안 된다. `server_name` 은 `~` 만 받고, **대소문자는 nginx 가 SNI 를 내려서 비교**하므로 `~` 로 충분하다 (`X.WILD.test` 실측) |
+| `default_server` 가 없으면 모르는 SNI 가 **첫 번째 server 의 인증서**를 받는다 — E32 의 TLS 판이다 | TLS 리스너마다 **`default_server` 를 반드시 낸다.** 멀티테넌트에서 이건 테넌트 간 누수다 |
+
+SNI 가 아예 없어도 handshake 는 안 끊긴다 — `default_server` 인증서가 나간다. 즉
+**"모르는 이름에 무엇을 제시할 것인가"는 설정으로 정해야 하는 값**이지, 비워 둘 수 있는
+자리가 아니다.
+
+**S16 — SNI 별 TLS policy 는 성립한다. `override` 를 유지한다.**
+
+같은 리스너 위에서 비-default server 의 `ssl_protocols` 가 **실제 handshake 에 걸린다**:
+`strict.test` 는 TLS1.2 를 거절하고 같은 포트의 default 는 받는다. 뒤집어도(default 가
+1.3 전용, 비-default 가 1.2 허용) 비-default 가 이긴다 — **default_server 값이 리스너를
+지배하지 않는다.** server 레벨이 http 레벨을 덮으므로, 렌더러는 policy 를 **각 server
+블록 안**에 낸다.
+
+> ⚠ **엔진 버전에 딸린 사실이다.** 오래된 nginx 에서는 `ssl_protocols` 가 사실상
+> default_server 것만 살았다. 엔진 이미지를 바꾸면 이 스파이크를 다시 돌린다.
+
+**그리고 이 측정은 한 번 틀렸다.** 처음 판정 지표가
+
+```sh
+openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
+```
+
+였는데, `Protocol :` 줄은 **s_client 가 자기 설정을 찍는 것**이라 서버가 alert 70 으로
+끊어도 그대로 `TLSv1.3` 이 나온다. 이 지표로는 **모든 조합이 통과로 보였고**, "http 레벨
+`ssl_protocols` 조차 안 먹는다" 는 있을 수 없는 결론이 나왔다 — 그 말도 안 되는 결론이
+계측기를 의심하게 만든 유일한 단서였다. 판정을 *handshake 가 실제로 섰는가*
+(`Cipher is (NONE)` / `alert protocol version` / `unsupported protocol`) 로 바꾸자 답이
+뒤집혔다.
+
+그래서 S16 프로브는 **자기 계측기를 먼저 검증한다**(`S16.instrument`): 의심의 여지 없이
+걸려야 하는 http 레벨 정책이 안 걸리면 지표가 죽은 것이므로, 나머지 판정을 신뢰하지 않는다.
 
 ### 12.1 이후 단계
 
