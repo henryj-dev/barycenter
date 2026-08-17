@@ -31,6 +31,8 @@ import { LocalDataplaneDriver } from '../dp/driver.js';
 import { FsEffects } from '../dp/effects-fs.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { FileStore } from '../dp/store-fs.js';
+import { log } from '../obs/log.js';
+import { count } from '../obs/metrics.js';
 import { probeEngine } from '../engine/probe.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
@@ -112,7 +114,7 @@ async function pushStream(port: number, epoch: string, body: string): Promise<st
 function writeBootstrap(prefix: string, adminPort: number, streamAdminPort: number): void {
   const link = join(prefix, 'current');
   if (existsSync(link)) {
-    console.log('current 가 이미 있다 — 부트스트랩을 건드리지 않는다');
+    log.info('bootstrap.skipped', { reason: 'current 가 이미 있다' });
     return;
   }
   const probe = probeEngine(env('BARY_ENGINE_BIN', '/usr/local/openresty/bin/openresty'));
@@ -143,7 +145,7 @@ function writeBootstrap(prefix: string, adminPort: number, streamAdminPort: numb
     },
   });
   symlinkSync('generations/bootstrap', link);
-  console.log(`부트스트랩 세대를 만들었다 (멤버십 dict=${caps.httpLua === true})`);
+  log.info('bootstrap.written', { membershipDict: caps.httpLua === true });
 }
 
 export async function main(): Promise<void> {
@@ -160,7 +162,7 @@ export async function main(): Promise<void> {
   const dsn = env('BARY_DSN');
   const db = new Db(dsn);
   const applied = await db.migrate();
-  if (applied.length > 0) console.log(`마이그레이션 적용: ${applied.join(', ')}`);
+  if (applied.length > 0) log.info('migrate.applied', { migrations: applied });
 
   // ── 엔진 capability (§7.6) ───────────────────────────────────────────
   //
@@ -184,12 +186,15 @@ export async function main(): Promise<void> {
         supports: probe.capabilities.supports,
       }
     : { probed: false, reason: probe.reason };
-  console.log(probe.ok
-    ? `엔진: ${probe.capabilities.flavor} ${probe.capabilities.version} `
-      + `(stream_realip=${probe.capabilities.supports.streamRealip}, `
-      + `멤버십 평면 http=${probe.capabilities.supports.runtimeMembership.http} `
-      + `stream=${probe.capabilities.supports.runtimeMembership.stream})`
-    : `엔진 조회 실패 — 보수적으로 간다: ${probe.reason}`);
+  if (probe.ok) {
+    log.info('engine.probed', {
+      flavor: probe.capabilities.flavor, version: probe.capabilities.version,
+      streamRealip: probe.capabilities.supports.streamRealip,
+      membership: probe.capabilities.supports.runtimeMembership,
+    });
+  } else {
+    log.warn('engine.probe_failed', { reason: probe.reason, assuming: 'conservative' });
+  }
 
   const store = new ConfigStore(db, renderCaps);
 
@@ -271,9 +276,9 @@ export async function main(): Promise<void> {
     // 전부 거부된다.
     const token = election.assertLeader();
     const fenced = await driver.fence(token);
-    console.log(`리더가 됐다: token=${token} (DP maxToken=${fenced.maxToken})`);
+    log.info('leader.acquired', { token, dpMaxToken: fenced.maxToken });
   } else {
-    console.log(`스탠바이로 뜬다 — ${election.state.reason}. 읽기만 답한다.`);
+    log.info('leader.standby', { reason: election.state.reason });
   }
 
   // 리더가 아니면 주기적으로 다시 시도한다. 앞선 리더가 죽으면 락이 풀린다.
@@ -283,9 +288,9 @@ export async function main(): Promise<void> {
       if (!got) return;
       const token = election.assertLeader();
       const fenced = await driver.fence(token);
-      console.log(`리더로 승격됐다: token=${token} (DP maxToken=${fenced.maxToken})`);
+      log.info('leader.promoted', { token, dpMaxToken: fenced.maxToken });
     }).catch((e: unknown) => {
-      console.error(`승격 시도 실패: ${String(e)}`);
+      log.error('leader.promote_failed', { error: String(e) });
     });
   }, Number(env('BARY_ELECTION_INTERVAL_MS', '5000')));
   retry.unref();
@@ -297,11 +302,11 @@ export async function main(): Promise<void> {
   // 재시작하면 슬롯이 통째로 빈다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.
   if (election.state.isLeader) {
     const restaged = await control.restageMembership().catch((e: unknown) => {
-      console.error(`멤버십 재적재 실패: ${String(e)}`);
+      log.error('membership.restage_failed', { error: String(e) });
       return undefined;
     });
     if (restaged !== undefined) {
-      console.log(`멤버십 재적재: epoch ${restaged.epoch} [${restaged.planes.join(',')}]`);
+      log.info('membership.restaged', { epoch: restaged.epoch, planes: restaged.planes });
     }
   }
   /**
@@ -325,15 +330,16 @@ export async function main(): Promise<void> {
     prober.start(
       async () => (election.state.isLeader ? control.headModel() : undefined),
       async () => {
+        count('bary_health_transition_total');
         const out = await control.projectHealth();
         if (out !== undefined) {
-          console.log(`헬스 반영: epoch [${out.epochs.join(',')}] 평면 [${out.planes.join(',')}]`);
+          log.info('health.projected', { epochs: out.epochs, planes: out.planes });
         }
       },
     );
-    console.log(`헬스 프로버 시작 (주기 ${env('BARY_PROBE_INTERVAL_MS', '2000')}ms)`);
+    log.info('prober.started', { intervalMs: Number(env('BARY_PROBE_INTERVAL_MS', '2000')) });
   } else {
-    console.log('헬스 프로버 없음 — 멤버십 평면이 꺼진 배포다 (반영할 곳이 없다)');
+    log.info('prober.disabled', { reason: '멤버십 평면이 꺼진 배포 — 반영할 곳이 없다' });
   }
 
   const auth = new TokenAuth(loadTokens());
@@ -342,7 +348,7 @@ export async function main(): Promise<void> {
   await new Promise<void>((resolve) => {
     server.listen(Number(port), host, resolve);
   });
-  console.log(`barycenterd: http://${host}:${port}  prefix=${prefix}  admin=:${adminPort}  토큰 ${auth.size}개`);
+  log.info('listening', { host, port: Number(port), prefix, adminPort, tokens: auth.size });
 
   const stop = (): void => {
     server.close(() => {
@@ -362,7 +368,7 @@ export async function main(): Promise<void> {
 if (process.argv[1]?.endsWith('barycenterd.ts') === true
   || process.argv[1]?.endsWith('barycenterd.js') === true) {
   main().catch((e: unknown) => {
-    console.error(`기동 실패: ${String(e)}`);
+    log.error('startup.failed', { error: String(e) });
     process.exit(1);
   });
 }

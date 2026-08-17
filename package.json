@@ -23,7 +23,7 @@
     "test:e2e": "vitest run tests/e2e --no-file-parallelism",
     "test:engine": "./tests/engine/run.sh",
     "typecheck": "tsc --noEmit",
-    "test:store": "vitest run tests/store",
+    "test:store": "vitest run tests/store --no-file-parallelism",
     "build": "./scripts/build.sh",
     "token": "node scripts/token.mjs",
     "quickstart": "./scripts/quickstart.sh"

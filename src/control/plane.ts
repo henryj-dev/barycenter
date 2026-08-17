@@ -21,6 +21,7 @@ import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
 import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
 import type { Model } from '../model/provisional.js';
+import { count, fileBytes, measureGenerations, type Gauges } from '../obs/metrics.js';
 import type { Db, Row } from '../store/pg.js';
 import type { LeaderElection } from './leader.js';
 
@@ -246,6 +247,7 @@ export class ControlPlane {
       throw e;
     }
     await this.recordPhase(op.operationId, result.phase, result);
+    count(`bary_apply_total{phase="${result.phase}"}`);
     await this.store.audit(by, 'apply', planId, undefined,
       { operationId: op.operationId, generation, phase: result.phase }, plan.targetRevision);
 
@@ -356,10 +358,50 @@ export class ControlPlane {
       // 실제로 비어 있고 요청은 실패해야 한다 — 옛 peer 를 남기면 죽은 백엔드가 계속
       // 트래픽을 받는다. 갱신 *실패* 의 fail-open 과는 다른 사건이다.
       await this.driver.pushMembershipDirect(plane, epoch, slots[plane]);
+      count(`bary_membership_project_total{plane="${plane}"}`);
       epochs.push(epoch);
       planes.push(plane);
     }
     return planes.length > 0 ? { epochs, planes } : undefined;
+  }
+
+  /**
+   * 지금 재 볼 수 있는 것 전부 (§6.4 리소스 알람).
+   *
+   * **자라는 것을 겨눈다.** 세대 디렉토리와 durable 상태 파일이 이 저장소가 오래 달고
+   * 있는 성장 부채(`terminal`·`completed` 원장)의 관측 창구다 — 원장 내부를 안 들여다보고
+   * 파일 크기로 재는 이유는 저장소 payload 를 불투명하게 다루기로 한 계약(9차 검수)을
+   * 안 깨기 위해서다.
+   */
+  async gauges(): Promise<Gauges> {
+    const st = await this.driver.status();
+    const head = await this.store.head();
+    const gen = measureGenerations(this.opts.prefix);
+    const health = (await this.db.query(
+      `SELECT state, count(*)::int AS n FROM backend_health GROUP BY state`,
+    )).rows;
+    const byState = Object.fromEntries(health.map((r) => [String(r['state']), Number(r['n'])]));
+    const pending = (await this.db.query(
+      `SELECT count(*)::int AS n FROM plans p WHERE p.state='committed'
+         AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.plan_id = p.id)`,
+    )).rows[0];
+    const mem = process.memoryUsage();
+    return {
+      generations: gen.count,
+      generationBytes: gen.bytes,
+      agentStateBytes: fileBytes(`${this.opts.prefix}/state/agent.json`),
+      head: Number(head.revision),
+      leader: this.election.state.isLeader ? 1 : 0,
+      activationEpochHttp: Number(st.planes.http.activationEpoch),
+      activationEpochStream: Number(st.planes.stream.activationEpoch),
+      unfinished: st.unfinished === undefined ? 0 : 1,
+      backendsHealthy: byState['healthy'] ?? 0,
+      backendsUnhealthy: byState['unhealthy'] ?? 0,
+      backendsUnknown: byState['unknown'] ?? 0,
+      pendingApply: Number(pending?.['n'] ?? 0),
+      uptimeSeconds: Math.round(process.uptime()),
+      rssBytes: mem.rss,
+    };
   }
 
   /** 지금 head 모델. 프로버가 무엇을 찔러야 하는지 안다. */
@@ -454,6 +496,7 @@ export class ControlPlane {
     );
     for (const plane of touched) {
       await this.driver.applyMembership(op, plane, slots[plane]);
+      count(`bary_membership_apply_total{plane="${plane}"}`);
     }
     await this.recordPhase(operationId, 'activated',
       { membershipOnly: true, planes: touched, reload: false });

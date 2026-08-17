@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 
 import type { ControlPlane } from '../control/plane.js';
 import { healthRows } from '../control/health.js';
+import { render as renderMetrics } from '../obs/metrics.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
 import type { Db } from '../store/pg.js';
@@ -243,6 +244,18 @@ const ROUTES: Route[] = [
    */
   route('GET', '/api/v1/health/backends', 'read', async (c, api) => {
     json(c.res, 200, await healthRows(api.db));
+  }),
+
+  /**
+   * Prometheus 노출.
+   *
+   * **인증을 요구한다.** 스크레이퍼가 토큰을 들고 다니는 불편보다, 풀 이름과 리비전이
+   * 인증 없이 나가는 편이 나쁘다 — `/healthz` 와 다르다. 그쪽은 "살아 있나" 하나뿐이고
+   * 이쪽은 배포 구조를 말한다.
+   */
+  route('GET', '/metrics', 'read', async (c, api) => {
+    c.res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
+    c.res.end(renderMetrics(await api.control.gauges()));
   }),
 
   route('GET', '/api/v1/audit', 'read', async (c, api) => {

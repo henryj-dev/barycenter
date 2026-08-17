@@ -358,6 +358,64 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
     }, (v) => v === 'B11,B12', 60_000);
   }, 300_000);
 
+  it('**`/metrics` 가 실제를 말한다** (§6.4 리소스 알람)', async () => {
+    // 관측 없이 오래 돌리면 "안 죽었다" 까지만 알 수 있고 그건 측정이 아니다.
+    // 여기서 재는 것은 **재는 자리가 진짜를 말하는가**다.
+    const r = await fetch(`http://127.0.0.1:${API_PORT}/metrics`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toContain('text/plain');
+    const text = await r.text();
+    const val = (name: string): number => {
+      const m = new RegExp(`^${name.replace(/[{}"]/g, '\\$&')} (\\d+)$`, 'm').exec(text);
+      return m === null ? Number.NaN : Number(m[1]);
+    };
+
+    // 디스크의 세대 수와 일치한다 — 상한이 도는지 보는 자리다.
+    const onDisk = Number(docker('exec', DP, 'sh', '-c', 'ls /prefix/generations | wc -l').trim());
+    expect(val('bary_generations')).toBe(onDisk);
+    expect(val('bary_generation_bytes')).toBeGreaterThan(0);
+
+    // **원장 성장의 관측 창구.** 오래 달고 있는 부채를 여기서 잰다.
+    expect(val('bary_agent_state_bytes')).toBeGreaterThan(0);
+
+    // 헬스 판정이 그대로 나온다.
+    const health = await api('GET', '/api/v1/health/backends');
+    const rows = health.body as { state: string }[];
+    expect(val('bary_backends_healthy'))
+      .toBe(rows.filter((x) => x.state === 'healthy').length);
+    expect(val('bary_backends_unhealthy'))
+      .toBe(rows.filter((x) => x.state === 'unhealthy').length);
+
+    // 리더와 좌표.
+    expect(val('bary_leader')).toBe(1);
+    expect(val('bary_activation_epoch_http')).toBeGreaterThan(0);
+    expect(val('bary_unfinished_transitions')).toBe(0);
+
+    // **일어난 것도 센다.** 지금까지 apply 가 여러 번 있었다.
+    expect(text).toMatch(/bary_apply_total\{phase="activated"\} [1-9]/);
+
+    // 인증 없이는 안 준다 — 풀 이름과 리비전이 나가는 자리다.
+    expect((await fetch(`http://127.0.0.1:${API_PORT}/metrics`)).status).toBe(401);
+  }, 120_000);
+
+  it('**로그가 한 줄에 JSON 하나다** — 오래 돌리면 문장은 관측이 아니다', () => {
+    const logs = docker('logs', DP);
+    const lines = logs.split('\n').filter((l) => l.trim().startsWith('{'));
+    expect(lines.length, '구조화 로그가 하나도 없다').toBeGreaterThan(3);
+    for (const line of lines) {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      expect(parsed['ts'], `ts 가 없다: ${line}`).toBeDefined();
+      expect(parsed['event'], `event 가 없다: ${line}`).toBeDefined();
+    }
+    // 기동 경로의 사건들이 이름으로 잡힌다.
+    const events = new Set(lines.map((l) => (JSON.parse(l) as { event: string }).event));
+    expect(events).toContain('leader.acquired');
+    expect(events).toContain('engine.probed');
+    expect(events).toContain('listening');
+  });
+
   it('**재기동 뒤에도 헬스 판정이 계속 움직인다** (§6.6 관측 좌표)', async () => {
     // §6.6 은 늦게 끝난 낡은 관측이 최신 판정을 덮는 것을 막으려고 **프로브 시작 순번**을
     // 싣게 한다. 그 순번을 프로세스 메모리에서 1 부터 세면 — 처음에 그렇게 짰다 —

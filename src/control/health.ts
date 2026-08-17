@@ -27,6 +27,7 @@
 import { connect } from 'node:net';
 
 import type { Model } from '../model/provisional.js';
+import { log } from '../obs/log.js';
 import type { Db, Queryable } from '../store/pg.js';
 
 export type HealthState = 'healthy' | 'unhealthy' | 'unknown';
@@ -190,7 +191,7 @@ export class HealthProber {
         }
       } catch (e) {
         // **프로버 장애는 판정 동결이다** (§6.7). 마지막 판정을 유지하고 멤버십도 유지한다.
-        console.error(`헬스 프로브 실패 — 판정을 동결한다: ${String(e)}`);
+        log.error('prober.failed', { error: String(e), effect: '판정 동결' });
       } finally {
         this.#running = false;
       }
