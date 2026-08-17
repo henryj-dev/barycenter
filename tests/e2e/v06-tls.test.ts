@@ -205,6 +205,32 @@ describe('v0.6 TLS 종단 — 실물', () => {
     expect(r.status).toBe(400);
   }, 60_000);
 
+  /**
+   * **§7.2 — 인증서-키 일치.**
+   *
+   * 이게 없으면 무관한 한 쌍이 저장되고, 실패는 며칠 뒤 apply 의 `nginx -t` 에서
+   * "설정이 이상하다" 로 나타난다. 원인은 업로드인데.
+   */
+  it('**체인과 무관한 개인키는 400** — apply 까지 끌고 가지 않는다', async () => {
+    const a = mintCert('pair-a.example', 'DNS:pair-a.example');
+    const b = mintCert('pair-b.example', 'DNS:pair-b.example');
+    const r = await api('POST', '/api/v1/certificates/material',
+      { name: 'mixed', fullchain: a.fullchain, privkey: b.privkey });
+    expect(r.status, JSON.stringify(r.body)).toBe(400);
+    expect(r.body.kind).toBe('key_mismatch');
+  }, 120_000);
+
+  it('업로드 응답이 **바이트에서 뽑은 사실**을 준다 — SAN·만료', async () => {
+    const m = mintCert('facts.example', 'DNS:facts.example,DNS:*.facts.example');
+    const r = await api('POST', '/api/v1/certificates/material',
+      { name: 'facts', fullchain: m.fullchain, privkey: m.privkey });
+    expect(r.status).toBe(201);
+    expect(r.body.domains).toEqual(['facts.example', '*.facts.example']);
+    expect(new Date(r.body.notAfter).getTime()).toBeGreaterThan(Date.now());
+    // 사실이 나가도 **자료는 안 나간다.**
+    expect(JSON.stringify(r.body)).not.toContain('PRIVATE KEY');
+  }, 120_000);
+
   it('**HTTPS 가 선다** — 업로드한 인증서가 실제로 제시된다', async () => {
     const { apply } = await push([
       { op: 'put', kind: 'pool', key: 'app', body: { protocolClass: 'http', algorithm: 'round_robin' } },
@@ -286,4 +312,24 @@ describe('v0.6 TLS 종단 — 실물', () => {
   it('모르는 SNI 는 default 인증서 — 첫 블록으로 새지 않는다 (S17)', async () => {
     expect(servedCn('nope.example')).toBe('old.example');
   }, 60_000);
+
+  /**
+   * **만료가 보인다** (§4.6: *"`not_after` 를 상태 API 에 노출"*).
+   *
+   * 만료는 아무 데서도 안 터진다 — 그냥 handshake 가 깨진다. 그래서 알람을 걸 자리가
+   * 있어야 하고, 그 자리는 **개인키를 안 읽고** 답할 수 있어야 한다.
+   */
+  it('`/certificates` 와 `/metrics` 가 만료를 드러낸다', async () => {
+    const list = await api('GET', '/api/v1/certificates');
+    expect(list.status).toBe(200);
+    const cert = list.body.find((x: { key: string }) => x.key === 'cert-app');
+    expect(cert, JSON.stringify(list.body)).toBeDefined();
+    expect(cert.domains).toContain('app.example');
+    expect(cert.expiresInDays).toBeGreaterThanOrEqual(0);
+    // 자료는 여전히 안 나간다.
+    expect(JSON.stringify(list.body)).not.toContain('PRIVATE KEY');
+
+    const metrics = await api('GET', '/metrics');
+    expect(String(metrics.body)).toContain('bary_certificate_expiry_seconds{certificate="cert-app"}');
+  }, 120_000);
 });

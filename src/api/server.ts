@@ -31,6 +31,7 @@ import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
 import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
+import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
 import { can, TokenAuth, type Principal, type Scope } from './auth.js';
 
 export type ApiOptions = {
@@ -186,7 +187,25 @@ const ROUTES: Route[] = [
    * `PRIVATE KEY` 가 없다는 것을 **응답 전체 문자열로** 검사한다.
    */
   route('GET', '/api/v1/certificates', 'read', async (c, api) => {
-    json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).certificates);
+    const certs = (await api.store.modelAt((await api.store.head()).revision)).certificates;
+    const secrets = api.secrets;
+    const now = Date.now();
+    json(c.res, 200, certs.map((cert) => {
+      // **사실은 참조에서 온다.** 설정에 적힌 값을 믿으면 클라이언트가 만료일을
+      // 거짓말할 수 있고, 그러면 만료 알람이 안 울린다 (§4.6 · §7.2).
+      const f = secrets?.facts(cert.materialRef);
+      if (f === undefined) return { ...cert, facts: null };
+      return {
+        ...cert,
+        domains: f.domains,
+        subject: f.subject,
+        issuer: f.issuer,
+        notBefore: f.notBefore,
+        notAfter: f.notAfter,
+        // 운영자가 제일 먼저 보는 값이다. 음수면 이미 만료다.
+        expiresInDays: Math.floor((new Date(f.notAfter).getTime() - now) / 86_400_000),
+      };
+    }));
   }),
   route('GET', '/api/v1/tls-policies', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).tlsPolicies);
@@ -322,7 +341,8 @@ const ROUTES: Route[] = [
    */
   route('GET', '/metrics', 'read', async (c, api) => {
     c.res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
-    c.res.end(renderMetrics(await api.control.gauges()));
+    c.res.end(renderMetrics(
+      await api.control.gauges(), await api.control.certificateExpiry()));
   }),
 
   /**
@@ -356,22 +376,40 @@ const ROUTES: Route[] = [
       });
       return;
     }
-    // 모양 검사는 여기서 한다. PEM 이 아닌 것을 넣어도 저장은 되지만, 그 세대는
-    // `nginx -t` 에서 죽고 원인은 apply 실패로만 보인다.
-    if (!fullchain.includes('-----BEGIN CERTIFICATE-----')) {
-      json(c.res, 400, { error: 'invalid_body', message: 'fullchain 이 PEM 인증서가 아니다' });
+    /**
+     * **§7.2 의 검증을 여기서 한다** — *"직후 인증서-키 일치·SAN·not_after 검증."*
+     *
+     * 안 하면 실패가 사라지는 게 아니라 **옮겨간다.** 무관한 한 쌍은 저장되고, apply 의
+     * `nginx -t` 에서 며칠 뒤 터진다 — 그때 보이는 것은 "설정이 이상하다" 이지 "올린
+     * 키가 그 인증서 것이 아니다" 가 아니다. 만료는 더 나쁘다: 아무 데서도 안 터지고
+     * **handshake 만 조용히 깨진다.**
+     */
+    let facts;
+    try {
+      facts = inspectMaterial(fullchain, privkey);
+    } catch (e) {
+      const err = e as CertMaterialError;
+      json(c.res, 400, {
+        error: 'invalid_certificate',
+        kind: err.kind ?? 'unparsable',
+        message: err.message,
+      });
       return;
     }
-    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(privkey)) {
-      json(c.res, 400, { error: 'invalid_body', message: 'privkey 가 PEM 개인키가 아니다' });
-      return;
-    }
+
     try {
       const ref = store.put(name, { fullchain, privkey });
-      // **자료를 안 돌려준다.** 참조·digest 만 나간다.
+      // **자료를 안 돌려준다.** 참조·digest 와 **바이트에서 뽑은 사실**만 나간다.
+      //
+      // 이 사실들을 changeset 으로 받지 않는 이유가 있다 — 클라이언트가 만료일을
+      // 거짓말할 수 있고, 그러면 만료 알람이 안 울린다. 내용 주소 참조에 매달아 두면
+      // 사실도 내용의 함수가 된다.
       json(c.res, 201, {
         ref: ref.ref, name: ref.name, version: ref.version,
         chainDigest: ref.chainDigest, keyDigest: ref.keyDigest,
+        subject: facts.subject, issuer: facts.issuer, domains: facts.domains,
+        notBefore: facts.notBefore, notAfter: facts.notAfter,
+        chainLength: facts.chainLength,
       });
     } catch (e) {
       json(c.res, 400, { error: 'invalid_body', message: (e as Error).message });

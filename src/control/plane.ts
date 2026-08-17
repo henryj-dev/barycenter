@@ -22,7 +22,9 @@ import { certificateFiles, type SecretStore } from '../dp/secrets.js';
 import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
 import type { Model } from '../model/provisional.js';
-import { count, fileBytes, measureGenerations, type Gauges } from '../obs/metrics.js';
+import {
+  count, fileBytes, measureGenerations, type Gauges, type LabeledGauge,
+} from '../obs/metrics.js';
 import type { Db, Row } from '../store/pg.js';
 import type { LeaderElection } from './leader.js';
 
@@ -104,6 +106,37 @@ export class ControlPlane {
     private readonly election: LeaderElection,
     private readonly opts: ControlPlaneOptions,
   ) {}
+
+  /**
+   * 인증서 만료 계열 (§4.6 — *"`not_after` 를 상태 API 에 노출"*).
+   *
+   * **개인키를 안 읽는다.** `SecretStore.facts` 가 `put` 시점에 뽑아 둔 것을 읽는다.
+   * 만료를 보려고 목록 조회마다 키를 읽어 들이면, 그 위험 때문에 결국 안 보게 된다.
+   *
+   * 사실이 없는 인증서(v0.6 1단계에 올라간 것)는 **계열에서 빠진다.** 0 으로 채우면
+   * "모른다" 가 "이미 만료" 로 보이고, 없는 알람보다 거짓 알람이 나쁘다.
+   */
+  async certificateExpiry(): Promise<LabeledGauge[]> {
+    const secrets = this.opts.secrets;
+    if (secrets === undefined) return [];
+    const head = await this.store.head();
+    const model = await this.store.modelAt(head.revision);
+    const now = Date.now();
+    const samples: LabeledGauge['samples'] = [];
+    for (const cert of model.certificates) {
+      const f = secrets.facts(cert.materialRef);
+      if (f === undefined) continue;
+      samples.push({
+        labels: { certificate: cert.key },
+        value: Math.floor((new Date(f.notAfter).getTime() - now) / 1000),
+      });
+    }
+    return [{
+      name: 'bary_certificate_expiry_seconds',
+      help: '인증서 만료까지 남은 초. 음수면 이미 만료다',
+      samples,
+    }];
+  }
 
   /**
    * 이 모델이 세대에 넣어야 할 인증서 파일들.

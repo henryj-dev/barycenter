@@ -21,6 +21,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileS
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
+import { inspectMaterial, type CertFacts } from './certinfo.js';
+
 /** 인증서 한 벌. */
 export type CertMaterial = {
   /** leaf + 중간 체인. PEM. */
@@ -52,6 +54,14 @@ export interface SecretStore {
   get(ref: string): CertMaterial;
   /** 참조를 해석만 한다 (자료를 안 읽는다). */
   describe(ref: string): SecretRef;
+  /**
+   * 바이트에서 뽑아 둔 사실 (§7.2 · §4.6). 없으면 `undefined`.
+   *
+   * **개인키를 안 읽는다.** 만료를 보려고 목록 요청마다 키를 읽어 들이는 것은
+   * 쓸데없이 위험하다 — `put` 시점에 뽑아 옆에 적어 둔 것을 읽는다. 참조가 내용
+   * 주소이므로 사실도 불변이다.
+   */
+  facts(ref: string): CertFacts | undefined;
 }
 
 const sha256 = (s: string): string =>
@@ -73,6 +83,10 @@ export class FsSecretStore implements SecretStore {
     if (!/^[A-Za-z0-9._-]+$/.test(name)) {
       throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
     }
+    // **저장소도 스스로 검증한다.** API 가 이미 `inspectMaterial` 을 부르지만, 그건
+    // 좋은 에러 메시지를 주기 위한 것이고 이쪽은 **거짓을 들고 있지 않기 위한** 것이다.
+    // 호출자가 하나 늘 때마다 검사를 잊을 자리가 하나 는다 (§7.2).
+    const facts = inspectMaterial(material.fullchain, material.privkey);
     const chainDigest = sha256(material.fullchain);
     const keyDigest = sha256(material.privkey);
     // **내용 주소.** 버전이 곧 내용의 함수라, 같은 자료를 다시 올려도 버전이 안 늘어난다.
@@ -87,6 +101,9 @@ export class FsSecretStore implements SecretStore {
       // 낫다.
       writeFileSync(join(dir, 'fullchain.pem'), material.fullchain, { mode: 0o400 });
       writeFileSync(join(dir, 'privkey.pem'), material.privkey, { mode: 0o400 });
+      // 사실은 **자료가 아니다.** 0444 로 둔다 — 만료를 보는 데 키 권한이 필요하면
+      // 만료를 안 보게 된다.
+      writeFileSync(join(dir, 'facts.json'), JSON.stringify(facts, null, 2), { mode: 0o444 });
       chmodSync(dir, 0o500);
     }
     return {
@@ -113,6 +130,18 @@ export class FsSecretStore implements SecretStore {
     const chainDigest = sha256(material.fullchain);
     const keyDigest = sha256(material.privkey);
     return { ref, name, version, sha256: sha256(`${chainDigest}|${keyDigest}`), chainDigest, keyDigest };
+  }
+
+  facts(ref: string): CertFacts | undefined {
+    const { name, version } = parseRef(ref);
+    try {
+      return JSON.parse(
+        readFileSync(join(this.root, name, version, 'facts.json'), 'utf8')) as CertFacts;
+    } catch {
+      // **없으면 undefined 다.** 이 파일이 없는 것은 v0.6 1단계에 올라간 자료뿐이고,
+      // 그건 "만료를 모른다" 이지 "만료됐다" 가 아니다. 던지면 목록 조회가 통째로 죽는다.
+      return undefined;
+    }
   }
 
   /** 이 이름의 버전들. GC 와 운영 조회용. */

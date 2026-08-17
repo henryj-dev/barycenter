@@ -122,12 +122,39 @@ export function fileBytes(path: string): number {
  *
  * 라이브러리를 안 쓴다 — 형식이 몇 줄이고, 여기서 의존성을 늘리면 그게 곧 공급망이다.
  */
-export function render(gauges: Gauges): string {
+/**
+ * 라벨이 붙는 게이지 계열.
+ *
+ * `Gauges` 는 고정 구조체라 "인증서마다 하나" 같은 것을 못 담는다. 카운터처럼 라벨을
+ * 이름에 접어 넣는 수법을 쓸 수도 있지만, 게이지는 **없어지는 것**이 있어서(인증서를
+ * 지우면 그 계열도 사라져야 한다) 누적 맵에 넣으면 유령이 남는다.
+ */
+export type LabeledGauge = {
+  name: string;
+  help: string;
+  samples: { labels: Record<string, string>; value: number }[];
+};
+
+const labelize = (labels: Record<string, string>): string =>
+  Object.entries(labels).length === 0 ? ''
+    : `{${Object.entries(labels)
+        .map(([k, v]) => `${k}="${v.replace(/(["\\])/g, '\\$1')}"`)
+        .join(',')}}`;
+
+export function render(gauges: Gauges, extra: readonly LabeledGauge[] = []): string {
   const lines: string[] = [];
   for (const [key, [name, help]] of Object.entries(HELP) as [keyof Gauges, [string, string]][]) {
     lines.push(`# HELP ${name} ${help}`);
     lines.push(`# TYPE ${name} gauge`);
     lines.push(`${name} ${gauges[key]}`);
+  }
+  for (const g of extra) {
+    // **표본이 없으면 HELP/TYPE 도 안 낸다.** 값 없는 헤더만 나가면 스크레이퍼가
+    // "계열이 있는데 비었다" 로 읽는다 — 없는 것과 다르다.
+    if (g.samples.length === 0) continue;
+    lines.push(`# HELP ${g.name} ${g.help}`);
+    lines.push(`# TYPE ${g.name} gauge`);
+    for (const s of g.samples) lines.push(`${g.name}${labelize(s.labels)} ${s.value}`);
   }
   for (const [name, value] of [...counters].sort(([a], [b]) => (a < b ? -1 : 1))) {
     lines.push(`# TYPE ${name} counter`);

@@ -88,9 +88,41 @@ describe('Prometheus 노출', () => {
 
   it('**모든 줄이 형식을 지킨다** — 스크레이퍼가 파싱할 수 있어야 한다', () => {
     count('bary_x_total{a="b"}');
-    for (const line of render({ ...ZERO, rssBytes: 12345 }).trim().split('\n')) {
+    const withLabels = render({ ...ZERO, rssBytes: 12345 }, [{
+      name: 'bary_certificate_expiry_seconds', help: '남은 초',
+      samples: [{ labels: { certificate: 'c' }, value: -1 }],
+    }]);
+    for (const line of withLabels.trim().split('\n')) {
       expect(line, `형식이 아닌 줄: ${line}`).toMatch(/^(# (HELP|TYPE) \S+ .+|\S+ -?\d+(\.\d+)?)$/);
     }
+  });
+
+  it('**라벨 있는 게이지 계열이 나온다** — 인증서마다 하나 (§4.6)', () => {
+    const out = render(ZERO, [{
+      name: 'bary_certificate_expiry_seconds',
+      help: '남은 초',
+      samples: [
+        { labels: { certificate: 'cert-a' }, value: 86400 },
+        { labels: { certificate: 'cert-b' }, value: -10 },
+      ],
+    }]);
+    expect(out).toContain('# TYPE bary_certificate_expiry_seconds gauge');
+    expect(out).toContain('bary_certificate_expiry_seconds{certificate="cert-a"} 86400');
+    // **음수가 나가야 한다.** 0 으로 깎으면 "이미 만료" 와 "오늘 만료" 가 같아진다.
+    expect(out).toContain('bary_certificate_expiry_seconds{certificate="cert-b"} -10');
+  });
+
+  it('**표본이 없으면 헤더도 안 낸다** — 빈 계열은 "있는데 비었다" 로 읽힌다', () => {
+    const out = render(ZERO, [{ name: 'bary_x', help: 'h', samples: [] }]);
+    expect(out).not.toContain('bary_x');
+  });
+
+  it('라벨 값의 따옴표를 이스케이프한다 — 안 하면 노출이 통째로 깨진다', () => {
+    const out = render(ZERO, [{
+      name: 'bary_x', help: 'h',
+      samples: [{ labels: { k: 'a"b' }, value: 1 }],
+    }]);
+    expect(out).toContain('bary_x{k="a\\"b"} 1');
   });
 
   it('카운터가 없으면 게이지만 나온다 — 빈 줄을 안 남긴다', () => {

@@ -1363,6 +1363,14 @@ http {
 - 결박 대상은 leaf/key/chain 만이 아니다. **OCSP staple, 신뢰 CA 번들, 업스트림 클라이언트
   인증서** 등 런타임 TLS 자료 전부가 manifest 에 들어간다.
 - 직후 **인증서-키 일치·SAN·not_after·권한(0400, DP uid)** 검증.
+  → **구현됨 (2026-08-17, `src/dp/certinfo.ts`)** — 자료를 받는 자리(`POST
+  /certificates/material`)와 `SecretStore.put` **양쪽**에서 검사한다. API 는 좋은 에러를
+  주기 위해서고, 저장소는 **거짓을 들고 있지 않기 위해서**다 — 호출자가 하나 늘 때마다
+  검사를 잊을 자리가 하나 는다. 권한은 `certificateFiles` 가 세대에 0400 으로 쓴다.
+
+  안 하면 실패가 사라지는 게 아니라 **옮겨간다.** 무관한 키-체인 한 쌍은 저장되고 며칠 뒤
+  apply 의 `nginx -t` 에서 터지는데, 그때 보이는 것은 *"설정이 이상하다"* 다. 만료는 더
+  나쁘다 — 아무 데서도 안 터지고 **handshake 만 조용히 깨진다.**
 - 세대 보존: 최근 N 개 + `serving_generations` 에 남아 있는 모든 세대.
 
 **세대 conf 안의 인증서 경로는 `certs/...` 상대경로로 쓴다.** nginx 는 `ssl_certificate` 를
@@ -1506,6 +1514,15 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
 
 - **ACME**: `http-01`(80 포트 도달) + `dns-01`(프로바이더 드라이버).
 - 갱신은 만료 30일 전 자동, 실패 시 알림. `not_after` 를 상태 API 에 노출.
+  → **노출은 구현됨** — `GET /certificates` 가 `domains`·`notBefore`·`notAfter`·
+  `expiresInDays` 를, `/metrics` 가 `bary_certificate_expiry_seconds{certificate=...}` 를
+  낸다. **자동 갱신은 아직 없다** (ACME · S18).
+
+  **사실은 설정이 아니라 바이트에서 온다.** changeset 으로 받으면 클라이언트가 만료일을
+  거짓말할 수 있고, 그러면 알람이 안 울린다. `put` 시점에 뽑아 내용 주소 참조
+  (`store://name@version`)에 매달아 두므로 사실도 내용의 함수가 된다 — 거짓말할 자리가
+  없다. 조회는 `facts.json` 만 읽으므로 **개인키를 안 읽는다**: 만료를 보려고 목록 조회마다
+  키를 읽어 들이면, 그 위험 때문에 결국 안 보게 된다.
 - **인증서 교체는 reload 를 유발한다** → 갱신도 디바운스 큐에 태운다.
 - 업로드 인증서도 1급 시민. **GUI 는 개인키를 절대 되돌려주지 않는다**(쓰기 전용).
 
@@ -1692,7 +1709,7 @@ freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스�
 |---|---|---|
 | 멤버십 드라이버 · 이중 zone · 헬스 프로버 | §6.5 커서와 함께 | **v0.3** |
 | 드레인 관측 (S2) · `least_conn` (S6) | 기능 | v0.3 · 미정 |
-| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6** — 1단계 완료(2026-08-17): 업로드 인증서 종단·SNI 별 선택·SNI 별 policy·갱신·롤백. **남은 것: ACME(S18) · HSTS · OCSP stapling · `CipherPolicyRef` · SNI↔Host 불일치 정책 · 만료 감시 · SecretStore GC** |
+| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6** — 1단계 완료(2026-08-17): 업로드 인증서 종단·SNI 별 선택·SNI 별 policy·갱신·롤백. **남은 것: ACME(S18) · HSTS · OCSP stapling · `CipherPolicyRef` · SNI↔Host 불일치 정책 · SecretStore GC** (만료 감시·자료 검증은 2026-08-17 구현) |
 | SNI 결과 **3분기 관측**(S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |
 | GC 원장 (S13) | 세대 보존은 **수동 상한**으로 대체 | v0.6 |
 | 백엔드 디스커버리 (S14 대안 B) | | v0.7 |
