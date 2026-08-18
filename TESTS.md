@@ -938,6 +938,17 @@ S11 하네스의 교훈이다.
 | C4.6 | 중간이 깨진 매니페스트 | 전체 거부. 부분 적용 없음 |
 | C4.7 | `--mode replace --prune` | 명시된 것만 삭제 |
 
+### C5 SSE · Plan·Impact (§5.2 · §10) — **RUNNABLE** `tests/unit/events.test.ts` · `tests/unit/plan-view.test.ts`
+
+| ID | 시나리오 | 기대 |
+|---|---|---|
+| C5.1 | `GET /api/v1/events` 토큰 없이 | **401** — `/healthz` 처럼 열지 않는다 |
+| C5.2 | 연결이 열리면 | `snapshot` 이 먼저, 그 다음 델타. 하트비트는 `: hb` 주석 |
+| C5.3 | `viewOfImpact` · reload | 헤드라인이 reload 를 말한다. diff 가 아니다 |
+| C5.4 | `guiRoot` 있고 `GET /` | 토큰 없이 HTML. `/api/v1/*` 는 그대로 401 |
+| C5.5 | `guiRoot` 없이 `GET /` | **401** — 없는 화면을 있는 척하지 않는다 |
+| C5.6 | `GET ../secret` | 루트 밖으로 나가지 않는다 |
+
 ---
 
 ## 8. G — GC / 보존 (SPIKE S13 + v0.1+)

@@ -17,7 +17,8 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { connect } from 'node:net';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { createApi } from '../api/server.js';
@@ -490,11 +491,26 @@ export async function main(): Promise<void> {
 
   const auth = new TokenAuth(loadTokens());
 
-  const server = createApi({ db, store, control, auth, election, secrets });
+  const explicitGui = process.env['BARY_GUI'];
+  const guiRoot = explicitGui !== undefined && explicitGui !== ''
+    ? explicitGui
+    : join(dirname(fileURLToPath(import.meta.url)), '../../gui/build');
+  if (explicitGui !== undefined && explicitGui !== '' && !existsSync(guiRoot)) {
+    throw new Error(`BARY_GUI (${guiRoot}) 가 없다`);
+  }
+  const serveRoot = existsSync(guiRoot) ? guiRoot : undefined;
+
+  const server = createApi({
+    db, store, control, auth, election, secrets,
+    ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
+  });
   await new Promise<void>((resolve) => {
     server.listen(Number(port), host, resolve);
   });
-  log.info('listening', { host, port: Number(port), prefix, adminPort, tokens: auth.size });
+  log.info('listening', {
+    host, port: Number(port), prefix, adminPort, tokens: auth.size,
+    gui: serveRoot ?? false,
+  });
 
   const stop = (): void => {
     server.close(() => {

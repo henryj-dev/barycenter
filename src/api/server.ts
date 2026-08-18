@@ -32,6 +32,7 @@ import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js'
 import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
+import { serveGui } from '../web/serve-gui.js';
 import { can, TokenAuth, type Principal, type Scope } from './auth.js';
 import { EventHub, openEventStream } from './events.js';
 
@@ -49,6 +50,11 @@ export type ApiOptions = {
   events?: EventHub;
   /** 테스트가 하트비트를 기다리도록. 기본 15s. */
   heartbeatMs?: number;
+  /**
+   * 정적 GUI 루트. 없으면 HTML 을 안 낸다.
+   * API 와 같은 출처에서 내보낸다 — 브라우저 CORS 를 열지 않기 위해.
+   */
+  guiRoot?: string;
 };
 
 const eventsOf = (api: ApiOptions): EventHub => {
@@ -524,6 +530,12 @@ async function handle(
   if (url.pathname === '/healthz') {
     json(res, 200, { ok: true });
     return;
+  }
+
+  // GUI 페이지와 자산은 토큰 없이 나간다. 토큰은 페이지가 events/status/apply 에
+  // 붙인다. 문서 탐색에 Authorization 을 요구하면 화면 자체가 안 열린다.
+  if (req.method === 'GET' && api.guiRoot !== undefined && !url.pathname.startsWith('/api/')) {
+    if (serveGui(res, url.pathname, api.guiRoot)) return;
   }
 
   const who = api.auth.authenticate(req.headers.authorization);

@@ -11,8 +11,9 @@
 > The [Quickstart](#quickstart) below ends with `curl` reaching a backend.
 >
 > **What it is not yet.** There is no membership plane (v0.3), so changing a single backend
-> still costs a full generation switch and a reload. TLS termination, ACME, health probing and
-> the GUI are all later milestones (§12.1). Leader election exists (a PostgreSQL advisory lock
+> still costs a full generation switch and a reload. TLS termination, ACME and health probing
+> are later milestones (§12.1). A Plan·Impact screen exists — it shows apply *impact*, not
+> a diff, and it does not poll. Listeners and Pools screens are still later. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
 > not_leader` to writes) — but **failover is not automatic**: each data plane carries its own
 > nginx, so extra instances are cold standbys, and moving traffic is still DNS or an upstream
@@ -232,7 +233,12 @@ See [§9 of the design doc](./DESIGN.md).
 
 ## Stack
 
-TypeScript on Node.js · PostgreSQL · SvelteKit for the web UI · nginx / OpenResty as the data plane.
+TypeScript on Node.js · PostgreSQL · Vite + Svelte 5 for the Plan·Impact screen
+(SvelteKit when three routes exist) · nginx / OpenResty as the data plane.
+
+The daemon serves `gui/build` (or `BARY_GUI`) from the same origin as the API — CORS is
+not opened. Build the page with `npm ci && npm run build` inside `gui/`. Without that
+directory the API is unchanged: `GET /` still asks for a token.
 
 Pinned engine for the test suites: `openresty/openresty:alpine` (OpenResty 1.31.1.1). Override
 with `BARY_ENGINE_IMAGE=… npm run test:engine` to check a candidate image — the suite reports

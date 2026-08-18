@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **344** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · **SSE** |
+| 단위 | `npm test` | **351** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · **Plan·Impact** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -626,6 +626,23 @@ PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이�
 
 ---
 
+### Plan·Impact 화면을 연다 — 폴링하지 않고 영향을 보여 준다 (2026-08-18)
+
+SSE 의 첫 소비자. §10 의 세 화면 중 Plan·Impact 한 장만 연다. 라우트가 하나라
+SvelteKit 은 아직 없다 — Vite + Svelte 5 로 빌드하고 `barycenterd` 가 `gui/build`
+를 같은 출처에서 낸다. CORS 를 열지 않기 위해서다.
+
+페이지는 토큰 없이 열린다. `/api/v1/*` 는 그대로 Bearer 다. EventSource 는
+Authorization 을 못 붙이므로 화면은 fetch 스트림 + `pullSse` 다. 스냅샷과
+revision/apply 델타가 오면 `GET /status` 로 pending 을 읽고 `GET /plans/:id`
+의 `impact` 를 문장으로 접는다. diff 가 아니다. `requiresReload` 가 있으면
+reload 가 필요하다고 말한다.
+
+`guiRoot` 가 없으면 예전과 같다 — `GET /` 도 토큰을 묻는다. `BARY_GUI` 를
+줬는데 그 경로가 없으면 기동이 멈춘다. 없는 화면을 있는 척하지 않는다.
+
+---
+
 ### SSE 를 연다 — GUI 는 폴링하지 않는다 (2026-08-18)
 
 v0.5 의 첫 조각. §10 이 "GUI 는 폴링하지 않는다" 고 적어 두고 `/api/v1/events` 는
@@ -636,7 +653,7 @@ v0.5 의 첫 조각. §10 이 "GUI 는 폴링하지 않는다" 고 적어 두고
 델타, apply 는 `apply` 델타를 낸다. 하트비트는 SSE 주석이다 — 클라이언트가
 이벤트로 세면 안 되는 신호다. 인증은 다른 읽기와 같다. `/healthz` 처럼 열지 않는다.
 
-화면은 아직 없다. SvelteKit 3화면은 이 스트림을 구독할 수 있을 때 시작한다.
+화면은 Plan·Impact 가 이 스트림을 구독한다. Listeners · Pools 는 아직 없다.
 
 ---
 

@@ -1,0 +1,21 @@
+:root {
+  --void: #14181c;
+  --plate: #1e252c;
+  --rule: #3a434c;
+  --ink: #e6e2d8;
+  --mute: #8b8680;
+  --ember: #c47a3a;
+  --moss: #5e7a62;
+  --display: "Fraunces", "Iowan Old Style", serif;
+  --ui: "Source Sans 3", "Segoe UI", sans-serif;
+  --data: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--void); color: var(--ink); }
+body { font-family: var(--ui); font-size: 16px; line-height: 1.45; }
+button, input { font: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

@@ -2588,9 +2588,17 @@ capability 패키지이지 apply 구현이 아니다.
 
 ## 10. Web GUI
 
-- 스택: **SvelteKit** (Svelte 5 runes). 코어와 같은 TypeScript 타입 공유.
+- 스택: **Svelte 5 runes**. 코어와 같은 TypeScript 타입 공유.
+  첫 화면은 라우트가 하나라 **Vite + Svelte 5** 다. SvelteKit 은 Listeners · Pools
+  가 붙어 세 경로가 생길 때 연다 — 한 장에 Kit 를 깔면 없는 라우터를 있는 척한다.
+- `barycenterd` 가 `gui/build`(또는 `BARY_GUI`) 를 **같은 출처**에서 낸다. CORS 를
+  열지 않기 위해서다. 페이지는 토큰 없이 열리고, `/api/v1/*` 는 그대로 Bearer 다.
+  EventSource 는 Authorization 을 못 붙이므로 `GET /api/v1/events` 는 fetch 스트림
+  + `pullSse` 다.
 - **v0.5 는 얇은 vertical slice 로 시작한다** — Listeners / Pools & Backends(드레인) /
   Plan·Impact 3화면으로 제품 가설을 검증하고, 나머지는 뒤로 뺀다.
+  지금 열린 것은 Plan·Impact 한 장이다. 화면은 `plan.impact` 를 문장으로 접는다.
+  diff 가 아니다. 폴링하지 않는다.
 
 | 화면 | 단계 |
 |---|---|
@@ -3053,7 +3061,8 @@ slice 로 v0.5 에서 검증한다.
 
 ## 13. 미결정 사항
 
-1. **구현 언어** — ✅ **Node.js + TypeScript** (2026-08-11). 런타임은 Node. GUI 는 SvelteKit.
+1. **구현 언어** — ✅ **Node.js + TypeScript** (2026-08-11). 런타임은 Node. GUI 첫 화면은
+   Vite + Svelte 5. Kit 는 세 경로가 생길 때.
    ⚠️ Go 대비 단일 바이너리 배포를 잃는다 → §11.1 컨테이너로 보완. 얻는 것은 §9.3 범위까지.
 2. **OpenResty 도입 시점** — ✅ 스파이크(S1·S5) 통과 시 **v0.3**, 계약은 **v0.1** 고정.
 3. **프로젝트명** — ✅ `barycenter`.
