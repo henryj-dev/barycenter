@@ -1653,7 +1653,37 @@ epoch·ACK·수렴까지 포함한 형태여야 한다 (§15.1-R4).
 | — | `quiesced`·deadline·강제 종료 |
 
 NXDOMAIN 과 timeout/SERVFAIL 의 네이티브 동작이 다르며 우리 모델의 `on_nxdomain`/`on_timeout`
-선택형과 1:1 대응하지 않는다. **대안 B 자체도 S14 에서 별도 검증한다.**
+선택형과 1:1 대응하지 않는다.
+
+#### S14 실행 결과 (2026-08-18) — 위 표가 사실로 바뀌었다
+
+통제 DNS(`spike/s14/dns.mjs`, 와이어 포맷 직접 구현)로 8/8 을 쟀다. `timeout` 을 만들려면
+**응답을 안 주는** 서버가 필요한데 — 서버를 죽이면 ICMP port unreachable 이 돌아가 즉시
+실패가 되지 timeout 이 아니다 — dnsmasq·CoreDNS 로는 그 침묵을 만들 수 없다.
+
+| 잰 것 | 결과 |
+|---|---|
+| A 두 개 × HTTP·TCP·UDP | **셋 다 분산된다.** 서브시스템별 차이 없음 |
+| `valid=` 대 레코드 TTL | **`valid=` 가 덮는다.** 같은 변경에 http(valid=2s) 1초, stream(TTL=8s) 5초 |
+| AAAA 단독 | **붙는다.** A 레코드가 하나도 없어도 |
+| SRV (`service=`) | **대상과 포트를 둘 다 준다.** 포트를 9099 로 돌리면 아무도 못 받는다 |
+| 기존 연결 | **한 회차에서 안 끊기는 것을 봤다**(줄 수 4→17, 마지막이 여전히 `be-a-17`). 다만 **재현이 불안정하다** — 긴 연결이 아예 안 서는 회차가 있어 아직 확정하지 않는다 |
+
+**그리고 실패 모드 셋이 실제로 갈린다:**
+
+| DNS 응답 | 엔진 동작 | error.log |
+|---|---|---|
+| **NXDOMAIN** | **peer 를 뺀다 → 502** | `resolved (3: Host not found)` |
+| **SERVFAIL** | 마지막으로 알던 peer 를 계속 쓴다 | `resolved (2: Server failure)` |
+| **무응답(침묵)** | 마지막으로 알던 peer 를 계속 쓴다 | (조용하다) |
+
+> **NXDOMAIN 만 fail-closed 다.** 그리고 셋 다 **설정할 수 없다** — 엔진이 각각 하나의
+> 동작만 준다. 즉 우리 모델의 `on_nxdomain`/`on_timeout` **선택형은 대안 B 에서 표현
+> 불가능하다.** 폴백으로 내려가면 그 두 필드는 값이 무엇이든 위 표대로 동작한다.
+> 드라이버 capability 로 그 사실을 드러내야 하고, 조용히 무시해서는 안 된다.
+
+**드레인도 마찬가지다.** (관측된 한 회차 기준) 기존 연결이 안 끊기는 것은 §7.3 표의 *"`quiesced`·deadline·강제
+종료"* 가 안 된다는 것과 같은 동전의 양면이다 — 엔진은 **기다려 주지만 재촉할 수 없다.**
 
 ### 7.4 nginx 의 한계 — 문서에 명시할 것
 
@@ -2028,7 +2058,7 @@ freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스�
 | **HTTP/3 (QUIC)** | **S20 실행 완료 (2026-08-18) — h3 자체는 된다(7/8). 깨진 것은 ② 뿐이고, 그것이 결정적이다: quic↔udp 충돌을 엔진도 검증기도 못 잡는다(E65). 축소 규칙대로 h3 는 모델에서 계속 뺀다.** | v0.7 |
 | SNI 결과 **3분기 관측**(S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |
 | GC 원장 (S13) | 세대 보존은 **수동 상한** + **시간 보호**로 대체 | v0.6 — 원장은 끝내 안 짓는다. S13 이 마커로는 옛 워커를 못 센다고 실측했고, `worker_shutdown_timeout` 이 그 대신 **상한**을 준다 (2026-08-18) |
-| 백엔드 디스커버리 (S14 대안 B) | | v0.7 |
+| 백엔드 디스커버리 (S14 대안 B) | **S14 부분 통과 (2026-08-18, 7/8)** — 「기존 세션」만 재현 불안정 — 폴백이 실제로 무엇을 하는지 §7.3 에 표로 고정했다 | v0.7 |
 
 **`tls_passthrough` 와 `source_ip_hash` 는 v0.1 에 있다 — 7차 검수 뒤 뒤집은 결정.**
 
@@ -2583,7 +2613,7 @@ k8s 네이티브 배포는 별도 과제.
 | S11 ❌ | **operation tuple 과 경합** | ① 롤백 후 옛 좌표 RPC 거부 ② cut 이후 델타 미유실 ③ staging 전 accept 없음 ④ 다중 serving epoch ⑤ 옛 리더 토큰 거부 ⑥ **동시 RPC** ⑦ 취소된 미래 epoch 거부 ⑧ 같은 좌표 다른 digest 거부 ⑨ DP 재시작 후 토큰 유지 — 전부 잘못된 peer 선택 0회 | 설계 재작업 (block) |
 | S12 ✅ | 크래시 저널 | §6.2 표의 모든 지점(durable write·외부 side-effect 직전/직후)에서 복구 정확. **최종 세대가 정확하고 중복 cycle 이 상한 이내** (exactly-once 는 요구하지 않는다 — §6.2) | 설계 재작업 (block) |
 | S13 ✅ | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 오삭제 0회 + §8.4 GC 각 단계 크래시에서 **누수·이중감소 0회** + GC root 누락 0회 | GC 보수화 |
-| S14 | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL/NXDOMAIN/timeout, 기존 세션 거동 | 폴백 자체가 없음 → 요구 재조정 |
+| S14 ~ | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL/NXDOMAIN/timeout, 기존 세션 거동 | 폴백 자체가 없음 → 요구 재조정 |
 | S15 | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
 | S16 ✅ | SNI 별 TLS policy 렌더 | 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 | `override` 제거 |
 | S17 ✅ | TLS 인증서 선택 렌더 | exact / 1라벨 와일드카드 / `default_server` 조합에서 SAN 미커버 인증서 제시 0회 | v0 은 exact host 만 |
