@@ -32,6 +32,10 @@ const FROZEN_VALUES = [
   'publishedByMe',
   // DP — 드라이버
   'LocalDataplaneDriver',
+  // DP — capability (S14: 네이티브 DNS 실패 모드는 선택형이 아니다)
+  'NATIVE_DNS_FAILURE_MODES',
+  'dataplaneCapabilitiesOf',
+  'nativeDnsOf',
   // DP — 세대
   'GenerationError',
   'digestOfFiles',
@@ -99,6 +103,26 @@ describe('v0.1 표면', () => {
       }).ok;
     expect(listener('tls_passthrough'), 'tls_passthrough 는 v0.1 에 있다').toBe(true);
     expect(listener('https'), 'https 는 렌더러가 TLS 를 못 내므로 없다').toBe(false);
+  });
+
+  it('해독기는 네이티브 DNS 정책 필드를 받지 않는다 — 선택형이 없다 (S14)', () => {
+    const base = {
+      listeners: [{ key: 'l', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true }],
+      httpRoutes: [],
+      certificates: [], tlsPolicies: [], sniBindings: [],
+      passthroughRoutes: [],
+      backends: [{ key: 'b', pool: 'p', host: '10.0.0.1', port: 80, weight: 1 }],
+    };
+    const rejected = (pool: Record<string, unknown>): string[] => {
+      const r = surface.parseModel({
+        ...base,
+        pools: [{ key: 'p', protocolClass: 'http', algorithm: 'round_robin', ...pool }],
+      });
+      return r.ok ? [] : r.issues.map((i) => i.code);
+    };
+    expect(rejected({ dns: { on_nxdomain: 'drop' } })).toContain('unknown_field');
+    expect(rejected({ on_nxdomain: 'drop' })).toContain('unknown_field');
+    expect(rejected({ on_timeout: 'keep' })).toContain('unknown_field');
   });
 
   it('DP Agent 는 표면이 아니다 — 드라이버 뒤에 있다', () => {

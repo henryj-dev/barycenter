@@ -9,10 +9,11 @@
  * REST 서버도 reconciler 도 없는 상태에서 OpenAPI 와 DDL 을 고정하면 같은 실수를 더 큰
  * 규모로 반복하게 된다. API·DB 는 v0.2 에서, 구현과 **함께** 고정한다.
  *
- * 그래서 v0.1 이 고정하는 것은 둘뿐이다.
+ * 그래서 v0.1 이 고정하는 것은 둘이다. v0.7 이 세 번째를 열었다.
  *
  *   1. **모델과 렌더러** — `unknown` 을 해독해 nginx 설정을 낸다.
  *   2. **DP 드라이버 ABI** — 세대를 만들고 활성화하고 복구한다.
+ *   3. **드라이버 capability** — 잰 것만. 지금은 네이티브 DNS 실패 모드 표 (S14).
  */
 
 // ── 1. 모델과 렌더러 ────────────────────────────────────────────────────
@@ -89,6 +90,19 @@ export {
   type PlaneStatus,
   type ReconcileResult,
 } from './dp/driver.js';
+
+/**
+ * 드라이버가 드러내는 능력. S14 가 첫 필드를 만들었다 — 네이티브 DNS 실패 모드는
+ * 선택형이 아니다. 구현하지 않은 필드는 여기 없다 (§9.1).
+ */
+export {
+  NATIVE_DNS_FAILURE_MODES,
+  dataplaneCapabilitiesOf,
+  nativeDnsOf,
+  type DataplaneCapabilities,
+  type NativeDnsCapabilities,
+  type NativeDnsFailureModes,
+} from './engine/native-dns.js';
 
 /** 세대를 원자적으로 만들고 활성화 직전에 대조한다 (§7.2). */
 export {

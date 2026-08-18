@@ -503,7 +503,7 @@ PASS=43  FAIL=0  SKIP=1
 | **S11** | **epoch 경합** | 아래 P1~P8 시나리오 전부에서 잘못된 peer 선택 **0회** | **block** |
 | **S12** | 크래시 저널 | A5 의 **11개 지점** 전부에서 복구 정확 + HUP 재전송이 워커 세대를 늘리지 않음 | **block** |
 | **S13** | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 세대/시크릿 오삭제 0회. GC 각 단계 크래시 포함 | GC 보수화 |
-| **S14** | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL 만료/NXDOMAIN/timeout/SERVFAIL. 각 경우의 **허용 동작·수렴 시간·기존 세션 보존**을 수치로 | 폴백 없음 → 요구 재조정 |
+| **S14** | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL 만료/NXDOMAIN/timeout/SERVFAIL. 각 경우의 **허용 동작·수렴 시간·기존 세션 보존**을 수치로. 실패 모드 표는 `DataplaneCapabilities.nativeDns` (게이트 밖, `tests/unit/native-dns.test.ts` 가 계약을 지킨다) | 폴백 없음 → 요구 재조정 |
 | **S15** | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
 | **S16** | **SNI 별 TLS policy 렌더** | 동일 `listen` 의 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 (E27 은 문법만 확인) | `override` 제거, TlsPolicy 는 리스너 단위 |
 | **S17** | **TLS 인증서 선택 렌더** | exact / 1-라벨 와일드카드 / `default_server` 조합에서 **SAN 이 커버하지 않는 인증서가 제시되는 일 0** (E22.2 위험) | v0 은 exact host 만 허용 |

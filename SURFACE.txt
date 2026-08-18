@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 90 심볼 · sha256:acf8a732b7d0a5bfbd142ef5af2dd19995ae68e71e0ee4a1d96fb315f460ad7c
+# 96 심볼 · sha256:b3e8307eda75d3548a2dbc44b4dfe625b184ada3e8af444425019468d06dd468
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -71,6 +71,10 @@ export type CipherPolicyRef = 'modern-2026' | 'intermediate-2026';
 export type Coordinate = {
     activationEpoch: string;
     membershipRevision: string;
+};
+── DataplaneCapabilities
+export type DataplaneCapabilities = {
+    nativeDns: NativeDnsCapabilities;
 };
 ── DataplaneDriver
 export interface DataplaneDriver {
@@ -289,6 +293,21 @@ export type MutationEnvelope = {
     transitionId: string;
     affectedPlanes: Plane[];
 };
+── NATIVE_DNS_FAILURE_MODES
+NATIVE_DNS_FAILURE_MODES: Readonly<{
+    readonly nxdomain: "drop_peer";
+    readonly servfail: "keep_last";
+    readonly timeout: "keep_last";
+}>
+── NativeDnsCapabilities
+export type NativeDnsCapabilities = {
+    readonly available: false;
+} | {
+    readonly available: true;
+    readonly failureModes: NativeDnsFailureModes;
+};
+── NativeDnsFailureModes
+export type NativeDnsFailureModes = typeof NATIVE_DNS_FAILURE_MODES;
 ── PassthroughAction
 export type PassthroughAction = {
     kind: 'proxy';
@@ -518,6 +537,12 @@ export type ValidationCapabilities = {
     streamRealip: boolean;
     http2?: boolean;
 };
+── dataplaneCapabilitiesOf
+export declare function dataplaneCapabilitiesOf(engine: {
+    supports: {
+        dnsResolve: boolean;
+    };
+}): DataplaneCapabilities;
 ── decodeModel
 export declare function decodeModel(input: unknown): DecodeResult;
 ── digestOfFiles
@@ -532,6 +557,8 @@ export declare function materializeGeneration(opts: {
     planes: ('http' | 'stream')[];
     modes?: Record<string, number>;
 }): GenerationManifest;
+── nativeDnsOf
+export declare function nativeDnsOf(dnsResolve: boolean): NativeDnsCapabilities;
 ── parseModel
 export declare function parseModel(input: unknown, caps?: ValidationCapabilities): DecodeResult;
 ── provesActivation

@@ -22,8 +22,8 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **300** | 렌더러·검증기·라우트·DP 상태기계 |
-| conformance | `npm run test:conformance` | **391** | **검수가 재현한 반례** (5~14차) |
+| 단위 | `npm test` | **308** | 렌더러·검증기·라우트·DP 상태기계 · 네이티브 DNS capability |
+| conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
 | e2e | `npm run test:e2e` | **57** | 실물 nginx — http·tcp·udp·SNI 패스스루·**TLS 종단**. 일부는 컨테이너 안에서 에이전트를 돌린다 |
@@ -33,7 +33,7 @@ DESIGN.md    2,400+ 줄
 (수치는 2026-08-17 `./scripts/verify.sh` 실측이다. e2e 행이 둘로 갈려 하나는 14, 하나는
 35 로 오래 어긋나 있었다 — 합쳐 실측값으로 고쳤다.)
 
-단위와 conformance 650 건은 **전부 불변식 테스트이기도 하다** — `assertInvariants` 가
+단위와 conformance 의 대부분(DP 경로)은 **불변식 테스트이기도 하다** — `assertInvariants` 가
 `DpAgent.serial()` 에 걸려 있어, 상태가 store 로 내려갈 때마다 I1·I3·I5 를 본다.
 
 `./scripts/verify.sh` 가 전부 돌린다. **스위트 통과와 동결 가능은 다르다** —
@@ -623,6 +623,36 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### DataplaneCapabilities 를 연다 — S14 가 선택형이 없다고 했다 (2026-08-18)
+
+S14 가 남긴 사실은 문서에만 있었다. `dnsResolve` 는 “엔진이 `resolve` 를 하는가” 라는
+boolean 하나뿐이고, `on_nxdomain`/`on_timeout` 은 DESIGN 표에만 있었다. 그 상태로
+CLI·GUI 를 열면 **엔진이 무시하는 선택지**를 보여주게 된다. 그게 S14 가 막으려던 것이다.
+
+그래서 모델에 선택형을 넣지 않았다. 넣은 것은 사실의 표다.
+
+```
+NATIVE_DNS_FAILURE_MODES = {
+  nxdomain: 'drop_peer',   // 502
+  servfail: 'keep_last',
+  timeout:  'keep_last',
+}
+```
+
+`resolve` 가 없으면(`available: false`) 표 자체를 안 준다. 없는 경로의 정책을 그릴 이유가
+없다. 해독기는 `dns`·`on_nxdomain`·`on_timeout` 을 `unknown_field` 로 거절한다.
+
+`DataplaneDriver.capabilities()` 는 아직 없다. 구현하지 않은 메서드를 인터페이스에 올리면
+§9.1 이 막으려던 일이 다시 난다. 조립 함수 `dataplaneCapabilitiesOf` 가 첫 소비자이고,
+로더가 설 때 메서드가 따라온다.
+
+이건 `src/` 를 움직인다. 표면 동결 카운터는 0 으로 돌아간다 — 이번 일의 목적이다.
+
+**아직 아닌 것.** 로딩 하드닝(X5–X7) · 참조 구현 키트 · `BackendDiscovery` 계약.
+S14 「기존 세션」과 h3/`transportOf()` 는 이번에도 손대지 않는다.
 
 ---
 

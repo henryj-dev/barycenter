@@ -712,7 +712,7 @@ type TlsPassthroughRoute = ResourceMeta & {
 | `passive` | object? | `max_fails`, `fail_timeout_s` |
 | `send_proxy_protocol` | enum | §4.7. **http 는 `none` 고정** |
 | `upstream_tls` | object? | `http`/`tcp` 만. `enabled`, `sni`, `ca_bundle_ref`, `client_cert_ref`, `verify` |
-| `dns` | object? | `resolver_ref`, `valid_s`, `on_nxdomain`, `on_timeout`, `resolve_mode` |
+| `dns` | object? | `resolver_ref`, `valid_s`, `resolve_mode` — **`on_nxdomain`/`on_timeout` 없음** (S14: 엔진이 선택지를 안 준다. 표는 `DataplaneCapabilities.nativeDns`) |
 | `sticky` | object? | HTTP: 쿠키 / L4: `source_ip_hash` |
 
 **`least_conn` 은 v0 enum 에 아예 넣지 않는다.** stream/http OSS 에 네이티브로 있지만, S1 이
@@ -1680,7 +1680,11 @@ NXDOMAIN 과 timeout/SERVFAIL 의 네이티브 동작이 다르며 우리 모델
 > **NXDOMAIN 만 fail-closed 다.** 그리고 셋 다 **설정할 수 없다** — 엔진이 각각 하나의
 > 동작만 준다. 즉 우리 모델의 `on_nxdomain`/`on_timeout` **선택형은 대안 B 에서 표현
 > 불가능하다.** 폴백으로 내려가면 그 두 필드는 값이 무엇이든 위 표대로 동작한다.
-> 드라이버 capability 로 그 사실을 드러내야 하고, 조용히 무시해서는 안 된다.
+>
+> **그 사실은 이제 `DataplaneCapabilities.nativeDns` 이다** (`src/engine/native-dns.ts`).
+> `available: false` 면 표를 내놓지 않고, `true` 면 위 세 칸이 리터럴로 고정된다.
+> 해독기는 `on_nxdomain`/`on_timeout`/`dns` 를 `unknown_field` 로 거절한다. 모델에
+> 선택형을 두고 조용히 무시하는 길을 만들지 않는다.
 
 **드레인도 마찬가지다.** (관측된 한 회차 기준) 기존 연결이 안 끊기는 것은 §7.3 표의 *"`quiesced`·deadline·강제
 종료"* 가 안 된다는 것과 같은 동전의 양면이다 — 엔진은 **기다려 주지만 재촉할 수 없다.**
@@ -2058,7 +2062,7 @@ freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스�
 | **HTTP/3 (QUIC)** | **S20 실행 완료 (2026-08-18) — h3 자체는 된다(7/8). 깨진 것은 ② 뿐이고, 그것이 결정적이다: quic↔udp 충돌을 엔진도 검증기도 못 잡는다(E65). 축소 규칙대로 h3 는 모델에서 계속 뺀다.** | v0.7 |
 | SNI 결과 **3분기 관측**(S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |
 | GC 원장 (S13) | 세대 보존은 **수동 상한** + **시간 보호**로 대체 | v0.6 — 원장은 끝내 안 짓는다. S13 이 마커로는 옛 워커를 못 센다고 실측했고, `worker_shutdown_timeout` 이 그 대신 **상한**을 준다 (2026-08-18) |
-| 백엔드 디스커버리 (S14 대안 B) | **S14 부분 통과 (2026-08-18, 7/8)** — 「기존 세션」만 재현 불안정 — 폴백이 실제로 무엇을 하는지 §7.3 에 표로 고정했다 | v0.7 |
+| 백엔드 디스커버리 (S14 대안 B) | **S14 부분 통과 (2026-08-18, 7/8)** — 「기존 세션」만 재현 불안정. 실패 모드 표는 `DataplaneCapabilities.nativeDns` 로 표면화 (2026-08-18). 모델에 선택형 없음 | v0.7 |
 
 **`tls_passthrough` 와 `source_ip_hash` 는 v0.1 에 있다 — 7차 검수 뒤 뒤집은 결정.**
 
@@ -2439,6 +2443,30 @@ export interface DataplaneDriver {
 멤버십과 같은 일이 난다 — 쓰이지 않는 계약은 깨진 채로 통과한다. 실제로 처음 쓴
 `abortConfig(봉투+epoch)` 는 구현해 보고서야 튜플이 안 맞는다는 걸 알았다.
 
+#### 9.2.0 지금 고정하는 capability (S14)
+
+§9.2.1 스케치의 `supports.dnsResolve: boolean` 은 **부족하다.** S14 가 잰 것은
+있느냐가 아니라, 있을 때 실패 모드가 **설정 불가능한 표**라는 것이다. 지금 표면에
+있는 것은 이것이다 (`src/engine/native-dns.ts`):
+
+```ts
+export const NATIVE_DNS_FAILURE_MODES = {
+  nxdomain: 'drop_peer',   // peer 를 뺀다 → 502
+  servfail: 'keep_last',
+  timeout:  'keep_last',
+} as const;
+
+export type NativeDnsCapabilities =
+  | { available: false }
+  | { available: true; failureModes: typeof NATIVE_DNS_FAILURE_MODES };
+
+export type DataplaneCapabilities = {
+  nativeDns: NativeDnsCapabilities;
+};
+```
+
+필드가 늘어나는 것은 표면 이동이다. 구현하지 않은 칸을 여기에 미리 넣지 않는다.
+
 #### 9.2.1 원래 그리던 계약 (비규범 — v0.3+ / v0.6+)
 
 아래는 멤버십·TLS·시크릿·capability 까지 포함한 전체 그림이다. **v0.1 은 이걸 구현하지
@@ -2482,7 +2510,7 @@ export interface DataplaneCapabilities {
     upstreamProxyProtocol: { http: []; tcp: readonly ('v1')[]; udp: [] };
     runtimeMembership: { http: boolean; stream: boolean };   // §3.4 — 별개다
     nativeLeastConn: boolean;
-    dnsResolve: boolean;                  // 1.27.3+ resolve (대안 B)
+    dnsResolve: boolean;                  // 1.27.3+ resolve (대안 B) — **불충분. 정본은 §9.2.0 nativeDns**
     forceCloseSessions: boolean;          // 드레인 강제 종료 capability
   };
 }
