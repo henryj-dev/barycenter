@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 96 심볼 · sha256:b3e8307eda75d3548a2dbc44b4dfe625b184ada3e8af444425019468d06dd468
+# 105 심볼 · sha256:254b262bdcfe20a8b305266317a30208721a19cf27393f39cb0307ed3d0f3544
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -72,6 +72,8 @@ export type Coordinate = {
     activationEpoch: string;
     membershipRevision: string;
 };
+── DRIVER_API_VERSION
+DRIVER_API_VERSION: 1
 ── DataplaneCapabilities
 export type DataplaneCapabilities = {
     nativeDns: NativeDnsCapabilities;
@@ -103,6 +105,41 @@ export declare class DpRejection extends Error {
     readonly terminalState?: TerminalKind;
     constructor(kind: RejectionKind, message: string, terminalState?: TerminalKind);
 }
+── DriverLoadError
+export declare class DriverLoadError extends Error {
+    readonly refusal: DriverLoadRefusal;
+    constructor(refusal: DriverLoadRefusal);
+}
+── DriverLoadRefusal
+export type DriverLoadRefusal = {
+    readonly kind: 'not_allowlisted';
+    readonly name: string;
+} | {
+    readonly kind: 'integrity_mismatch';
+    readonly name: string;
+} | {
+    readonly kind: 'api_version_mismatch';
+    readonly name: string;
+    readonly want: number;
+    readonly got: number;
+} | {
+    readonly kind: 'unreadable';
+    readonly name: string;
+    readonly path: string;
+};
+── DriverModule
+export type DriverModule = {
+    readonly apiVersion: typeof DRIVER_API_VERSION;
+    readonly [key: string]: unknown;
+};
+── DriverPin
+export type DriverPin = {
+    name: string;
+    version: string;
+    integrity: string;
+    apiVersion: number;
+    path: string;
+};
 ── DriverStatus
 export type DriverStatus = {
     maxLeaderToken: string;
@@ -537,6 +574,8 @@ export type ValidationCapabilities = {
     streamRealip: boolean;
     http2?: boolean;
 };
+── assertDriverPins
+export declare function assertDriverPins(pins: readonly DriverPin[]): void;
 ── dataplaneCapabilitiesOf
 export declare function dataplaneCapabilitiesOf(engine: {
     supports: {
@@ -547,8 +586,12 @@ export declare function dataplaneCapabilitiesOf(engine: {
 export declare function decodeModel(input: unknown): DecodeResult;
 ── digestOfFiles
 export declare function digestOfFiles(files: Record<string, string>, planes?: readonly ('http' | 'stream')[]): string;
+── driverIntegrityOf
+export declare function driverIntegrityOf(bytes: Uint8Array): string;
 ── isTerminalPhase
 isTerminalPhase: (p: ApplyPhase) => boolean
+── loadDriver
+export declare function loadDriver(pins: readonly DriverPin[], name: string): Promise<DriverModule>;
 ── materializeGeneration
 export declare function materializeGeneration(opts: {
     prefix: string;
@@ -559,6 +602,8 @@ export declare function materializeGeneration(opts: {
 }): GenerationManifest;
 ── nativeDnsOf
 export declare function nativeDnsOf(dnsResolve: boolean): NativeDnsCapabilities;
+── parseDriverPins
+export declare function parseDriverPins(input: unknown): DriverPin[];
 ── parseModel
 export declare function parseModel(input: unknown, caps?: ValidationCapabilities): DecodeResult;
 ── provesActivation

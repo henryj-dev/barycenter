@@ -104,6 +104,21 @@ export {
   type NativeDnsFailureModes,
 } from './engine/native-dns.js';
 
+/**
+ * 드라이버 로딩. 설정의 패키지명을 그대로 import 하지 않는다 (§9.3 · X5–X7).
+ */
+export {
+  DRIVER_API_VERSION,
+  DriverLoadError,
+  assertDriverPins,
+  driverIntegrityOf,
+  loadDriver,
+  parseDriverPins,
+  type DriverLoadRefusal,
+  type DriverModule,
+  type DriverPin,
+} from './dp/loader.js';
+
 /** 세대를 원자적으로 만들고 활성화 직전에 대조한다 (§7.2). */
 export {
   GenerationError,

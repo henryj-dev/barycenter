@@ -36,6 +36,13 @@ const FROZEN_VALUES = [
   'NATIVE_DNS_FAILURE_MODES',
   'dataplaneCapabilitiesOf',
   'nativeDnsOf',
+  // DP — 로더 (§9.3 · X5–X7)
+  'DRIVER_API_VERSION',
+  'DriverLoadError',
+  'assertDriverPins',
+  'driverIntegrityOf',
+  'loadDriver',
+  'parseDriverPins',
   // DP — 세대
   'GenerationError',
   'digestOfFiles',

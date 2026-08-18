@@ -2546,6 +2546,28 @@ export interface DataplaneDriver {
 - 설정의 임의 패키지명을 로드하지 않는다. **이미지에 pin 된 allowlist** 만.
 - `name + version + integrity(sha512)` 검증. `apiVersion` 불일치는 기동 실패.
 
+정본은 `src/dp/loader.ts` 다. 핀은 이미지와 함께 가는 값이고, 설정은 **이름만** 고른다.
+
+```ts
+type DriverPin = {
+  name: string;
+  version: string;
+  integrity: string;   // `sha512:` + 128 hex. 엔트리 파일 바이트
+  apiVersion: number;  // 코어의 DRIVER_API_VERSION 과 같아야 한다
+  path: string;        // 이미지에 프로비저닝된 엔트리
+};
+```
+
+| | 언제 | 무엇을 안 하는가 |
+|---|---|---|
+| X5 | 이름이 핀 목록에 없다 | 파일을 열지 않는다 |
+| X6 | 바이트의 sha512 가 핀과 다르다 | `import()` 하지 않는다 |
+| X7 | 핀 또는 모듈의 `apiVersion` 이 코어와 다르다 | 모듈을 호출자에게 주지 않는다. 목록에 틀린 핀이 하나라도 있으면 `assertDriverPins` 가 기동을 멈춘다 — 쓰지 않을 핀이라며 건너뛰면 그게 곧 조용한 degrade 다 |
+
+이름은 핀 목록에서 유일하다. 버전을 설정이 고르게 하면 선택지가 하나 더 생기고, 그 선택지가 곧 우회가 된다. 한 이름에 한 핀.
+
+**아직 아닌 것.** `barycenterd` 가 이 로더로 외부 패키지를 집어넣는 배선, 참조 구현 키트, `BackendDiscovery`. 로더가 있어도 소비자가 없으면 §9.1 이 경고한 "쓰이지 않는 계약" 이다. 다음 회차가 그 소비자를 만든다.
+
 ---
 
 ## 10. Web GUI

@@ -963,9 +963,9 @@ S11 하네스의 교훈이다.
 | X2 | 백엔드 host = 클라우드 메타데이터 엔드포인트 | 목적지 정책 위반으로 거부 |
 | X3 | 백엔드 DNS 가 프로브 시점에 내부 IP 로 재해석 | **재검증 후 차단** (DNS rebinding) |
 | X4 | 액티브 프로브를 임의 내부 포트로 유도 | egress 정책으로 차단 |
-| X5 | allowlist 에 없는 드라이버 패키지명 | 로드 거부 |
-| X6 | integrity(sha512) 불일치 드라이버 | 로드 거부 |
-| X7 | `apiVersion` 불일치 드라이버 | **기동 실패** (조용한 degrade 금지) |
+| X5 | allowlist 에 없는 드라이버 패키지명 | 로드 거부. 파일을 열지 않는다 (`tests/unit/load-driver.test.ts`) |
+| X6 | integrity(sha512) 불일치 드라이버 | 로드 거부. `import()` 하지 않는다 |
+| X7 | `apiVersion` 불일치 드라이버 | **기동 실패** (조용한 degrade 금지). 핀에서 틀리면 파일을 안 열고, 모듈에서 틀리면 호출자에게 안 준다 |
 | X8 | 개인키 조회 API | 존재하지 않음. 쓰기 전용 |
 | X9 | materialize 된 키 파일 권한 | `0400`, DP uid 소유 |
 | X10 | 감사 로그 | 모든 변경에 who/what/before/after/revision |
