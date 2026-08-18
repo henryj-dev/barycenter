@@ -97,7 +97,7 @@ const routesTraffic = (protocol: RawListener['protocol']): boolean =>
   protocol === 'http' || protocol === 'https' || protocol === 'tls_passthrough';
 
 /** 렌더 결과에 영향을 주는 엔진 capability 중, 검증이 알아야 하는 것. */
-export type ValidationCapabilities = { streamRealip: boolean };
+export type ValidationCapabilities = { streamRealip: boolean; http2?: boolean };
 
 export function validateModel(
   model: RawModel,
@@ -229,6 +229,22 @@ export function validateModel(
     // **https 도 `http` 프로필을 쓴다.** TLS 를 종단하고 나면 평범한 HTTP 다.
     notHere('http', l.protocol !== 'http' && l.protocol !== 'https' && l.http !== undefined);
     notHere('tls', l.protocol !== 'https' && l.tls !== undefined);
+    // **h2c 는 동작한다** (§4.9 실측). 그래도 안 여는 이유는 브라우저가 안 쓰기
+    // 때문이고, 그건 "표현 불가" 가 아니라 **의도된 배제**다.
+    notHere('http2', l.protocol !== 'https' && l.http2 !== undefined);
+
+    // **켜 달라고 했는데 엔진이 못 하면 막는다.** 조용히 무시하면 "켰는데 h2 가 안
+    // 나온다" 가 되고, 원인은 설정 어디에도 안 보인다. 기본값이 못 걸리는 것은 다른
+    // 이야기다 — 그건 capability 로 관측된다.
+    if (l.protocol === 'https' && l.http2 === true && caps.http2 !== true) {
+      issues.push({
+        code: 'option_not_supported',
+        subjects: [l.key],
+        message:
+          `리스너 '${l.key}' 가 http2 를 요구하는데 엔진이 못 낸다 — ` +
+          `ngx_http_v2_module 과 nginx 1.25.1+ 가 함께 필요하다 (§4.9 · §7.6)`,
+      });
+    }
     notHere('udp', l.protocol !== 'udp' && l.udp !== undefined);
     notHere('onUnmatchedSni', l.protocol !== 'tls_passthrough' && l.onUnmatchedSni !== undefined);
     notHere('prereadTimeoutS', l.protocol !== 'tls_passthrough' && l.prereadTimeoutS !== undefined);

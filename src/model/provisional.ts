@@ -168,6 +168,7 @@ export type RawListener = ListenerBase & {
   onUnmatchedSni?: SniOutcome;
   prereadTimeoutS?: number;
   tls?: RawTlsBinding;
+  http2?: boolean;
 };
 
 /** 검증 전. `https` 가 아닌 리스너에 붙어 있을 수 있으므로 검증기가 막는다. */
@@ -192,6 +193,17 @@ export type HttpsListener = ListenerBase & {
   acceptProxyProtocol?: InboundProxyProtocol;
   http?: HttpProfile;
   tls: { policy: string; defaultCertificate: string };
+  /**
+   * HTTP/2 (§4.9). 안 적으면 **켠다** — 요즘 HTTPS 에서 h2 없이 서비스하는 것은 사실상
+   * 결함이다.
+   *
+   * **https 에만 있다.** 평문에서도 h2c 는 동작하지만(실측), 브라우저가 안 쓰므로
+   * 켜 놓고 아무 일도 안 일어난다 — §4.9 가 그 이유를 적었다.
+   *
+   * 엔진이 못 하는데 `true` 로 명시하면 **검증기가 막는다.** 기본값이 못 걸리는 것은
+   * 조용히 넘어가지만, 그건 `/api/v1/status` 의 capability 로 보인다.
+   */
+  http2?: boolean;
 };
 
 export type PassthroughListener = ListenerBase & {

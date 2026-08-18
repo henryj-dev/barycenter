@@ -83,6 +83,17 @@ export type RenderCapabilities = {
    */
   httpLua?: boolean;
   streamLua?: boolean;
+  /**
+   * `http2 on;` 을 낼 수 있는가 (§4.9 · §7.6).
+   *
+   * `ngx_http_v2_module` **과** core 1.25.1+ 가 함께 필요하다 — 그 전 문법은
+   * `listen ... http2` 라 리스너 단위였고, 지금 규칙(server 별)이 성립하지 않는다.
+   *
+   * **없으면 안 낸다.** 켜 달라고 명시했는데 못 내는 경우는 검증기가 막는다 —
+   * 조용히 무시하면 "켰는데 h2 가 안 나온다" 가 되고, 그건 이 저장소가 반복해서
+   * 잡아온 모양이다.
+   */
+  http2?: boolean;
 };
 
 /** capability 를 모르면 없는 쪽으로 가정한다. 모르는 것을 할 수 있다고 하지 않는다. */
@@ -347,7 +358,7 @@ function httpServerBlocks(
     // S16 — 인증서와 정책은 **이 server 블록 안**에 낸다. 그래야 SNI 별로 갈린다.
     const tlsBody = tls === undefined ? [] : (() => {
       const c = certFor(host, tls.listener, tls.bindings, tls.policy, tls.certs);
-      return tlsNodes(c.cert, c.min, c.max);
+      return [...tlsNodes(c.cert, c.min, c.max), ...(tls.http2 ? [http2Node()] : [])];
     })();
 
     out.push(
@@ -478,6 +489,19 @@ function sslProtocols(min: TlsVersion, max: TlsVersion | undefined): ConfValue[]
  * 비-default server 의 값도 실제 handshake 에 걸린다. http 레벨에 한 번만 내면 SNI 별
  * override 가 표시만 하고 마는 거짓말이 된다.
  */
+/**
+ * `http2 on;` — **server 별로 낸다.**
+ *
+ * §4.9 가 실측했다: 같은 리스너에서 `a.test`(on) 는 `h2` 를, `b.test`(off) 는
+ * `http/1.1` 을 협상한다. `ssl_protocols`(S16)와 같은 성질이고, 그래서 같은 자리에 낸다.
+ *
+ * http 블록에 한 번만 내는 길도 있지만 안 쓴다 — server 별 재정의가 http 레벨을 덮는지
+ * **또 재야 하고**, S16 이 정확히 그 자리에서 한 번 물었다.
+ */
+function http2Node(): ConfNode {
+  return directive('http2', [lit('on')]);
+}
+
 function tlsNodes(
   cert: Certificate, min: TlsVersion, max: TlsVersion | undefined,
 ): ConfNode[] {
@@ -556,7 +580,12 @@ type TlsContext = {
   bindings: SniCertificateBinding[];
   policy: TlsPolicy;
   certs: Map<string, Certificate>;
+  /** 이 리스너에 `http2 on;` 을 낼 것인가 (모델의 의도 × 엔진 capability). */
+  http2: boolean;
 };
+
+const withHttp2 = (tls: TlsContext, body: ConfNode[]): ConfNode[] =>
+  tls.http2 ? [...body, http2Node()] : body;
 
 function defaultServerBlock(
   listener: HttpListener | HttpsListener,
@@ -589,14 +618,14 @@ function defaultServerBlock(
   // `tls.defaultCertificate` 이고, 그 값이 없는 https 리스너는 타입이 표현하지 못한다.
   const tlsBody = tls === undefined
     ? []
-    : tlsNodes(
+    : withHttp2(tls, tlsNodes(
         tls.certs.get(tls.listener.tls.defaultCertificate)
           ?? ((): Certificate => {
             throw new Error(
               `알 수 없는 default 인증서가 렌더에 도달했다: '${tls.listener.tls.defaultCertificate}'`);
           })(),
         tls.policy.minVersion, tls.policy.maxVersion,
-      );
+      ));
 
   // **default_server 에도 낸다.** CA 는 Host 헤더를 도메인으로 보내지만, 그 도메인에
   // 라우트가 아직 없을 수 있다 — 첫 발급이 정확히 그 상황이다. default 에 없으면
@@ -719,7 +748,10 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
   const decoded = decodeModel(model);
   if (!decoded.ok) throw new ModelValidationError(decoded.issues);
 
-  const issues = validateModel(model, { streamRealip: caps.streamRealip });
+  const issues = validateModel(model, {
+    streamRealip: caps.streamRealip,
+    ...(caps.http2 === undefined ? {} : { http2: caps.http2 }),
+  });
   if (issues.length > 0) throw new ModelValidationError(issues);
 
   const pools = new Map(model.pools.map((p) => [p.key, p]));
@@ -841,6 +873,10 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
             listener: l,
             bindings: byKey(model.sniBindings.filter((b) => b.listener === l.key)),
             certs,
+            // **기본은 켜는 것이다.** 요즘 HTTPS 에서 h2 없이 서비스하는 것은 사실상
+            // 결함이다. 다만 엔진이 못 하면 안 낸다 — 명시적으로 켜 달라고 한 경우는
+            // 검증기가 미리 막으므로, 여기서 조용히 꺼지는 것은 "기본값" 뿐이다.
+            http2: (l.http2 ?? true) && caps.http2 === true,
             // 검증기가 참조를 이미 봤다. 없으면 인증서를 지어내는 대신 터진다.
             policy: policies.get(l.tls.policy) ?? ((): TlsPolicy => {
               throw new Error(`알 수 없는 TLS 정책이 렌더에 도달했다: '${l.tls.policy}'`);

@@ -114,3 +114,48 @@ describe('오류를 모아서 보고한다 — plan 이 한 번에 보여줘야 
     expect(codes).toEqual(['invalid_bind_address', 'unknown_pool']);
   });
 });
+
+describe('HTTP/2 (§4.9)', () => {
+  const httpsListener = (over: Record<string, unknown> = {}) => ({
+    ...base,
+    certificates: [{
+      key: 'c', materialRef: `store://c@${'a'.repeat(32)}`,
+      chainDigest: `sha256:${'0'.repeat(64)}`, keyDigest: `sha256:${'1'.repeat(64)}`,
+    }],
+    tlsPolicies: [{ key: 'p', minVersion: '1.2' as const }],
+    listeners: [{
+      key: 'l', protocol: 'https' as const, bind: '0.0.0.0', port: 443, enabled: true,
+      tls: { policy: 'p', defaultCertificate: 'c' },
+      http: { defaultAction: 'reject' as const },
+      ...over,
+    }],
+  });
+
+  it('**켜 달라고 했는데 엔진이 못 하면 막는다** — 조용히 무시하지 않는다', () => {
+    const issues = validateModel(httpsListener({ http2: true }), { streamRealip: true, http2: false });
+    expect(issues.map((i) => i.code)).toContain('option_not_supported');
+    expect(issues.find((i) => i.code === 'option_not_supported')?.message).toContain('1.25.1');
+  });
+
+  it('엔진이 할 수 있으면 통과한다', () => {
+    expect(validateModel(httpsListener({ http2: true }), { streamRealip: true, http2: true }))
+      .toEqual([]);
+  });
+
+  it('**기본값(생략)은 못 걸려도 에러가 아니다** — 명시와 기본은 다르다', () => {
+    // 기본이 못 걸리는 것은 capability 로 관측된다. 그걸 에러로 만들면 h2 를 못 내는
+    // 엔진에서 **모든 https 리스너가 저장 불가**가 된다.
+    expect(validateModel(httpsListener(), { streamRealip: true, http2: false })).toEqual([]);
+  });
+
+  it('**평문 리스너에는 없다** — h2c 는 동작하지만 브라우저가 안 쓴다 (§4.9)', () => {
+    const issues = validateModel({
+      ...base,
+      listeners: [{
+        key: 'l', protocol: 'http' as const, bind: '0.0.0.0', port: 80, enabled: true,
+        http: { defaultAction: 'reject' as const }, http2: true,
+      }],
+    } as never, { streamRealip: true, http2: true });
+    expect(issues.map((i) => i.code)).toContain('option_not_supported');
+  });
+});

@@ -293,17 +293,19 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
       };
     }
     case 'https': {
-      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'http', 'tls']);
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'http', 'tls', 'http2']);
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
       const http = optional(v['http'], () => decodeHttpProfile(iss, v['http'], `${path}.http`));
       // **`tls` 는 필수다.** 없으면 렌더러가 인증서를 지어내거나 평문으로 내야 한다 —
       // v3 이 정확히 그렇게 깨졌다. 여기서 막는다.
       const tls = required(iss, v, 'tls', path, () => decodeTlsBinding(iss, v['tls'], `${path}.tls`));
+      const http2 = optional(v['http2'], () => bool(iss, v['http2'], `${path}.http2`));
       if (tls === undefined) return undefined;
       return {
         ...head, protocol, tls,
         ...(accept === undefined ? {} : { acceptProxyProtocol: accept }),
         ...(http === undefined ? {} : { http }),
+        ...(http2 === undefined ? {} : { http2 }),
       };
     }
     case 'tls_passthrough': {

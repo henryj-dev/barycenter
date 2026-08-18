@@ -87,6 +87,10 @@ cn_nosni() {
   echo | timeout 5 openssl s_client -connect 127.0.0.1:$1 -noservername 2>/dev/null \\
     | openssl x509 -noout -subject 2>/dev/null | sed 's/.*CN *= *//'
 }
+alpn() {
+  echo | timeout 5 openssl s_client -connect 127.0.0.1:$1 -servername "$2" \\
+    -alpn h2,http/1.1 2>/dev/null | sed -n 's/^ALPN protocol: //p'
+}
 hs() {
   out=$(echo | timeout 5 openssl s_client -connect 127.0.0.1:$1 -servername "$2" "$3" 2>&1)
   case "$out" in
@@ -104,6 +108,7 @@ const model: Model = {
     key: 'l-tls', protocol: 'https', bind: '0.0.0.0', port: PORT, enabled: true,
     tls: { policy: 'modern', defaultCertificate: 'cert-default' },
     http: { defaultAction: 'reject' },
+    // 기본(생략)이 켜는 것이다 — 아래 alpn 테스트가 그걸 잰다.
   }],
   httpRoutes: [
     { key: 'r-a', listener: 'l-tls', hosts: ['a.test'], priority: 10,
@@ -151,7 +156,8 @@ describe('TLS 종단 — 실제 엔진', () => {
 
   beforeAll(() => {
     if (!dockerAvailable()) return;
-    const conf = render(model, { httpLua: false, streamLua: false, streamRealip: true }).conf;
+    const conf = render(model,
+      { httpLua: false, streamLua: false, streamRealip: true, http2: true }).conf;
     out = serveTls(conf, CERTS, `
 ${HELPERS}
 echo "exact=$(cn ${PORT} a.test)"
@@ -162,6 +168,8 @@ echo "nosni=$(cn_nosni ${PORT})"
 echo "old12=$(hs ${PORT} old.test -tls1_2)"
 echo "old13=$(hs ${PORT} old.test -tls1_3)"
 echo "a12=$(hs ${PORT} a.test -tls1_2)"
+echo "alpn_a=$(alpn ${PORT} a.test)"
+echo "alpn_default=$(alpn ${PORT} nope.test)"
 `);
   }, 180_000);
 
@@ -189,6 +197,20 @@ echo "a12=$(hs ${PORT} a.test -tls1_2)"
       expect(val('nosni'), out).toBe('default.test');
     },
   );
+
+  /**
+   * **§4.9 — ALPN 을 잰다. conf 문자열이 아니라.**
+   *
+   * `http2 on;` 이 conf 에 있다는 것과 클라이언트가 h2 를 받는다는 것은 다르다. nginx
+   * 1.25.1 부터 기본이 off 라, 이 줄을 안 내면 **클라이언트가 h2 를 제안해도 http/1.1
+   * 로 떨어진다** — 그리고 그건 트래픽을 봐야만 보인다.
+   */
+  it.runIf(dockerAvailable())('**HTTP/2 가 실제로 협상된다** — 기본이 켜는 것이다', () => {
+    expect(val('alpn_a'), out).toBe('h2');
+    // default_server 에도 나야 한다. 첫 발급 직후처럼 라우트가 아직 없는 호스트도
+    // h2 로 붙는다.
+    expect(val('alpn_default'), out).toBe('h2');
+  });
 
   it.runIf(dockerAvailable())(
     '**override 가 실제 handshake 에 걸린다** — 그 호스트만 TLS1.3 이상',
