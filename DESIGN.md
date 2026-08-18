@@ -422,6 +422,38 @@ type Listener =
 | `http3` | **https 만** | §4.9 · S20 |
 | `tls_policy_id` | **https 만** | §4.6 |
 
+#### 4.6.1 OCSP stapling — **안 짓는다** (2026-08-18)
+
+§4.6 후보 타입에 `ocsp_stapling: boolean` 이 있었다. **뺀다.** 재고 나서 정한 것이다.
+
+**① 우리 테스트 하네스의 어떤 CA 도 OCSP URL 을 안 준다.**
+
+| 인증서 출처 | AIA(OCSP 응답자 URL) |
+|---|---|
+| 자체서명 (골든·엔진 테스트) | **없다** |
+| Pebble (S18 의 실물 CA) | **없다** (`infoAccess: null`) |
+
+**② nginx 는 그걸 조용히 무시한다.** AIA 없는 인증서에 `ssl_stapling on` 을 켜면
+`nginx -t` 는 **통과하고**, 로그에 `"ssl_stapling" ignored, issuer certificate not found`
+경고만 남는다. 클라이언트에게는 `OCSP response: no response sent` 가 간다.
+
+즉 지금 이걸 넣으면 **설정에는 있는데 아무 일도 안 하고, 그 사실을 아무도 못 잰다.**
+이 저장소가 반복해서 잡아온 바로 그 모양이다.
+
+**③ 그리고 주 CA 가 OCSP 를 접었다.** Let's Encrypt 는 **2025-05-07 에 인증서에서 OCSP
+URL 을 제거**했고 **2025-08-06 에 응답자를 껐다**([발표](https://letsencrypt.org/2024/12/05/ending-ocsp)).
+이유는 프라이버시다 — 응답자가 "누가 어느 사이트를 보는가" 를 알게 된다. 대체는 CRL 이다.
+
+우리가 방금 지은 발급 경로(§8.2 ACME)의 기본 CA 가 **OCSP 를 아예 안 준다.** 그러니
+`ssl_stapling on` 은 그 경로에서 정의상 no-op 다.
+
+**되살릴 조건.** OCSP 를 계속 서비스하는 CA 를 지원하게 되고, **그 CA 로 스테이플이 실제로
+나가는 것을 잴 수 있게** 되면 그때 다시 본다. 판정 도구는 이미 있다 —
+`openssl s_client -status` 가 스테이플 유무를 구분한다(실측). 없는 것은 **CA 쪽**이다.
+
+> 이건 "나중에" 가 아니라 **결정**이다. §12.0 이 S9(SNI 3분기 관측)를 "현행 유지" 로
+> 닫은 것과 같은 종류 — 잴 수 없는 것을 넣으면 켰다는 사실만 남는다.
+
 #### HSTS — 되돌릴 수 없는 유일한 설정 (2026-08-18)
 
 이 제품의 다른 기본값들과 성질이 다르다. h2 는 잘못 켜도 끄면 그만이지만 **HSTS 는
@@ -731,7 +763,7 @@ type TlsPolicy = ResourceMeta & {
   /** 버전된 정책 참조. 자유 문자열이 아니다. TLS1.2 이하와 TLS1.3 산출물을 분리한다. */
   cipher_policy: CipherPolicyRef;   // → 구현됨 (2026-08-18). 아래 실측 참조
   hsts?: { max_age: number; include_subdomains: boolean; preload: boolean };
-  ocsp_stapling: boolean;
+  // ocsp_stapling: **뺐다** (2026-08-18). 아래 §4.6.1 참조
 };
 
 type SniCertificateBinding = ResourceMeta & {
@@ -1937,7 +1969,7 @@ freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스�
 |---|---|---|
 | 멤버십 드라이버 · 이중 zone · 헬스 프로버 | §6.5 커서와 함께 | **v0.3** |
 | 드레인 관측 (S2) · `least_conn` (S6) | 기능 | v0.3 · 미정 |
-| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6** — 1단계 완료(2026-08-17): 업로드 인증서 종단·SNI 별 선택·SNI 별 policy·갱신·롤백. **남은 것: OCSP stapling · GC 원장(S13)** (ACME·SNI↔Host·SecretStore GC 는 2026-08-18 구현) (만료 감시·자료 검증은 2026-08-17 구현) |
+| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6** — 1단계 완료(2026-08-17): 업로드 인증서 종단·SNI 별 선택·SNI 별 policy·갱신·롤백. **남은 것: GC 원장(S13)**. OCSP stapling 은 **안 짓기로 했다** (§4.6.1 — 잴 수 없고, 주 CA 가 OCSP 를 접었다) (ACME·SNI↔Host·SecretStore GC 는 2026-08-18 구현) (만료 감시·자료 검증은 2026-08-17 구현) |
 | **HTTP/2** (https, server 별 `http2 on`) | §4.9 실측 — capability 로 가른다 | **v0.6** |
 | **HTTP/3 (QUIC)** | **S20** — h3 클라이언트를 구하는 것이 첫 과제 | v0.7 |
 | SNI 결과 **3분기 관측**(S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |
