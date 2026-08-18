@@ -24,6 +24,7 @@
     "test:engine": "./tests/engine/run.sh",
     "typecheck": "tsc --noEmit",
     "test:store": "vitest run tests/store --no-file-parallelism",
+    "test:driver": "node scripts/driver-compat.mjs",
     "build": "./scripts/build.sh",
     "token": "node scripts/token.mjs",
     "quickstart": "./scripts/quickstart.sh",
@@ -45,6 +46,7 @@
   "main": "./dist/index.js",
   "files": [
     "dist",
+    "drivers",
     "README.md",
     "DESIGN.md",
     "LICENSE"

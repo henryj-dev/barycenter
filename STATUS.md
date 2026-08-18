@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **317** | 렌더러·검증기·라우트·DP 상태기계 · 네이티브 DNS capability · 드라이버 로더 |
+| 단위 | `npm test` | **322** | 렌더러·검증기·라우트·DP 상태기계 · 네이티브 DNS capability · 드라이버 로더 · 호환성 키트 |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,25 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### 로더의 소비자를 만든다 — 참조 드라이버와 호환성 키트 (2026-08-18)
+
+로더만 있고 소비자가 없으면 §9.1 이 경고한 상태였다. 첫 소비자는
+`drivers/reference.mjs` 다. 코어가 그걸 정적으로 import 하지 않는다. 테스트가
+`loadDriver` 로 경로를 집어넣고, `capabilitiesFromDriver` 가 내용을 읽는다.
+
+참조는 엔진을 재지 않는다. 그래서 `nativeDns.available: false` 다. 없는 능력을
+있다고 하지 않는다. available: true 를 내려면 S14 표와 **같아야** 한다 —
+`nxdomain=retry` 같은 선택형은 `DriverContractError` 다.
+
+사내 레포는 `node scripts/driver-compat.mjs <entry>` 로 같은 키트를 자기
+엔트리에 댄다. 코어를 수정하지 않는다. 그게 v0.7 완료 판정("사내 레포가 코어
+수정 없이 빌드·로드")의 절반이다.
+
+`BackendDiscovery` 는 아직 안 연다. 표면 테스트가 `Discovery` 를 빼 둔 이유가
+그대로다 — 받는 쪽이 없다.
 
 ---
 

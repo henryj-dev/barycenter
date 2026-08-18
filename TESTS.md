@@ -966,6 +966,7 @@ S11 하네스의 교훈이다.
 | X5 | allowlist 에 없는 드라이버 패키지명 | 로드 거부. 파일을 열지 않는다 (`tests/unit/load-driver.test.ts`) |
 | X6 | integrity(sha512) 불일치 드라이버 | 로드 거부. `import()` 하지 않는다 |
 | X7 | `apiVersion` 불일치 드라이버 | **기동 실패** (조용한 degrade 금지). 핀에서 틀리면 파일을 안 열고, 모듈에서 틀리면 호출자에게 안 준다 |
+| X5–X7 + S14 | 참조 드라이버 (`drivers/reference.mjs`) 를 로더로 로드. 선택형 실패 모드는 `DriverContractError` | `tests/unit/driver-compat.test.ts` · `npm run test:driver` |
 | X8 | 개인키 조회 API | 존재하지 않음. 쓰기 전용 |
 | X9 | materialize 된 키 파일 권한 | `0400`, DP uid 소유 |
 | X10 | 감사 로그 | 모든 변경에 who/what/before/after/revision |

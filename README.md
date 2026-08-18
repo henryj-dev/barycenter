@@ -224,7 +224,9 @@ Driver interfaces keep organization-specific concerns out of the core, so you ne
 Each interface is frozen just before the release that first consumes it, not all at once.
 Drivers ship as npm packages and are loaded at runtime from a pinned allowlist with integrity
 and API-version checks — no recompilation or forking of the core, though they still have to be
-provisioned into the image. See [§9 of the design doc](./DESIGN.md).
+provisioned into the image. The reference driver is `drivers/reference.mjs`. A third-party
+repo checks its own entry with `node scripts/driver-compat.mjs <entry>` — the core is not
+modified. See [§9 of the design doc](./DESIGN.md).
 
 ## Stack
 

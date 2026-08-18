@@ -33,7 +33,9 @@ const FROZEN_VALUES = [
   // DP — 드라이버
   'LocalDataplaneDriver',
   // DP — capability (S14: 네이티브 DNS 실패 모드는 선택형이 아니다)
+  'DriverContractError',
   'NATIVE_DNS_FAILURE_MODES',
+  'capabilitiesFromDriver',
   'dataplaneCapabilitiesOf',
   'nativeDnsOf',
   // DP — 로더 (§9.3 · X5–X7)

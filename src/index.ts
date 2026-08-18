@@ -96,7 +96,9 @@ export {
  * 선택형이 아니다. 구현하지 않은 필드는 여기 없다 (§9.1).
  */
 export {
+  DriverContractError,
   NATIVE_DNS_FAILURE_MODES,
+  capabilitiesFromDriver,
   dataplaneCapabilitiesOf,
   nativeDnsOf,
   type DataplaneCapabilities,

@@ -50,3 +50,74 @@ export function dataplaneCapabilitiesOf(
 ): DataplaneCapabilities {
   return { nativeDns: nativeDnsOf(engine.supports.dnsResolve) };
 }
+
+/**
+ * 로드된 드라이버가 드러낸 capability 를 읽는다.
+ *
+ * 로더는 공급망만 본다. 계약의 내용은 여기다. 선택형을 슬며시 받아들이면
+ * S14 가 막으려던 GUI 가 다시 생긴다 — 모르는 키·다른 값은 거절한다.
+ */
+export class DriverContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DriverContractError';
+  }
+}
+
+export function capabilitiesFromDriver(mod: unknown): DataplaneCapabilities {
+  if (mod === null || typeof mod !== 'object') {
+    throw new DriverContractError('드라이버 모듈이 객체여야 한다');
+  }
+  const capabilities = (mod as { capabilities?: unknown }).capabilities;
+  const raw = typeof capabilities === 'function'
+    ? (capabilities as () => unknown)()
+    : capabilities;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new DriverContractError('capabilities 가 객체여야 한다');
+  }
+  const obj = raw as Record<string, unknown>;
+  for (const k of Object.keys(obj)) {
+    if (k !== 'nativeDns') throw new DriverContractError(`모르는 capability '${k}'`);
+  }
+  return { nativeDns: readNativeDns(obj['nativeDns']) };
+}
+
+function readNativeDns(raw: unknown): NativeDnsCapabilities {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new DriverContractError('nativeDns 가 객체여야 한다');
+  }
+  const obj = raw as Record<string, unknown>;
+  const available = obj['available'];
+  if (available === false) {
+    for (const k of Object.keys(obj)) {
+      if (k !== 'available') throw new DriverContractError(`available: false 인데 '${k}' 가 있다`);
+    }
+    return { available: false };
+  }
+  if (available !== true) {
+    throw new DriverContractError('nativeDns.available 은 boolean 이어야 한다');
+  }
+  const modes = obj['failureModes'];
+  if (modes === null || typeof modes !== 'object' || Array.isArray(modes)) {
+    throw new DriverContractError('available: true 이면 failureModes 가 있어야 한다');
+  }
+  const rec = modes as Record<string, unknown>;
+  for (const k of Object.keys(obj)) {
+    if (k !== 'available' && k !== 'failureModes') {
+      throw new DriverContractError(`nativeDns 에 모르는 필드 '${k}'`);
+    }
+  }
+  const want = NATIVE_DNS_FAILURE_MODES;
+  const keys = Object.keys(rec).sort();
+  const expected = Object.keys(want).sort();
+  if (keys.join(',') !== expected.join(',')) {
+    throw new DriverContractError('failureModes 의 키가 S14 표와 다르다');
+  }
+  for (const k of expected) {
+    const field = k as keyof typeof want;
+    if (rec[field] !== want[field]) {
+      throw new DriverContractError(`failureModes.${field} 는 '${want[field]}' 이어야 한다`);
+    }
+  }
+  return { available: true, failureModes: want };
+}

@@ -2566,7 +2566,16 @@ type DriverPin = {
 
 이름은 핀 목록에서 유일하다. 버전을 설정이 고르게 하면 선택지가 하나 더 생기고, 그 선택지가 곧 우회가 된다. 한 이름에 한 핀.
 
-**아직 아닌 것.** `barycenterd` 가 이 로더로 외부 패키지를 집어넣는 배선, 참조 구현 키트, `BackendDiscovery`. 로더가 있어도 소비자가 없으면 §9.1 이 경고한 "쓰이지 않는 계약" 이다. 다음 회차가 그 소비자를 만든다.
+참조 구현은 `drivers/reference.mjs` 다. **코어를 import 하지 않는다.** 로더가
+그 파일을 경로로 집어넣고, `capabilitiesFromDriver` 가 S14 표를 지킨다.
+사내 레포의 CI 는 `node scripts/driver-compat.mjs <entry>` 를 돌린다 — 코어를
+수정하지 않고 자기 엔트리가 로드되는지 잰다.
+
+`BackendDiscovery` 는 아직 고정하지 않는다. 멤버십·렌더가 엔드포인트 집합을
+받는 경로가 없다. 구현하지 않은 계약을 올리면 §9.1 이 막으려던 일이 난다.
+
+**아직 아닌 것.** `barycenterd` 가 핀 목록으로 외부 패키지를 기동 시 집어넣는
+배선. `BackendDiscovery`.
 
 ---
 
@@ -2933,7 +2942,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.4** CLI | `bary` 전 리소스 + changeset/plan/commit/apply + 트랜잭셔널 export/import | GUI 없이 전부 가능. 같은 매니페스트를 두 번 import 해도 결과가 같다 |
 | **v0.5** GUI slice | Listeners / Pools·Backends / Plan·Impact 3화면 + SSE | 클릭만으로 v0.3 시나리오 재현 |
 | **v0.6** TLS | `SecretStore`/`DNSProvider` 확정 → ACME 상태기계, 업로드, 자동 갱신, 세대 결박 롤백 + GUI 잔여 화면 | 무중단 갱신 관측 + 갱신 후 롤백 시 옛 인증서 복원 |
-| **v0.7** 드라이버 | 참조 구현 + 로딩 하드닝 + 호환성 테스트 키트 + `BackendDiscovery` | 사내 레포가 코어 수정 없이 빌드·로드 |
+| **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조 구현 + 호환성 키트 ✅ (`drivers/reference.mjs` · `scripts/driver-compat.mjs`). `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
 | **v1.0** | 전체 RBAC, 백업/복구 리허설, SPOF 런북, 문서 | RTO/RPO 리허설 합격 |
 
 > **v0.1 완료 판정 통과 (2026-08-16).** `tests/e2e/v01-curl.test.ts` 10건이 실물로 판정한다 —
