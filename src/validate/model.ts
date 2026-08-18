@@ -55,6 +55,8 @@ export type ModelIssueCode =
   | 'certificate_has_no_material'
   /** ACME 의도가 자기 도메인을 안 덮거나 모양이 틀렸다. */
   | 'invalid_acme_intent'
+  /** HSTS preload 요구조건을 안 지켰다 (§4.6). */
+  | 'invalid_hsts'
   // ── 아래는 런타임 해독기(`src/model/decode.ts`)가 낸다 ──
   /** 타입이 다르다. 강제 변환하지 않는다. */
   | 'invalid_type'
@@ -449,6 +451,32 @@ export function validateModel(
             message: `인증서 '${c.key}' 의 ACME 도메인 '${d}': ${parsed.message}`,
           });
         }
+      }
+    }
+
+    // **HSTS preload 는 되돌리는 데 수개월이 걸린다.** 브라우저 빌드에 구워지기 때문이다.
+    // 목록의 요구조건을 안 지킨 채 제출하면 거절되거나, 더 나쁘게는 준비 안 된
+    // 서브도메인이 함께 등재된다. 저장 시점에 막는다.
+    for (const t of model.tlsPolicies) {
+      const h = t.hsts;
+      if (h?.preload !== true) continue;
+      if (h.maxAgeSeconds < 31_536_000) {
+        issues.push({
+          code: 'invalid_hsts',
+          subjects: [t.key],
+          message:
+            `TLS 정책 '${t.key}' 가 HSTS preload 를 요구하는데 max-age 가 ` +
+            `${h.maxAgeSeconds} 초다 — preload 목록은 1년(31536000) 이상을 요구한다`,
+        });
+      }
+      if (h.includeSubdomains !== true) {
+        issues.push({
+          code: 'invalid_hsts',
+          subjects: [t.key],
+          message:
+            `TLS 정책 '${t.key}' 가 HSTS preload 를 요구하는데 includeSubdomains 가 없다 — ` +
+            `preload 목록이 요구한다`,
+        });
       }
     }
 

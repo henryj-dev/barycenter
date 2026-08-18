@@ -34,6 +34,8 @@ export type EngineCapabilities = {
     streamRealip: boolean;
     sniPassthrough: boolean;
     http2: boolean;
+    /** `ssl_conf_command` — TLS1.3 ciphersuite 를 정하는 유일한 길 (§4.6). */
+    sslConfCommand: boolean;
     /** upstream `server ... resolve` — 1.27.3 부터 OSS. §7.3 대안 B 의 전제. */
     dnsResolve: boolean;
     runtimeMembership: { http: boolean; stream: boolean };
@@ -94,6 +96,8 @@ export function parseEngineCapabilities(nginxV: string): EngineCapabilities {
       streamRealip: has('stream_realip_module'),
       sniPassthrough: has('stream_ssl_preread_module'),
       http2: has('http_v2_module') && atLeast(version, '1.25.1'),
+      // 1.19.4+ 이고 OpenSSL 1.1.1+ 여야 한다. TLS1.3 을 쓸 수 있는 빌드면 후자는 참이다.
+      sslConfCommand: atLeast(version, '1.19.4'),
       dnsResolve: atLeast(version, '1.27.3'),
       runtimeMembership: { http: httpLua, stream: streamLua },
     },

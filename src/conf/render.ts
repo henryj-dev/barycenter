@@ -41,6 +41,8 @@ import type {
   Model,
   PassthroughRoute,
   Certificate,
+  CipherPolicyRef,
+  HstsPolicy,
   Pool,
   SniCertificateBinding,
   SniOutcome,
@@ -83,6 +85,8 @@ export type RenderCapabilities = {
    */
   httpLua?: boolean;
   streamLua?: boolean;
+  /** `ssl_conf_command` — TLS1.3 ciphersuite 를 정하는 유일한 길 (§4.6). */
+  sslConfCommand?: boolean;
   /**
    * `http2 on;` 을 낼 수 있는가 (§4.9 · §7.6).
    *
@@ -397,6 +401,8 @@ function httpServerBlocks(
       const c = certFor(host, tls.listener, tls.bindings, tls.policy, tls.certs);
       return [
         ...tlsNodes(c.cert, c.min, c.max),
+        ...cipherNodes(tls.cipher, tls.confCommand),
+        ...(tls.hsts === undefined ? [] : [hstsNode(tls.hsts)]),
         ...(tls.http2 ? [http2Node()] : []),
         // ⚠️ **`if` 는 rewrite 단계다** — location 선택보다 **앞**이다(§7.x 에서
         // `return 444` 로 한 번 물렸다). 그래서 이 가드가 걸리면 같은 server 의 어떤
@@ -518,6 +524,90 @@ export function certPaths(certKey: string, version: string): { chain: string; ke
 const TLS_ORDER: readonly TlsVersion[] = ['1.2', '1.3'];
 
 /**
+ * 암호군 정책의 실제 내용 (§4.6).
+ *
+ * **둘로 갈려 있는 것이 요점이다.** 실측했다 — `ssl_ciphers` 는 TLS1.3 에 **안 걸린다**:
+ *
+ * ```
+ * ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256
+ *   → TLS1.2 는 그것,  TLS1.3 은 TLS_AES_256_GCM_SHA384 (전혀 다른 것)
+ * ```
+ *
+ * 그래서 1.3 은 `ssl_conf_command Ciphersuites` 가 따로 정한다. 한 필드로 합쳐 두면
+ * "약한 암호를 껐다" 고 믿으면서 1.3 쪽은 손도 안 댄 상태가 된다.
+ *
+ * `preferServer` 도 갈린다: 목록을 좁게 고른 `modern` 은 클라이언트 선호를 따르는 편이
+ * 낫고(둘 다 안전하다), 넓은 `intermediate` 는 서버가 골라야 약한 쪽으로 안 밀린다.
+ */
+const CIPHER_POLICIES: Record<CipherPolicyRef, {
+  ciphers: string; ciphersuites: string; preferServer: boolean;
+}> = {
+  'modern-2026': {
+    // TLS1.2 를 허용하더라도 AEAD + PFS 만 남긴다.
+    ciphers: 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:'
+      + 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:'
+      + 'ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305',
+    ciphersuites: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256',
+    preferServer: false,
+  },
+  'intermediate-2026': {
+    ciphers: 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:'
+      + 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:'
+      + 'ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:'
+      + 'DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384',
+    ciphersuites: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256',
+    preferServer: true,
+  },
+};
+
+export const DEFAULT_CIPHER_POLICY: CipherPolicyRef = 'intermediate-2026';
+
+/**
+ * HSTS 헤더 (§4.6).
+ *
+ * ⚠️ **`add_header` 는 상속이 아니라 대체다.** location 에 `add_header` 가 **하나라도**
+ * 있으면 상위 server 의 것이 **전부 사라진다.** 실측했다:
+ *
+ * | 위치 | HSTS |
+ * |---|---|
+ * | 자기 `add_header` 가 없는 location | 나온다 |
+ * | 자기 `add_header` 가 있는 location | **안 나온다** |
+ * | 500 응답 (`always` 덕분) | 나온다 |
+ *
+ * 지금 렌더러는 location 에 `add_header` 를 하나도 안 낸다. **그 사실에 기대고 있다** —
+ * 그래서 conformance 가 그 불변식을 지킨다(`tests/conformance/hsts-*`). 응답 헤더 기능을
+ * 나중에 라우트에 붙이는 사람은 여기서 걸린다.
+ *
+ * `always` 가 필요한 이유: 없으면 2xx/3xx 에만 붙는다. 인증서가 깨져 5xx 를 내는 동안
+ * HSTS 가 사라지는 것은 **의미가 정반대**다.
+ */
+function hstsNode(h: HstsPolicy): ConfNode {
+  const parts = [`max-age=${h.maxAgeSeconds}`];
+  if (h.includeSubdomains === true) parts.push('includeSubDomains');
+  if (h.preload === true) parts.push('preload');
+  return directive('add_header', [
+    lit('Strict-Transport-Security'), lit(parts.join('; ')), lit('always'),
+  ]);
+}
+
+/**
+ * 암호군 디렉티브. **server 별로 낸다** — 실측이다(같은 리스너에서 SNI 별로 다른 암호군이
+ * 협상된다). `ssl_protocols`(S16)·`http2`(§4.9)와 같은 자리다.
+ */
+function cipherNodes(ref: CipherPolicyRef, canConfCommand: boolean): ConfNode[] {
+  const p = CIPHER_POLICIES[ref];
+  return [
+    directive('ssl_ciphers', [lit(p.ciphers)]),
+    directive('ssl_prefer_server_ciphers', [lit(p.preferServer ? 'on' : 'off')]),
+    // **TLS1.3 은 이것으로만 정해진다.** 엔진이 못 하면 안 낸다 — 그 경우 1.3 은 엔진
+    // 기본값을 쓰고, 그 사실은 capability 로 관측된다.
+    ...(canConfCommand
+      ? [directive('ssl_conf_command', [lit('Ciphersuites'), lit(p.ciphersuites)])]
+      : []),
+  ];
+}
+
+/**
  * min/max 를 `ssl_protocols` 인자들로.
  *
  * **한 문자열이 아니라 인자 배열이다.** `TLSv1.2 TLSv1.3` 을 값 하나로 내면 AST 가
@@ -632,10 +722,17 @@ type TlsContext = {
   http2: boolean;
   /** SNI↔Host 불일치를 421 로 막을 것인가 (§4.6). */
   rejectMismatch: boolean;
+  /** 암호군 정책과 엔진이 `ssl_conf_command` 를 낼 수 있는가. */
+  cipher: CipherPolicyRef;
+  confCommand: boolean;
+  /** HSTS. 없으면 안 낸다 — 되돌릴 수 없는 설정이라 기본이 꺼짐이다. */
+  hsts: HstsPolicy | undefined;
 };
 
 const withHttp2 = (tls: TlsContext, body: ConfNode[]): ConfNode[] => [
   ...body,
+  ...cipherNodes(tls.cipher, tls.confCommand),
+  ...(tls.hsts === undefined ? [] : [hstsNode(tls.hsts)]),
   ...(tls.http2 ? [http2Node()] : []),
   ...(tls.rejectMismatch ? [sniMismatchGuard()] : []),
 ];
@@ -937,6 +1034,9 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
             http2: (l.http2 ?? true) && caps.http2 === true,
             rejectMismatch:
               (policies.get(l.tls.policy)?.sniHostMismatch ?? 'allow') === 'reject_421',
+            cipher: policies.get(l.tls.policy)?.cipherPolicy ?? DEFAULT_CIPHER_POLICY,
+            confCommand: caps.sslConfCommand === true,
+            hsts: policies.get(l.tls.policy)?.hsts,
             // 검증기가 참조를 이미 봤다. 없으면 인증서를 지어내는 대신 터진다.
             policy: policies.get(l.tls.policy) ?? ((): TlsPolicy => {
               throw new Error(`알 수 없는 TLS 정책이 렌더에 도달했다: '${l.tls.policy}'`);

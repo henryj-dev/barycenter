@@ -25,7 +25,7 @@ const caps = (streamRealip: boolean): EngineCapabilities => ({
     streamLua: true,
     streamRealip,
     sniPassthrough: true,
-    http2: true,
+    http2: true, sslConfCommand: true,
     dnsResolve: true,
     runtimeMembership: { http: true, stream: true },
   },

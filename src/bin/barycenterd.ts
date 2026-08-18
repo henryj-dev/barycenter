@@ -132,6 +132,7 @@ function writeBootstrap(prefix: string, adminPort: number, streamAdminPort: numb
         // §4.9 — 모듈과 버전을 함께 본다. 그 전 문법(`listen ... http2`)은 리스너
         // 단위라 지금 규칙(server 별)이 성립하지 않는다.
         http2: probe.capabilities.supports.http2,
+        sslConfCommand: probe.capabilities.supports.sslConfCommand,
       }
     : { streamRealip: false };
 

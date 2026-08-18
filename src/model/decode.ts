@@ -30,6 +30,7 @@ import type {
   PassthroughAction,
   PassthroughRoute,
   Pool,
+  HstsPolicy,
   SniCertificateBinding,
   SniOutcome,
   TlsPolicy,
@@ -154,6 +155,7 @@ function optional<T>(v: unknown, decode: () => T | undefined): T | undefined {
 const LISTENER_PROTOCOLS = ['http', 'https', 'tls_passthrough', 'tcp', 'udp'] as const;
 const TLS_VERSIONS = ['1.2', '1.3'] as const;
 const SNI_HOST_MISMATCH = ['allow', 'reject_421'] as const;
+const CIPHER_POLICIES = ['modern-2026', 'intermediate-2026'] as const;
 const PROTOCOL_CLASSES = ['http', 'tcp', 'udp'] as const;
 const ALGORITHMS = ['round_robin', 'source_ip_hash', 'hash'] as const;
 const UDP_PRESETS = ['dns', 'wireguard', 'game_generic', 'custom'] as const;
@@ -519,7 +521,8 @@ function decodeTlsPolicy(iss: Issues, v: unknown, path: string): TlsPolicy | und
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['key', 'minVersion', 'maxVersion', 'sniHostMismatch']);
+  noExtraKeys(iss, v, path,
+    ['key', 'minVersion', 'maxVersion', 'sniHostMismatch', 'cipherPolicy', 'hsts']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
   const minVersion = required(iss, v, 'minVersion', path, () =>
     oneOf(iss, v['minVersion'], `${path}.minVersion`, TLS_VERSIONS));
@@ -527,11 +530,37 @@ function decodeTlsPolicy(iss: Issues, v: unknown, path: string): TlsPolicy | und
     oneOf(iss, v['maxVersion'], `${path}.maxVersion`, TLS_VERSIONS));
   const mismatch = optional(v['sniHostMismatch'], () =>
     oneOf(iss, v['sniHostMismatch'], `${path}.sniHostMismatch`, SNI_HOST_MISMATCH));
+  const cipherPolicy = optional(v['cipherPolicy'], () =>
+    oneOf(iss, v['cipherPolicy'], `${path}.cipherPolicy`, CIPHER_POLICIES));
+  const hsts = optional(v['hsts'], () => decodeHsts(iss, v['hsts'], `${path}.hsts`));
   if (key === undefined || minVersion === undefined) return undefined;
   return {
     key, minVersion,
     ...(maxVersion === undefined ? {} : { maxVersion }),
     ...(mismatch === undefined ? {} : { sniHostMismatch: mismatch }),
+    ...(cipherPolicy === undefined ? {} : { cipherPolicy }),
+    ...(hsts === undefined ? {} : { hsts }),
+  };
+}
+
+function decodeHsts(iss: Issues, v: unknown, path: string): HstsPolicy | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['maxAgeSeconds', 'includeSubdomains', 'preload']);
+  // **상한을 둔다.** 2 년을 넘기면 실수로 적은 숫자와 구분이 안 되고, 되돌릴 수 없는
+  // 설정에서 오타는 비싸다.
+  const maxAgeSeconds = required(iss, v, 'maxAgeSeconds', path, () =>
+    int(iss, v['maxAgeSeconds'], `${path}.maxAgeSeconds`, 0, 63_072_000));
+  const includeSubdomains = optional(v['includeSubdomains'], () =>
+    bool(iss, v['includeSubdomains'], `${path}.includeSubdomains`));
+  const preload = optional(v['preload'], () => bool(iss, v['preload'], `${path}.preload`));
+  if (maxAgeSeconds === undefined) return undefined;
+  return {
+    maxAgeSeconds,
+    ...(includeSubdomains === undefined ? {} : { includeSubdomains }),
+    ...(preload === undefined ? {} : { preload }),
   };
 }
 

@@ -58,6 +58,19 @@ export type InboundProxyProtocol = {
 export type TlsVersion = '1.2' | '1.3';
 
 /**
+ * 암호군 정책 — **버전된 참조지 자유 문자열이 아니다** (§4.6).
+ *
+ * 자유 문자열이면 오타가 조용히 TLS 를 약하게 만든다. `ECDHE-RSA-AES128-GCM-SHA256` 을
+ * `ECDHE-RSA-AES128-GCM-SHA255` 로 적으면 nginx 는 **그 이름을 그냥 무시하고** 남은
+ * 목록으로 협상한다 — 설정에는 있는데 안 걸리는 그 모양이다.
+ *
+ * **이름에 연도가 붙는 이유**: 권고 목록은 바뀐다. `modern` 의 내용을 조용히 갈면 같은
+ * 설정이 어느 날 다른 암호군을 쓰게 되고, 그건 재현 가능한 배포가 아니다. 내용이 바뀌면
+ * **새 이름**을 만든다.
+ */
+export type CipherPolicyRef = 'modern-2026' | 'intermediate-2026';
+
+/**
  * 인증서 **메타데이터**. §4.8 · §8.1
  *
  * **자료가 여기 없다.** `materialRef` 는 SecretStore 의 불변 버전 참조
@@ -137,6 +150,45 @@ export type TlsPolicy = {
    * 프록시 뒤의 정당한 트래픽이 끊긴다. 멀티테넌트는 명시적으로 켠다.
    */
   sniHostMismatch?: 'allow' | 'reject_421';
+  /**
+   * 암호군 정책. 안 적으면 `intermediate-2026` 이다.
+   *
+   * **TLS1.2 이하와 TLS1.3 은 따로 정해진다** — 실측이다(§4.6):
+   *
+   * ```
+   * ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256  →  TLS1.2 는 그것, TLS1.3 은 TLS_AES_256_GCM_SHA384
+   * ```
+   *
+   * `ssl_ciphers` 가 TLS1.3 에 **안 걸린다.** 그걸 모르고 "약한 암호를 껐다" 고 믿으면
+   * 1.3 쪽은 손도 안 댄 것이다. 1.3 은 `ssl_conf_command Ciphersuites` 가 정한다.
+   */
+  cipherPolicy?: CipherPolicyRef;
+  /**
+   * HSTS (§4.6). 안 적으면 **안 낸다.**
+   *
+   * ── 왜 기본이 꺼짐인가 ────────────────────────────────────────────────
+   *
+   * HSTS 는 **클라이언트 쪽에서 되돌릴 수 없다.** `max-age` 동안 브라우저가 이 도메인을
+   * https 로만 가고, 인증서가 깨지면 사용자는 **우회할 방법이 없다**(경고를 무시하고
+   * 진행하는 버튼도 사라진다). 설정을 되돌려도 이미 나간 헤더는 회수가 안 된다.
+   *
+   * 이 저장소의 다른 기본값들과 성질이 다르다 — h2 는 잘못 켜도 끄면 그만이지만
+   * 이건 아니다. **켜는 것은 사람이 정한다.**
+   */
+  hsts?: HstsPolicy;
+};
+
+export type HstsPolicy = {
+  maxAgeSeconds: number;
+  includeSubdomains?: boolean;
+  /**
+   * 브라우저 **preload 목록**에 넣겠다는 선언.
+   *
+   * 목록은 브라우저 빌드에 구워지므로 빼는 데 수개월이 걸린다. 그래서 목록의 요구조건
+   * (`max-age` ≥ 1년 + `includeSubdomains`)을 **검증기가 강제한다** — 그걸 안 지킨 채
+   * 제출하면 거절되거나, 더 나쁘게는 서브도메인이 준비 안 된 채로 등재된다.
+   */
+  preload?: boolean;
 };
 
 /**
