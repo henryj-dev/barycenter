@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **322** | 렌더러·검증기·라우트·DP 상태기계 · 네이티브 DNS capability · 드라이버 로더 · 호환성 키트 |
+| 단위 | `npm test` | **327** | 렌더러·검증기·라우트·DP 상태기계 · 네이티브 DNS capability · 드라이버 로더 · 호환성 키트 · 기동 배선 |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,22 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### 기동에서 핀을 집어넣는다 — apply 경로는 그대로다 (2026-08-18)
+
+로더와 키트는 테스트가 소비자였다. 이제 `barycenterd` 가 기동에서 같은 길을 간다.
+
+`BARY_DRIVER_PINS` 가 없으면 아무 것도 안 집어넣는다. `GET /status` 의 `driver` 는
+`{ loaded: false }` 다. 핀이 있으면 목록 전체를 검사하고(X7 — 고르지 않은 핀의
+apiVersion 도 기동을 멈춘다) 고른 이름만 로드한다. 로드된 capability 는 status 에
+그대로 보인다. 엔진 쪽 S14 표는 `engine.nativeDns` 로 따로 드러낸다 — 둘을 섞지
+않는다. 드라이버가 제공하지 않는 것을 엔진이 한다고 덮어쓰면 GUI 가 다시 거짓
+선택지를 그린다.
+
+**설정 평면은 `LocalDataplaneDriver` 다.** 참조 드라이버는 applyConfig 가 아니다.
+그걸 갈아 끼우는 계약을 지금 만들면 구현하지 않은 ABI 를 고정하는 것이다.
 
 ---
 

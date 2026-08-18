@@ -226,7 +226,9 @@ Drivers ship as npm packages and are loaded at runtime from a pinned allowlist w
 and API-version checks — no recompilation or forking of the core, though they still have to be
 provisioned into the image. The reference driver is `drivers/reference.mjs`. A third-party
 repo checks its own entry with `node scripts/driver-compat.mjs <entry>` — the core is not
-modified. See [§9 of the design doc](./DESIGN.md).
+modified. At boot, `BARY_DRIVER_PINS` / `BARY_DRIVER_PINS_FILE` plus optional `BARY_DRIVER`
+load that package for `GET /api/v1/status`. The apply path stays `LocalDataplaneDriver`.
+See [§9 of the design doc](./DESIGN.md).
 
 ## Stack
 

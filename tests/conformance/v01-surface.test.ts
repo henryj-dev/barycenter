@@ -42,9 +42,11 @@ const FROZEN_VALUES = [
   'DRIVER_API_VERSION',
   'DriverLoadError',
   'assertDriverPins',
+  'bootDrivers',
   'driverIntegrityOf',
   'loadDriver',
   'parseDriverPins',
+  'readDriverBootSource',
   // DP — 세대
   'GenerationError',
   'digestOfFiles',

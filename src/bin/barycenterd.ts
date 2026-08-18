@@ -33,12 +33,14 @@ import { collectSecretRoots, expandVersionRoots } from '../control/secret-roots.
 import { sweepSecrets } from '../dp/secret-gc.js';
 import { ControlPlane } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
+import { bootDrivers, readDriverBootSource } from '../dp/boot.js';
 import { LocalDataplaneDriver } from '../dp/driver.js';
 import { FsEffects } from '../dp/effects-fs.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { FileStore } from '../dp/store-fs.js';
 import { log } from '../obs/log.js';
 import { count } from '../obs/metrics.js';
+import { dataplaneCapabilitiesOf } from '../engine/native-dns.js';
 import { probeEngine } from '../engine/probe.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
@@ -190,11 +192,15 @@ export async function main(): Promise<void> {
         streamLua: probe.capabilities.supports.runtimeMembership.stream,
       }
     : { streamRealip: false };
+  const nativeDns = probe.ok
+    ? dataplaneCapabilitiesOf(probe.capabilities).nativeDns
+    : undefined;
   const engineInfo = probe.ok
     ? {
         probed: true, via: probe.via,
         flavor: probe.capabilities.flavor, version: probe.capabilities.version,
         supports: probe.capabilities.supports,
+        nativeDns,
       }
     : { probed: false, reason: probe.reason };
   if (probe.ok) {
@@ -202,9 +208,17 @@ export async function main(): Promise<void> {
       flavor: probe.capabilities.flavor, version: probe.capabilities.version,
       streamRealip: probe.capabilities.supports.streamRealip,
       membership: probe.capabilities.supports.runtimeMembership,
+      nativeDns,
     });
   } else {
     log.warn('engine.probe_failed', { reason: probe.reason, assuming: 'conservative' });
+  }
+
+  // 핀이 없으면 설정 평면은 지금처럼 LocalDataplaneDriver 만. 핀이 있으면
+  // capability 패키지를 기동에서 집어넣는다. apply 경로를 갈아 끼우지 않는다.
+  const driverBoot = await bootDrivers(readDriverBootSource(process.env));
+  if (driverBoot.loaded) {
+    log.info('driver.loaded', { name: driverBoot.name, nativeDns: driverBoot.capabilities.nativeDns });
   }
 
   const store = new ConfigStore(db, renderCaps);
@@ -317,7 +331,7 @@ export async function main(): Promise<void> {
   const secrets = new FsSecretStore(secretsRoot);
 
   const control = new ControlPlane(db, store, driver, election,
-    { prefix, adminPort, streamAdminPort, renderCaps, engine: engineInfo, secrets });
+    { prefix, adminPort, streamAdminPort, renderCaps, engine: engineInfo, driver: driverBoot, secrets });
 
   // **기동 시 멤버십을 되돌려 놓는다** (§6.4). shared dict 는 프로세스 수명이라 엔진이
   // 재시작하면 슬롯이 통째로 빈다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.

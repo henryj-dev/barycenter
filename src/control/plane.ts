@@ -40,6 +40,11 @@ export type ControlPlaneOptions = {
   renderCaps?: RenderCapabilities;
   /** 조회한 엔진 정보. `status()` 가 그대로 드러낸다. */
   engine?: unknown;
+  /**
+   * 기동에서 집어넣은 드라이버. 없으면 `{ loaded: false }`.
+   * 설정 평면을 갈아 끼운 결과가 아니다 — capability 만 드러낸다.
+   */
+  driver?: unknown;
   /** stream 평면 admin 포트. http 는 `adminPort` 다. */
   streamAdminPort?: number;
   /**
@@ -632,6 +637,7 @@ export class ControlPlane {
   async status(): Promise<{
     head: string;
     engine: unknown;
+    driver: unknown;
     leader: unknown;
     published: unknown;
     planes: unknown;
@@ -653,6 +659,7 @@ export class ControlPlane {
       // 엔진이 무엇을 할 수 있는지 드러낸다. 이게 안 보이면 "왜 이 조합이 막히는가" 에
       // 답할 수 없다 — capability 로 좁힌다면 그 capability 도 보여야 한다.
       engine: this.opts.engine ?? { probed: false },
+      driver: this.opts.driver ?? { loaded: false },
       // **숨기지 않는다.** 스탠바이가 자기를 리더처럼 보이게 하면 운영자는 왜 apply 가
       // 503 인지 알 수 없다.
       leader: this.election.state,

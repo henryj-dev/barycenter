@@ -2574,8 +2574,14 @@ type DriverPin = {
 `BackendDiscovery` 는 아직 고정하지 않는다. 멤버십·렌더가 엔드포인트 집합을
 받는 경로가 없다. 구현하지 않은 계약을 올리면 §9.1 이 막으려던 일이 난다.
 
-**아직 아닌 것.** `barycenterd` 가 핀 목록으로 외부 패키지를 기동 시 집어넣는
-배선. `BackendDiscovery`.
+기동 배선은 `src/dp/boot.ts` 다. `BARY_DRIVER_PINS` / `BARY_DRIVER_PINS_FILE` 이
+없으면 핀을 안 읽는다. 있으면 목록 전체를 `assertDriverPins` 한 뒤 `BARY_DRIVER`
+(핀이 하나면 생략) 를 `loadDriver` 로 집어넣고, `GET /api/v1/status` 의 `driver`
+로 드러낸다. **설정 평면은 계속 `LocalDataplaneDriver`.** 로드하는 것은
+capability 패키지이지 apply 구현이 아니다.
+
+`BackendDiscovery` 는 아직 고정하지 않는다. 멤버십·렌더가 엔드포인트 집합을
+받는 경로가 없다.
 
 ---
 
@@ -2942,7 +2948,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.4** CLI | `bary` 전 리소스 + changeset/plan/commit/apply + 트랜잭셔널 export/import | GUI 없이 전부 가능. 같은 매니페스트를 두 번 import 해도 결과가 같다 |
 | **v0.5** GUI slice | Listeners / Pools·Backends / Plan·Impact 3화면 + SSE | 클릭만으로 v0.3 시나리오 재현 |
 | **v0.6** TLS | `SecretStore`/`DNSProvider` 확정 → ACME 상태기계, 업로드, 자동 갱신, 세대 결박 롤백 + GUI 잔여 화면 | 무중단 갱신 관측 + 갱신 후 롤백 시 옛 인증서 복원 |
-| **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조 구현 + 호환성 키트 ✅ (`drivers/reference.mjs` · `scripts/driver-compat.mjs`). `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
+| **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
 | **v1.0** | 전체 RBAC, 백업/복구 리허설, SPOF 런북, 문서 | RTO/RPO 리허설 합격 |
 
 > **v0.1 완료 판정 통과 (2026-08-16).** `tests/e2e/v01-curl.test.ts` 10건이 실물로 판정한다 —

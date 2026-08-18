@@ -121,6 +121,13 @@ export {
   type DriverPin,
 } from './dp/loader.js';
 
+export {
+  bootDrivers,
+  readDriverBootSource,
+  type DriverBoot,
+  type DriverBootSource,
+} from './dp/boot.js';
+
 /** 세대를 원자적으로 만들고 활성화 직전에 대조한다 (§7.2). */
 export {
   GenerationError,
