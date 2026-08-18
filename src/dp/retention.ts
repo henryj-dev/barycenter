@@ -41,6 +41,32 @@ export type SweepOptions = {
    * 활성 세대를 지운다.**
    */
   protect: readonly string[];
+  /**
+   * **옛 워커가 아직 들 수 있는 창** (§4.10 · S13). 없으면 시간 보호를 안 건다.
+   *
+   * ── 왜 개수 상한만으로는 부족한가 ─────────────────────────────────────
+   *
+   * S13 이 실측했다: **마커로는 옛 워커를 셀 수 없다.** HUP 뒤 옛 워커는 리스닝 소켓을
+   * 닫으므로 새 요청이 절대 안 가고, nginx 는 "어느 워커가 어느 세대인가" 를 안 알려준다.
+   * 그래서 개수 상한(기본 10)은 **우연한 보호**다 — 오래 사는 연결(WebSocket)을 든 워커가
+   * 전환 10 회를 넘겨 살아남으면 그 세대가 지워진다.
+   *
+   * 그때 무슨 일이 나는지도 실측돼 있다(S8): **열린 fd 로 트래픽은 계속 흐르고 다음
+   * reload 가 깨진다.** 트래픽만 보면 알 수 없다.
+   *
+   * ── 시간으로 푼다 ────────────────────────────────────────────────────
+   *
+   * `worker_shutdown_timeout` 이 걸려 있으면 옛 워커는 그 시간 안에 죽는다. 그러면
+   * **"비활성이 된 지 이 시간이 지난 세대는 아무도 안 든다"** 가 성립한다.
+   *
+   * 비활성 시각은 디스크에서 나온다 — 세대 i 는 **세대 i+1 이 만들어진 순간** 비활성이
+   * 된다. 새 상태를 안 만들고 mtime 만으로 계산한다.
+   *
+   * **상한이 없는 배포에서는 이 보호가 없다.** 그건 숨길 것이 아니라 계약이다 —
+   * `undefined` 를 "안전하다" 로 읽지 않는다.
+   */
+  workerLingerMs?: number;
+  now?: () => number;
 };
 
 /**
@@ -87,8 +113,29 @@ export function sweepGenerations(opts: SweepOptions): SweepResult {
     })
     .sort((a, b) => b.mtime - a.mtime);
 
-  const kept = [...protect, ...candidates.slice(0, keep).map((c) => c.name)];
-  const doomed = candidates.slice(keep).map((c) => c.name);
+  /**
+   * **비활성이 된 지 얼마 안 된 세대는 개수 상한 밖이어도 남긴다.**
+   *
+   * `candidates` 는 mtime 역순이므로, `candidates[i]` 는 `candidates[i-1]` 이 만들어질 때
+   * 비활성이 됐다. 가장 새 것(i=0)은 아직 활성일 수 있으므로 언제나 남는다 — 어차피
+   * 개수 상한 안이다.
+   */
+  const linger = opts.workerLingerMs;
+  const now = opts.now?.() ?? Date.now();
+  const stillHeld = new Set<string>();
+  if (linger !== undefined) {
+    for (let i = 1; i < candidates.length; i += 1) {
+      const deactivatedAt = candidates[i - 1]!.mtime;
+      if (now - deactivatedAt < linger) stillHeld.add(candidates[i]!.name);
+    }
+  }
+
+  const kept = [
+    ...protect,
+    ...candidates.slice(0, keep).map((c) => c.name),
+    ...candidates.slice(keep).filter((c) => stillHeld.has(c.name)).map((c) => c.name),
+  ];
+  const doomed = candidates.slice(keep).filter((c) => !stillHeld.has(c.name)).map((c) => c.name);
 
   const removed: string[] = [];
   const failed: { generation: string; reason: string }[] = [];

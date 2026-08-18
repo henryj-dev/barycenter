@@ -354,7 +354,7 @@ export class ControlPlane {
       });
       // **활성화가 끝난 뒤에 치운다.** 앞에서 치우면 방금 만든 것을 지울 수 있고,
       // 실패했을 때 치우면 되돌아갈 자리를 지운다.
-      this.sweep(generation, by);
+      this.sweep(generation, by, plan.model);
     }
     return {
       id: op.operationId, planId, revision: plan.targetRevision,
@@ -753,7 +753,7 @@ export class ControlPlane {
    * 실패해도 apply 를 실패시키지 않는다. 치우기는 부수적인 일이고, 그것 때문에 성공한
    * 활성화를 실패로 보고하면 운영자가 잘못된 판단을 한다. 대신 **감사에 남긴다.**
    */
-  private sweep(justMade: string, by: string): void {
+  private sweep(justMade: string, by: string, model?: Model): void {
     const keep = this.opts.keepGenerations ?? DEFAULT_KEEP;
     if (keep <= 0) return;
     try {
@@ -765,7 +765,21 @@ export class ControlPlane {
           ? [st.published.generation] : []),
         ...(st?.unfinished !== undefined ? [st.unfinished.generation] : []),
       ];
-      const out = sweepGenerations({ prefix: this.opts.prefix, keep, protect });
+      /**
+       * **시간 보호는 상한이 걸린 배포에서만 걸린다** (§4.10 · S13).
+       *
+       * `worker_shutdown_timeout` 이 없으면 옛 워커가 얼마나 오래 사는지 모르고, 그러면
+       * "비활성이 된 지 오래됐다" 도 못 말한다. 그 경우 개수 상한만 남는다 — 없는 보호를
+       * 있는 척하지 않는다.
+       *
+       * 여유를 두 배로 잡는다. 상한은 워커가 죽는 시각이지 **publish→HUP 사이 지연까지
+       * 덮지 않는다.**
+       */
+      const linger = model?.engine?.workerShutdownTimeoutS;
+      const out = sweepGenerations({
+        prefix: this.opts.prefix, keep, protect,
+        ...(linger === undefined ? {} : { workerLingerMs: linger * 2000 }),
+      });
       if (out.removed.length > 0 || out.failed.length > 0) {
         void this.store.audit(by, 'generations.sweep', 'dataplane', undefined, out);
       }

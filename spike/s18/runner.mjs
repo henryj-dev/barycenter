@@ -158,17 +158,31 @@ const scenarios = {
         if (i >= 10 || !(e instanceof AcmeHttpError)) throw e;
       }
     }
+    // **고정 횟수로 재면 안 된다.** 게이트가 실제로 여기서 한 번 빨개져서 알았다.
+    //
+    // 처음엔 `PEBBLE_WFE_NONCEREJECT=20` 을 "20% 거절" 로 읽고 `0.8^12 = 6.9%` 라고
+    // 계산했다. **실측이 그걸 뒤집었다** — 첫 실패가 나온 주문 번호가 세 번의 실행에서
+    // 3·13·14·7 이었다. 기하분포 MLE 로 `p̂ = 4/37 ≈ 0.11` 이고, 그러면 옛 12 회 루프의
+    // 거짓 빨강은 `0.89^12 ≈ 25%` — **네 번에 한 번**이었다. 6.9% 가 아니라.
+    //
+    // (13·14 회째에 잡힌 실행이 둘이다. 옛 코드였으면 넷 중 둘이 빨간색이다.)
+    //
+    // 그래서 **관측될 때까지 돌리고 상한에서만 실패한다.** 상한은 실측 p̂ 이 아니라
+    // 그 절반(0.05)을 가정해 잡는다 — 표본이 셋뿐이라 p̂ 을 믿고 조이면 이 함정을
+    // 한 번 더 밟는다. `0.95^300 ≈ 2.4e-7`. 흔한 경우엔 열 번쯤에 끝나므로 **더 빠르다.**
+    const CAP = 300;
     let failed = 0;
-    for (let i = 0; i < 12; i += 1) {
+    let tried = 0;
+    for (; tried < CAP && failed === 0; tried += 1) {
       try {
-        await c.newOrder([`noretry-${i}.test`]);
+        await c.newOrder([`noretry-${tried}.test`]);
       } catch (e) {
         if (e instanceof AcmeHttpError && e.problem.type?.endsWith(':badNonce')) failed += 1;
         else if (!(e instanceof AcmeHttpError)) throw e;
       }
     }
     say('nonce.control', failed > 0,
-      `재시도를 끄면 badNonce 로 ${failed} 회 실패한다 — ②가 재는 것이 있다`);
+      `재시도를 끄면 badNonce 가 난다 — 주문 ${tried} 회째에 관측 (상한 ${CAP}, 거짓 빨강 2.4e-7). ②가 재는 것이 있다`);
   },
 
   /** ④ 챌린지 실패 — 토큰을 안 서빙하면 주문이 invalid 가 되는가. */

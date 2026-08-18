@@ -105,3 +105,67 @@ describe('세대 보존 상한', () => {
     expect(present()).toHaveLength(5);
   });
 });
+
+describe('시간 보호 — 개수 상한만으로는 옛 워커를 못 지킨다 (S13)', () => {
+  /**
+   * S13 이 실측했다: **마커로는 옛 워커를 셀 수 없다.** 그래서 개수 상한은 **우연한
+   * 보호**다 — 오래 사는 연결을 든 워커가 전환 N 회를 넘겨 살아남으면 그 세대가 지워지고,
+   * S8 이 실측한 대로 **트래픽은 계속 흐르면서 다음 reload 가 깨진다.**
+   *
+   * `worker_shutdown_timeout` 이 걸려 있으면 잔존 창이 유계이므로, **"비활성이 된 지
+   * 그만큼 지난 세대는 아무도 안 든다"** 를 쓸 수 있다.
+   */
+  const mkGens = (names: readonly string[], stepMs: number): number => {
+    // 오래된 것부터 만든다. mtime 을 손으로 밀어 "언제 만들어졌나" 를 정한다.
+    const base = Date.now() - names.length * stepMs;
+    names.forEach((name, i) => {
+      const dir = join(prefix, 'generations', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'nginx.conf'), 'x');
+      const t = (base + i * stepMs) / 1000;
+      utimesSync(dir, t, t);
+    });
+    return base + names.length * stepMs;
+  };
+
+  it('**방금 비활성이 된 세대는 개수 상한 밖이어도 남는다**', () => {
+    // 1초 간격으로 다섯 개. keep=2 면 원래 셋이 지워진다.
+    const now = mkGens(['g1', 'g2', 'g3', 'g4', 'g5'], 1000);
+    const out = sweepGenerations({
+      prefix, keep: 2, protect: ['g5'],
+      // 잔존 창 10 초 — 최근 것들은 아직 워커가 들고 있을 수 있다.
+      workerLingerMs: 10_000, now: () => now,
+    });
+    expect(out.removed).toEqual([]);
+    expect(out.kept).toEqual(expect.arrayContaining(['g1', 'g2', 'g3', 'g4', 'g5']));
+  });
+
+  it('**창이 지난 세대는 지운다** — 보호가 영원하면 상한이 없는 것과 같다', () => {
+    const now = mkGens(['g1', 'g2', 'g3', 'g4', 'g5'], 1000);
+    const out = sweepGenerations({
+      prefix, keep: 2, protect: ['g5'],
+      // 창이 아주 짧으면 옛 것들은 이미 아무도 안 든다.
+      workerLingerMs: 1, now: () => now,
+    });
+    expect(out.removed.sort()).toEqual(['g1', 'g2']);
+  });
+
+  it('**창을 안 주면 시간 보호가 없다** — 없는 보호를 있는 척하지 않는다', () => {
+    // `worker_shutdown_timeout` 이 없는 배포가 이렇다. 개수 상한만 남는다.
+    const now = mkGens(['g1', 'g2', 'g3', 'g4', 'g5'], 1000);
+    void now;
+    const out = sweepGenerations({ prefix, keep: 2, protect: ['g5'] });
+    expect(out.removed.sort()).toEqual(['g1', 'g2']);
+  });
+
+  it('가장 새 후보는 비활성 시각을 모른다 — 그래서 개수 상한이 진다', () => {
+    // `candidates[0]` 은 아직 활성일 수 있어 "언제 비활성이 됐나" 가 없다. 개수 상한
+    // 안에 있으므로 어차피 남지만, 그 이유를 여기 못 박는다.
+    const now = mkGens(['g1', 'g2'], 1000);
+    const out = sweepGenerations({
+      prefix, keep: 1, protect: [], workerLingerMs: 1, now: () => now,
+    });
+    expect(out.kept).toContain('g2');
+    expect(out.removed).toEqual(['g1']);
+  });
+});
