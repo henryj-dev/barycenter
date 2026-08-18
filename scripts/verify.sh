@@ -69,6 +69,7 @@ else
     run "spike S8             " ./spike/s8/run.sh
     run "spike S11            " ./spike/s11/run.sh
     run "spike S12            " ./spike/s12/run.sh
+    run "spike S13            " ./spike/s13/run.sh
     run "spike S16            " ./spike/s16/run.sh
     run "spike S17            " ./spike/s17/run.sh
     run "spike S18            " ./spike/s18/run.sh
@@ -112,7 +113,10 @@ cat <<'GATES'
  ✅ S16  SNI 별 TLS policy  **열렸다 (2026-08-17).** override 를 유지한다.
  ✅ S17  인증서 선택        **열렸다 (2026-08-17).** https 를 되살린 전제.
  ✅ S18  ACME 상태기계      **열렸다 (2026-08-17).** 실물 CA(Pebble). 의존성 0.
- ❌ S13  GC ledger          미착수
+ ✅ S13  마커·워커 레지스트리·GC  **열렸다 (2026-08-18).** 이중 감소는 구조적으로
+         불가하다 — 별도 카운터를 안 두고 root 를 정본에서 모은다. **마커로는 옛
+         워커를 못 센다**(HUP 뒤 리스닝 소켓을 닫는다). `worker_shutdown_timeout`
+         이 잔존 창을 유계로 만든다. 지금은 숫자 상한에만 기댄다 — 대가는 §12.0.
  ❌ S2 S3 S4 S6 S9 S10 S14 S15   전부 **기능 축소** 등급 — 떨어져도 설계를 다시 안 한다
 
  ─── 6차 검수: 반례 7건이 **녹색 상태에서** 재현됐다 ────────────────

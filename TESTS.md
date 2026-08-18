@@ -342,6 +342,7 @@ npm run test:engine     # 엔진 사실 검증
 ./spike/s8/run.sh       # S8 인증서 세대 롤백
 ./spike/s11/run.sh      # S11 activation_epoch 경합
 ./spike/s12/run.sh      # S12 크래시 저널 (실제 프로세스 종료)
+./spike/s13/run.sh      # S13 마커·워커 레지스트리·GC
 ./spike/s16/run.sh      # S16 SNI 별 TLS policy
 ./spike/s17/run.sh      # S17 TLS 인증서 선택
 ./spike/s18/run.sh      # S18 ACME 상태기계 (Pebble)
@@ -373,6 +374,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS** |
 | 스파이크 S11 | `./spike/s11/run.sh` | **14 PASS** |
 | 스파이크 S12 | `./spike/s12/run.sh` | **5 PASS** — 실제 프로세스를 38 지점에서 죽인다 |
+| 스파이크 S13 | `./spike/s13/run.sh` | **5 PASS** — 마커로는 옛 워커를 못 센다 |
 | 스파이크 S16 | `./spike/s16/run.sh` | **5 PASS** |
 | 스파이크 S17 | `./spike/s17/run.sh` | **10 PASS** |
 | 스파이크 S18 | `./spike/s18/run.sh` | **8 PASS** — 실물 ACME(Pebble) |
@@ -390,8 +392,8 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | ✅ | **S12 크래시 저널** | **열렸다 (2026-08-17).** `process.abort()` 로 실물 `FileStore`·`FsEffects`·nginx 위에서 38 지점을 훑는다 — 전부 수렴, 죽은 주인의 락 회수, 중복 reload 유계. in-process 스윕은 예외로 죽어서 파일시스템이 정상 종료 상태로 남았다 |
 | ✅ | **S16 · S17 TLS 렌더** | **열렸다 (2026-08-17).** 인증서 선택과 SNI 별 policy 가 실제 handshake 에 걸린다. `https` 를 되살린 전제 |
 | ✅ | **S18 ACME** | **열렸다 (2026-08-17).** 실물 CA(Pebble)로 발급 한 바퀴. 의존성 0 — JWS·CSR 을 직접 만든다 |
-| ❌ | S13 GC ledger | 미착수 |
-| ❌ | S2 S3 S4 S6 S9 S10 S14 S15 | 미착수 — 전부 **기능 축소** 등급이다 (떨어져도 설계를 다시 하지 않는다) |
+
+| ❌ | S2 S3 S4 S6 S9 S10 S14 S15 · **S20**(HTTP/3) | 미착수 — 전부 **기능 축소** 등급이다 (떨어져도 설계를 다시 하지 않는다) |
 
 > **block 등급 셋(S8·S11·S12)이 전부 열렸다.** 그래도 스위트가 green 인 것과 게이트가
 > 열리는 것은 다르다 — `./scripts/verify.sh` 가 둘을 나눠서 출력한다. 지금 A 를 막는 것은
