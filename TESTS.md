@@ -948,6 +948,9 @@ S11 하네스의 교훈이다.
 | C5.4 | `guiRoot` 있고 `GET /` | 토큰 없이 HTML. `/api/v1/*` 는 그대로 401 |
 | C5.5 | `guiRoot` 없이 `GET /` | **401** — 없는 화면을 있는 척하지 않는다 |
 | C5.6 | `GET ../secret` | 루트 밖으로 나가지 않는다 |
+| C5.7 | head 리스너 + 미적용 added | `join`. 검증기를 다시 돌리지 않는다 (`tests/unit/listeners-view.test.ts`) |
+| C5.8 | head 에 없고 impact.removed 인 소켓 | `leave` — 엔진에 아직 있다 |
+| C5.9 | `/listeners` | 리스너 화면. Kit 이 아니다 |
 
 ---
 

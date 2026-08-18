@@ -1,7 +1,11 @@
 /**
- * Plan·Impact 책상. SSE 를 구독하고, 폴링하지 않는다.
+ * 운영 책상. SSE 를 구독하고, 폴링하지 않는다.
+ * Plan·Impact 와 Listeners 가 같은 스트림을 본다 — 연결을 둘로 열지 않는다.
  */
 import { pickPending, viewOfImpact, type Impact, type ImpactView, type PendingApply } from '@web/impact-view';
+import {
+  viewOfListeners, type ListenerFact, type ListenersView,
+} from '@web/listeners-view';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -17,6 +21,7 @@ export function createDesk() {
   let error = $state<string | undefined>();
   let head = $state<string | undefined>();
   let view = $state<ImpactView | undefined>();
+  let listeners = $state<ListenersView>({ rows: [] });
   let applying = $state(false);
   let stop: (() => void) | undefined;
 
@@ -38,9 +43,25 @@ export function createDesk() {
     view = viewOfImpact(pending, body.impact);
   };
 
+  const refreshListeners = async (impact: ImpactView | undefined): Promise<void> => {
+    const r = await fetch('/api/v1/listeners', { headers: auth() });
+    if (!r.ok) {
+      error = `listeners ${r.status}`;
+      listeners = { rows: [] };
+      return;
+    }
+    const body = (await r.json()) as unknown;
+    const facts = Array.isArray(body) ? body as ListenerFact[] : [];
+    listeners = viewOfListeners(
+      facts,
+      impact === undefined ? undefined : { added: impact.socketsAdded, removed: impact.socketsRemoved },
+    );
+  };
+
   const onStatus = async (snap: StatusSnap): Promise<void> => {
     head = snap.head;
     await refreshImpact(pickPending(snap.pendingApply ?? []));
+    await refreshListeners(view);
   };
 
   const connect = async (): Promise<void> => {
@@ -110,6 +131,7 @@ export function createDesk() {
     get error() { return error; },
     get head() { return head; },
     get view() { return view; },
+    get listeners() { return listeners; },
     get applying() { return applying; },
     connect,
     apply,
