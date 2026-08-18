@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 87 심볼 · sha256:5f8c1ca1988a4d9f1efb296a8bb84f539fba241d6b9dc7ad1732127290cf7a40
+# 87 심볼 · sha256:4c4d9e204484a0ab4fb51d139678734095678ea958dcf9fbe8afd517c07b5e90
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -483,6 +483,7 @@ export type TlsPolicy = {
     key: string;
     minVersion: TlsVersion;
     maxVersion?: TlsVersion;
+    sniHostMismatch?: 'allow' | 'reject_421';
 };
 ── TlsVersion
 export type TlsVersion = '1.2' | '1.3';

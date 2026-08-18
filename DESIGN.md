@@ -692,8 +692,33 @@ type SniCertificateBinding = ResourceMeta & {
 ```
 
 - `HttpsProfile.tls_policy_id` → `TlsPolicy` → `SniCertificateBinding[]`.
-- **SNI 와 HTTP Host 불일치 정책**을 명시한다: `allow`(기본, 로그만) \| `reject_421`.
-  둘이 다를 수 있다는 사실 자체를 모델이 인정해야 한다.
+- **SNI 와 HTTP Host 불일치 정책**을 명시한다: `allow`(기본) \| `reject_421`.
+  → **구현됨 (2026-08-18)** — `TlsPolicy.sniHostMismatch`.
+
+  실측이 왜 필요한지 보여 준다. 테넌트 둘을 세우고 SNI 와 Host 를 엇갈리게 보내면:
+
+  ```
+  SNI=a.test + Host=b.test  →  인증서 a.test  /  응답 TENANT-B
+  ```
+
+  handshake 는 SNI 로, 요청은 Host 로 server 를 고르기 때문이다. **그 자체로 권한 상승은
+  아니다** — 클라이언트가 처음부터 SNI=b 로 붙을 수 있었다. 위험은 운영자가 *"a 의
+  인증서를 받았으면 a 의 트래픽"* 이라고 가정할 때 생기고, **HTTP/2 가 그 가정을 깬다**:
+  브라우저는 인증서가 덮는 다른 오리진에 같은 커넥션을 재사용한다(RFC 7540 §9.1.1).
+  그 RFC 가 **421 Misdirected Request** 를 답으로 정해 둔 이유다.
+
+  **기본은 `allow` 다.** 막는 쪽을 기본으로 하면 SNI 를 안 보내는 옛 클라이언트가 끊긴다.
+  멀티테넌트는 명시적으로 켠다.
+
+  렌더는 `map` + `if` 다 — nginx 의 `if` 는 변수 하나만 보므로 두 값을 `:` 로 이어 붙여
+  정규식 역참조로 비교한다. 경계 셋을 실측했다: `Host: a.test:443` 은 통과(`$host` 가
+  포트를 뗀다) · `Host: A.TEST` 도 통과(소문자로 내린다) · **SNI 없음도 통과**(비교할
+  것이 없다 — 여기서 막으면 옛 클라이언트가 통째로 끊긴다).
+
+  ⚠️ `if` 는 **rewrite 단계**라 location 선택보다 앞이다(§7.x 의 `return 444` 로 한 번
+  물렸다). 가드가 걸리면 그 server 의 어떤 location 도 안 돈다 — ACME 예약 라우트를
+  포함해서. 그래도 문제가 안 되는 이유는 http-01 검증이 평문 80 으로 오고, 이 가드는
+  **불일치일 때만** 걸리기 때문이다.
 - `tls_passthrough` 리스너에는 `TlsPolicy` 가 붙지 않는다 (인증서를 제시하지 않으므로).
 
 ### 4.7 PROXY protocol — 방향·전송·버전 3축
@@ -1861,7 +1886,7 @@ freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스�
 |---|---|---|
 | 멤버십 드라이버 · 이중 zone · 헬스 프로버 | §6.5 커서와 함께 | **v0.3** |
 | 드레인 관측 (S2) · `least_conn` (S6) | 기능 | v0.3 · 미정 |
-| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6** — 1단계 완료(2026-08-17): 업로드 인증서 종단·SNI 별 선택·SNI 별 policy·갱신·롤백. **남은 것: ACME(S18) · HSTS · OCSP stapling · `CipherPolicyRef` · SNI↔Host 불일치 정책 · SecretStore GC** (만료 감시·자료 검증은 2026-08-17 구현) |
+| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6** — 1단계 완료(2026-08-17): 업로드 인증서 종단·SNI 별 선택·SNI 별 policy·갱신·롤백. **남은 것: HSTS · OCSP stapling · `CipherPolicyRef` · GC 원장(S13)** (ACME·SNI↔Host·SecretStore GC 는 2026-08-18 구현) (만료 감시·자료 검증은 2026-08-17 구현) |
 | **HTTP/2** (https, server 별 `http2 on`) | §4.9 실측 — capability 로 가른다 | **v0.6** |
 | **HTTP/3 (QUIC)** | **S20** — h3 클라이언트를 구하는 것이 첫 과제 | v0.7 |
 | SNI 결과 **3분기 관측**(S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |

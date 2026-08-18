@@ -125,6 +125,43 @@ export const ACME_DICT = 'bary_acme';
  */
 export const ACME_PREFIX = '/.well-known/acme-challenge/';
 
+/** SNI↔Host 불일치 판정을 담는 변수 (§4.6). */
+const SNI_MISMATCH_VAR = 'bary_sni_mismatch';
+
+/**
+ * SNI 와 Host 가 다른지 판정하는 map (§4.6).
+ *
+ * **`if` 안에서 문자열 둘을 비교할 방법이 없어서** map 을 쓴다. nginx 의 `if` 는 변수
+ * 하나만 보므로, 두 값을 `:` 로 이어 붙여 정규식 역참조로 같은지 본다.
+ *
+ * 세 경우를 실측했다:
+ *
+ * | 입력 | 결과 | 왜 |
+ * |---|---|---|
+ * | `Host: a.test:443` | 통과 | `$host` 가 **포트를 뗀다** |
+ * | `Host: A.TEST` | 통과 | `$host` 가 **소문자로 내린다** |
+ * | SNI 없음 | 통과 | 비교할 것이 없다 — 여기서 막으면 SNI 를 안 보내는 옛 클라이언트가 끊긴다 |
+ */
+function sniMismatchMap(): ConfNode {
+  return block('map', [lit('$ssl_server_name:$host'), variable(SNI_MISMATCH_VAR)], [
+    entry(lit('default'), lit('1')),
+    // SNI 가 비어 있으면 비교 불가 — 통과시킨다.
+    entry(lit('~^:'), lit('0')),
+    // 역참조로 "앞과 뒤가 같다" 를 본다.
+    entry(lit('~^(.+):\\1$'), lit('0')),
+  ]);
+}
+
+/**
+ * 불일치면 421. RFC 7540 §9.1.1 이 정한 답이다.
+ *
+ * **`if` 는 괄호를 요구한다** — `variable()` 은 `$x` 만 내므로 `if $x {` 가 되고 nginx 가
+ * 거절한다. 인용되면 안 되므로 `regex()`(그대로 내는 노드)로 괄호째 낸다.
+ */
+function sniMismatchGuard(): ConfNode {
+  return block('if', [lit(`($${SNI_MISMATCH_VAR})`)], [directive('return', [num(421)])]);
+}
+
 const byKey = <T extends { key: string }>(xs: T[]): T[] =>
   [...xs].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
@@ -358,7 +395,18 @@ function httpServerBlocks(
     // S16 — 인증서와 정책은 **이 server 블록 안**에 낸다. 그래야 SNI 별로 갈린다.
     const tlsBody = tls === undefined ? [] : (() => {
       const c = certFor(host, tls.listener, tls.bindings, tls.policy, tls.certs);
-      return [...tlsNodes(c.cert, c.min, c.max), ...(tls.http2 ? [http2Node()] : [])];
+      return [
+        ...tlsNodes(c.cert, c.min, c.max),
+        ...(tls.http2 ? [http2Node()] : []),
+        // ⚠️ **`if` 는 rewrite 단계다** — location 선택보다 **앞**이다(§7.x 에서
+        // `return 444` 로 한 번 물렸다). 그래서 이 가드가 걸리면 같은 server 의 어떤
+        // location 도 안 돈다. ACME 예약 라우트를 포함해서.
+        //
+        // 그래도 문제가 안 되는 이유: http-01 검증은 **평문 80 포트**로 오고(CA 가
+        // 리다이렉트를 따라와 TLS 로 붙는 경우에도 SNI 와 Host 가 같다), 이 가드는
+        // **불일치일 때만** 걸린다. 일치하는 요청은 그대로 location 으로 간다.
+        ...(tls.rejectMismatch ? [sniMismatchGuard()] : []),
+      ];
     })();
 
     out.push(
@@ -582,10 +630,15 @@ type TlsContext = {
   certs: Map<string, Certificate>;
   /** 이 리스너에 `http2 on;` 을 낼 것인가 (모델의 의도 × 엔진 capability). */
   http2: boolean;
+  /** SNI↔Host 불일치를 421 로 막을 것인가 (§4.6). */
+  rejectMismatch: boolean;
 };
 
-const withHttp2 = (tls: TlsContext, body: ConfNode[]): ConfNode[] =>
-  tls.http2 ? [...body, http2Node()] : body;
+const withHttp2 = (tls: TlsContext, body: ConfNode[]): ConfNode[] => [
+  ...body,
+  ...(tls.http2 ? [http2Node()] : []),
+  ...(tls.rejectMismatch ? [sniMismatchGuard()] : []),
+];
 
 function defaultServerBlock(
   listener: HttpListener | HttpsListener,
@@ -867,6 +920,11 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     }
     const policies = new Map(model.tlsPolicies.map((t) => [t.key, t]));
     const certs = new Map(model.certificates.map((c) => [c.key, c]));
+    // **map 은 http 블록에 하나만.** 리스너마다 내면 이름이 겹쳐 nginx 가 거절한다.
+    const anyMismatchGuard = httpListeners.some((l) =>
+      l.protocol === 'https'
+      && (policies.get(l.tls.policy)?.sniHostMismatch ?? 'allow') === 'reject_421');
+    if (anyMismatchGuard) children.push(sniMismatchMap());
     for (const l of httpListeners) {
       const tls: TlsContext | undefined = l.protocol === 'https'
         ? {
@@ -877,6 +935,8 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
             // 결함이다. 다만 엔진이 못 하면 안 낸다 — 명시적으로 켜 달라고 한 경우는
             // 검증기가 미리 막으므로, 여기서 조용히 꺼지는 것은 "기본값" 뿐이다.
             http2: (l.http2 ?? true) && caps.http2 === true,
+            rejectMismatch:
+              (policies.get(l.tls.policy)?.sniHostMismatch ?? 'allow') === 'reject_421',
             // 검증기가 참조를 이미 봤다. 없으면 인증서를 지어내는 대신 터진다.
             policy: policies.get(l.tls.policy) ?? ((): TlsPolicy => {
               throw new Error(`알 수 없는 TLS 정책이 렌더에 도달했다: '${l.tls.policy}'`);

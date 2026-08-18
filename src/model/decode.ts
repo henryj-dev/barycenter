@@ -153,6 +153,7 @@ function optional<T>(v: unknown, decode: () => T | undefined): T | undefined {
 
 const LISTENER_PROTOCOLS = ['http', 'https', 'tls_passthrough', 'tcp', 'udp'] as const;
 const TLS_VERSIONS = ['1.2', '1.3'] as const;
+const SNI_HOST_MISMATCH = ['allow', 'reject_421'] as const;
 const PROTOCOL_CLASSES = ['http', 'tcp', 'udp'] as const;
 const ALGORITHMS = ['round_robin', 'source_ip_hash', 'hash'] as const;
 const UDP_PRESETS = ['dns', 'wireguard', 'game_generic', 'custom'] as const;
@@ -518,14 +519,20 @@ function decodeTlsPolicy(iss: Issues, v: unknown, path: string): TlsPolicy | und
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['key', 'minVersion', 'maxVersion']);
+  noExtraKeys(iss, v, path, ['key', 'minVersion', 'maxVersion', 'sniHostMismatch']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
   const minVersion = required(iss, v, 'minVersion', path, () =>
     oneOf(iss, v['minVersion'], `${path}.minVersion`, TLS_VERSIONS));
   const maxVersion = optional(v['maxVersion'], () =>
     oneOf(iss, v['maxVersion'], `${path}.maxVersion`, TLS_VERSIONS));
+  const mismatch = optional(v['sniHostMismatch'], () =>
+    oneOf(iss, v['sniHostMismatch'], `${path}.sniHostMismatch`, SNI_HOST_MISMATCH));
   if (key === undefined || minVersion === undefined) return undefined;
-  return { key, minVersion, ...(maxVersion === undefined ? {} : { maxVersion }) };
+  return {
+    key, minVersion,
+    ...(maxVersion === undefined ? {} : { maxVersion }),
+    ...(mismatch === undefined ? {} : { sniHostMismatch: mismatch }),
+  };
 }
 
 function decodeSniBinding(iss: Issues, v: unknown, path: string): SniCertificateBinding | undefined {

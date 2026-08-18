@@ -117,6 +117,26 @@ export type TlsPolicy = {
   key: string;
   minVersion: TlsVersion;
   maxVersion?: TlsVersion;
+  /**
+   * SNI 와 HTTP Host 가 다를 때 (§4.6).
+   *
+   * **둘은 다를 수 있다.** handshake 는 SNI 로, 요청은 Host 로 server 를 고르므로 —
+   * 실측했다:
+   *
+   * ```
+   * SNI=a.test + Host=b.test → 인증서는 a.test, 응답은 **b.test 의 것**
+   * ```
+   *
+   * 그 자체로 권한 상승은 아니다(클라이언트가 처음부터 SNI=b 로 붙을 수 있었다). 위험은
+   * **운영자가 "a 의 인증서를 받았으면 a 의 트래픽" 이라고 가정할 때** 생기고, 특히
+   * **HTTP/2 가 그 가정을 깬다** — 브라우저는 인증서가 덮는 다른 오리진에 대해 같은
+   * 커넥션을 재사용한다(RFC 7540 §9.1.1). 그래서 그 RFC 가 **421 Misdirected Request**
+   * 를 답으로 정해 뒀다.
+   *
+   * 기본은 `allow` 다 — 켜는 쪽을 기본으로 하면 SNI 를 안 보내는 옛 클라이언트나
+   * 프록시 뒤의 정당한 트래픽이 끊긴다. 멀티테넌트는 명시적으로 켠다.
+   */
+  sniHostMismatch?: 'allow' | 'reject_421';
 };
 
 /**
