@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **333** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · **export/import 멱등** |
+| 단위 | `npm test` | **340** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · **CLI 단계** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,19 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### changeset 단계를 나눈다 — apply --plan 은 새로 열지 않는다 (2026-08-18)
+
+`bary apply <파일>` 은 한 바퀴를 통째로 돈다. 그러면 plan 을 보고 멈출 수가 없고,
+import 가 남긴 pending_apply 를 적용할 명령도 없다.
+
+나눈 것: `changeset new|patch|plan|show`, `commit --plan`, `apply --plan`.
+`--plan` 은 changeset 을 열지 않는다. 롤백 plan 은 changeset 이 없으므로
+`commit --plan` 이 거절한다 — 그쪽은 `bary rollback` 이다.
+
+파일 한 장짜리 `plan`/`apply` 단축은 남겼다. 없애면 지금 돌아가는 스크립트가 끊긴다.
 
 ---
 

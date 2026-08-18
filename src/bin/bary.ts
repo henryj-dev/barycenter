@@ -3,18 +3,15 @@
  * `bary` — 컨트롤 플레인 CLI (DESIGN.md §5.6)
  *
  * **v0.4 의 전체 CLI 가 아니다.** 리소스별 하위 명령과 대화형 편집은 아직 없다.
- * export/import 는 있다 — 안정 키 매니페스트, 단일 changeset, 두 번 넣어도 같다.
+ * export/import 와 나뉜 changeset 단계는 있다. `apply <파일>` 은 단축이다.
  *
- *   bary status
- *   bary head
- *   bary get <listeners|pools|backends|routes|model|rendered>
- *   bary apply <파일.json>      매니페스트 한 장을 changeset 한 바퀴로 밀어 넣는다
+ *   bary changeset new|patch|plan|show
+ *   bary commit --plan <id>
+ *   bary apply --plan <id>
+ *   bary apply <파일.json>      한 바퀴 단축
  *   bary plan  <파일.json>      커밋하지 않고 영향만 본다
- *   bary export                 spec-only 매니페스트를 stdout 에
- *   bary import <파일.json>     단일 changeset 으로 커밋 (nginx 적용은 apply)
- *   bary rollback <리비전>      그 시점 내용으로 새 리비전을 만들고 적용한다
- *   bary cancel <오퍼레이션>   진행 중인 전환을 포기한다
- *   bary audit [n]
+ *   bary export / import
+ *   bary rollback / cancel / audit / status / head / get
  *
  * 환경변수: `BARY_URL`(기본 http://127.0.0.1:8088) · `BARY_TOKEN`
  *
@@ -23,6 +20,17 @@
  * 쪽이 계약인지 아무도 모른다(6차 검수가 문서와 코드에서 겪은 것과 같은 병이다).
  */
 import { readFileSync } from 'node:fs';
+
+import {
+  applyByPlan,
+  changesetNew,
+  changesetPatch,
+  changesetPlan,
+  changesetShow,
+  commitByPlan,
+  flag,
+  unwrap,
+} from '../cli/flow.js';
 
 const URL_BASE = process.env['BARY_URL'] ?? 'http://127.0.0.1:8088';
 const TOKEN = process.env['BARY_TOKEN'] ?? '';
@@ -52,12 +60,12 @@ const show = (v: unknown): void => {
 
 /** 실패는 **조용히 넘기지 않는다.** 종료 코드와 본문을 함께 낸다. */
 function must(r: Res, what: string): unknown {
-  if (r.status >= 400) {
-    const b = r.body as { code?: string; message?: string };
-    console.error(`${what} 실패 [${r.status} ${b.code ?? ''}]: ${b.message ?? JSON.stringify(r.body)}`);
+  try {
+    return unwrap(r, what);
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
     process.exit(1);
   }
-  return r.body;
 }
 
 const usage = (): never => {
@@ -66,7 +74,13 @@ const usage = (): never => {
   bary status                    4-way 상태 · 미완 전환 · 미적용 커밋
   bary head                      전역 리비전
   bary get <무엇>                listeners | pools | backends | routes | model | rendered
-  bary plan <파일.json>          커밋하지 않고 영향만 본다
+  bary changeset new             changeset 을 연다
+  bary changeset patch <id> <파일.json>
+  bary changeset plan <id>       영향만 본다 (커밋하지 않는다)
+  bary changeset show <id>
+  bary plan <파일.json>          changeset+patch+plan 단축
+  bary commit --plan <id>        plan 이 가리키는 changeset 을 커밋
+  bary apply --plan <id>         이미 커밋된 plan 을 nginx 에
   bary apply <파일.json>         changeset → plan → commit → apply 한 바퀴
   bary export                    spec-only 매니페스트 (stdout)
   bary import <파일.json>        단일 changeset 으로 커밋. --mode replace 는 없는 키를 지운다
@@ -103,8 +117,14 @@ async function upToPlan(path: string): Promise<{ csId: string; plan: any }> {
   return { csId: cs.id, plan };
 }
 
+function die(e: unknown): never {
+  console.error(e instanceof Error ? e.message : String(e));
+  process.exit(1);
+}
+
 async function main(): Promise<void> {
-  const [cmd, arg] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  const [cmd, arg, arg2] = argv;
   switch (cmd) {
     case 'status':
       show(must(await call('GET', '/api/v1/status'), 'status'));
@@ -158,9 +178,7 @@ async function main(): Promise<void> {
       return;
     case 'import': {
       const path = arg ?? usage();
-      const mode = process.argv.includes('--mode')
-        ? process.argv[process.argv.indexOf('--mode') + 1]
-        : 'merge';
+      const mode = flag(argv, '--mode') ?? 'merge';
       if (mode !== 'merge' && mode !== 'replace') {
         console.error('--mode 는 merge 또는 replace 다');
         process.exit(2);
@@ -178,7 +196,58 @@ async function main(): Promise<void> {
       show(out);
       return;
     }
+    case 'changeset': {
+      const sub = arg ?? usage();
+      try {
+        if (sub === 'new') {
+          show(await changesetNew(call));
+          return;
+        }
+        if (sub === 'show') {
+          show(await changesetShow(call, arg2 ?? usage()));
+          return;
+        }
+        if (sub === 'patch') {
+          await changesetPatch(call, arg2 ?? usage(), readPatch(argv[3] ?? usage()));
+          return;
+        }
+        if (sub === 'plan') {
+          const plan = await changesetPlan(call, arg2 ?? usage());
+          show({ id: plan.id, impact: plan.impact, renderDigest: plan.renderDigest });
+          return;
+        }
+      } catch (e) {
+        die(e);
+      }
+      return usage();
+    }
+    case 'commit': {
+      const planId = flag(argv, '--plan') ?? usage();
+      try {
+        const committed = await commitByPlan(call, planId);
+        console.error(`committed r${committed.revision}`);
+        show(committed);
+      } catch (e) {
+        die(e);
+      }
+      return;
+    }
     case 'apply': {
+      const planId = flag(argv, '--plan');
+      if (planId !== undefined) {
+        try {
+          const op = await applyByPlan(call, planId);
+          show(op);
+          if (op.phase !== 'activated') {
+            console.error(`활성화되지 않았다: ${op.phase}${
+              op.detail?.failure === undefined ? '' : ` — ${op.detail.failure}`}`);
+            process.exit(1);
+          }
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       const { csId, plan } = await upToPlan(arg ?? usage());
       console.error(`plan ${plan.id} — 소켓 +${plan.impact.socketChanges.added.length} `
         + `-${plan.impact.socketChanges.removed.length}, 평면 [${plan.impact.planes.join(',')}]`);
