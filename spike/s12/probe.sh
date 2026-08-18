@@ -117,7 +117,7 @@ fi
 #
 # 각 지점마다: 깨끗한 상태 → 그 지점에서 죽인다 → **다시 돌린다**(복구) →
 # 최종 세대와 종단 상태를 본다.
-CRASHED=0; RECOVERED=0; MISSED=0
+CRASHED=0; RECOVERED=0; MISSED=0; CYCLES=0
 FAILED_POINTS=""; MISSED_POINTS=""
 BASE_LABELS=$(echo "$OUT" | sed -n 's/^POINT [0-9]* //p')
 i=0
@@ -137,8 +137,24 @@ while [ "$i" -lt "$TOTAL" ]; do
   WHERE=$(echo "$CRASH_OUT" | sed -n 's/^ABORT [0-9]* //p' | head -1)
 
   # **복구.** 같은 오퍼레이션을 다시 돌린다 — 멱등해야 한다 (§6.2).
-  REC_OUT=$(node /spike/runner.mjs $P none gen-2 2>&1)
-  REC_PHASE=$(echo "$REC_OUT" | sed -n 's/^RESULT //p')
+  #
+  # **한 번으로 안 끝날 수 있다.** §12.0 의 합격 기준은 *"최종 세대가 정확하고 중복
+  # cycle 이 상한 이내"* 이고 **exactly-once 를 요구하지 않는다.** 처음엔 첫 복구가
+  # `activated` 여야 한다고 단언했는데, 그건 기준보다 엄격하다.
+  #
+  # 실제로 게이트 안에서(다른 컨테이너들과 부하를 나눌 때) `phase=failed` 인데 **링크도
+  # 서빙 세대도 gen-2** 인 회차가 나왔다 — 세상은 수렴했고 러너가 활성화 증거를 예산
+  # (25×100ms) 안에 못 본 것이다. S7 이 다룬 그 판정 지연이고, 그때 러너는 유한 재시도로
+  # 넘어간다. 여기서 그걸 재현한다: **상한 안에서 다시 돈다.**
+  RECOVERY_LIMIT=3
+  REC_TRIES=0
+  while [ "$REC_TRIES" -lt "$RECOVERY_LIMIT" ]; do
+    REC_OUT=$(node /spike/runner.mjs $P none gen-2 2>&1)
+    REC_PHASE=$(echo "$REC_OUT" | sed -n 's/^RESULT //p')
+    REC_TRIES=$((REC_TRIES+1))
+    [ "$REC_PHASE" = "activated" ] && break
+  done
+  CYCLES=$((CYCLES + REC_TRIES))
   LINK=$(readlink $P/current)
   # **워커 교체는 비동기다.** 러너가 돌아온 순간을 읽으면 아직 옛 워커가 답할 수 있다 —
   # 그건 "수렴 못 했다" 가 아니라 아직 안 봤다는 뜻이다. 유계로 기다린다.
@@ -151,17 +167,21 @@ while [ "$i" -lt "$TOTAL" ]; do
   done
 
   # **다음 오퍼레이션이 지나가는가** — 실행권이 놓였는지는 이걸로만 보인다.
-  NEXT=$(node /spike/runner.mjs $P none gen-3 op2.json 2>&1 | sed -n 's/^RESULT //p')
+  NEXT_OUT=$(node /spike/runner.mjs $P none gen-3 op2.json 2>&1)
+  NEXT=$(echo "$NEXT_OUT" | sed -n 's/^RESULT //p')
 
   if [ "$REC_PHASE" = "activated" ] && [ "$LINK" = "generations/gen-2" ] \
      && [ "$SERVED" = "gen-2" ] && [ "$NEXT" = "activated" ]; then
     RECOVERED=$((RECOVERED+1))
   else
     FAILED_POINTS="$FAILED_POINTS
-      #$i $WHERE → phase=$REC_PHASE link=$LINK served=$SERVED next=$NEXT"
+      #$i $WHERE → phase=$REC_PHASE(${REC_TRIES}회) link=$LINK served=$SERVED next=$NEXT"
     # **실패한 회차의 복구 로그를 남긴다.** 어느 지점이 깨졌는지만 알면 다음에 또
     # 재현부터 해야 한다.
-    echo "$REC_OUT" | tail -6 > "/tmp/s12/fail-$i.log"
+    # **왜 실패했는지 그 자리에서 남긴다.** 게이트 안에서만 재현되는 종류가 있어서
+    # (부하 의존), 나중에 로그를 찾아가면 이미 컨테이너가 없다.
+    echo "        복구 로그:"; echo "$REC_OUT" | tail -4 | sed 's/^/          /'
+    echo "        후속 로그:"; echo "$NEXT_OUT" | tail -4 | sed 's/^/          /'
   fi
   i=$((i+1))
 done
@@ -171,7 +191,7 @@ echo "  지점 $TOTAL 개 중 실제로 죽은 것 $CRASHED, 못 지난 것 $MIS
 [ -n "$MISSED_POINTS" ] && echo "    (정상 경로가 재시도로 더 길어서 생긴 꼬리다 — 크래시 주입 실행은 그만큼 안 간다)"
 
 if [ -z "$FAILED_POINTS" ] && [ "$CRASHED" -gt 0 ]; then
-  ok S12.sweep "**전 지점에서 죽여도 복구가 gen-2 로 수렴하고, 다음 오퍼레이션이 막히지 않는다** ($CRASHED 개 전부)"
+  ok S12.sweep "**전 지점에서 죽여도 복구가 gen-2 로 수렴하고, 다음 오퍼레이션이 막히지 않는다** ($CRASHED 개 전부, 복구 cycle $CYCLES 회 = 지점당 $((CYCLES * 100 / CRASHED))/100)"
 else
   bad S12.sweep "수렴하지 못한 지점이 있다:$FAILED_POINTS"
 fi

@@ -28,6 +28,7 @@ import { encodeSlots, httpAdminConf, streamAdminConf } from '../control/membersh
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
+import { publishIssued } from '../control/acme-publish.js';
 import { ControlPlane } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
 import { LocalDataplaneDriver } from '../dp/driver.js';
@@ -365,6 +366,7 @@ export async function main(): Promise<void> {
    * **리더만 돈다.** 스탠바이가 함께 주문하면 nonce 가 서로를 깨뜨린다.
    */
   const acmeOn = renderCaps.httpLua === true && env('BARY_ACME', '1') !== '0';
+  let stopPublish = (): void => {};
   const acmeStore = new AcmeStore(db);
   const acmeRunner = new AcmeRunner({
     store: acmeStore,
@@ -393,9 +395,36 @@ export async function main(): Promise<void> {
         });
       },
     );
+    /**
+     * **발급된 것을 설정에 반영한다** (ADR-ACME ⑥).
+     *
+     * 러너와 별도 타이머다 — 러너 틱이 CA 를 기다리는 동안 게시가 막히면, 이미 받은
+     * 인증서가 nginx 에 안 간 채로 남는다.
+     *
+     * ⚠️ **자동 활성화는 세대 전환을 부른다** (전환당 트래픽 2.6%, 소크 실측). 인증서
+     * 경로에 버전이 들어가므로(§7.2) 교체가 렌더 산출물을 바꾸기 때문이고, nginx 가 새
+     * 파일을 읽으려면 reload 가 필요하다. `BARY_ACME_AUTOAPPLY=0` 이면 커밋까지만 한다.
+     */
+    const publishTimer = setInterval(() => {
+      void (async (): Promise<void> => {
+        if (!election.state.isLeader) return;
+        try {
+          await publishIssued({
+            db, store, control, acme: acmeStore, secrets,
+            applyAutomatically: env('BARY_ACME_AUTOAPPLY', '1') !== '0',
+          });
+        } catch (e) {
+          log.error('acme.publish.tick_failed', { error: (e as Error).message });
+        }
+      })();
+    }, Number(env('BARY_ACME_PUBLISH_INTERVAL_MS', '15000')));
+    publishTimer.unref?.();
+    stopPublish = () => clearInterval(publishTimer);
+
     log.info('acme.started', {
       intervalMs: Number(env('BARY_ACME_INTERVAL_MS', '30000')),
       renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
+      autoApply: env('BARY_ACME_AUTOAPPLY', '1') !== '0',
     });
   } else {
     log.info('acme.disabled', {
@@ -417,6 +446,7 @@ export async function main(): Promise<void> {
       // 것과 죽은 것을 나중에 구분할 수 있어야 한다.
       prober.stop();
       acmeRunner.stop();
+      stopPublish();
       void election.release()
         .then(() => db.close())
         .then(() => process.exit(0));

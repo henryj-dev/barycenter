@@ -146,7 +146,18 @@ const scenarios = {
   /** ③ 재시도를 껐을 때 — 대조군. 이게 실패해야 ②가 무언가를 증명한다. */
   async nonce_norety() {
     const c = tracked({ nonceRetries: 0 });
-    await c.register();
+    // **등록은 재시도한다.** 이 시나리오가 재는 것은 *주문*이 badNonce 로 실패하는가지
+    // 등록이 아니다. 재시도를 끈 클라이언트로 그냥 `register()` 를 부르면 20% 확률로
+    // 거기서 죽고, 그러면 **시나리오가 무작위로 빨개진다** — 간헐적으로 깨지는 게이트는
+    // 없느니만 못하다(이 저장소가 e2e 에서 이미 배운 것).
+    for (let i = 0; ; i += 1) {
+      try {
+        await c.register();
+        break;
+      } catch (e) {
+        if (i >= 10 || !(e instanceof AcmeHttpError)) throw e;
+      }
+    }
     let failed = 0;
     for (let i = 0; i < 12; i += 1) {
       try {
