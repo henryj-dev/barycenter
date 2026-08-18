@@ -942,7 +942,21 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
       l.protocol !== 'http' && l.protocol !== 'https',
   );
 
-  const top: ConfNode[] = [block('events', [], [directive('worker_connections', [num(1024)])])];
+  /**
+   * **main 컨텍스트.** 여기 내는 것은 재 보고 대가를 아는 것뿐이다 (§4.10).
+   *
+   * `worker_shutdown_timeout` 을 안 적으면 **안 낸다** — nginx 기본값(무한)이 안전한
+   * 기본값이기 때문이다. 켜면 HUP 뒤 in-flight 요청이 **응답 없이 죽는다**(실측:
+   * `exit=52` empty reply). 그 대가를 내고 사는 것은 **옛 워커 잔존 창의 상한**이고,
+   * 그게 있어야 GC 가 "이 시간이 지나면 아무도 안 든다" 를 쓸 수 있다 (S13).
+   */
+  const shutdownTimeout = model.engine?.workerShutdownTimeoutS;
+  const top: ConfNode[] = [
+    ...(shutdownTimeout === undefined
+      ? []
+      : [directive('worker_shutdown_timeout', [lit(`${shutdownTimeout}s`)])]),
+    block('events', [], [directive('worker_connections', [num(1024)])]),
+  ];
 
   /**
    * **세대에 결박된 admin 조각을 끌어들인다** (§7.2 레이아웃의 `http/admin.conf`).

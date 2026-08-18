@@ -19,6 +19,7 @@
  */
 import type {
   AcmeIntent,
+  EngineSettings,
   InboundProxyProtocol,
   Backend,
   Certificate,
@@ -601,9 +602,23 @@ function decodeTlsOverride(
 // ── 입구 ─────────────────────────────────────────────────────────────────
 
 const MODEL_KEYS = [
+  'engine',
   'listeners', 'httpRoutes', 'passthroughRoutes', 'pools', 'backends',
   'certificates', 'tlsPolicies', 'sniBindings',
 ] as const;
+
+function decodeEngineSettings(iss: Issues, v: unknown, path: string): EngineSettings | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['workerShutdownTimeoutS']);
+  // **상한을 둔다.** 하루를 넘기는 값은 "무한" 과 구분이 안 되고, 그럴 거면 안 적는 것이
+  // 정직하다.
+  const t = optional(v['workerShutdownTimeoutS'], () =>
+    int(iss, v['workerShutdownTimeoutS'], `${path}.workerShutdownTimeoutS`, 1, 86_400));
+  return t === undefined ? {} : { workerShutdownTimeoutS: t };
+}
 
 /**
  * `unknown` 을 `Model` 로 해독한다. **모양과 타입만** 본다 — 참조 무결성 같은 의미
@@ -618,6 +633,10 @@ export function decodeModel(input: unknown): DecodeResult {
   noExtraKeys(iss, input, 'model', MODEL_KEYS);
 
   const model: Model = {
+    ...(input['engine'] === undefined ? {} : (() => {
+      const e = decodeEngineSettings(iss, input['engine'], 'engine');
+      return e === undefined ? {} : { engine: e };
+    })()),
     listeners: arrayOf(iss, input['listeners'] ?? [], 'listeners', (v, at) => decodeListener(iss, v, at)),
     httpRoutes: arrayOf(iss, input['httpRoutes'] ?? [], 'httpRoutes', (v, at) => decodeHttpRoute(iss, v, at)),
     passthroughRoutes: arrayOf(iss, input['passthroughRoutes'] ?? [], 'passthroughRoutes', (v, at) =>

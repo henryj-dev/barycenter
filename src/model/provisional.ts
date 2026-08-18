@@ -368,7 +368,41 @@ export type PassthroughRoute = {
  * `acceptProxyProtocol` 을 넣으면 컴파일이 막힌다 — 5차 검수가 재현한 조합이다.
  * 런타임 입력은 타입이 못 막으므로 `validateModel` 이 같은 규칙을 다시 검사한다.
  */
+/**
+ * 엔진 전역 설정 (§7.x main 컨텍스트).
+ *
+ * **일부러 좁다.** nginx 의 main 컨텍스트에는 수십 개 디렉티브가 있지만, 여기 여는 것은
+ * **재 보고 대가를 아는 것**뿐이다. 일반 탈출구(자유 문자열 주입)를 열면 렌더러가
+ * 보장하는 것이 통째로 무너진다 — 이 저장소가 `cipher_preset: custom` 을 없앤 것과 같은
+ * 이유다.
+ */
+export type EngineSettings = {
+  /**
+   * HUP 뒤 옛 워커를 얼마나 기다릴 것인가 (`worker_shutdown_timeout`).
+   *
+   * **안 적으면 안 낸다 = 무한이다** (nginx 기본값). 그게 안전한 기본값인 이유와 켤 때의
+   * 대가를 둘 다 실측했다:
+   *
+   * | 설정 | in-flight 요청 |
+   * |---|---|
+   * | 없음(기본) | **끝까지 간다** — 10 초짜리 요청이 200 으로 완료 |
+   * | `2s` | **응답 없이 죽는다** — `exit=52` empty reply, 본문 0 바이트 |
+   *
+   * 502 도 부분 응답도 아니다. 클라이언트는 **네트워크 장애와 구분할 수 없고**,
+   * 비멱등 요청이면 부작용이 이미 일어났을 수 있다.
+   *
+   * 그럼에도 여는 이유는 S13 이다: 이게 없으면 옛 워커가 **얼마나 오래 사는지 상한이
+   * 없고**, GC 는 "이 세대를 아직 누가 쓰는가" 를 영영 모른다(마커로는 못 센다 — 실측).
+   * 상한을 걸면 *"이 시간이 지나면 아무도 안 든다"* 를 쓸 수 있다.
+   *
+   * **모르는 것을 없애는 대신 유계로 바꾸는 거래**이고, 값은 in-flight 다.
+   */
+  workerShutdownTimeoutS?: number;
+};
+
 export type Model = {
+  /** 엔진 전역 설정. 없으면 렌더러가 아무것도 안 낸다 (엔진 기본값). */
+  engine?: EngineSettings;
   listeners: Listener[];
   httpRoutes: HttpRoute[];
   passthroughRoutes: PassthroughRoute[];

@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 89 심볼 · sha256:e5518c84fd89bc4a886a20aad666c30d5091185ffb25d5c6746f041d412d3782
+# 90 심볼 · sha256:acf8a732b7d0a5bfbd142ef5af2dd19995ae68e71e0ee4a1d96fb315f460ad7c
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -122,6 +122,10 @@ export interface Effects {
     stageMembership?(generation: string, plane: Plane, lease: ApplyLease): Promise<Checked>;
     pushMembership?(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
 }
+── EngineSettings
+export type EngineSettings = {
+    workerShutdownTimeoutS?: number;
+};
 ── FileStore
 export declare class FileStore implements DurableStore {
     readonly path: string;
@@ -255,6 +259,7 @@ MEMBERSHIP_DICT: {
 }
 ── Model
 export type Model = {
+    engine?: EngineSettings;
     listeners: Listener[];
     httpRoutes: HttpRoute[];
     passthroughRoutes: PassthroughRoute[];
