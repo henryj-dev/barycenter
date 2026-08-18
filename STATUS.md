@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **327** | 렌더러·검증기·라우트·DP 상태기계 · 네이티브 DNS capability · 드라이버 로더 · 호환성 키트 · 기동 배선 |
+| 단위 | `npm test` | **333** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · **export/import 멱등** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -526,9 +526,9 @@ curl :8999   →   hello from A:11
 - `deploy/Dockerfile` — **엔진과 에이전트가 한 컨테이너**다. 쪼갤 수 없다(§3.2 · §11.1,
   링크 교체가 안 보인다는 실측). 런타임 이미지에는 `npm` 도 devDependency 도 없다.
 - `deploy/docker-compose.yml` — PG + 데이터 플레인 + 예제 백엔드. API 는 **루프백에만** 묶는다.
-- `src/bin/bary.ts` — CLI. **v0.4 의 전체 CLI 가 아니다**(범위를 주석에 밝혔다).
-  매니페스트 문법을 새로 만들지 않고 API 가 받는 patch 배열 그대로 쓴다 — 모양이 둘이면
-  갈라지고, 갈라지면 어느 쪽이 계약인지 아무도 모른다.
+- `src/bin/bary.ts` — CLI. 리소스별 하위 명령은 아직 없다. export/import 는
+  `GET|POST /api/v1/config/export|import` 를 그대로 부른다. 매니페스트 문법을
+  새로 만들지 않는다.
 - `scripts/token.mjs` — 토큰 발급. **설정에는 해시만 들어간다.**
 - `scripts/quickstart.sh` — **README 의 절차를 그대로 돌리고 확인한다.** 손으로 확인하는
   문서는 반드시 썩는다.
@@ -623,6 +623,25 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### export/import 를 연다 — 같은 장을 두 번 넣어도 같다 (2026-08-18)
+
+v0.4 의 첫 조각. CLI 에 리소스별 하위 명령은 아직 없다. 있는 것은 §5.5 가
+요구한 **안정 키 매니페스트** 다.
+
+export 는 spec 만 낸다. `key` 가 옆자리이고 id/revision 은 없다. 모델에 UUID 가
+없으므로 remap 표는 만들지 않았다 — 만들 것이 없다. import 는 한 장의
+changeset 이다. 차이가 없으면 changeset 을 안 만든다. 그게 "두 번 넣어도
+결과가 같다" 의 강한 쪽이다.
+
+merge 는 매니페스트에 있는 것만 맞춘다. replace 는 없는 키를 지운다. YAML 은
+안 만든다 — CLI 가 API 와 다른 모양을 들면 둘이 갈라진다.
+
+`bary export` / `bary import` 가 `GET|POST /api/v1/config/export|import` 를
+그대로 부른다. nginx 적용은 여전히 `apply` 의 몫이다. import 가 적용까지 하면
+그 경로만 덜 검증된다.
 
 ---
 

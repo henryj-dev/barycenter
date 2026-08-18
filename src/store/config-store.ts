@@ -31,6 +31,9 @@ import type {
   SniOutcome,
 } from '../model/provisional.js';
 import type { Db, Queryable, Row } from './pg.js';
+import {
+  exportManifest, importPatch, parseManifest, type ImportMode, type Manifest,
+} from './manifest.js';
 
 /** 렌더 결과를 리비전에 결박하기 위한 표식 (§5.3 `renderer_version_changed`). */
 export const RENDERER_VERSION = 'v0.1';
@@ -615,6 +618,34 @@ export class ConfigStore {
         `리비전 ${revision} 의 스냅샷을 해독할 수 없다`, decoded.issues);
     }
     return decoded.model;
+  }
+
+  /** 현재 head 를 spec-only 매니페스트로. */
+  async exportAt(revision: string): Promise<Manifest> {
+    return exportManifest(await this.modelAt(revision));
+  }
+
+  /**
+   * 매니페스트 한 장을 단일 changeset 으로 커밋한다 (§5.5).
+   *
+   * 차이가 없으면 changeset 을 만들지 않는다. 두 번째 import 가 리비전을
+   * 올리지 않는 것이 "결과가 같다" 의 강한 쪽이다.
+   */
+  async importFromManifest(
+    input: unknown, mode: ImportMode, by: string,
+  ): Promise<
+    | { unchanged: true; revision: string }
+    | { unchanged: false; revision: string; planId: string; changesetId: string }
+  > {
+    const manifest = parseManifest(input);
+    const head = await this.head();
+    const ops = importPatch(await this.modelAt(head.revision), manifest, mode);
+    if (ops.length === 0) return { unchanged: true, revision: head.revision };
+    const changesetId = await this.createChangeset(head.revision, by);
+    await this.patchChangeset(changesetId, ops, by);
+    const plan = await this.plan(changesetId, by);
+    const committed = await this.commit(changesetId, plan.id, by);
+    return { unchanged: false, revision: committed.revision, planId: plan.id, changesetId };
   }
 
   /**

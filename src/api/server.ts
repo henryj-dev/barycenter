@@ -125,6 +125,27 @@ const ROUTES: Route[] = [
     json(c.res, 200, { revision: rev, digest: r.digest, planes: r.planes, conf: r.conf });
   }),
 
+  /**
+   * §5.5 export. spec-only. CLI `bary export` 가 이걸 그대로 찍는다.
+   */
+  route('GET', '/api/v1/config/export', 'read', async (c, api) => {
+    const rev = c.url.searchParams.get('revision') ?? (await api.store.head()).revision;
+    json(c.res, 200, await api.store.exportAt(rev));
+  }),
+
+  /**
+   * §5.5 import. 단일 changeset. 차이가 없으면 리비전을 안 올린다.
+   * nginx 적용은 `/apply` 의 몫이다 — import 가 적용까지 하면 그 경로만 덜 검증된다.
+   */
+  route('POST', '/api/v1/config/import', 'write', async (c, api) => {
+    const body = c.body;
+    const wrapped = body !== null && typeof body === 'object' && !Array.isArray(body)
+      && 'manifest' in (body as object);
+    const mode = wrapped && (body as { mode?: unknown }).mode === 'replace' ? 'replace' : 'merge';
+    const input = wrapped ? (body as { manifest: unknown }).manifest : body;
+    json(c.res, 200, await api.store.importFromManifest(input, mode, c.who.name));
+  }),
+
   route('GET', '/api/v1/listeners', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).listeners);
   }),

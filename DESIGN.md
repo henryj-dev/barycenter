@@ -1071,10 +1071,11 @@ resources:
 ```
 
 - **spec-only.** `id`/`version`/`revision`/status 는 export 되지 않는다.
-- **`key` 가 정본 식별자.** import 시 `key → uuid` remap 테이블 유지.
+- **`key` 가 정본 식별자.** 모델에 UUID 가 없으므로 remap 표는 없다.
 - **시크릿은 별칭만.** 대상 SecretStore 에 없으면 **plan 단계에서 실패**한다.
 - **전체 매니페스트 검증 후 단일 changeset 으로 커밋.** 순차 CRUD 금지.
-- 머지 정책: `--mode merge|replace`, `--prune` (replace 에서만).
+- 머지 정책: `--mode merge|replace` (replace 는 매니페스트에 없는 키를 지운다).
+- 정본은 JSON 이다 (`GET|POST /api/v1/config/export|import`). YAML 예시는 모양만.
 
 ### 5.6 CLI (`bary`)
 
@@ -2945,7 +2946,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.1** 골격 ✅ | (동결은 둘로 나뉜다 — §9.1.1) 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
 | **v0.2** L4 ✅ | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
 | **v0.3** 멤버십 ✅ | 이중 zone 멤버십 평면 + epoch 결박 + 헬스 프로버 + 드레인 관측 + **§6.5 커서·cut·replay 와 멤버십 드라이버 계약 확정** (§9.1) | 백엔드 down 시 reload 없이 격리되고, apply 중 헬스 변화가 경합하지 않는다 (S11 시나리오 회귀 테스트). **활성 epoch 안의 헬스 진행이 전환 중인 commit 을 깨지 않는다** |
-| **v0.4** CLI | `bary` 전 리소스 + changeset/plan/commit/apply + 트랜잭셔널 export/import | GUI 없이 전부 가능. 같은 매니페스트를 두 번 import 해도 결과가 같다 |
+| **v0.4** CLI | 트랜잭셔널 export/import ✅ (`GET|POST /api/v1/config/export|import`, `bary export`/`import`). 리소스별 하위 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다 (두 번째는 빈 patch) |
 | **v0.5** GUI slice | Listeners / Pools·Backends / Plan·Impact 3화면 + SSE | 클릭만으로 v0.3 시나리오 재현 |
 | **v0.6** TLS | `SecretStore`/`DNSProvider` 확정 → ACME 상태기계, 업로드, 자동 갱신, 세대 결박 롤백 + GUI 잔여 화면 | 무중단 갱신 관측 + 갱신 후 롤백 시 옛 인증서 복원 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |

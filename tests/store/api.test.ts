@@ -263,3 +263,22 @@ describe('DELETE /changesets/{id}', () => {
     expect(r.status).toBeGreaterThanOrEqual(400);
   });
 });
+
+describe('§5.5 export / import', () => {
+  it('export 한 것을 다시 import 하면 리비전이 안 오른다', async () => {
+    await commitAll([
+      PUT('pool', 'app', { protocolClass: 'http', algorithm: 'round_robin' }),
+      PUT('backend', 'a-11', { pool: 'app', host: '10.0.0.1', port: 80, weight: 1 }),
+    ]);
+    const first = await req('GET', '/api/v1/config/export');
+    expect(first.status).toBe(200);
+    expect(first.body.schemaVersion).toBe('1');
+    expect(first.body.resources.some((r: { kind: string }) => r.kind === 'pool')).toBe(true);
+
+    const before = (await req('GET', '/api/v1/config/head')).body.revision;
+    const again = await req('POST', '/api/v1/config/import', first.body);
+    expect(again.status).toBe(200);
+    expect(again.body.unchanged).toBe(true);
+    expect(again.body.revision).toBe(before);
+  });
+});

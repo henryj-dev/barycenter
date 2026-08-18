@@ -2,15 +2,16 @@
 /**
  * `bary` — 컨트롤 플레인 CLI (DESIGN.md §5.6)
  *
- * **v0.4 의 전체 CLI 가 아니다.** 로드맵상 CLI 는 v0.4 이고 여기 있는 것은 v0.1 API 를
- * 사람이 쓸 수 있게 감싼 최소한이다. 없는 것을 있다고 적지 않으려고 범위를 밝힌다:
- * 리소스별 하위 명령도, 대화형 편집도, export/import 도 없다.
+ * **v0.4 의 전체 CLI 가 아니다.** 리소스별 하위 명령과 대화형 편집은 아직 없다.
+ * export/import 는 있다 — 안정 키 매니페스트, 단일 changeset, 두 번 넣어도 같다.
  *
  *   bary status
  *   bary head
  *   bary get <listeners|pools|backends|routes|model|rendered>
  *   bary apply <파일.json>      매니페스트 한 장을 changeset 한 바퀴로 밀어 넣는다
  *   bary plan  <파일.json>      커밋하지 않고 영향만 본다
+ *   bary export                 spec-only 매니페스트를 stdout 에
+ *   bary import <파일.json>     단일 changeset 으로 커밋 (nginx 적용은 apply)
  *   bary rollback <리비전>      그 시점 내용으로 새 리비전을 만들고 적용한다
  *   bary cancel <오퍼레이션>   진행 중인 전환을 포기한다
  *   bary audit [n]
@@ -60,13 +61,15 @@ function must(r: Res, what: string): unknown {
 }
 
 const usage = (): never => {
-  console.error(`bary — barycenter CLI (v0.1 범위)
+  console.error(`bary — barycenter CLI
 
   bary status                    4-way 상태 · 미완 전환 · 미적용 커밋
   bary head                      전역 리비전
   bary get <무엇>                listeners | pools | backends | routes | model | rendered
   bary plan <파일.json>          커밋하지 않고 영향만 본다
   bary apply <파일.json>         changeset → plan → commit → apply 한 바퀴
+  bary export                    spec-only 매니페스트 (stdout)
+  bary import <파일.json>        단일 changeset 으로 커밋. --mode replace 는 없는 키를 지운다
   bary rollback <리비전>          그 시점 내용으로 **새 리비전**을 만들고 적용한다
   bary cancel <오퍼레이션>        진행 중인 전환을 포기한다 (활성화된 것은 못 되돌린다)
   bary audit [개수]
@@ -148,6 +151,31 @@ async function main(): Promise<void> {
       const { plan } = await upToPlan(arg ?? usage());
       // **영향을 먼저 보여 준다.** 전체 모델을 쏟으면 정작 봐야 할 것이 묻힌다.
       show({ id: plan.id, impact: plan.impact, renderDigest: plan.renderDigest });
+      return;
+    }
+    case 'export':
+      show(must(await call('GET', '/api/v1/config/export'), 'export'));
+      return;
+    case 'import': {
+      const path = arg ?? usage();
+      const mode = process.argv.includes('--mode')
+        ? process.argv[process.argv.indexOf('--mode') + 1]
+        : 'merge';
+      if (mode !== 'merge' && mode !== 'replace') {
+        console.error('--mode 는 merge 또는 replace 다');
+        process.exit(2);
+      }
+      const doc: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      const body = mode === 'replace' ? { manifest: doc, mode } : doc;
+      const out = must(await call('POST', '/api/v1/config/import', body), 'import') as {
+        unchanged: boolean; revision: string;
+      };
+      if (out.unchanged) {
+        console.error(`이미 같다 (r${out.revision})`);
+      } else {
+        console.error(`imported r${out.revision}`);
+      }
+      show(out);
       return;
     }
     case 'apply': {
