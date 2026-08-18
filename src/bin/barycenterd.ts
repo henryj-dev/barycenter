@@ -29,6 +29,8 @@ import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
 import { publishIssued } from '../control/acme-publish.js';
+import { collectSecretRoots, expandVersionRoots } from '../control/secret-roots.js';
+import { sweepSecrets } from '../dp/secret-gc.js';
 import { ControlPlane } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
 import { LocalDataplaneDriver } from '../dp/driver.js';
@@ -310,7 +312,8 @@ export async function main(): Promise<void> {
    * KMS·Vault 드라이버는 같은 인터페이스 뒤에 따로 붙는다. 지금 없는 것을 있다고
    * 적지 않는다.
    */
-  const secrets = new FsSecretStore(env('BARY_SECRETS', `${prefix}/secrets`));
+  const secretsRoot = env('BARY_SECRETS', `${prefix}/secrets`);
+  const secrets = new FsSecretStore(secretsRoot);
 
   const control = new ControlPlane(db, store, driver, election,
     { prefix, adminPort, streamAdminPort, renderCaps, engine: engineInfo, secrets });
@@ -370,6 +373,7 @@ export async function main(): Promise<void> {
    */
   const acmeOn = renderCaps.httpLua === true && env('BARY_ACME', '1') !== '0';
   let stopPublish = (): void => {};
+  let stopSecretGc = (): void => {};
   const acmeStore = new AcmeStore(db);
   const acmeRunner = new AcmeRunner({
     store: acmeStore,
@@ -424,6 +428,40 @@ export async function main(): Promise<void> {
     publishTimer.unref?.();
     stopPublish = () => clearInterval(publishTimer);
 
+    /**
+     * **시크릿 청소** (§8.3 · §8.4).
+     *
+     * 자동 갱신은 새 버전을 만들 뿐 옛 것을 안 덮는다. 인증서 하나가 90 일마다 버전
+     * 하나씩 쌓고, **그 버전들은 개인키를 담고 있다.** 세대는 이미 상한이 있는데
+     * (`retention.ts`) 시크릿은 없었다 — 자동화가 부채를 스스로 채우기 시작한 것이다.
+     *
+     * ⚠️ root 를 하나라도 놓치면 **살아 있는 개인키를 지운다.** 그 증상은 S8 이
+     * 실측했다: 열린 fd 로 트래픽은 계속 흐르고 **다음 reload 가 깨진다.** 그래서
+     * 남기는 쪽으로 틀린다 — 이름당 안전망과 최소 나이가 그 장치다.
+     */
+    const secretGcTimer = setInterval(() => {
+      void (async (): Promise<void> => {
+        if (!election.state.isLeader) return;
+        try {
+          const raw = await collectSecretRoots({ db, prefix });
+          const all = [...raw].filter((r) => !r.startsWith('@'));
+          const roots = expandVersionRoots(raw, all);
+          const out = sweepSecrets({ root: secretsRoot, roots });
+          if (out.removed.length > 0 || out.failed.length > 0) {
+            log.info('secrets.swept', {
+              removed: out.removed.length, kept: out.kept.length,
+              failed: out.failed.length,
+            });
+          }
+        } catch (e) {
+          log.error('secrets.sweep_failed', { error: (e as Error).message });
+        }
+      })();
+    }, Number(env('BARY_SECRET_GC_INTERVAL_MS', '3600000')));
+    secretGcTimer.unref?.();
+    const stopSecretGcTimer = (): void => clearInterval(secretGcTimer);
+    stopSecretGc = stopSecretGcTimer;
+
     log.info('acme.started', {
       intervalMs: Number(env('BARY_ACME_INTERVAL_MS', '30000')),
       renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
@@ -450,6 +488,7 @@ export async function main(): Promise<void> {
       prober.stop();
       acmeRunner.stop();
       stopPublish();
+      stopSecretGc();
       void election.release()
         .then(() => db.close())
         .then(() => process.exit(0));
