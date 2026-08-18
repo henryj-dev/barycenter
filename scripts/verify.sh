@@ -44,6 +44,14 @@ run "표면 (계약 고정)     " node scripts/surface.mjs --check
 # **재현물 게이트** (48차 처방 B). 39·40차에 규칙을 산문으로 세웠는데 46차에 또 어겼다 —
 # 규칙이 산문이라 안 지켜진다. 기본은 직전 커밋을 본다.
 [ $QUICK -eq 0 ] && run "재현물 (핀 검사)     " node scripts/pinned.mjs HEAD~1
+
+# **훅 — 핀 검사의 한 발을 메운다.** 위 검사는 `HEAD~1` 을 보므로 *지금 만들 커밋*을 못
+# 본다. 커밋 전에 게이트를 돌리는 이 저장소의 순서에서는 위반이 **항상 한 사이클 늦게**
+# 잡힌다 (2026-08-18 에 실제로 그렇게 놓쳤다). `commit-msg` 훅이 커밋 시점에 표식을
+# 요구한다. 훅은 커밋되지만 `core.hooksPath` 를 건 클론에서만 도니, **훅 자체가 도는지를
+# 여기서 잰다** — 안 그러면 "있는데 안 도는" 층이 된다.
+run "훅 (pre-commit)      " python3 scripts/git-hooks/test-pre-commit.py
+run "훅 (commit-msg)      " python3 scripts/git-hooks/test-commit-msg.py
 run "unit                 " npm test --silent
 run "conformance (반례)   " npm run test:conformance --silent
 run "모델 (스케줄 생성)   " npx vitest run tests/model --silent
@@ -74,6 +82,11 @@ else
     run "spike S17            " ./spike/s17/run.sh
     run "spike S18            " ./spike/s18/run.sh
     run "spike S19            " ./spike/s19/run.sh
+    # **S20 은 일부러 안 넣는다.** 8 개 중 7 개가 통과하고 하나가 실패하는데, 그 실패는
+    # 우리 코드의 결함이 아니라 **h3 를 열기 위한 선결 조건**이다(§4.5 검증기가 다중 전송을
+    # 표현해야 한다). 빨간 걸 알면서 게이트에 넣으면 빨강을 무시하는 법을 익히게 된다.
+    # 충돌 사실 자체는 h3 클라이언트 없이도 재지므로 **엔진 사실 E65 로 갈라 넣었고**,
+    # 그건 위의 `engine facts` 안에서 초록으로 산다. `./spike/s20/run.sh` 로 직접 돌린다.
   fi
 fi
 

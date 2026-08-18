@@ -13,10 +13,11 @@ COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
 MAIN="$(dirname "$COMMON")"
 
 git -C "$MAIN" config core.hooksPath scripts/git-hooks
-chmod +x "$MAIN/scripts/git-hooks/pre-commit"
+chmod +x "$MAIN/scripts/git-hooks/pre-commit" "$MAIN/scripts/git-hooks/commit-msg"
 
 echo "core.hooksPath = $(git -C "$MAIN" config core.hooksPath)"
 echo "설치됨: $MAIN/scripts/git-hooks/pre-commit"
+echo "설치됨: $MAIN/scripts/git-hooks/commit-msg"
 echo
 echo "확인:  cd $MAIN && git commit --allow-empty -m probe   → 거부돼야 정상"
 echo "⚠️  --no-verify 로는 우회됩니다. 이건 경계가 아니라 위생 장치입니다."

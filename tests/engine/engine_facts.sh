@@ -916,6 +916,107 @@ events {}
 http { server { listen 19763; location / { content_by_lua_block { this is not lua (( } } } }
 EOF
 
+# ── E65. QUIC 은 UDP 를 점유하고, 그 충돌을 아무도 안 잡는다 (§4.5 · S20) ──
+#
+# S20 이 실물 h3 클라이언트로 잰 것: 이 엔진에서 h3 는 **된다**. 그런데 §4.5 겹침
+# 검증기가 https 리스너를 **tcp 로만** 예약하므로, 같은 포트의 `udp` 리스너와의 충돌을
+# 못 본다. 여기서 그 충돌이 실제로 무엇인지 고정한다.
+#
+# **`nginx -t` 도 안 잡고 런타임도 안 죽는다.** 소켓이 둘 다 열리고, 데이터그램은
+# stream 쪽이 먹는다. h3 는 조용히 죽는다 — 운영자가 볼 수 있는 신호가 **하나도 없다.**
+# 이것이 h3 를 v0 모델에서 빼 두는 이유이고, 나중에 열 때 검증기가 갚아야 할 빚이다.
+log ""
+log "[E65] QUIC 과 UDP 의 포트 충돌 (§4.5 · S20)"
+
+if ! echo "$CONF_ARGS" | grep -q -- "--with-http_v3_module"; then
+  skip "E65" "빌드에 http_v3_module 이 없다 — 이 엔진에서는 h3 를 낼 수 없다"
+else
+  QP=19165
+  QP_HEX=$(printf '%04X' "$QP")
+
+  # E65.1 — conf 검사는 통과한다. 즉 **정적 검사로는 못 잡는다.**
+  conf_test E65.1 pass "\`listen N quic\` 과 stream \`listen N udp\` 가 같은 포트여도 nginx -t 는 통과한다 — 정적 검사로 못 잡는다" <<EOF
+events {}
+http {
+  server {
+    listen $QP ssl;
+    listen $QP quic reuseport;
+    ssl_certificate cert.pem; ssl_certificate_key key.pem;
+    return 200 "h3-http";
+  }
+}
+stream {
+  server { listen $QP udp; return "udp-stream"; }
+}
+EOF
+
+  # E65.2 — 런타임. 기동에 성공하고 UDP 소켓이 둘 열린다.
+  P=$(mkprefix E65r)
+  cat > "$P/conf/nginx.conf" <<EOF
+events {}
+error_log logs/err.log warn;
+pid logs/nginx.pid;
+http {
+  access_log off;
+  server {
+    listen $QP ssl;
+    listen $QP quic reuseport;
+    ssl_certificate cert.pem; ssl_certificate_key key.pem;
+    return 200 "h3-http";
+  }
+}
+stream {
+  server { listen $QP udp; return "udp-stream"; }
+}
+EOF
+  if ! start_ng "$P"; then
+    ok E65.2 "엔진이 기동에 실패한다 — 충돌이 런타임에 잡힌다: $(tail -1 "$P/logs/err.log" 2>/dev/null | cut -c1-110)"
+  else
+    nudp=$(cat /proc/net/udp /proc/net/udp6 2>/dev/null | awk '{print $2}' | grep -c ":$QP_HEX\$")
+    # 데이터그램을 누가 먹는가. stream 의 `return` 이 답하면 stream 이 이긴 것이다.
+    ans=$({ printf 'ping'; sleep 0.5; } | timeout 4 nc -u -w2 127.0.0.1 "$QP" 2>/dev/null | head -c 20)
+    # `grep -c` 는 못 찾아도 "0" 을 찍고 종료코드 1 을 준다. 거기에 `|| echo 0` 을 붙였더니
+    # **"0\n0"** 이 되어 `-eq` 비교가 깨졌다 — 값은 셋 다 예상대로인데 판정만 빨개졌다.
+    warn=$(grep -ciE 'duplicate|conflict|in use' "$P/logs/err.log" 2>/dev/null | head -1)
+    [ -z "$warn" ] && warn=0
+    if [ "${nudp:-0}" -ge 2 ] && [ "$ans" = "udp-stream" ] && [ "${warn:-0}" -eq 0 ]; then
+      ok E65.2 "**둘 다 bind 되고(UDP 소켓 $nudp 개) 데이터그램은 stream 이 먹는다('$ans'). 경고 0줄** — h3 는 조용히 죽는다"
+    else
+      bad E65.2 "예상 밖 (udp소켓=$nudp, 응답='$ans', 경고=$warn) — 이 사실을 다시 세워야 한다"
+    fi
+    stop_ng "$P"
+  fi
+
+  # E65.3 — 대조군. quic 만 두면 UDP 소켓은 하나다. 위의 "둘" 이 충돌의 증거가 된다.
+  P=$(mkprefix E65c)
+  cat > "$P/conf/nginx.conf" <<EOF
+events {}
+error_log logs/err.log warn;
+pid logs/nginx.pid;
+http {
+  access_log off;
+  server {
+    listen $QP ssl;
+    listen $QP quic reuseport;
+    ssl_certificate cert.pem; ssl_certificate_key key.pem;
+    return 200 "h3-http";
+  }
+}
+EOF
+  if start_ng "$P"; then
+    n1=$(cat /proc/net/udp /proc/net/udp6 2>/dev/null | awk '{print $2}' | grep -c ":$QP_HEX\$")
+    t1=$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | awk '{print $2}' | grep -c ":$QP_HEX\$")
+    if [ "${n1:-0}" -eq 1 ] && [ "${t1:-0}" -ge 1 ]; then
+      ok E65.3 "대조 — quic 만 두면 UDP 소켓은 **하나**(그리고 TCP $t1 개). 위의 '둘' 이 충돌의 증거다"
+    else
+      bad E65.3 "대조가 안 선다 (udp=$n1, tcp=$t1) — E65.2 의 '둘' 이 무엇의 증거인지 말할 수 없다"
+    fi
+    stop_ng "$P"
+  else
+    bad E65.3 "quic 단독으로도 안 뜬다 — E65.2 를 해석할 수 없다"
+  fi
+fi
+
 log ""
 log "=============================================================="
 log " PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP"

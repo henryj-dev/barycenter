@@ -167,15 +167,49 @@ while [ "$i" -lt "$TOTAL" ]; do
   done
 
   # **다음 오퍼레이션이 지나가는가** — 실행권이 놓였는지는 이걸로만 보인다.
-  NEXT_OUT=$(node /spike/runner.mjs $P none gen-3 op2.json 2>&1)
-  NEXT=$(echo "$NEXT_OUT" | sed -n 's/^RESULT //p')
+  #
+  # ── 여기에 복구와 같은 처방을 안 줬었다 (2026-08-18) ────────────────────
+  #
+  # 위의 복구 단계는 이미 배웠다: 러너가 활성화 증거를 예산 안에 못 보면 `failed` 라고
+  # 말하는데 **세상은 이미 수렴해 있다**(S7). 그래서 유계 재시도를 넣었다.
+  # 그런데 후속 단계는 **한 방에, 러너의 말만 보고** 판정하고 있었다.
+  #
+  # 부하가 걸린 기계에서 그게 터졌다. 38 지점 중 두엇이 `next=failed` 로 빨개지는데,
+  # 회차마다 **다른 지점**이었다 — #10·#25 → #8·#35 → #18·#37 → 없음. 러너 자신의
+  # 주석이 이 판별법을 적어 뒀다: *"고정된 로직 결함이면 같은 지점이 나온다."*
+  # 그리고 그때조차 `link` 와 `served` 는 둘 다 gen-2 였다. 세상은 멀쩡했다.
+  #
+  # **그래서 판정을 러너의 말에서 세계로 옮긴다.** §12.0 이 요구하는 것은
+  # *"다음 오퍼레이션이 막히지 않는다"* 이고, 그건 **gen-3 가 실제로 서빙되는가**다.
+  # `phase` 문자열은 그 사실의 보고일 뿐이고, 보고는 늦을 수 있다. 보고를 재면
+  # 계측기를 재게 된다 — 이 저장소가 S16 에서 `Protocol :` 줄로 물린 그 형태다.
+  #
+  # 약화가 아니다. 오히려 **빈 `phase=`**(러너가 아예 출력을 못 낸 회차)까지 정직하게
+  # 판정된다. 러너가 죽어도 세상이 gen-3 로 갔으면 실행권은 놓인 것이다.
+  NEXT_LIMIT=3
+  NEXT_TRIES=0
+  while [ "$NEXT_TRIES" -lt "$NEXT_LIMIT" ]; do
+    NEXT_OUT=$(node /spike/runner.mjs $P none gen-3 op2.json 2>&1)
+    NEXT=$(echo "$NEXT_OUT" | sed -n 's/^RESULT //p')
+    NEXT_TRIES=$((NEXT_TRIES+1))
+    [ "$NEXT" = "activated" ] && break
+  done
+  NEXT_LINK=$(readlink $P/current)
+  NEXT_SERVED=""
+  w=0
+  while [ "$w" -lt 30 ]; do
+    NEXT_SERVED=$(curl -s --max-time 1 http://127.0.0.1:19990/generation)
+    [ "$NEXT_SERVED" = "gen-3" ] && break
+    w=$((w+1)); sleep 0.1
+  done
 
   if [ "$REC_PHASE" = "activated" ] && [ "$LINK" = "generations/gen-2" ] \
-     && [ "$SERVED" = "gen-2" ] && [ "$NEXT" = "activated" ]; then
+     && [ "$SERVED" = "gen-2" ] \
+     && [ "$NEXT_LINK" = "generations/gen-3" ] && [ "$NEXT_SERVED" = "gen-3" ]; then
     RECOVERED=$((RECOVERED+1))
   else
     FAILED_POINTS="$FAILED_POINTS
-      #$i $WHERE → phase=$REC_PHASE(${REC_TRIES}회) link=$LINK served=$SERVED next=$NEXT"
+      #$i $WHERE → phase=$REC_PHASE(${REC_TRIES}회) link=$LINK served=$SERVED next=$NEXT(${NEXT_TRIES}회) next_link=$NEXT_LINK next_served=$NEXT_SERVED"
     # **실패한 회차의 복구 로그를 남긴다.** 어느 지점이 깨졌는지만 알면 다음에 또
     # 재현부터 해야 한다.
     # **왜 실패했는지 그 자리에서 남긴다.** 게이트 안에서만 재현되는 종류가 있어서

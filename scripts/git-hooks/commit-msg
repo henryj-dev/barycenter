@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""`src/` 를 바꾸는 커밋에 재현물 표식을 요구한다 — **커밋이 만들어지기 전에**.
+
+**왜 있나.** `scripts/pinned.mjs` 가 이미 같은 규칙을 검사한다. 그런데 `verify.sh` 는 그걸
+`HEAD~1` 기준으로 돌리므로, **검사하는 대상은 언제나 이미 만들어진 커밋**이다. 커밋 전에
+게이트를 돌리는 이 저장소의 작업 순서에서는 **내가 지금 만들 커밋을 절대 못 본다** — 다음
+사이클에 가서야 빨개진다.
+
+2026-08-18 에 실제로 그 일이 났다. 세대 보존 커밋이 `src/` 둘을 바꾸면서 표식을 안 달았고,
+커밋 **전**에 돌린 게이트는 초록이었다(그때 HEAD 는 그 전 커밋이었으니까). 다음 사이클의
+게이트가 그제서야 잡았는데, 그때는 이미 push 된 뒤였다.
+
+**게이트가 한 발 늦다는 것 자체가 결함이다.** 이 훅이 그 한 발을 메운다.
+
+⚠️ **한계 — `pinned.mjs` 를 대신하지 않는다.**
+  · 여기서는 **표식의 존재와 형식만** 본다. 표식이 가리키는 테스트를 부모 트리에 대고
+    돌려 빨간지 확인하는 것은 여전히 `pinned.mjs` 의 몫이다. 훅은 빨라야 하고, 커밋마다
+    테스트를 돌리면 아무도 안 쓴다.
+  · `git commit --no-verify` 로 우회된다. git 설계상 막을 수 없다.
+  · `core.hooksPath` 를 건 클론에서만 돈다 → `scripts/git-hooks/install.sh`.
+  · 즉 이건 **경계가 아니라 앞당김**이다. 최종 판정은 `verify.sh` 가 한다.
+"""
+import re
+import subprocess
+import sys
+import os
+
+MSG_FILE = sys.argv[1] if len(sys.argv) > 1 else None
+
+
+def git(*args):
+    return subprocess.run(
+        ["git", *args], capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def main():
+    if MSG_FILE is None:
+        return 0
+
+    # 머지 커밋은 건너뛴다 — `pinned.mjs` 와 같은 이유다. 두 부모에 대한 diff 는
+    # "이 커밋이 무엇을 바꿨나" 를 말하지 않고, 실제 변경은 각 커밋에서 이미 검사됐다.
+    git_dir = git("rev-parse", "--git-dir")
+    if git_dir and os.path.exists(os.path.join(git_dir, "MERGE_HEAD")):
+        return 0
+
+    try:
+        with open(MSG_FILE, encoding="utf-8") as f:
+            raw = f.read()
+    except OSError:
+        return 0
+
+    # `fixup!`/`squash!` 는 최종 메시지가 나중에 정해진다. 여기서 요구하면 rebase 가 막힌다.
+    first = next((l for l in raw.splitlines() if l.strip()), "")
+    if first.startswith(("fixup!", "squash!", "amend!")):
+        return 0
+
+    # 주석 줄(`#`)은 메시지가 아니다.
+    message = "\n".join(l for l in raw.splitlines() if not l.startswith("#"))
+
+    # **스테이지된 것만 본다.** 작업 트리의 미스테이지 수정은 이 커밋에 안 들어간다.
+    has_head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], capture_output=True,
+    ).returncode == 0
+    args = ["diff", "--cached", "--name-only"]
+    if has_head:
+        args.append("HEAD")
+    changed = git(*args, "--", "src/")
+    if not changed:
+        return 0
+
+    marks = [m.group(1).strip()
+             for m in re.finditer(r"^Pinned-by:\s*(.+)$", message, re.M)]
+
+    if not marks:
+        sys.stderr.write(
+            "\n커밋을 막았다 — `src/` 를 바꾸는데 `Pinned-by:` 가 없다.\n\n"
+            f"  바뀐 것: {', '.join(changed.splitlines()[:5])}\n\n"
+            '  Pinned-by: tests/unit/foo.test.ts -t "이름"   재현물이 있다\n'
+            "  Pinned-by: none — <근거>                      없어도 되는 이유를 적는다\n\n"
+            "40차 규칙: **검증물은 커밋된 산출물이어야 한다.**\n"
+            "`verify.sh` 의 핀 검사는 `HEAD~1` 을 보므로 **지금 만들 커밋을 못 본다** —\n"
+            "그 한 발을 이 훅이 메운다. 최종 판정은 여전히 `scripts/pinned.mjs` 다.\n\n"
+            "정말 우회해야 하면 `git commit --no-verify` (그러면 다음 게이트가 잡는다).\n",
+        )
+        return 1
+
+    for mark in marks:
+        if mark.startswith("none") and not re.match(r"^none\s+[—-]\s+\S", mark):
+            sys.stderr.write(
+                f"\n커밋을 막았다 — `Pinned-by: {mark}`\n\n"
+                "  맨 `none` 은 근거가 아니다. `none — <근거>` 형식으로 적어라.\n",
+            )
+            return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
