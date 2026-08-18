@@ -18,6 +18,7 @@
  *   3. **강제 변환하지 않는다.** `"8080"` 은 8080 이 아니라 오류다. 변환은 의미를 바꾼다.
  */
 import type {
+  AcmeIntent,
   InboundProxyProtocol,
   Backend,
   Certificate,
@@ -464,15 +465,50 @@ function decodeCertificate(iss: Issues, v: unknown, path: string): Certificate |
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['key', 'materialRef', 'chainDigest', 'keyDigest']);
+  noExtraKeys(iss, v, path, ['key', 'materialRef', 'chainDigest', 'keyDigest', 'acme']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
-  const materialRef = required(iss, v, 'materialRef', path, () => str(iss, v['materialRef'], `${path}.materialRef`));
-  const chainDigest = required(iss, v, 'chainDigest', path, () => str(iss, v['chainDigest'], `${path}.chainDigest`));
-  const keyDigest = required(iss, v, 'keyDigest', path, () => str(iss, v['keyDigest'], `${path}.keyDigest`));
-  if (key === undefined || materialRef === undefined || chainDigest === undefined || keyDigest === undefined) {
+  const materialRef = optional(v['materialRef'], () => str(iss, v['materialRef'], `${path}.materialRef`));
+  const chainDigest = optional(v['chainDigest'], () => str(iss, v['chainDigest'], `${path}.chainDigest`));
+  const keyDigest = optional(v['keyDigest'], () => str(iss, v['keyDigest'], `${path}.keyDigest`));
+  const acme = optional(v['acme'], () => decodeAcmeIntent(iss, v['acme'], `${path}.acme`));
+  if (key === undefined) return undefined;
+
+  // **자료는 셋이 함께 온다.** 참조만 있고 digest 가 없으면 세대 결박을 검증할 수 없고,
+  // digest 만 있고 참조가 없으면 무엇의 digest 인지 알 수 없다. 반쪽을 허용하면 그
+  // 반쪽이 언젠가 들어온다.
+  const parts = [materialRef, chainDigest, keyDigest].filter((x) => x !== undefined).length;
+  if (parts !== 0 && parts !== 3) {
+    iss.add('missing_field', path,
+      'materialRef·chainDigest·keyDigest 는 셋 다 있거나 셋 다 없어야 한다');
     return undefined;
   }
-  return { key, materialRef, chainDigest, keyDigest };
+  // 자료도 없고 ACME 의도도 없으면 이 인증서는 **아무것도 아니다.**
+  if (parts === 0 && acme === undefined) {
+    iss.add('missing_field', path,
+      '자료(materialRef)도 ACME 의도(acme)도 없다 — 이 인증서는 아무 일도 못 한다');
+    return undefined;
+  }
+
+  return {
+    key,
+    ...(materialRef === undefined ? {} : { materialRef }),
+    ...(chainDigest === undefined ? {} : { chainDigest }),
+    ...(keyDigest === undefined ? {} : { keyDigest }),
+    ...(acme === undefined ? {} : { acme }),
+  };
+}
+
+function decodeAcmeIntent(iss: Issues, v: unknown, path: string): AcmeIntent | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['account', 'domains']);
+  const account = required(iss, v, 'account', path, () => str(iss, v['account'], `${path}.account`));
+  const domains = required(iss, v, 'domains', path, () =>
+    arrayOf(iss, v['domains'], `${path}.domains`, (d, at) => str(iss, d, at)));
+  if (account === undefined || domains === undefined) return undefined;
+  return { account, domains };
 }
 
 function decodeTlsPolicy(iss: Issues, v: unknown, path: string): TlsPolicy | undefined {

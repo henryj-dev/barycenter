@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 86 심볼 · sha256:ca21bd6d3ad59065f26a30d239ce5754d4bffb2a2315c81c1668d82c9ece82e3
+# 87 심볼 · sha256:9a6898e4b5e83c10caaf27ce3c929059ca8b8dc94eb0363da1b46b76991248e9
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -8,6 +8,11 @@
 
 ── ALL_APPLY_PHASES
 ALL_APPLY_PHASES: readonly ApplyPhase[]
+── AcmeIntent
+export type AcmeIntent = {
+    account: string;
+    domains: string[];
+};
 ── ActivationEvidence
 export type ActivationEvidence = {
     acceptingGeneration: string | undefined;
@@ -51,9 +56,10 @@ export type Backend = {
 ── Certificate
 export type Certificate = {
     key: string;
-    materialRef: string;
-    chainDigest: string;
-    keyDigest: string;
+    materialRef?: string;
+    chainDigest?: string;
+    keyDigest?: string;
+    acme?: AcmeIntent;
 };
 ── Checked
 export type Checked = {
@@ -256,7 +262,7 @@ export type ModelIssue = {
     message: string;
 };
 ── ModelIssueCode
-export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range';
+export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range';
 ── ModelValidationError
 export declare class ModelValidationError extends Error {
     readonly issues: ModelIssue[];

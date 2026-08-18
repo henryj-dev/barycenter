@@ -51,6 +51,10 @@ export type ModelIssueCode =
   | 'invalid_sni_host'
   /** 사용자 라우트가 ACME http-01 예약 경로를 가로챈다 (§8.2). */
   | 'acme_path_reserved'
+  /** 자료 없는 인증서를 바인딩했다 — ACME 발급 전이다. */
+  | 'certificate_has_no_material'
+  /** ACME 의도가 자기 도메인을 안 덮거나 모양이 틀렸다. */
+  | 'invalid_acme_intent'
   // ── 아래는 런타임 해독기(`src/model/decode.ts`)가 낸다 ──
   /** 타입이 다르다. 강제 변환하지 않는다. */
   | 'invalid_type'
@@ -383,6 +387,55 @@ export function validateModel(
       }
     }
 
+    // **자료 없는 인증서는 바인딩할 수 없다.**
+    //
+    // ACME 로 관리되는 인증서는 첫 발급 전에 자료가 없다. 그건 정당한 상태이고 모델이
+    // 표현해야 하지만, **렌더러가 낼 것이 없다** — 그대로 두면 세대가 `nginx -t` 에서
+    // "파일이 없다" 로 죽고 원인은 apply 실패로만 보인다.
+    //
+    // 그래서 첫 발급은 두 단계다: ① 의도만 커밋 → 발급 ② 발급된 참조로 바인딩.
+    const noMaterial = new Set(
+      model.certificates.filter((c) => c.materialRef === undefined).map((c) => c.key));
+
+    const usedBy = (certKey: string, subject: string): void => {
+      if (!noMaterial.has(certKey)) return;
+      issues.push({
+        code: 'certificate_has_no_material',
+        subjects: [subject, certKey],
+        message:
+          `'${subject}' 가 자료 없는 인증서 '${certKey}' 를 쓴다. ACME 발급 전이라 ` +
+          `제시할 것이 없다 — 발급된 뒤에 바인딩한다`,
+      });
+    };
+
+    for (const l of model.listeners) {
+      if (l.protocol !== 'https' || l.tls === undefined) continue;
+      usedBy(l.tls.defaultCertificate, `리스너 '${l.key}'`);
+    }
+
+    // ACME 의도의 모양. 도메인이 비어 있으면 스케줄러가 무엇을 주문할지 모른다.
+    for (const c of model.certificates) {
+      const acme = c.acme;
+      if (acme === undefined) continue;
+      if (acme.domains.length === 0) {
+        issues.push({
+          code: 'invalid_acme_intent',
+          subjects: [c.key],
+          message: `인증서 '${c.key}' 의 ACME 의도에 도메인이 없다`,
+        });
+      }
+      for (const d of acme.domains) {
+        const parsed = parseHostPattern(d);
+        if (!parsed.ok) {
+          issues.push({
+            code: 'invalid_acme_intent',
+            subjects: [c.key],
+            message: `인증서 '${c.key}' 의 ACME 도메인 '${d}': ${parsed.message}`,
+          });
+        }
+      }
+    }
+
     const bindingsByListener = new Map<string, SniCertificateBinding[]>();
     for (const b of model.sniBindings) {
       const l = listenerByKey.get(b.listener);
@@ -411,6 +464,7 @@ export function validateModel(
           message: `SNI 바인딩 '${b.key}' 가 존재하지 않는 인증서 '${b.certificate}' 를 참조한다`,
         });
       }
+      usedBy(b.certificate, `SNI 바인딩 '${b.key}'`);
       // **호스트 모양.** exact 아니면 `*.suffix` 1라벨 와일드카드뿐이다. `*.a.*.b` 나
       // 맨 `*` 를 허용하면 렌더가 낼 정규식이 없다.
       for (const h of b.hosts) {

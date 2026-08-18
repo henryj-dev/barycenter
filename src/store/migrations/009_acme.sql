@@ -40,7 +40,10 @@ CREATE TABLE acme_accounts (
   directory_url   text        NOT NULL,
   contact         text[]      NOT NULL DEFAULT '{}',
   -- **SecretStore 참조다.** 계정 개인키가 여기 없다 (§4.8).
-  account_key_ref text        NOT NULL CHECK (account_key_ref ~ '^store://[A-Za-z0-9._-]+@[a-f0-9]{16,64}$'),
+  --
+  -- 스킴이 `key://` 인 것이 중요하다 — 계정 키는 **인증서가 없는 키**이고, 인증서 자료
+  -- 참조(`store://`)와 섞이면 안 된다. 스킴을 가르면 섞이는 것이 표현 불가능하다.
+  account_key_ref text        NOT NULL CHECK (account_key_ref ~ '^key://[A-Za-z0-9._-]+@[a-f0-9]{16,64}$'),
   -- CA 가 준 계정 URL(kid). 없으면 아직 등록 전이다.
   account_url     text,
   tos_agreed_at   timestamptz,
@@ -66,9 +69,12 @@ CREATE TABLE acme_orders (
   certificate_url text,
   -- 발급 성공 시 SecretStore 참조. 게시(changeset)는 별도 사건이다.
   issued_ref      text CHECK (issued_ref IS NULL OR issued_ref ~ '^store://[A-Za-z0-9._-]+@[a-f0-9]{16,64}$'),
-  -- 이 주문이 쓰는 인증서 개인키. **주문 시작 시 만들어 SecretStore 에 넣는다** —
-  -- CSR 에 서명한 키와 발급된 인증서가 짝이어야 하므로 재시작을 넘어 살아 있어야 한다.
-  cert_key_ref    text CHECK (cert_key_ref IS NULL OR cert_key_ref ~ '^store://[A-Za-z0-9._-]+@[a-f0-9]{16,64}$'),
+  -- 이 주문이 쓰는 인증서 개인키. **finalize 전에 만들어 SecretStore 에 넣는다** —
+  -- CSR 에 서명한 키와 발급된 인증서가 짝이어야 하고, 그 사이에 죽으면 발급된 인증서가
+  -- 짝을 잃어 **새 주문을 내야 한다.** CA 의 레이트리밋이 그걸 센다.
+  --
+  -- 아직 인증서가 없으므로 `key://` 다.
+  cert_key_ref    text CHECK (cert_key_ref IS NULL OR cert_key_ref ~ '^key://[A-Za-z0-9._-]+@[a-f0-9]{16,64}$'),
 
   attempts        integer          NOT NULL DEFAULT 0,
   -- **다음에 볼 시각.** 이게 없으면 실패한 주문을 매 틱마다 다시 던지고 CA 의
@@ -134,3 +140,31 @@ CREATE TABLE acme_challenges (
 -- 고아 스캔이 볼 것: 놓았는데 안 치운 것.
 CREATE INDEX acme_challenge_orphan_idx ON acme_challenges (placed_at)
   WHERE placed_at IS NOT NULL AND cleaned_at IS NULL;
+
+-- ── 인증서의 ACME 의도 (§4.6 · ADR-ACME) ────────────────────────────────
+--
+-- **의도는 설정이고 주문은 운영 상태다.** "이 인증서를 이 도메인들로 자동 갱신한다" 는
+-- 사람이 정하는 것이라 리비전에 남는다. 그 결과 생기는 주문·챌린지는 위 표들에 산다.
+--
+-- 그리고 **자료가 없을 수 있게 된다.** ACME 로 관리되는 인증서는 첫 발급 전에 자료가
+-- 없고, 그걸 표현 못 하면 "인증서를 받으려면 인증서가 있어야 한다" 가 된다.
+ALTER TABLE certificates ADD COLUMN acme_account text;
+ALTER TABLE certificates ADD COLUMN acme_domains text[];
+ALTER TABLE certificates ALTER COLUMN material_ref DROP NOT NULL;
+ALTER TABLE certificates ALTER COLUMN chain_digest DROP NOT NULL;
+ALTER TABLE certificates ALTER COLUMN key_digest   DROP NOT NULL;
+
+-- **자료는 셋이 함께 온다.** 참조만 있고 digest 가 없으면 세대 결박을 검증할 수 없고,
+-- digest 만 있고 참조가 없으면 무엇의 digest 인지 알 수 없다.
+ALTER TABLE certificates ADD CONSTRAINT certificate_material_together CHECK (
+  (material_ref IS NULL AND chain_digest IS NULL AND key_digest IS NULL)
+  OR (material_ref IS NOT NULL AND chain_digest IS NOT NULL AND key_digest IS NOT NULL));
+
+-- ACME 의도도 짝이다. 계정만 있고 도메인이 없으면 무엇을 주문할지 모른다.
+ALTER TABLE certificates ADD CONSTRAINT certificate_acme_together CHECK (
+  (acme_account IS NULL AND acme_domains IS NULL)
+  OR (acme_account IS NOT NULL AND acme_domains IS NOT NULL AND cardinality(acme_domains) > 0));
+
+-- **자료도 의도도 없는 인증서는 아무것도 아니다.**
+ALTER TABLE certificates ADD CONSTRAINT certificate_useful CHECK (
+  material_ref IS NOT NULL OR acme_account IS NOT NULL);

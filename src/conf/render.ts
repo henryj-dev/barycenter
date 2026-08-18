@@ -481,6 +481,12 @@ function sslProtocols(min: TlsVersion, max: TlsVersion | undefined): ConfValue[]
 function tlsNodes(
   cert: Certificate, min: TlsVersion, max: TlsVersion | undefined,
 ): ConfNode[] {
+  // **자료 없는 인증서가 여기 오면 터진다.** ACME 로 아직 못 받은 인증서를 바인딩하는
+  // 것은 검증기가 막는다(`certificate_has_no_material`) — 렌더러가 조용히 빈 경로를
+  // 내면 `nginx -t` 가 "파일이 없다" 로 죽고, 원인은 apply 실패로만 보인다.
+  if (cert.materialRef === undefined) {
+    throw new Error(`자료 없는 인증서가 렌더에 도달했다: '${cert.key}' (ACME 발급 전이다)`);
+  }
   const paths = certPaths(cert.key, parseRef(cert.materialRef).version);
   return [
     directive('ssl_certificate', [lit(paths.chain)]),

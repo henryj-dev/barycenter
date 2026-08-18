@@ -124,6 +124,9 @@ export class ControlPlane {
     const now = Date.now();
     const samples: LabeledGauge['samples'] = [];
     for (const cert of model.certificates) {
+      // 자료가 없으면 만료를 말할 수 없다. **0 으로 채우지 않는다** — "아직 발급 전" 이
+      // "이미 만료" 로 보이면 없는 알람보다 나쁜 거짓 알람이 된다.
+      if (cert.materialRef === undefined) continue;
       const f = secrets.facts(cert.materialRef);
       if (f === undefined) continue;
       samples.push({
@@ -145,17 +148,22 @@ export class ControlPlane {
    * SecretStore 를 요구하지 않는다.
    */
   private certificateFiles(model: Model): { files: Record<string, string>; modes?: Record<string, number> } {
-    if (model.certificates.length === 0) return { files: {} };
+    // **자료가 있는 것만 세대에 넣는다.** ACME 발급 전 인증서는 넣을 바이트가 없고,
+    // 바인딩도 안 돼 있으므로(검증기) 세대가 그걸 참조하지도 않는다.
+    const withMaterial = model.certificates.filter(
+      (c): c is typeof c & { materialRef: string; chainDigest: string; keyDigest: string } =>
+        c.materialRef !== undefined && c.chainDigest !== undefined && c.keyDigest !== undefined);
+    if (withMaterial.length === 0) return { files: {} };
     const store = this.opts.secrets;
     if (store === undefined) {
       // **fail closed.** 자료 없이 게시하면 세대가 `nginx -t` 에서 죽고, 실패 이유가
       // "설정이 이상하다" 로 보인다. 진짜 이유는 여기다.
       throw new Error(
-        `모델이 인증서 ${model.certificates.length}개를 참조하는데 SecretStore 가 없다. ` +
+        `모델이 자료 있는 인증서 ${withMaterial.length}개를 참조하는데 SecretStore 가 없다. ` +
         `개인키 없는 세대는 활성화할 수 없다 (§4.8)`,
       );
     }
-    return certificateFiles(model.certificates, store);
+    return certificateFiles(withMaterial, store);
   }
 
   /**

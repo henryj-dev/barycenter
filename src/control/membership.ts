@@ -133,6 +133,14 @@ server {
             ngx.req.read_body()
             local body = ngx.req.get_body_data() or ""
             local d = ngx.shared.${ACME_DICT}
+            -- 제거는 별도 인자다. TTL 에만 기대면 "치웠다" 를 언제 적을지 알 수 없고,
+            -- 그러면 고아 목록이 안 줄어든다.
+            local rm = ngx.var.arg_remove
+            if rm and rm ~= "" then
+                d:delete("tok:" .. rm)
+                ngx.print("removed")
+                return
+            end
             local n = 0
             for line in body:gmatch("[^\\n]+") do
                 local token, value = line:match("^([^=]+)=(.*)$")

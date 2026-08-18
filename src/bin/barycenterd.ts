@@ -26,6 +26,8 @@ import { TokenAuth, type TokenSpec } from '../api/auth.js';
 import { render } from '../conf/render.js';
 import { encodeSlots, httpAdminConf, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
+import { AcmeStore } from '../control/acme-store.js';
+import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
 import { ControlPlane } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
 import { LocalDataplaneDriver } from '../dp/driver.js';
@@ -353,6 +355,54 @@ export async function main(): Promise<void> {
     log.info('prober.disabled', { reason: '멤버십 평면이 꺼진 배포 — 반영할 곳이 없다' });
   }
 
+  /**
+   * ACME 갱신 러너 (§8.2 · ADR-ACME).
+   *
+   * **`httpLua` 가 있어야 돈다.** 챌린지는 shared dict 에서 서빙되고(ADR-ACME ①), 그게
+   * 없으면 토큰을 conf 에 실어야 한다 — 갱신 한 번에 세대 전환 한 번이고 그 대가는
+   * 실측돼 있다(트래픽 2.6%). **없는 경로를 있는 척하지 않는다.**
+   *
+   * **리더만 돈다.** 스탠바이가 함께 주문하면 nonce 가 서로를 깨뜨린다.
+   */
+  const acmeOn = renderCaps.httpLua === true && env('BARY_ACME', '1') !== '0';
+  const acmeStore = new AcmeStore(db);
+  const acmeRunner = new AcmeRunner({
+    store: acmeStore,
+    secrets,
+    placer: new HttpChallengePlacer(adminPort),
+    renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
+  });
+  if (acmeOn) {
+    acmeRunner.start(
+      Number(env('BARY_ACME_INTERVAL_MS', '30000')),
+      () => election.state.isLeader,
+      async () => {
+        // 인증서 목록은 **head 리비전**에서 온다 — 의도는 설정이고, 주문만 운영 상태다.
+        const head = await store.head();
+        const model = await store.modelAt(head.revision);
+        const ids = new Map((await db.query('SELECT id, key FROM certificates')).rows
+          .map((r) => [String(r['key']), String(r['id'])]));
+        return model.certificates.flatMap((c) => {
+          const id = ids.get(c.key);
+          if (id === undefined) return [];
+          return [{
+            key: c.key, id,
+            ...(c.materialRef === undefined ? {} : { materialRef: c.materialRef }),
+            ...(c.acme === undefined ? {} : { acme: c.acme }),
+          }];
+        });
+      },
+    );
+    log.info('acme.started', {
+      intervalMs: Number(env('BARY_ACME_INTERVAL_MS', '30000')),
+      renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
+    });
+  } else {
+    log.info('acme.disabled', {
+      reason: renderCaps.httpLua === true ? 'BARY_ACME=0' : '엔진에 http lua 가 없다 — 챌린지를 서빙할 곳이 없다',
+    });
+  }
+
   const auth = new TokenAuth(loadTokens());
 
   const server = createApi({ db, store, control, auth, election, secrets });
@@ -366,6 +416,7 @@ export async function main(): Promise<void> {
       // **물러난 것을 적고 나간다.** 락은 세션 종료로 어차피 풀리지만, 깨끗하게 물러난
       // 것과 죽은 것을 나중에 구분할 수 있어야 한다.
       prober.stop();
+      acmeRunner.stop();
       void election.release()
         .then(() => db.close())
         .then(() => process.exit(0));

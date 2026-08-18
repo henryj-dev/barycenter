@@ -236,13 +236,24 @@ async function readModel(c: Queryable): Promise<Model> {
   }));
 
   const certificates = (await c.query(
-    `SELECT key, material_ref, chain_digest, key_digest FROM certificates ORDER BY key`,
-  )).rows.map((r): Certificate => ({
-    key: text(r, 'key'),
-    materialRef: text(r, 'material_ref'),
-    chainDigest: text(r, 'chain_digest'),
-    keyDigest: text(r, 'key_digest'),
-  }));
+    `SELECT key, material_ref, chain_digest, key_digest, acme_account, acme_domains
+       FROM certificates ORDER BY key`,
+  )).rows.map((r): Certificate => {
+    const ref = maybeText(r, 'material_ref');
+    const account = maybeText(r, 'acme_account');
+    return {
+      key: text(r, 'key'),
+      // 자료는 셋이 함께 온다 (DB CHECK `certificate_material_together`).
+      ...(ref === undefined ? {} : {
+        materialRef: ref,
+        chainDigest: text(r, 'chain_digest'),
+        keyDigest: text(r, 'key_digest'),
+      }),
+      ...(account === undefined ? {} : {
+        acme: { account, domains: (r['acme_domains'] as string[] | null) ?? [] },
+      }),
+    };
+  });
 
   const tlsPolicies = (await c.query(
     `SELECT key, min_version, max_version FROM tls_policies ORDER BY key`,
@@ -480,14 +491,18 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       // 받아 두고 돌려준 불변 버전이다 (§4.8). 개인키는 이 경로를 지나지 않는다.
       await c.query(
         `INSERT INTO certificates (id,key,name,material_ref,chain_digest,key_digest,
+                                   acme_account,acme_domains,
                                    created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$6,$7)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$8,$9)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, material_ref=EXCLUDED.material_ref,
            chain_digest=EXCLUDED.chain_digest, key_digest=EXCLUDED.key_digest,
+           acme_account=EXCLUDED.acme_account, acme_domains=EXCLUDED.acme_domains,
            version=certificates.version+1, updated_at=now(),
            updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
-        [op.key, b['name'] ?? op.key, b['materialRef'], b['chainDigest'], b['keyDigest'],
+        [op.key, b['name'] ?? op.key,
+          b['materialRef'] ?? null, b['chainDigest'] ?? null, b['keyDigest'] ?? null,
+          obj(b['acme'])['account'] ?? null, obj(b['acme'])['domains'] ?? null,
           by, revision],
       );
       return;

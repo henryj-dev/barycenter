@@ -193,7 +193,9 @@ const ROUTES: Route[] = [
     json(c.res, 200, certs.map((cert) => {
       // **사실은 참조에서 온다.** 설정에 적힌 값을 믿으면 클라이언트가 만료일을
       // 거짓말할 수 있고, 그러면 만료 알람이 안 울린다 (§4.6 · §7.2).
-      const f = secrets?.facts(cert.materialRef);
+      // 자료가 없으면(ACME 발급 전) 사실도 없다. **목록에서 빼지 않는다** — 발급을
+      // 기다리는 인증서가 안 보이면 "왜 안 나오지" 를 묻게 된다.
+      const f = cert.materialRef === undefined ? undefined : secrets?.facts(cert.materialRef);
       if (f === undefined) return { ...cert, facts: null };
       return {
         ...cert,

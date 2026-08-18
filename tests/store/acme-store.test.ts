@@ -23,6 +23,8 @@ let certA = '';
 let certB = '';
 
 const REF = (n: string): string => `store://${n}@${'a'.repeat(32)}`;
+/** 계정·주문 키는 **인증서가 없는 키**라 스킴이 다르다 — 섞이면 DB 가 막는다. */
+const KEYREF = (n: string): string => `key://${n}@${'a'.repeat(32)}`;
 
 /** 인증서 행을 직접 넣는다 — 여기서 재는 것은 changeset 경로가 아니다. */
 async function makeCert(key: string): Promise<string> {
@@ -54,21 +56,21 @@ beforeEach(async () => {
   certA = await makeCert('cert-a');
   certB = await makeCert('cert-b');
   accountId = await store.upsertAccount({
-    key: 'le', directoryUrl: 'https://ca.test/dir', accountKeyRef: REF('acct'), by: 't',
+    key: 'le', directoryUrl: 'https://ca.test/dir', accountKeyRef: KEYREF('acct'), by: 't',
   });
 });
 
 describe('계정', () => {
   it('디렉토리당 하나다 — 두 번 넣어도 같은 계정', async () => {
     const again = await store.upsertAccount({
-      key: 'le2', directoryUrl: 'https://ca.test/dir', accountKeyRef: REF('acct'), by: 't',
+      key: 'le2', directoryUrl: 'https://ca.test/dir', accountKeyRef: KEYREF('acct'), by: 't',
     });
     expect(again).toBe(accountId);
   });
 
   it('**개인키가 아니라 참조를 든다** (§4.8)', async () => {
     const acct = await store.account('https://ca.test/dir');
-    expect(acct?.accountKeyRef).toMatch(/^store:\/\/acct@[a-f0-9]{32}$/);
+    expect(acct?.accountKeyRef).toMatch(/^key:\/\/acct@[a-f0-9]{32}$/);
     // 자료를 담을 컬럼 자체가 없다.
     const cols = (await db.query(
       `SELECT column_name FROM information_schema.columns WHERE table_name='acme_accounts'`,
@@ -106,8 +108,8 @@ describe('주문은 인증서당 하나만 살아 있다', () => {
 
   it('끝난 주문은 새 주문을 막지 않는다 — 그래야 갱신이 돈다', async () => {
     const first = await store.openOrder({ accountId, certificateId: certA, domains: ['a.test'] });
-    await store.setCertKeyRef(first.id, REF('k'));
-    await store.markIssued(first.id, REF('issued'), REF('k'));
+    await store.setCertKeyRef(first.id, KEYREF('k'));
+    await store.markIssued(first.id, REF('issued'), KEYREF('k'));
     const next = await store.openOrder({ accountId, certificateId: certA, domains: ['a.test'] });
     expect(next.created).toBe(true);
     expect(next.id).not.toBe(first.id);
@@ -161,8 +163,8 @@ describe('실행권 — 둘이 같은 주문을 몰면 nonce 가 서로를 깨�
   it('**종단 상태는 실행권을 못 든다** — 들고 있으면 아무도 못 집는다', async () => {
     const o = await store.openOrder({ accountId, certificateId: certA, domains: ['a.test'] });
     await store.claimDue('leader-1');
-    await store.setCertKeyRef(o.id, REF('k'));
-    await store.markIssued(o.id, REF('issued'), REF('k'));
+    await store.setCertKeyRef(o.id, KEYREF('k'));
+    await store.markIssued(o.id, REF('issued'), KEYREF('k'));
     const row = (await db.query('SELECT claimed_by FROM acme_orders WHERE id=$1', [o.id])).rows[0];
     expect(row?.['claimed_by']).toBeNull();
   });
@@ -249,8 +251,8 @@ describe('챌린지와 고아 정리 (§8.2)', () => {
       authzUrl: 'u', challengeUrl: 'c',
     });
     await store.markPlaced(id);
-    await store.setCertKeyRef(o.id, REF('k'));
-    await store.markIssued(o.id, REF('issued'), REF('k'));
+    await store.setCertKeyRef(o.id, KEYREF('k'));
+    await store.markIssued(o.id, REF('issued'), KEYREF('k'));
     // 성공해도 치워야 한다 — §8.2 는 "성공/실패와 무관하게" 라고 적었다.
     expect((await store.orphans(3600)).map((c) => c.id)).toEqual([id]);
   });
@@ -279,8 +281,8 @@ describe('챌린지와 고아 정리 (§8.2)', () => {
       authzUrl: 'u', challengeUrl: 'c',
     });
     await store.markPlaced(id);
-    await store.setCertKeyRef(o.id, REF('k'));
-    await store.markIssued(o.id, REF('issued'), REF('k'));
+    await store.setCertKeyRef(o.id, KEYREF('k'));
+    await store.markIssued(o.id, REF('issued'), KEYREF('k'));
     await store.markCleaned(id);
     expect(await store.orphans(3600)).toHaveLength(0);
   });
@@ -311,8 +313,8 @@ describe('챌린지와 고아 정리 (§8.2)', () => {
 describe('발급 결과는 설정이 아니다', () => {
   it('**issued 는 참조만 든다** — 게시는 별도 사건이다 (changeset)', async () => {
     const o = await store.openOrder({ accountId, certificateId: certA, domains: ['a.test'] });
-    await store.setCertKeyRef(o.id, REF('newkey'));
-    await store.markIssued(o.id, REF('newcert'), REF('newkey'));
+    await store.setCertKeyRef(o.id, KEYREF('newkey'));
+    await store.markIssued(o.id, REF('newcert'), KEYREF('newkey'));
     const row = await store.get(o.id);
     expect(row?.issuedRef).toMatch(/^store:\/\/newcert@/);
     // **`certificates.material_ref` 는 아직 안 바뀐다.** 발급과 게시는 다르다.

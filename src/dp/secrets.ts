@@ -21,6 +21,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileS
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
+import { createPrivateKey } from 'node:crypto';
+
 import { inspectMaterial, type CertFacts } from './certinfo.js';
 
 /** 인증서 한 벌. */
@@ -42,6 +44,32 @@ export type SecretRef = {
   keyDigest: string;
 };
 
+/**
+ * **아직 인증서가 없는 개인키** 참조. `key://<name>@<version>`.
+ *
+ * ── 왜 별도 스킴인가 ────────────────────────────────────────────────────
+ *
+ * ACME finalize 는 CSR 에 서명한 키와 발급된 인증서가 **짝**이어야 한다. 그런데 키는
+ * CSR 을 만들 때 필요하고 인증서는 그 뒤에 온다 — 그 사이에 죽으면 키를 잃고, 그러면
+ * 발급된 인증서가 **쓸모없어져 새 주문을 내야 한다.** CA 의 레이트리밋은 그걸 센다.
+ *
+ * 그래서 키만 먼저 둔다. 그런데 `put` 은 **한 쌍**을 요구한다(§7.2 — 무관한 키-체인이
+ * 저장되지 않게). 자리표 인증서를 지어내 짝을 맞추는 길도 있지만 안 골랐다: 어디에도
+ * 제시되지 않을 인증서를 만들어 두면 **언젠가 제시된다.**
+ *
+ * 대신 **스킴을 갈랐다.** `parseRef` 는 `store://` 만 받으므로 키 참조를 인증서 자리에
+ * 넣으면 그 자리에서 터진다 — 섞이는 것이 표현 불가능하다.
+ */
+export type KeyRef = { ref: string; name: string; version: string; keyDigest: string };
+
+export function parseKeyRef(ref: string): { name: string; version: string } {
+  const m = /^key:\/\/([A-Za-z0-9._-]+)@([a-f0-9]{16,64})$/.exec(ref);
+  if (m === null) {
+    throw new Error(`키 참조 모양이 아니다: ${JSON.stringify(ref)} (key://<name>@<version>)`);
+  }
+  return { name: m[1]!, version: m[2]! };
+}
+
 export interface SecretStore {
   /**
    * 자료를 넣고 **새 버전**을 받는다.
@@ -62,6 +90,10 @@ export interface SecretStore {
    * 주소이므로 사실도 불변이다.
    */
   facts(ref: string): CertFacts | undefined;
+  /** 인증서 없는 개인키를 둔다 (ACME 주문 진행 중). */
+  putKey(name: string, privkey: string): KeyRef;
+  /** 키만 읽는다. `store://` 참조를 주면 던진다. */
+  getKey(ref: string): string;
 }
 
 const sha256 = (s: string): string =>
@@ -130,6 +162,29 @@ export class FsSecretStore implements SecretStore {
     const chainDigest = sha256(material.fullchain);
     const keyDigest = sha256(material.privkey);
     return { ref, name, version, sha256: sha256(`${chainDigest}|${keyDigest}`), chainDigest, keyDigest };
+  }
+
+  putKey(name: string, privkey: string): KeyRef {
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+      throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
+    }
+    // 진짜 키인지 확인한다 — 아무 문자열이나 받으면 finalize 시점에야 터진다.
+    createPrivateKey(privkey);
+    const keyDigest = sha256(privkey);
+    const version = createHash('sha256').update(keyDigest, 'utf8').digest('hex').slice(0, 32);
+    // **인증서 자료와 다른 디렉토리다.** 같은 곳에 두면 `get` 이 반쪽짜리를 만난다.
+    const dir = join(this.root, 'keys', name, version);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(join(dir, 'privkey.pem'), privkey, { mode: 0o400 });
+      chmodSync(dir, 0o500);
+    }
+    return { ref: `key://${name}@${version}`, name, version, keyDigest };
+  }
+
+  getKey(ref: string): string {
+    const { name, version } = parseKeyRef(ref);
+    return readFileSync(join(this.root, 'keys', name, version, 'privkey.pem'), 'utf8');
   }
 
   facts(ref: string): CertFacts | undefined {

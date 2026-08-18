@@ -137,7 +137,7 @@ const model: Model = {
 
 /** 버전은 모델의 `materialRef` 에서 뽑는다 — 렌더러가 경로에 쓰는 그 값이다. */
 const versionOf = (certKey: string): string =>
-  model.certificates.find((c) => c.key === certKey)!.materialRef.split('@')[1]!;
+  model.certificates.find((c) => c.key === certKey)!.materialRef!.split('@')[1]!;
 
 const CERTS = [
   { key: 'cert-default', version: versionOf('cert-default'),

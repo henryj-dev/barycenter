@@ -116,6 +116,37 @@ export class AcmeStore {
   }
 
   /**
+   * 이름으로 계정을 찾는다.
+   *
+   * `Certificate.acme.account` 는 **계정 키**를 가리킨다 — 설정에 디렉토리 URL 을 적게
+   * 하면 CA 를 바꿀 때 모든 인증서를 고쳐야 한다. 처음에 `account(directoryUrl)` 로
+   * 찾다가 아무것도 못 찾았고, 증상은 "주문이 안 열린다" 였다.
+   */
+  async accountByKey(key: string): Promise<{ id: string; directoryUrl: string } | undefined> {
+    const r = (await this.db.query(
+      'SELECT id, directory_url FROM acme_accounts WHERE key=$1', [key])).rows[0];
+    return r === undefined
+      ? undefined
+      : { id: text(r, 'id'), directoryUrl: text(r, 'directory_url') };
+  }
+
+  /** 주문이 매달린 계정. `#drive` 가 디렉토리 URL 과 키 참조를 여기서 읽는다. */
+  async accountById(id: string): Promise<{
+    id: string; key: string; directoryUrl: string; accountKeyRef: string;
+    accountUrl: string | undefined;
+  } | undefined> {
+    const r = (await this.db.query(
+      'SELECT id,key,directory_url,account_key_ref,account_url FROM acme_accounts WHERE id=$1',
+      [id],
+    )).rows[0];
+    if (r === undefined) return undefined;
+    return {
+      id: text(r, 'id'), key: text(r, 'key'), directoryUrl: text(r, 'directory_url'),
+      accountKeyRef: text(r, 'account_key_ref'), accountUrl: maybe(r, 'account_url'),
+    };
+  }
+
+  /**
    * 주문을 연다. **이미 살아 있는 주문이 있으면 그것을 돌려준다.**
    *
    * 갱신 스케줄러는 주기적으로 돌고, 주문 하나가 여러 틱에 걸쳐 진행된다. 매 틱마다 새
