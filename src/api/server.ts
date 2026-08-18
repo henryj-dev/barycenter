@@ -33,6 +33,7 @@ import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
 import { can, TokenAuth, type Principal, type Scope } from './auth.js';
+import { EventHub, openEventStream } from './events.js';
 
 export type ApiOptions = {
   db: Db;
@@ -44,6 +45,15 @@ export type ApiOptions = {
   maxBodyBytes?: number;
   /** 인증서 자료 저장소 (§4.8). 없으면 업로드 엔드포인트가 501 이다. */
   secrets?: SecretStore;
+  /** SSE 허브. 없으면 서버가 하나 만든다. */
+  events?: EventHub;
+  /** 테스트가 하트비트를 기다리도록. 기본 15s. */
+  heartbeatMs?: number;
+};
+
+const eventsOf = (api: ApiOptions): EventHub => {
+  api.events ??= new EventHub();
+  return api.events;
 };
 
 const DEFAULT_MAX_BODY = 4 * 1024 * 1024;
@@ -143,7 +153,9 @@ const ROUTES: Route[] = [
       && 'manifest' in (body as object);
     const mode = wrapped && (body as { mode?: unknown }).mode === 'replace' ? 'replace' : 'merge';
     const input = wrapped ? (body as { manifest: unknown }).manifest : body;
-    json(c.res, 200, await api.store.importFromManifest(input, mode, c.who.name));
+    const out = await api.store.importFromManifest(input, mode, c.who.name);
+    eventsOf(api).publish('revision', { revision: out.revision, unchanged: out.unchanged });
+    json(c.res, 200, out);
   }),
 
   route('GET', '/api/v1/listeners', 'read', async (c, api) => {
@@ -297,7 +309,9 @@ const ROUTES: Route[] = [
 
   route('POST', '/api/v1/changesets/:id/commit', 'write', async (c, api) => {
     const planId = field(c.body, 'plan_id');
-    json(c.res, 200, await api.store.commit(c.params['id'] ?? '', planId, c.who.name));
+    const out = await api.store.commit(c.params['id'] ?? '', planId, c.who.name);
+    eventsOf(api).publish('revision', { revision: out.revision });
+    json(c.res, 200, out);
   }),
 
   route('GET', '/api/v1/plans/:id', 'read', async (c, api) => {
@@ -319,6 +333,7 @@ const ROUTES: Route[] = [
     const note = (c.body as { note?: unknown } | null)?.note;
     const rolled = await api.store.rollbackTo(to, c.who.name,
       typeof note === 'string' ? note : undefined);
+    eventsOf(api).publish('revision', { revision: rolled.revision, rollbackOf: rolled.rollbackOf });
     // 만들기만 하고 적용은 `/apply` 가 한다. 롤백만의 적용 경로를 따로 두면 그 경로만
     // 덜 검증된다 — 정작 급할 때 쓰는 경로가 가장 안 밟힌 경로가 된다.
     json(c.res, 200, rolled);
@@ -326,7 +341,10 @@ const ROUTES: Route[] = [
 
   // ── 적용·관찰 ──────────────────────────────────────────────────────────
   route('POST', '/api/v1/apply', 'apply', async (c, api) => {
-    json(c.res, 200, await api.control.apply(field(c.body, 'plan_id'), c.who.name));
+    const planId = field(c.body, 'plan_id');
+    const out = await api.control.apply(planId, c.who.name);
+    eventsOf(api).publish('apply', { planId, phase: out.phase });
+    json(c.res, 200, out);
   }),
 
   route('GET', '/api/v1/operations/:id', 'read', async (c, api) => {
@@ -343,6 +361,20 @@ const ROUTES: Route[] = [
 
   route('GET', '/api/v1/status', 'read', async (c, api) => {
     json(c.res, 200, await api.control.status());
+  }),
+
+  /**
+   * §5.2 · §10 SSE. 스냅샷 + 델타 + 하트비트. GUI 는 폴링하지 않는다.
+   * 핸들러가 연결이 끊길 때까지 await 한다.
+   */
+  route('GET', '/api/v1/events', 'read', async (c, api) => {
+    await openEventStream({
+      req: c.req,
+      res: c.res,
+      hub: eventsOf(api),
+      snapshot: () => api.control.status(),
+      ...(api.heartbeatMs === undefined ? {} : { heartbeatMs: api.heartbeatMs }),
+    });
   }),
 
   /**

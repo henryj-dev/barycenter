@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **340** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · **CLI 단계** |
+| 단위 | `npm test` | **344** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · **SSE** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,20 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### SSE 를 연다 — GUI 는 폴링하지 않는다 (2026-08-18)
+
+v0.5 의 첫 조각. §10 이 "GUI 는 폴링하지 않는다" 고 적어 두고 `/api/v1/events` 는
+표에만 있었다. 화면을 그리기 전에 그 구멍을 메운다. 폴링하는 화면을 먼저 지으면
+계약이 화면을 따라간다.
+
+연결이 열리면 `snapshot` 으로 지금 `status` 를 주고, 커밋·import·롤백은 `revision`
+델타, apply 는 `apply` 델타를 낸다. 하트비트는 SSE 주석이다 — 클라이언트가
+이벤트로 세면 안 되는 신호다. 인증은 다른 읽기와 같다. `/healthz` 처럼 열지 않는다.
+
+화면은 아직 없다. SvelteKit 3화면은 이 스트림을 구독할 수 있을 때 시작한다.
 
 ---
 
