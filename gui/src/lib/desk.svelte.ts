@@ -17,6 +17,7 @@ import {
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
+import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
@@ -48,6 +49,7 @@ export function createDesk() {
   let bindings = $state<{ key: string; listener: string; hosts: string[]; certificate: string }[]>([]);
   let status = $state<StatusView>(viewOfStatus({}));
   let rendered = $state<RenderedView>(viewOfRendered({}));
+  let audit = $state<AuditView>(viewOfAudit([]));
   let applying = $state(false);
   let editing = $state(false);
   let stop: (() => void) | undefined;
@@ -116,6 +118,17 @@ export function createDesk() {
     await refreshPolicies();
     await refreshBindings();
     await refreshRendered();
+    await refreshAudit();
+  };
+
+  const refreshAudit = async (): Promise<void> => {
+    const r = await fetch('/api/v1/audit', { headers: auth() });
+    if (!r.ok) {
+      error = `audit ${r.status}`;
+      audit = viewOfAudit([]);
+      return;
+    }
+    audit = viewOfAudit(await r.json());
   };
 
   const refreshRendered = async (): Promise<void> => {
@@ -640,6 +653,7 @@ export function createDesk() {
     get bindings() { return bindings; },
     get status() { return status; },
     get rendered() { return rendered; },
+    get audit() { return audit; },
     get applying() { return applying; },
     get editing() { return editing; },
     connect,

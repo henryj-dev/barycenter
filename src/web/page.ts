@@ -3,7 +3,7 @@
  * 같은 index.html 을 낸다. 라우터 이주는 화면과 한 커밋에 갈지 않는다.
  */
 export type Place =
-  | 'impact' | 'listeners' | 'pools' | 'routes' | 'certificates' | 'status' | 'rendered';
+  | 'impact' | 'listeners' | 'pools' | 'routes' | 'certificates' | 'status' | 'rendered' | 'audit';
 
 export function pageOf(pathname: string): Place {
   if (pathname === '/listeners' || pathname.startsWith('/listeners/')) return 'listeners';
@@ -12,5 +12,6 @@ export function pageOf(pathname: string): Place {
   if (pathname === '/certificates' || pathname.startsWith('/certificates/')) return 'certificates';
   if (pathname === '/status' || pathname.startsWith('/status/')) return 'status';
   if (pathname === '/rendered' || pathname.startsWith('/rendered/')) return 'rendered';
+  if (pathname === '/audit' || pathname.startsWith('/audit/')) return 'audit';
   return 'impact';
 }

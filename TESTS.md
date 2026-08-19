@@ -984,6 +984,7 @@ S11 하네스의 교훈이다.
 | C5.42 | GUI source_ip_hash 풀 put | algorithm=source_ip_hash. hashKey 없음. 첫 백엔드와 같이 |
 | C5.39 | OpenSSL CSR 판정 | stdout+stderr, `CN=` 공백 허용 (LibreSSL · OpenSSL 3) |
 | C5.43 | `/rendered` | head 산출물. 모르는 본문은 빈 conf. 지어내지 않는다 (`tests/unit/rendered-view.test.ts`) |
+| C5.44 | `/audit` | 로그. 모르는 본문은 빈 목록. 지어내지 않는다 (`tests/unit/audit-view.test.ts`) |
 
 ---
 

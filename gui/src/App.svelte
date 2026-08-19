@@ -7,6 +7,7 @@
   import Certs from './lib/Certs.svelte';
   import Status from './lib/Status.svelte';
   import Rendered from './lib/Rendered.svelte';
+  import Audit from './lib/Audit.svelte';
   import { createDesk } from './lib/desk.svelte.ts';
 
   const desk = createDesk();
@@ -74,6 +75,11 @@
         aria-current={page === 'rendered' ? 'page' : undefined}
         onclick={(e) => { e.preventDefault(); go('/rendered'); }}
       >산출물</a>
+      <a
+        href="/audit"
+        aria-current={page === 'audit' ? 'page' : undefined}
+        onclick={(e) => { e.preventDefault(); go('/audit'); }}
+      >기록</a>
     </nav>
     {#if page === 'listeners'}
       <h1>열려 있는 포트</h1>
@@ -93,6 +99,9 @@
     {:else if page === 'rendered'}
       <h1>엔진이 받을 것</h1>
       <p class="lede">nginx.conf 는 산출물이다. head 리비전을 렌더한 것이다. 폴링하지 않는다.</p>
+    {:else if page === 'audit'}
+      <h1>누가 무엇을 했는가</h1>
+      <p class="lede">로그다. 모델이 아니다. 폴링하지 않는다.</p>
     {:else}
       <h1>이 적용이 하는 일</h1>
       <p class="lede">저장과 적용은 다르다. 여기 있는 것은 이미 커밋된 plan 이 트래픽에 닿을 때 생기는 영향이다.</p>
@@ -240,6 +249,8 @@
     <Status view={desk.status} live={desk.live} />
   {:else if page === 'rendered'}
     <Rendered view={desk.rendered} live={desk.live} />
+  {:else if page === 'audit'}
+    <Audit view={desk.audit} live={desk.live} />
   {:else if desk.view}
     <Impact view={desk.view} applying={desk.applying} apply={apply} />
   {:else if desk.live}
