@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { pageOf, socketOf, viewOfListeners } from '../../src/web/listeners-view.js';
+import { socketOf, viewOfListeners } from '../../src/web/listeners-view.js';
 
 describe('리스너 목록', () => {
   it('커밋됐지만 아직 안 열린 소켓을 join 으로 표시한다', () => {
@@ -42,11 +42,4 @@ describe('리스너 목록', () => {
   });
 });
 
-describe('화면 자리', () => {
-  it('/listeners 가 리스너 화면이다 — Kit 이 아니다', () => {
-    expect(pageOf('/listeners')).toBe('listeners');
-    expect(pageOf('/listeners/front')).toBe('listeners');
-    expect(pageOf('/')).toBe('impact');
-    expect(pageOf('/plan')).toBe('impact');
-  });
-});
+

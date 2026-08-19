@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **356** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · Plan·Impact · Listeners · **헬스 델타** |
+| 단위 | `npm test` | **359** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · Plan·Impact · Listeners · **Pools** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -626,6 +626,19 @@ PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이�
 
 ---
 
+### Pools 화면을 연다 — 안 잰 것과 죽은 것은 다르다 (2026-08-19)
+
+v0.5 세 화면의 마지막. 헬스는 스냅샷과 `health` 델타다. `/health/backends` 를
+다시 치지 않는다. 관측이 없으면 `unknown` — 프로버가 아직 안 본 것과
+`unhealthy` 를 섞으면 기동 직후 멤버십이 통째로 비어 보인다.
+
+드레인 진행률은 그리지 않는다. inflight/sessions 를 재는 경로가 없다.
+없는 숫자를 그려 두면 화면이 계약을 만든다.
+
+세 경로가 됐다. Kit 은 아직 없다. 화면과 라우터 이주를 한 커밋에 넣지 않는다.
+
+---
+
 ### 헬스 델타를 연다 — 폴링하지 않는다 (2026-08-19)
 
 Pools 화면을 그리려면 헬스 변화가 스트림에 있어야 한다. `health_events` 는
@@ -651,7 +664,7 @@ impact 의 `removed` 로 leave 다. 충돌 판정은 검증기가 이미 했다 
 두 번째 엔진을 두지 않는다.
 
 경로는 `/listeners` 다. Kit 은 아직 없다. 확장자 없는 폴백이 같은
-`index.html` 을 내고, `pageOf` 가 자리를 가른다. 세 경로가 되면 Kit 이다.
+`index.html` 을 내고, `pageOf` 가 자리를 가른다.
 
 ---
 

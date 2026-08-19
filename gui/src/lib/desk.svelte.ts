@@ -1,16 +1,22 @@
 /**
  * 운영 책상. SSE 를 구독하고, 폴링하지 않는다.
- * Plan·Impact 와 Listeners 가 같은 스트림을 본다 — 연결을 둘로 열지 않는다.
+ * Plan·Impact · Listeners · Pools 가 같은 스트림을 본다 — 연결을 둘로 열지 않는다.
+ * 헬스는 스냅샷과 health 델타다. `/health/backends` 를 치지 않는다.
  */
 import { pickPending, viewOfImpact, type Impact, type ImpactView, type PendingApply } from '@web/impact-view';
 import {
   viewOfListeners, type ListenerFact, type ListenersView,
 } from '@web/listeners-view';
+import {
+  applyHealthFlip, upsertHealth, viewOfPools,
+  type BackendFact, type HealthFact, type PoolFact, type PoolsView,
+} from '@web/pools-view';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
   head?: string;
   pendingApply?: PendingApply[];
+  health?: HealthFact[];
 };
 
 const tokenKey = 'bary.token';
@@ -22,6 +28,8 @@ export function createDesk() {
   let head = $state<string | undefined>();
   let view = $state<ImpactView | undefined>();
   let listeners = $state<ListenersView>({ rows: [] });
+  let health = $state<HealthFact[]>([]);
+  let pools = $state<PoolsView>({ rows: [] });
   let applying = $state(false);
   let stop: (() => void) | undefined;
 
@@ -58,10 +66,39 @@ export function createDesk() {
     );
   };
 
+  const asList = <T>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : []);
+
+  const refreshPools = async (): Promise<void> => {
+    const [pr, br] = await Promise.all([
+      fetch('/api/v1/pools', { headers: auth() }),
+      fetch('/api/v1/backends', { headers: auth() }),
+    ]);
+    if (!pr.ok || !br.ok) {
+      error = `pools ${pr.status}/${br.status}`;
+      pools = { rows: [] };
+      return;
+    }
+    pools = viewOfPools(
+      asList<PoolFact>(await pr.json()),
+      asList<BackendFact>(await br.json()),
+      health,
+    );
+  };
+
   const onStatus = async (snap: StatusSnap): Promise<void> => {
     head = snap.head;
+    if (snap.health !== undefined) health = snap.health;
     await refreshImpact(pickPending(snap.pendingApply ?? []));
     await refreshListeners(view);
+    await refreshPools();
+  };
+
+  const onHealth = (data: unknown): void => {
+    const flip = data as { backendKey?: unknown; state?: unknown };
+    if (typeof flip.backendKey !== 'string' || typeof flip.state !== 'string') return;
+    const row = { backendKey: flip.backendKey, state: flip.state };
+    health = upsertHealth(health, row);
+    pools = applyHealthFlip(pools, row);
   };
 
   const connect = async (): Promise<void> => {
@@ -91,6 +128,8 @@ export function createDesk() {
           if (frame.kind !== 'event') continue;
           if (frame.event === 'snapshot') {
             await onStatus(frame.data as StatusSnap);
+          } else if (frame.event === 'health') {
+            onHealth(frame.data);
           } else if (frame.event === 'revision' || frame.event === 'apply') {
             const st = await fetch('/api/v1/status', { headers: auth() });
             if (st.ok) await onStatus((await st.json()) as StatusSnap);
@@ -132,6 +171,7 @@ export function createDesk() {
     get head() { return head; },
     get view() { return view; },
     get listeners() { return listeners; },
+    get pools() { return pools; },
     get applying() { return applying; },
     connect,
     apply,

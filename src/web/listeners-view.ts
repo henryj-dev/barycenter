@@ -36,12 +36,6 @@ export function socketOf(l: { protocol: string; bind: string; port: number }): s
   return `${l.protocol === 'udp' ? 'udp' : 'tcp'}://${l.bind}:${l.port}`;
 }
 
-export function pageOf(pathname: string): 'impact' | 'listeners' {
-  return pathname === '/listeners' || pathname.startsWith('/listeners/')
-    ? 'listeners'
-    : 'impact';
-}
-
 export function viewOfListeners(
   listeners: readonly ListenerFact[],
   pending?: SocketDelta,

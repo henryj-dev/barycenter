@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { pageOf } from '@web/listeners-view';
+  import { pageOf } from '@web/page';
   import Impact from './lib/Impact.svelte';
   import Listeners from './lib/Listeners.svelte';
+  import Pools from './lib/Pools.svelte';
   import { createDesk } from './lib/desk.svelte.ts';
 
   const desk = createDesk();
@@ -44,10 +45,18 @@
         aria-current={page === 'listeners' ? 'page' : undefined}
         onclick={(e) => { e.preventDefault(); go('/listeners'); }}
       >리스너</a>
+      <a
+        href="/pools"
+        aria-current={page === 'pools' ? 'page' : undefined}
+        onclick={(e) => { e.preventDefault(); go('/pools'); }}
+      >풀</a>
     </nav>
     {#if page === 'listeners'}
       <h1>열려 있는 포트</h1>
       <p class="lede">head 모델이다. 커밋됐지만 적용 전이면 아직 엔진에 없는 소켓이 섞여 있다. 충돌은 검증기가 이미 막았다.</p>
+    {:else if page === 'pools'}
+      <h1>풀이 받는 것</h1>
+      <p class="lede">TCP 연결만 잰다. 아직 안 잰 것과 죽은 것은 다르다. 드레인 관측은 없다.</p>
     {:else}
       <h1>이 적용이 하는 일</h1>
       <p class="lede">저장과 적용은 다르다. 여기 있는 것은 이미 커밋된 plan 이 트래픽에 닿을 때 생기는 영향이다.</p>
@@ -82,6 +91,8 @@
 
   {#if page === 'listeners'}
     <Listeners view={desk.listeners} live={desk.live} />
+  {:else if page === 'pools'}
+    <Pools view={desk.pools} live={desk.live} />
   {:else if desk.view}
     <Impact view={desk.view} applying={desk.applying} apply={apply} />
   {:else if desk.live}

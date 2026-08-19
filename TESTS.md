@@ -953,6 +953,9 @@ S11 하네스의 교훈이다.
 | C5.9 | `/listeners` | 리스너 화면. Kit 이 아니다 |
 | C5.10 | SSE 스냅샷 | `health` 배열이 있다. `/status` 는 그대로 |
 | C5.11 | 판정 변경 | `event: health` 델타. 폴링하지 않는다 |
+| C5.12 | 헬스 관측 없음 | `unknown`. 죽은 것과 섞지 않는다 (`tests/unit/pools-view.test.ts`) |
+| C5.13 | health 델타 | 목록을 다시 치지 않고 한 줄만 옮긴다 |
+| C5.14 | `/pools` | 풀 화면. 드레인 숫자는 없다. Kit 이 아니다 |
 
 ---
 
