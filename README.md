@@ -175,7 +175,7 @@ not a moat. The bets that need execution quality instead:
 - **Inbound and backend ports are independent.** `:999 → A:11` and `:888 → B:11` are just two
   listeners pointing at two pools.
 - **The API is the only entry point.** The web UI and `bary` CLI are clients of it.
-  They are not yet equal: the GUI has no reject form, and the CLI has no
+  They are not yet equal: the GUI cannot turn websocket on, and the CLI has no
   per-resource subcommands. Equality is a v1.0 claim (`DESIGN.md` §1).
 - **Nothing is applied blind.** Changes accumulate in a changeset, `plan` reports the impact,
   and apply runs a durable state machine — render → validate on the real data plane → publish →
@@ -266,7 +266,7 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
 | **v0.3** | Membership plane, health probe | ← **done except drain observation (S2)** |
 | **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** No per-resource subcommands |
-| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **slice is open.** No Kit, no drain, no reject form |
+| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **slice is open.** No Kit, no drain, websocket stays off |
 | **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** No order GET, no dns-01 |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` has no consumer |
 | **v1.0** | Full RBAC, backup/restore rehearsal, SPOF runbook, documentation | |

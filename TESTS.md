@@ -976,6 +976,7 @@ S11 하네스의 교훈이다.
 | C5.33 | GUI 패스스루 리스너 put | protocol=tls_passthrough. tls·http·defaultPool 을 안 붙인다. unmatched 풀은 선택 |
 | C5.34 | GUI 패스스루 라우트 put | SNI → 풀 proxy. websocket·path 없음. 빈 SNI 는 패치를 안 만든다 |
 | C5.35 | GUI HTTP redirect put | to·status. 기본 302. pool·websocket 없음. 빈 대상·모르는 상태는 패치를 안 만든다 |
+| C5.36 | GUI HTTP reject put | status 403·404·444. 기본 403. to·pool 없음. 모르는 상태는 패치를 안 만든다 |
 
 ---
 

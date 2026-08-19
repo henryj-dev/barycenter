@@ -2,10 +2,11 @@
   import type { RoutesView } from '@web/routes-view';
   import AddRoute from './AddRoute.svelte';
   import AddRedirect from './AddRedirect.svelte';
+  import AddReject from './AddReject.svelte';
   import AddPassthroughRoute from './AddPassthroughRoute.svelte';
-  import type { RedirectStatus } from '@web/edit';
+  import type { RedirectStatus, RejectStatus } from '@web/edit';
 
-  let { view, live, editing, listeners, pools, ptListeners, tcpPools, withdraw, withdrawPt, insert, insertRedirect, insertPt }: {
+  let { view, live, editing, listeners, pools, ptListeners, tcpPools, withdraw, withdrawPt, insert, insertRedirect, insertReject, insertPt }: {
     view: RoutesView;
     live: boolean;
     editing: boolean;
@@ -21,6 +22,10 @@
     insertRedirect: (input: {
       key: string; listener: string; hosts: string[]; to: string;
       status: RedirectStatus; pathPrefix?: string;
+    }) => void;
+    insertReject: (input: {
+      key: string; listener: string; hosts: string[];
+      status: RejectStatus; pathPrefix?: string;
     }) => void;
     insertPt: (input: { key: string; listener: string; snis: string[]; pool: string }) => void;
   } = $props();
@@ -78,6 +83,7 @@
   {/if}
   <AddRoute {listeners} {pools} {editing} add={insert} />
   <AddRedirect {listeners} {editing} add={insertRedirect} />
+  <AddReject {listeners} {editing} add={insertReject} />
   <AddPassthroughRoute listeners={ptListeners} pools={tcpPools} {editing} add={insertPt} />
 {/if}
 

@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -267,6 +267,36 @@ describe('설정에서 빼기', () => {
     expect(() => putHttpRedirectPatch({
       key: 'r-https', listener: 'front', hosts: ['app.example.com'], to: 'https://x/',
       status: 418 as 302,
+    })).toThrow(/status/);
+  });
+
+  it('HTTP reject 패치는 status 다 — to·pool 을 안 붙인다', () => {
+    expect(putHttpRejectPatch({
+      key: 'r-deny', listener: 'front', hosts: ['app.example.com'],
+    })).toEqual([
+      {
+        op: 'put', kind: 'httpRoute', key: 'r-deny',
+        body: {
+          listener: 'front', hosts: ['app.example.com'], priority: 0,
+          action: { kind: 'reject', status: 403 },
+        },
+      },
+    ]);
+  });
+
+  it('HTTP reject 패치에 to·pool·websocket 을 안 붙인다', () => {
+    const [op] = putHttpRejectPatch({
+      key: 'r-deny', listener: 'front', hosts: ['app.example.com'],
+    });
+    expect(op?.body.action).not.toHaveProperty('to');
+    expect(op?.body.action).not.toHaveProperty('pool');
+    expect(op?.body.action).not.toHaveProperty('websocket');
+  });
+
+  it('모르는 reject 상태는 패치를 만들지 않는다', () => {
+    expect(() => putHttpRejectPatch({
+      key: 'r-deny', listener: 'front', hosts: ['app.example.com'],
+      status: 500 as 403,
     })).toThrow(/status/);
   });
 

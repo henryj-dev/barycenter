@@ -383,7 +383,7 @@ export type PutHttpRouteOp = {
 
 /**
  * 호스트 → 풀 proxy. websocket 은 끈다.
- * redirect 는 putHttpRedirectPatch. reject 는 폼이 못 채운다.
+ * redirect 는 putHttpRedirectPatch. reject 는 putHttpRejectPatch.
  */
 export function putHttpRoutePatch(input: {
   key: string;
@@ -432,7 +432,7 @@ export type PutHttpRedirectOp = {
 
 /**
  * 호스트 → URL redirect. pool·websocket 을 안 붙인다.
- * reject 는 폼이 못 채운다. 기본 상태는 302.
+ * reject 는 putHttpRejectPatch. 기본 상태는 302.
  */
 export function putHttpRedirectPatch(input: {
   key: string;
@@ -463,6 +463,58 @@ export function putHttpRedirectPatch(input: {
     hosts,
     priority,
     action: { kind: 'redirect', to, status },
+  };
+  if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
+  return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
+}
+
+export type RejectStatus = 403 | 404 | 444;
+
+const REJECT_STATUSES: readonly RejectStatus[] = [403, 404, 444];
+
+export type PutHttpRejectOp = {
+  op: 'put';
+  kind: 'httpRoute';
+  key: string;
+  body: {
+    listener: string;
+    hosts: string[];
+    priority: number;
+    pathPrefix?: string;
+    action: { kind: 'reject'; status: RejectStatus };
+  };
+};
+
+/**
+ * 호스트 → 상태 코드. to·pool·websocket 을 안 붙인다.
+ * 444 는 응답 없이 끊는다. 기본은 403.
+ */
+export function putHttpRejectPatch(input: {
+  key: string;
+  listener: string;
+  hosts: readonly string[];
+  status?: RejectStatus;
+  pathPrefix?: string;
+  priority?: number;
+}): PutHttpRejectOp[] {
+  if (input.key === '') throw new Error('키가 비어 있다');
+  if (input.listener === '') throw new Error('리스너가 비어 있다');
+  const hosts = input.hosts.map((h) => h.trim()).filter((h) => h !== '');
+  if (hosts.length === 0) throw new Error('호스트가 비어 있다');
+  const status = Number(input.status ?? 403) as RejectStatus;
+  if (!REJECT_STATUSES.includes(status)) {
+    throw new Error('status 가 403|404|444 이 아니다');
+  }
+  const priority = input.priority ?? 0;
+  if (!Number.isInteger(priority) || priority < 0) {
+    throw new Error('priority 가 0 이상 정수가 아니다');
+  }
+  const pathPrefix = input.pathPrefix?.trim();
+  const body: PutHttpRejectOp['body'] = {
+    listener: input.listener,
+    hosts,
+    priority,
+    action: { kind: 'reject', status },
   };
   if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
