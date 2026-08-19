@@ -1,5 +1,5 @@
 /**
- * CLI HTTP 라우트 create — websocket 은 끈다. apply 가 아니다.
+ * CLI HTTP 라우트 create — proxy 또는 redirect. apply 가 아니다.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -37,9 +37,35 @@ describe('route create 패치', () => {
     }]);
   });
 
-  it('빈 호스트는 패치를 안 만든다', () => {
+  it('HTTP redirect 는 to·status 다. pool 이 없다', () => {
+    const patch = routeCreatePatch({
+      name: 'old', listener: 'web', hosts: 'old.example.com', to: 'https://new.example.com',
+    });
+    expect(patch).toEqual([{
+      op: 'put',
+      kind: 'httpRoute',
+      key: 'old',
+      body: {
+        listener: 'web',
+        hosts: ['old.example.com'],
+        priority: 0,
+        action: { kind: 'redirect', to: 'https://new.example.com', status: 302 },
+      },
+    }]);
+  });
+
+  it('빈 호스트·대상·모르는 status 와 pool+to 는 패치를 안 만든다', () => {
     expect(routeCreatePatch({
       name: 'api', listener: 'web', hosts: '  ,  ', pool: 'app',
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'old', listener: 'web', hosts: 'old.example.com', to: '',
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'old', listener: 'web', hosts: 'old.example.com', to: 'https://x', status: '200',
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'old', listener: 'web', hosts: 'old.example.com', pool: 'app', to: 'https://x',
     })).toBeUndefined();
   });
 });

@@ -994,6 +994,7 @@ S11 하네스의 교훈이다.
 | C5.51 | CLI hash 풀 create | algorithm=hash + hashKey 화이트리스트. 첫 백엔드와 같이. 모르는 키는 패치를 안 만든다 |
 | C5.52 | CLI source_ip_hash 풀 create | algorithm=source_ip_hash. hashKey 없음. 첫 백엔드와 같이 |
 | C5.53 | CLI HTTP 라우트 create | proxy · websocket=false. 빈 호스트는 패치를 안 만든다 (`tests/unit/cli-route.test.ts`) |
+| C5.54 | CLI HTTP redirect create | to·status. 기본 302. pool 없음. 모르는 상태는 패치를 안 만든다 |
 
 ---
 
