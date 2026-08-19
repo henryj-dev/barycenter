@@ -27,7 +27,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, TCP connect 프로브, SSE `health` | 드레인 관측(S2), HTTP 본문 프로브 |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 | 주문 GET · dns-01 |
 | ACME | http-01 러너, shared dict 챌린지, 만료 30일 전 갱신 틱 | 주문 GET, dns-01 프로바이더 |
-| CLI | `changeset` 단계, `commit --plan`, `apply --plan`, export/import, status/rollback | 리소스 하위 명령 |
+| CLI | `changeset` 단계, `commit --plan`, `apply --plan`, export/import, status/rollback, HTTP listener create | tcp·udp·https·풀·라우트 명령 |
 | GUI | 여덟 화면. 폴링하지 않는다. Kit 이 아니다 | 아래 §2 |
 
 ### GUI
@@ -67,7 +67,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **424** |
+| 단위 | `npm test` | **427** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -92,7 +92,7 @@ API 가 없어서 못 그리는 것.
 
 로드맵 잔여.
 
-- CLI 리소스 하위 명령
+- CLI 리소스 하위 명령 (HTTP listener create 말고)
 - SvelteKit (여덟 경로인데도 한 `index.html`)
 - v1.0 RBAC · 백업/복구 리허설 · SPOF 런북
 

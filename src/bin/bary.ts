@@ -2,9 +2,10 @@
 /**
  * `bary` — 컨트롤 플레인 CLI (DESIGN.md §5.6)
  *
- * **v0.4 의 전체 CLI 가 아니다.** 리소스별 하위 명령과 대화형 편집은 아직 없다.
+ * **v0.4 의 전체 CLI 가 아니다.** HTTP 리스너 create 만 있다. 대화형 편집은 없다.
  * export/import 와 나뉜 changeset 단계는 있다. `apply <파일>` 은 단축이다.
  *
+ *   bary listener create --name --protocol http --bind --port --pool
  *   bary changeset new|patch|plan|show
  *   bary commit --plan <id>
  *   bary apply --plan <id>
@@ -21,6 +22,7 @@
  */
 import { readFileSync } from 'node:fs';
 
+import { listenerCreate } from '../cli/listener.js';
 import {
   applyByPlan,
   changesetNew,
@@ -74,6 +76,7 @@ const usage = (): never => {
   bary status                    4-way 상태 · 미완 전환 · 미적용 커밋
   bary head                      전역 리비전
   bary get <무엇>                listeners | pools | backends | routes | model | rendered
+  bary listener create           --name --protocol http --bind --port --pool. commit 까지. apply 는 아니다
   bary changeset new             changeset 을 연다
   bary changeset patch <id> <파일.json>
   bary changeset plan <id>       영향만 본다 (커밋하지 않는다)
@@ -165,6 +168,25 @@ async function main(): Promise<void> {
     case 'audit': {
       const n = arg ?? '30';
       show(must(await call('GET', `/api/v1/audit?limit=${encodeURIComponent(n)}`), 'audit'));
+      return;
+    }
+    case 'listener': {
+      const sub = arg ?? usage();
+      if (sub !== 'create') usage();
+      const name = flag(argv, '--name') ?? usage();
+      const protocol = flag(argv, '--protocol') ?? usage();
+      const bind = flag(argv, '--bind') ?? usage();
+      const portRaw = flag(argv, '--port') ?? usage();
+      const pool = flag(argv, '--pool') ?? usage();
+      try {
+        const out = await listenerCreate(call, {
+          name, protocol, bind, port: Number(portRaw), pool,
+        });
+        console.error(`listener ${name} committed r${out.revision}`);
+        show(out);
+      } catch (e) {
+        die(e);
+      }
       return;
     }
     case 'plan': {

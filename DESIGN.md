@@ -1080,7 +1080,8 @@ resources:
 ### 5.6 CLI (`bary`)
 
 ```bash
-bary listener create --name game --protocol tcp --port 999 --pool pool-a
+bary listener create --name web --protocol http --bind 0.0.0.0 --port 80 --pool app
+bary listener create --name game --protocol tcp --port 999 --pool pool-a   # 아직
 bary pool create --name pool-a --protocol-class tcp --algorithm round_robin
 bary backend add --pool pool-a --host 10.0.0.11 --port 11 --weight 2
 bary backend drain <id> --deadline 300s
@@ -1096,6 +1097,9 @@ bary get config --rendered
 bary export > barycenter.yaml
 bary import barycenter.yaml --mode merge
 ```
+
+`listener create --protocol http` 은 changeset 을 지나 **commit 까지** 한다. apply 는
+아니다. tcp·udp·https 와 풀·라우트 명령은 아직 패치를 안 만든다. 드레인은 S2 다.
 
 ---
 
@@ -2996,7 +3000,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.1** 골격 ✅ | (동결은 둘로 나뉜다 — §9.1.1) 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
 | **v0.2** L4 ✅ | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
 | **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2)은 아직** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. inflight/sessions 숫자는 없다 |
-| **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). 리소스별 하위 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
+| **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). HTTP listener create ✅. tcp·udp·https·풀·라우트 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
 | **v0.5** GUI | SSE ✅. 여덟 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
 | **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩 ✅. 주문 GET · dns-01 은 아직 | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
