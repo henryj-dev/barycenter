@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type TlsVersion, type UdpPreset } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type TlsVersion, type UdpPreset } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -353,6 +353,22 @@ export function createDesk() {
     }
   };
 
+  const insertPassthroughListener = async (
+    key: string,
+    body: { bind: string; port: number; pool?: string },
+  ): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putPassthroughListenerPatch(key, body));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const insertTlsPolicy = async (key: string, minVersion?: TlsVersion): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -505,6 +521,7 @@ export function createDesk() {
     insertPool,
     insertHttpListener,
     insertTcpListener,
+    insertPassthroughListener,
     insertUdpListener,
     insertTlsPolicy,
     insertHttpsListener,

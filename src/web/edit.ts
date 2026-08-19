@@ -291,6 +291,45 @@ export function putSniBindingPatch(input: {
   }];
 }
 
+export type PutPassthroughListenerOp = {
+  op: 'put';
+  kind: 'listener';
+  key: string;
+  body: {
+    protocol: 'tls_passthrough';
+    bind: string;
+    port: number;
+    enabled: true;
+    onUnmatchedSni?: { pool: string };
+  };
+};
+
+/**
+ * TLS 패스스루. 인증서를 제시하지 않는다 — tls 를 안 붙인다.
+ * 기본 풀은 없다. 라우트가 목적지를 가른다.
+ * unmatched SNI 만 풀로 보낼 수 있다. 부재·파싱 실패는 설정 대상이 아니다.
+ * PROXY 수신은 trustedCidrs 가 없어서 안 켠다.
+ */
+export function putPassthroughListenerPatch(
+  key: string,
+  body: { bind: string; port: number; pool?: string },
+): PutPassthroughListenerOp[] {
+  if (key === '') throw new Error('키가 비어 있다');
+  if (body.bind === '') throw new Error('바인드가 비어 있다');
+  if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) {
+    throw new Error('포트가 1–65535 정수가 아니다');
+  }
+  const pool = body.pool?.trim();
+  const patchBody: PutPassthroughListenerOp['body'] = {
+    protocol: 'tls_passthrough',
+    bind: body.bind,
+    port: body.port,
+    enabled: true,
+  };
+  if (pool !== undefined && pool !== '') patchBody.onUnmatchedSni = { pool };
+  return [{ op: 'put', kind: 'listener', key, body: patchBody }];
+}
+
 export type ProtocolClass = 'http' | 'tcp' | 'udp';
 
 export type PutPoolOp = {

@@ -973,6 +973,7 @@ S11 하네스의 교훈이다.
 | C5.30 | GUI HTTPS 리스너 put | tls 결박 필수. 빈 인증서는 패치를 안 만든다 |
 | C5.31 | GUI 인증서 put | 참조·digest 만. 개인키·fullchain 이 패치에 없다 (`tests/unit/edit.test.ts`) |
 | C5.32 | GUI SNI 바인딩 put | listener·hosts·certificate. override 없음. 빈 호스트는 패치를 안 만든다 |
+| C5.33 | GUI 패스스루 리스너 put | protocol=tls_passthrough. tls·http·defaultPool 을 안 붙인다. unmatched 풀은 선택 |
 
 ---
 

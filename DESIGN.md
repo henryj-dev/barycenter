@@ -2613,11 +2613,13 @@ capability 패키지이지 apply 구현이 아니다.
   Status 는 SSE 스냅샷의 4-way 다. `/status` 를 폴링하지 않는다. nativeDns
   선택형은 그리지 않는다.
   GUI 쓰기는 changeset 을 지난다. 지금 열린 것은 백엔드 `put`/`delete`,
-  HTTP·TCP·UDP 리스너 `put`/`delete`, 풀은 **첫 백엔드와 같이** `put` 한다.
+  HTTP·TCP·UDP·패스스루 리스너 `put`/`delete`, 풀은 **첫 백엔드와 같이** `put` 한다.
   빈 풀은 검증기가 막는다. HTTP 라우트 `put`/`delete` 는 호스트 → 풀 proxy 다.
   websocket 은 끈다. redirect·reject 는 폼이 없다. TCP·UDP 는 `defaultPool`
   이다 — `http.defaultAction` 이 아니다. UDP 는 named preset 만 받는다
-  (`dns`·`wireguard`·`game_generic`·`custom`). HTTPS 는 `tls.policy` 와
+  (`dns`·`wireguard`·`game_generic`·`custom`). 패스스루는 `tls_passthrough`
+  다. 인증서를 제시하지 않으므로 `tls` 를 안 붙인다. 기본 풀은 없다.
+  unmatched SNI 만 선택으로 TCP 풀에 보낸다. HTTPS 는 `tls.policy` 와
   `tls.defaultCertificate` 가 필수다. 자료 없는 인증서는 고르지 않는다.
   HTTPS 호스트는 SNI 바인딩 `put`/`delete` 가 있어야 plan 이 된다.
   바인딩은 라우트가 아니라 handshake 의 SNI 다. override 는 안 붙인다. 인증서 자료는
@@ -2629,10 +2631,10 @@ capability 패키지이지 apply 구현이 아니다.
 
 | 화면 | 상태 |
 |---|---|
-| Listeners — head 포트, HTTP·TCP·UDP·HTTPS put/delete | 열림. HTTPS 는 자료 있는 인증서 + 정책 |
+| Listeners — head 포트, HTTP·TCP·UDP·HTTPS·패스스루 put/delete | 열림. HTTPS 는 자료 있는 인증서 + 정책. 패스스루는 tls 없음 |
 | Pools & Backends — SSE 헬스, 풀+첫 백엔드, 백엔드 put/delete | 열림. 드레인 숫자 없음 (S2) |
 | Plan/Impact — diff 가 아니라 **영향**. apply 는 여기만 | 열림 |
-| Routes — 엔진 순서, HTTP 호스트 proxy put/delete | 열림. redirect·reject 없음 |
+| Routes — 엔진 순서, HTTP 호스트 proxy put/delete | 열림. redirect·reject 없음. 패스스루 라우트 폼 없음 |
 | Certificates — 만료는 자료. 자료 put. SNI 바인딩 put/delete | 열림. 주문 GET 없음 |
 | Status — SSE 스냅샷 4-way | 열림. nativeDns 선택형 없음 |
 | Rendered Config / Audit | API 있음. 화면은 v1.0 |

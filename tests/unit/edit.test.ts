@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -165,6 +165,40 @@ describe('설정에서 빼기', () => {
     expect(() => putSniBindingPatch({
       key: 'sni-a', listener: 'front-tls', hosts: ['  '], certificate: 'cert-a',
     })).toThrow(/호스트/);
+  });
+
+  it('패스스루 리스너를 넣는 패치는 put 한 줄이다 — tls 를 안 붙인다', () => {
+    expect(putPassthroughListenerPatch('edge', { bind: '0.0.0.0', port: 443 })).toEqual([
+      {
+        op: 'put', kind: 'listener', key: 'edge',
+        body: {
+          protocol: 'tls_passthrough', bind: '0.0.0.0', port: 443, enabled: true,
+        },
+      },
+    ]);
+  });
+
+  it('패스스루 패치에 tls·http·defaultPool 을 안 붙인다', () => {
+    const [op] = putPassthroughListenerPatch('edge', { bind: '0.0.0.0', port: 443 });
+    expect(op).toBeDefined();
+    expect(op?.body).not.toHaveProperty('tls');
+    expect(op?.body).not.toHaveProperty('http');
+    expect(op?.body).not.toHaveProperty('defaultPool');
+    expect(op?.body).not.toHaveProperty('onUnmatchedSni');
+  });
+
+  it('unmatched SNI 풀이 있으면 onUnmatchedSni 만 붙인다', () => {
+    expect(putPassthroughListenerPatch('edge', {
+      bind: '0.0.0.0', port: 443, pool: 'origin',
+    })).toEqual([
+      {
+        op: 'put', kind: 'listener', key: 'edge',
+        body: {
+          protocol: 'tls_passthrough', bind: '0.0.0.0', port: 443, enabled: true,
+          onUnmatchedSni: { pool: 'origin' },
+        },
+      },
+    ]);
   });
 
   it('HTTP 라우트를 넣는 패치는 put 한 줄이다 — proxy 이고 websocket 은 끈다', () => {
