@@ -535,7 +535,7 @@ export type PutPassthroughRouteOp = {
 
 /**
  * SNI → TCP 풀 proxy. TLS 를 종단하지 않으므로 websocket·path·status 가 없다.
- * reject 는 폼이 못 채운다. 라우트에 인증서를 안 붙인다 — handshake 는 백엔드다.
+ * reject 는 putPassthroughRejectPatch. 라우트에 인증서를 안 붙인다 — handshake 는 백엔드다.
  */
 export function putPassthroughRoutePatch(input: {
   key: string;
@@ -562,6 +562,49 @@ export function putPassthroughRoutePatch(input: {
       snis,
       priority,
       action: { kind: 'proxy', pool: input.pool },
+    },
+  }];
+}
+
+export type PutPassthroughRejectOp = {
+  op: 'put';
+  kind: 'passthroughRoute';
+  key: string;
+  body: {
+    listener: string;
+    snis: string[];
+    priority: number;
+    action: { kind: 'reject' };
+  };
+};
+
+/**
+ * SNI → 끊기. HTTP status 가 없다 — handshake 를 종단하지 않으므로.
+ * pool·websocket·path 를 안 붙인다.
+ */
+export function putPassthroughRejectPatch(input: {
+  key: string;
+  listener: string;
+  snis: readonly string[];
+  priority?: number;
+}): PutPassthroughRejectOp[] {
+  if (input.key === '') throw new Error('키가 비어 있다');
+  if (input.listener === '') throw new Error('리스너가 비어 있다');
+  const snis = input.snis.map((s) => s.trim()).filter((s) => s !== '');
+  if (snis.length === 0) throw new Error('SNI 가 비어 있다');
+  const priority = input.priority ?? 0;
+  if (!Number.isInteger(priority) || priority < 0) {
+    throw new Error('priority 가 0 이상 정수가 아니다');
+  }
+  return [{
+    op: 'put',
+    kind: 'passthroughRoute',
+    key: input.key,
+    body: {
+      listener: input.listener,
+      snis,
+      priority,
+      action: { kind: 'reject' },
     },
   }];
 }

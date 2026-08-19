@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -348,5 +348,33 @@ describe('설정에서 빼기', () => {
     expect(deletePatch('passthroughRoute', 'pt-app')).toEqual([
       { op: 'delete', kind: 'passthroughRoute', key: 'pt-app' },
     ]);
+  });
+
+  it('패스스루 reject 패치는 SNI 만 끊는다 — status 가 없다', () => {
+    expect(putPassthroughRejectPatch({
+      key: 'pt-deny', listener: 'edge', snis: ['bad.example.com'],
+    })).toEqual([
+      {
+        op: 'put', kind: 'passthroughRoute', key: 'pt-deny',
+        body: {
+          listener: 'edge', snis: ['bad.example.com'], priority: 0,
+          action: { kind: 'reject' },
+        },
+      },
+    ]);
+  });
+
+  it('패스스루 reject 에 pool·status 를 안 붙인다', () => {
+    const [op] = putPassthroughRejectPatch({
+      key: 'pt-deny', listener: 'edge', snis: ['bad.example.com'],
+    });
+    expect(op?.body.action).not.toHaveProperty('pool');
+    expect(op?.body.action).not.toHaveProperty('status');
+  });
+
+  it('SNI 가 없으면 패스스루 reject 패치를 만들지 않는다', () => {
+    expect(() => putPassthroughRejectPatch({
+      key: 'pt-deny', listener: 'edge', snis: ['  '],
+    })).toThrow(/SNI/);
   });
 });

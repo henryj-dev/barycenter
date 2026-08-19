@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -538,6 +538,23 @@ export function createDesk() {
     }
   };
 
+  const insertPassthroughReject = async (input: {
+    key: string;
+    listener: string;
+    snis: string[];
+  }): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putPassthroughRejectPatch(input));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const apply = async (): Promise<void> => {
     if (view === undefined) return;
     applying = true;
@@ -589,6 +606,7 @@ export function createDesk() {
     insertHttpRedirect,
     insertHttpReject,
     insertPassthroughRoute,
+    insertPassthroughReject,
     disconnect() { stop?.(); },
   };
 }

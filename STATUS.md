@@ -7,7 +7,7 @@
 [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md) 로 옮겼다.
 그 파일은 정본이 아니다.
 
-마지막 GUI 쓰기는 HTTP 프록시 websocket 이다. 안 적으면 끈다.
+마지막 GUI 쓰기는 패스스루 reject put 이다. SNI 를 끊는다. 상태 코드는 없다.
 
 CI Linux 는 OpenSSL 3 출력 · 바인드 마운트 uid 0 · Lua 밸런서의 호스트 이름 거절에서
 깨졌다. 멤버십 슬롯은 넣기 전에 IP 로 푼다.
@@ -49,7 +49,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | HTTP redirect | 호스트 → `to`. status 301·302·307·308. 기본 302. pool 없음 |
 | HTTP reject | 호스트 → 403·404·444. 기본 403. to·pool 없음. 444 는 응답 없이 끊는다 |
 | 패스스루 리스너 | bind · port. tls 없음. unmatched SNI 풀은 선택 |
-| 패스스루 라우트 | SNI → TCP 풀 proxy. websocket·path 없음. reject 폼 없음 |
+| 패스스루 라우트 | SNI → TCP 풀 proxy. reject 는 SNI 만 끊는다. HTTP status 없음 |
 | 인증서 | 자료는 `POST /certificates/material`. 설정 put 은 `materialRef`·digest 만 |
 | SNI 바인딩 | listener · hosts · certificate. override 없음. 라우트에 안 붙인다 |
 
@@ -64,7 +64,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **410** |
+| 단위 | `npm test` | **413** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -81,7 +81,6 @@ non-zero 다. API·DB 스키마는 아직 동결하지 않는다 (§9.1.1).
 
 가까운 GUI 구멍 — API 는 있고 폼이 없다.
 
-- 패스스루 라우트 reject
 - 풀 알고리즘 `hash` (`hashKey` 필요)
 
 API 가 없어서 못 그리는 것.
