@@ -64,6 +64,26 @@ export async function changesetShow(http: Http, id: string): Promise<unknown> {
 }
 
 /**
+ * changeset 을 버린다. 커밋된 것은 못 버린다 — 그건 롤백이다.
+ * 빈 키는 호출하지 않는다.
+ */
+export async function changesetDiscard(http: Http, id: string): Promise<void> {
+  if (id === '') throw new Error('changeset 키가 비어 있다');
+  unwrap(await http('DELETE', `/api/v1/changesets/${encodeURIComponent(id)}`), 'discard');
+}
+
+/**
+ * sealed → open. 옛 plan 은 무효다. 빈 키는 호출하지 않는다.
+ */
+export async function changesetReopen(http: Http, id: string): Promise<{ id: string; state: string }> {
+  if (id === '') throw new Error('changeset 키가 비어 있다');
+  return unwrap(
+    await http('POST', `/api/v1/changesets/${encodeURIComponent(id)}/reopen`),
+    'reopen',
+  ) as { id: string; state: string };
+}
+
+/**
  * plan 이 가리키는 changeset 으로 커밋한다.
  *
  * 롤백 plan 은 changeset 이 없다. 그쪽은 `bary rollback` 이지 `commit --plan` 이 아니다.

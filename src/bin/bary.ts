@@ -12,7 +12,7 @@
  *   bary tls-policy create --name [--min-version 1.2|1.3]
  *   bary certificate create --name --fullchain --privkey
  *   bary sni-binding create|delete
- *   bary changeset new|patch|plan|show
+ *   bary changeset new|patch|plan|show|discard|reopen
  *   bary commit --plan <id>
  *   bary apply --plan <id>
  *   bary apply <파일.json>      한 바퀴 단축
@@ -37,9 +37,11 @@ import { routeCreate, routeDelete } from '../cli/route.js';
 import { certificateCreate, sniBindingCreate, sniBindingDelete, tlsPolicyCreate } from '../cli/tls.js';
 import {
   applyByPlan,
+  changesetDiscard,
   changesetNew,
   changesetPatch,
   changesetPlan,
+  changesetReopen,
   changesetShow,
   commitByPlan,
   flag,
@@ -104,6 +106,8 @@ const usage = (): never => {
   bary changeset patch <id> <파일.json>
   bary changeset plan <id>       영향만 본다 (커밋하지 않는다)
   bary changeset show <id>
+  bary changeset discard <id>    연 것·봉인한 것을 버린다. 커밋된 것은 롤백이다
+  bary changeset reopen <id>     sealed → open. 옛 plan 은 무효
   bary plan <파일.json>          changeset+patch+plan 단축
   bary commit --plan <id>        plan 이 가리키는 changeset 을 커밋
   bary apply --plan <id>         이미 커밋된 plan 을 nginx 에
@@ -445,6 +449,15 @@ async function main(): Promise<void> {
         if (sub === 'plan') {
           const plan = await changesetPlan(call, arg2 ?? usage());
           show({ id: plan.id, impact: plan.impact, renderDigest: plan.renderDigest });
+          return;
+        }
+        if (sub === 'discard') {
+          await changesetDiscard(call, arg2 ?? usage());
+          console.error(`changeset ${arg2} discarded`);
+          return;
+        }
+        if (sub === 'reopen') {
+          show(await changesetReopen(call, arg2 ?? usage()));
           return;
         }
       } catch (e) {

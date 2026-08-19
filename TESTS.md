@@ -1008,6 +1008,8 @@ S11 하네스의 교훈이다.
 | C5.65 | CLI SNI 바인딩 delete | delete 한 줄. 빈 키는 패치를 안 만든다 |
 | C5.66 | CLI get 인증서·정책·SNI·헬스 | 있는 GET 만. health → `/health/backends`. 모르는 이름은 호출하지 않는다 (`tests/unit/cli-get.test.ts`) |
 | C5.67 | CLI get 한 줄 | `pools/<id>/backends` · `backends/<id>/status`. 빈 키는 경로를 안 만든다 |
+| C5.68 | CLI changeset discard | DELETE. 빈 키는 호출하지 않는다. apply 안 함 (`tests/unit/cli-changeset.test.ts`) |
+| C5.69 | CLI changeset reopen | POST `.../reopen`. 빈 키는 호출하지 않는다. apply 안 함 |
 
 ---
 
