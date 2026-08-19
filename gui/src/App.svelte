@@ -4,6 +4,7 @@
   import Listeners from './lib/Listeners.svelte';
   import Pools from './lib/Pools.svelte';
   import Routes from './lib/Routes.svelte';
+  import Certs from './lib/Certs.svelte';
   import { createDesk } from './lib/desk.svelte.ts';
 
   const desk = createDesk();
@@ -56,6 +57,11 @@
         aria-current={page === 'routes' ? 'page' : undefined}
         onclick={(e) => { e.preventDefault(); go('/routes'); }}
       >라우트</a>
+      <a
+        href="/certificates"
+        aria-current={page === 'certificates' ? 'page' : undefined}
+        onclick={(e) => { e.preventDefault(); go('/certificates'); }}
+      >인증서</a>
     </nav>
     {#if page === 'listeners'}
       <h1>열려 있는 포트</h1>
@@ -66,6 +72,9 @@
     {:else if page === 'routes'}
       <h1>엔진이 보는 순서</h1>
       <p class="lede">사용자 priority 가 매치 클래스를 이기지 못한다. 어긋나면 그림자로 말한다.</p>
+    {:else if page === 'certificates'}
+      <h1>언제 죽는가</h1>
+      <p class="lede">만료는 자료에서 읽는다. 설정에 적은 날짜가 아니다. 주문 상태는 여기 없다.</p>
     {:else}
       <h1>이 적용이 하는 일</h1>
       <p class="lede">저장과 적용은 다르다. 여기 있는 것은 이미 커밋된 plan 이 트래픽에 닿을 때 생기는 영향이다.</p>
@@ -104,6 +113,8 @@
     <Pools view={desk.pools} live={desk.live} />
   {:else if page === 'routes'}
     <Routes view={desk.routes} live={desk.live} />
+  {:else if page === 'certificates'}
+    <Certs view={desk.certs} live={desk.live} />
   {:else if desk.view}
     <Impact view={desk.view} applying={desk.applying} apply={apply} />
   {:else if desk.live}

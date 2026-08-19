@@ -1,6 +1,6 @@
 /**
  * 운영 책상. SSE 를 구독하고, 폴링하지 않는다.
- * Plan·Impact · Listeners · Pools · Routes 가 같은 스트림을 본다 — 연결을 둘로 열지 않는다.
+ * 운영 화면이 같은 스트림을 본다 — 연결을 둘로 열지 않는다.
  * 헬스는 스냅샷과 health 델타다. `/health/backends` 를 치지 않는다.
  */
 import { pickPending, viewOfImpact, type Impact, type ImpactView, type PendingApply } from '@web/impact-view';
@@ -14,6 +14,7 @@ import {
 import {
   viewOfRoutes, type HttpRouteFact, type PassthroughFact, type RoutesView,
 } from '@web/routes-view';
+import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -34,6 +35,7 @@ export function createDesk() {
   let health = $state<HealthFact[]>([]);
   let pools = $state<PoolsView>({ rows: [] });
   let routes = $state<RoutesView>({ order: [], warnings: [], errors: [], passthrough: [] });
+  let certs = $state<CertsView>({ rows: [] });
   let applying = $state(false);
   let stop: (() => void) | undefined;
 
@@ -96,6 +98,17 @@ export function createDesk() {
     await refreshListeners(view);
     await refreshPools();
     await refreshRoutes();
+    await refreshCerts();
+  };
+
+  const refreshCerts = async (): Promise<void> => {
+    const r = await fetch('/api/v1/certificates', { headers: auth() });
+    if (!r.ok) {
+      error = `certificates ${r.status}`;
+      certs = { rows: [] };
+      return;
+    }
+    certs = viewOfCertificates(asList<CertificateFact>(await r.json()));
   };
 
   const refreshRoutes = async (): Promise<void> => {
@@ -189,6 +202,7 @@ export function createDesk() {
     get listeners() { return listeners; },
     get pools() { return pools; },
     get routes() { return routes; },
+    get certs() { return certs; },
     get applying() { return applying; },
     connect,
     apply,

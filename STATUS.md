@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **363** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · Plan·Impact · Listeners · Pools · **Routes** |
+| 단위 | `npm test` | **366** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **Certificates** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,17 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### Certificates 화면을 연다 — 만료는 자료에서 읽는다 (2026-08-19)
+
+v0.6 의 둘째 장. 설정에 적힌 날짜를 그리면 클라이언트가 알람을 속일 수
+있다. `GET /certificates` 가 자료에서 `expiresInDays` 를 낸다. 자료가
+없으면(ACME 발급 전) `facts: null` 이고 **빼지 않는다.**
+
+주문·챌린지 상태는 그리지 않는다. `acme_orders` 는 운영 상태고 읽기
+엔드포인트가 없다. 의도는 `acme` 필드다. 없는 주문을 있는 척하지 않는다.
 
 ---
 

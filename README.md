@@ -12,10 +12,9 @@
 >
 > **What it is not yet.** There is no membership plane (v0.3), so changing a single backend
 > still costs a full generation switch and a reload. TLS termination, ACME and health probing
-> are later milestones (§12.1). Plan·Impact, Listeners, Pools and Routes screens exist — impact, not a
-> diff; the listener list is the head model; pool health is SSE, not a poll;
-> routes show the engine's compiled order, not user priority.
-> Drain progress is not shown. Leader election exists (a PostgreSQL advisory lock
+> are later milestones (§12.1). Operator screens exist for impact, listeners, pools, routes and certificates.
+> Expiry is read from material, not from the spec. ACME order state is not shown —
+> that table has no read API. Drain progress is not shown. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
 > not_leader` to writes) — but **failover is not automatic**: each data plane carries its own
 > nginx, so extra instances are cold standbys, and moving traffic is still DNS or an upstream
