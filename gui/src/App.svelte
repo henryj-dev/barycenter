@@ -77,7 +77,7 @@
       <p class="lede">빈 풀은 저장되지 않는다. 풀을 열 때 첫 백엔드를 같이 넣는다.</p>
     {:else if page === 'routes'}
       <h1>엔진이 보는 순서</h1>
-      <p class="lede">호스트 라우트를 넣는 것은 commit 이다. 매치 클래스가 priority 를 이긴다. redirect·reject 는 아직 폼이 없다.</p>
+      <p class="lede">호스트 라우트를 넣는 것은 commit 이다. 패스스루는 SNI 를 TCP 풀에 붙인다. redirect·reject 는 아직 폼이 없다.</p>
     {:else if page === 'certificates'}
       <h1>언제 죽는가</h1>
       <p class="lede">자료를 넣는 것은 commit 이다. HTTPS 호스트는 SNI 바인딩이 있어야 plan 이 된다.</p>
@@ -175,11 +175,21 @@
         .filter((l) => l.mark !== 'leave' && (l.protocol === 'http' || l.protocol === 'https'))
         .map((l) => l.key)}
       pools={desk.pools.rows.filter((p) => p.protocolClass === 'http').map((p) => p.key)}
+      ptListeners={desk.listeners.rows
+        .filter((l) => l.mark !== 'leave' && l.protocol === 'tls_passthrough')
+        .map((l) => l.key)}
+      tcpPools={desk.pools.rows.filter((p) => p.protocolClass === 'tcp').map((p) => p.key)}
       withdraw={(key) => {
         void desk.withdraw('httpRoute', key).then((ok) => { if (ok) go('/'); });
       }}
+      withdrawPt={(key) => {
+        void desk.withdraw('passthroughRoute', key).then((ok) => { if (ok) go('/'); });
+      }}
       insert={(input) => {
         void desk.insertHttpRoute(input).then((ok) => { if (ok) go('/'); });
+      }}
+      insertPt={(input) => {
+        void desk.insertPassthroughRoute(input).then((ok) => { if (ok) go('/'); });
       }}
     />
   {:else if page === 'certificates'}

@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -232,6 +232,41 @@ describe('설정에서 빼기', () => {
   it('HTTP 라우트를 빼는 패치는 delete 한 줄이다', () => {
     expect(deletePatch('httpRoute', 'r-app')).toEqual([
       { op: 'delete', kind: 'httpRoute', key: 'r-app' },
+    ]);
+  });
+
+  it('패스스루 라우트 패치는 SNI → 풀 proxy 다 — websocket 이 없다', () => {
+    expect(putPassthroughRoutePatch({
+      key: 'pt-app', listener: 'edge', snis: ['app.example.com'], pool: 'origin',
+    })).toEqual([
+      {
+        op: 'put', kind: 'passthroughRoute', key: 'pt-app',
+        body: {
+          listener: 'edge', snis: ['app.example.com'], priority: 0,
+          action: { kind: 'proxy', pool: 'origin' },
+        },
+      },
+    ]);
+  });
+
+  it('패스스루 라우트에 hosts·pathPrefix·websocket 을 안 붙인다', () => {
+    const [op] = putPassthroughRoutePatch({
+      key: 'pt-app', listener: 'edge', snis: ['app.example.com'], pool: 'origin',
+    });
+    expect(op?.body).not.toHaveProperty('hosts');
+    expect(op?.body).not.toHaveProperty('pathPrefix');
+    expect(op?.body.action).not.toHaveProperty('websocket');
+  });
+
+  it('SNI 가 없으면 패스스루 라우트 패치를 만들지 않는다', () => {
+    expect(() => putPassthroughRoutePatch({
+      key: 'pt-app', listener: 'edge', snis: ['  ', ''], pool: 'origin',
+    })).toThrow(/SNI/);
+  });
+
+  it('패스스루 라우트를 빼는 패치는 delete 한 줄이다', () => {
+    expect(deletePatch('passthroughRoute', 'pt-app')).toEqual([
+      { op: 'delete', kind: 'passthroughRoute', key: 'pt-app' },
     ]);
   });
 });

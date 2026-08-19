@@ -1,17 +1,22 @@
 <script lang="ts">
   import type { RoutesView } from '@web/routes-view';
   import AddRoute from './AddRoute.svelte';
+  import AddPassthroughRoute from './AddPassthroughRoute.svelte';
 
-  let { view, live, editing, listeners, pools, withdraw, insert }: {
+  let { view, live, editing, listeners, pools, ptListeners, tcpPools, withdraw, withdrawPt, insert, insertPt }: {
     view: RoutesView;
     live: boolean;
     editing: boolean;
     listeners: string[];
     pools: string[];
+    ptListeners: string[];
+    tcpPools: string[];
     withdraw: (key: string) => void;
+    withdrawPt: (key: string) => void;
     insert: (input: {
       key: string; listener: string; hosts: string[]; pool: string; pathPrefix?: string;
     }) => void;
+    insertPt: (input: { key: string; listener: string; snis: string[]; pool: string }) => void;
   } = $props();
 </script>
 
@@ -50,19 +55,23 @@
     </ol>
   {/if}
 
-  {#if view.passthrough.length > 0}
-    <h2>패스스루</h2>
+  <h2>패스스루</h2>
+  {#if view.passthrough.length === 0}
+    <p class="empty">패스스루 라우트가 없다. 아래에서 SNI 를 붙인다.</p>
+  {:else}
     <ul class="pass">
       {#each view.passthrough as row (row.key)}
         <li>
           <span class="key">{row.key}</span>
           <span class="host mono">{row.snis.join(', ')}</span>
           <span class="cls mono">{row.action}</span>
+          <button type="button" disabled={editing} onclick={() => withdrawPt(row.key)}>설정에서 뺀다</button>
         </li>
       {/each}
     </ul>
   {/if}
   <AddRoute {listeners} {pools} {editing} add={insert} />
+  <AddPassthroughRoute listeners={ptListeners} pools={tcpPools} {editing} add={insertPt} />
 {/if}
 
 <style>
@@ -89,7 +98,7 @@
     padding: 0.55rem 0;
     border-bottom: 1px solid var(--rule);
   }
-  .pass li { grid-template-columns: 7rem 1fr auto; }
+  .pass li { grid-template-columns: 7rem 1fr auto auto; }
   .mono { font-family: var(--data); }
   .n { color: var(--mute); font-size: 0.75rem; }
   .host { font-size: 0.9rem; }

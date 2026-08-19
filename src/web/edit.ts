@@ -4,7 +4,7 @@
  * 저장(commit)과 적용(apply)은 다르다. 여기서 만드는 것은 patch 뿐이다.
  * 메서드×경로 ALLOW/DENY 는 WAF 다. 여기 없다.
  */
-export type EditKind = 'backend' | 'listener' | 'pool' | 'httpRoute' | 'sniBinding';
+export type EditKind = 'backend' | 'listener' | 'pool' | 'httpRoute' | 'passthroughRoute' | 'sniBinding';
 
 export type DeleteOp = { op: 'delete'; kind: EditKind; key: string };
 
@@ -411,4 +411,49 @@ export function putHttpRoutePatch(input: {
   };
   if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
+}
+
+export type PutPassthroughRouteOp = {
+  op: 'put';
+  kind: 'passthroughRoute';
+  key: string;
+  body: {
+    listener: string;
+    snis: string[];
+    priority: number;
+    action: { kind: 'proxy'; pool: string };
+  };
+};
+
+/**
+ * SNI → TCP 풀 proxy. TLS 를 종단하지 않으므로 websocket·path·status 가 없다.
+ * reject 는 폼이 못 채운다. 라우트에 인증서를 안 붙인다 — handshake 는 백엔드다.
+ */
+export function putPassthroughRoutePatch(input: {
+  key: string;
+  listener: string;
+  snis: readonly string[];
+  pool: string;
+  priority?: number;
+}): PutPassthroughRouteOp[] {
+  if (input.key === '') throw new Error('키가 비어 있다');
+  if (input.listener === '') throw new Error('리스너가 비어 있다');
+  if (input.pool === '') throw new Error('풀이 비어 있다');
+  const snis = input.snis.map((s) => s.trim()).filter((s) => s !== '');
+  if (snis.length === 0) throw new Error('SNI 가 비어 있다');
+  const priority = input.priority ?? 0;
+  if (!Number.isInteger(priority) || priority < 0) {
+    throw new Error('priority 가 0 이상 정수가 아니다');
+  }
+  return [{
+    op: 'put',
+    kind: 'passthroughRoute',
+    key: input.key,
+    body: {
+      listener: input.listener,
+      snis,
+      priority,
+      action: { kind: 'proxy', pool: input.pool },
+    },
+  }];
 }

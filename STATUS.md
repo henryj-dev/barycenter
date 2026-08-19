@@ -7,7 +7,7 @@
 [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md) 로 옮겼다.
 그 파일은 정본이 아니다.
 
-마지막 GUI 쓰기는 패스스루 리스너 put 이다. 인증서를 제시하지 않는다.
+마지막 GUI 쓰기는 패스스루 라우트 put 이다. SNI 를 TCP 풀에 붙인다.
 
 ---
 
@@ -44,6 +44,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | HTTPS 리스너 | bind · port · pool · `tls.policy` · `tls.defaultCertificate`. 자료 없는 인증서는 안 고른다 |
 | HTTP 라우트 | 호스트 → 풀 proxy. websocket 끔 |
 | 패스스루 리스너 | bind · port. tls 없음. unmatched SNI 풀은 선택 |
+| 패스스루 라우트 | SNI → TCP 풀 proxy. websocket·path 없음. reject 폼 없음 |
 | 인증서 | 자료는 `POST /certificates/material`. 설정 put 은 `materialRef`·digest 만 |
 | SNI 바인딩 | listener · hosts · certificate. override 없음. 라우트에 안 붙인다 |
 
@@ -58,7 +59,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **394** |
+| 단위 | `npm test` | **398** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -75,8 +76,8 @@ non-zero 다. API·DB 스키마는 아직 동결하지 않는다 (§9.1.1).
 
 가까운 GUI 구멍 — API 는 있고 폼이 없다.
 
-- 패스스루 라우트
 - HTTP 라우트 redirect · reject · websocket
+- 패스스루 라우트 reject
 - 풀 알고리즘 `hash` (`hashKey` 필요)
 
 API 가 없어서 못 그리는 것.
