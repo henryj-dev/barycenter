@@ -909,10 +909,10 @@ type SniCertificateBinding = ResourceMeta & {
 | stream + `stream_realip` 없음 | **검증기가 막는다** — 신뢰 경계를 걸 방법이 없는 조합이다 |
 | DB | `accept_proxy_cidrs text[]`, 빈 배열 금지. **옛 `true` 는 옮기지 않고 끈다** — 신뢰 경계를 지어낼 수 없다 |
 
-아직 없는 것: `real_ip_from_header` · `forwarded_header_policy`. HTTP 헤더 파생은 v0.6 의
-TLS/헤더 정책과 함께 다룬다. **컨트롤 플레인이 엔진 capability 를 조회하지 않는다** —
-`streamRealip` 을 보수적으로 `false` 로 가정하므로, stream PROXY 수신은 지금 항상 막힌다.
-capability 프로브는 별도 과제다.
+아직 없는 것: `real_ip_from_header` · `forwarded_header_policy`. HTTP 헤더 파생은
+모델에 없다. **엔진 capability 는 기동에서 묻는다** (`src/engine/probe.ts`).
+못 물으면 `streamRealip: false` 로 보수적으로 답하고, stream PROXY 수신은 그때
+막힌다.
 
 ### 4.8 Certificate & Secret
 
@@ -1745,7 +1745,8 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
   따라서 목록을 하드코딩하면 어떤 이미지를 골라도 "설계 위반"이 된다. 필수와 선택을 나눈다.
 
   - **필수**: `stream`, `stream_ssl`, `stream_ssl_preread`, `http_v2`, `http_ssl`, `http_realip`
-  - ⚠️ v0 렌더러는 아직 TLS 종단을 내지 않으므로 `https` 리스너를 제공하지 않는다 (§4.1).
+  - **https 는 렌더한다.** TLS 종단 · SNI 선택 · 업로드/ACME 자료는 v0.6 에서 열렸다.
+    GUI 가 https 리스너를 못 여는 것은 tls 바인딩 폼이 없어서다 — 엔진이 없어서가 아니다.
   - **선택(기능을 좁힘)**: `stream_realip`, `http_lua`, `stream_lua`
 
   `stream_realip` 이 없을 때 실측된 결과 (E28·E29):
@@ -1779,7 +1780,8 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
 - 갱신은 만료 30일 전 자동, 실패 시 알림. `not_after` 를 상태 API 에 노출.
   → **노출은 구현됨** — `GET /certificates` 가 `domains`·`notBefore`·`notAfter`·
   `expiresInDays` 를, `/metrics` 가 `bary_certificate_expiry_seconds{certificate=...}` 를
-  낸다. **자동 갱신은 아직 없다** (ACME · S18).
+  낸다. **자동 갱신 틱은 있다** — `AcmeRunner` 가 만료 30일 전에 주문을 연다.
+  없는 것은 주문 GET · dns-01 프로바이더 · GUI 로 수명주기를 조작하는 것이다.
 
   **사실은 설정이 아니라 바이트에서 온다.** changeset 으로 받으면 클라이언트가 만료일을
   거짓말할 수 있고, 그러면 알람이 안 울린다. `put` 시점에 뽑아 내용 주소 참조
@@ -2058,7 +2060,7 @@ freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스�
 |---|---|---|
 | 멤버십 드라이버 · 이중 zone · 헬스 프로버 | §6.5 커서와 함께 | **v0.3** |
 | 드레인 관측 (S2) · `least_conn` (S6) | 기능 | v0.3 · 미정 |
-| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6** — 1단계 완료(2026-08-17): 업로드 인증서 종단·SNI 별 선택·SNI 별 policy·갱신·롤백. **남은 것: GC 원장(S13)**. OCSP stapling 은 **안 짓기로 했다** (§4.6.1 — 잴 수 없고, 주 CA 가 OCSP 를 접었다) (ACME·SNI↔Host·SecretStore GC 는 2026-08-18 구현) (만료 감시·자료 검증은 2026-08-17 구현) |
+| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6 엔진은 열렸다.** 업로드 종단·SNI·policy·갱신 틱·롤백. GUI https 폼과 주문 GET 은 없다. OCSP 는 **안 짓는다** (§4.6.1). GC 원장은 **안 짓는다** (S13) |
 | **HTTP/2** (https, server 별 `http2 on`) | §4.9 실측 — capability 로 가른다 | **v0.6** |
 | **HTTP/3 (QUIC)** | **S20 실행 완료 (2026-08-18) — h3 자체는 된다(7/8). 깨진 것은 ② 뿐이고, 그것이 결정적이다: quic↔udp 충돌을 엔진도 검증기도 못 잡는다(E65). 축소 규칙대로 h3 는 모델에서 계속 뺀다.** | v0.7 |
 | SNI 결과 **3분기 관측**(S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |
@@ -2589,17 +2591,14 @@ capability 패키지이지 apply 구현이 아니다.
 ## 10. Web GUI
 
 - 스택: **Svelte 5 runes**. 코어와 같은 TypeScript 타입 공유.
-  첫 화면은 라우트가 하나라 **Vite + Svelte 5** 다. SvelteKit 은 Listeners · Pools
-  가 붙어 세 경로가 생길 때 연다 — 한 장에 Kit 를 깔면 없는 라우터를 있는 척한다.
+  여섯 경로가 됐는데도 **Vite + Svelte 5** 한 장이다. `pageOf` 가 자리를 가른다.
+  Kit 이주는 별도 조각이다 — 한 장에 Kit 를 깔면 없는 라우터를 있는 척한다.
 - `barycenterd` 가 `gui/build`(또는 `BARY_GUI`) 를 **같은 출처**에서 낸다. CORS 를
   열지 않기 위해서다. 페이지는 토큰 없이 열리고, `/api/v1/*` 는 그대로 Bearer 다.
   EventSource 는 Authorization 을 못 붙이므로 `GET /api/v1/events` 는 fetch 스트림
   + `pullSse` 다.
-- **v0.5 는 얇은 vertical slice 로 시작한다** — Listeners / Pools & Backends(드레인) /
-  Plan·Impact 3화면으로 제품 가설을 검증하고, 나머지는 뒤로 뺀다.
-  지금 열린 것은 Plan·Impact · Listeners · Pools · Routes · Certificates ·
-  Status 다. `serveGui` 의 확장자 없는 폴백이 같은 `index.html` 을 낸다.
-  Kit 이주는 별도 조각이다.
+- 열린 화면: Plan·Impact · Listeners · Pools · Routes · Certificates · Status.
+  `serveGui` 의 확장자 없는 폴백이 같은 `index.html` 을 낸다.
   Plan·Impact 는 `plan.impact` 를 문장으로 접는다. diff 가 아니다.
   Listeners 는 `GET /api/v1/listeners`(head 모델) 다. 커밋됐지만 미적용이면
   그 목록은 이미 미래이고, 엔진에 남은 소켓은 impact 의 `removed` 로만 보인다.
@@ -2622,15 +2621,15 @@ capability 패키지이지 apply 구현이 아니다.
   apply 는 Impact 가 한다. 메서드×경로 ALLOW/DENY 는 WAF 다.
   폴링하지 않는다.
 
-| 화면 | 단계 |
+| 화면 | 상태 |
 |---|---|
-| Listeners — 포트별 목록, 소켓 충돌 경고 | v0.5 |
-| Pools & Backends — 헬스 실시간(SSE), 드레인 진행률(inflight/sessions) | v0.5 |
-| Plan/Impact 모달 — diff 가 아니라 **영향** | v0.5 |
-| Routes — 컴파일된 매칭 순서와 그림자 경고 | v0.6 |
-| Certificates — 만료 정렬, ACME 오더/챌린지 상태 | v0.6 |
-| Status — 4-way + epoch + pending_apply + capability | v0.6 |
-| Rendered Config (읽기 전용) / Audit | v1.0 |
+| Listeners — head 포트, HTTP·TCP put/delete | 열림. https·UDP 폼 없음 |
+| Pools & Backends — SSE 헬스, 풀+첫 백엔드, 백엔드 put/delete | 열림. 드레인 숫자 없음 (S2) |
+| Plan/Impact — diff 가 아니라 **영향**. apply 는 여기만 | 열림 |
+| Routes — 엔진 순서, HTTP 호스트 proxy put/delete | 열림. redirect·reject 없음 |
+| Certificates — 만료는 자료. 목록에서 빼지 않는다 | 읽기. 주문 GET 없음 |
+| Status — SSE 스냅샷 4-way | 열림. nativeDns 선택형 없음 |
+| Rendered Config / Audit | API 있음. 화면은 v1.0 |
 
 - 실시간: SSE (스냅샷 + 델타, 하트비트). GUI 는 폴링하지 않는다.
   스냅샷은 `status` 에 지금 `health` 를 얹는다. 판정 변경은 `health` 델타.
@@ -2705,10 +2704,10 @@ k8s 네이티브 배포는 별도 과제.
 | S5 ~ | **이중 zone + 워커 수렴 + 평면 부분 전환** | 양쪽 ACK 후 전 워커 수렴 < 500ms **AND** 한쪽 평면 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존에서 잘못된 peer 선택 0회 | → 대안 B (구조 불성립) |
 | S6 | `least_conn` 근사 오차 | 균등 부하에서 편차 < 10% | v0 알고리즘에서 제외 |
 | S7 ✅ | reload 실패 판정 | 포트 점유 상태 HUP 재현 + 오탐/미탐 0, 판정 시간 < 3s | 판정 절차 재설계 (ApplyOperation freeze 에는 block) |
-| S8 | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | 설계 재작업 (block) |
+| S8 ✅ | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | 설계 재작업 (block) |
 | S9 | SNI 결과 3분기 관측성 | TLS-no-SNI / malformed / preread timeout 구분 가능 여부 (**비-TLS 는 E26.1 로 이미 확인**) | 현행 유지 — 부재·파싱실패는 계속 `reject` 고정 |
 | S10 | 라우트 컴파일러 | exact/wildcard/path 우선순위 + 라우트 500개 p99 영향 < 5% | `strict_priority` 모드 미제공 |
-| S11 ❌ | **operation tuple 과 경합** | ① 롤백 후 옛 좌표 RPC 거부 ② cut 이후 델타 미유실 ③ staging 전 accept 없음 ④ 다중 serving epoch ⑤ 옛 리더 토큰 거부 ⑥ **동시 RPC** ⑦ 취소된 미래 epoch 거부 ⑧ 같은 좌표 다른 digest 거부 ⑨ DP 재시작 후 토큰 유지 — 전부 잘못된 peer 선택 0회 | 설계 재작업 (block) |
+| S11 ~ | **operation tuple 과 경합** | 원래 스파이크 기준 9항. **DP Agent 로 재구현**했다. cut·replay 일부는 논증 | 설계 재작업 (block) — 원래 스파이크는 닫히지 않았고 상태기계가 그 자리를 먹었다 |
 | S12 ✅ | 크래시 저널 | §6.2 표의 모든 지점(durable write·외부 side-effect 직전/직후)에서 복구 정확. **최종 세대가 정확하고 중복 cycle 이 상한 이내** (exactly-once 는 요구하지 않는다 — §6.2) | 설계 재작업 (block) |
 | S13 ✅ | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 오삭제 0회 + §8.4 GC 각 단계 크래시에서 **누수·이중감소 0회** + GC root 누락 0회 | GC 보수화 |
 | S14 ~ | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL/NXDOMAIN/timeout, 기존 세션 거동 | 폴백 자체가 없음 → 요구 재조정 |
@@ -2977,10 +2976,10 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 |---|---|---|
 | **v0.1** 골격 ✅ | (동결은 둘로 나뉜다 — §9.1.1) 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
 | **v0.2** L4 ✅ | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
-| **v0.3** 멤버십 ✅ | 이중 zone 멤버십 평면 + epoch 결박 + 헬스 프로버 + 드레인 관측 + **§6.5 커서·cut·replay 와 멤버십 드라이버 계약 확정** (§9.1) | 백엔드 down 시 reload 없이 격리되고, apply 중 헬스 변화가 경합하지 않는다 (S11 시나리오 회귀 테스트). **활성 epoch 안의 헬스 진행이 전환 중인 commit 을 깨지 않는다** |
+| **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2)은 아직** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. inflight/sessions 숫자는 없다 |
 | **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). 리소스별 하위 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
-| **v0.5** GUI slice | SSE ✅ (`GET /api/v1/events`). 3화면은 아직 | 클릭만으로 v0.3 시나리오 재현 |
-| **v0.6** TLS | `SecretStore`/`DNSProvider` 확정 → ACME 상태기계, 업로드, 자동 갱신, 세대 결박 롤백 + GUI 잔여 화면 | 무중단 갱신 관측 + 갱신 후 롤백 시 옛 인증서 복원 |
+| **v0.5** GUI | SSE ✅. 여섯 화면 ✅ (영향·리스너·풀·라우트·인증서·상태). Kit 아님. 드레인 화면 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
+| **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI https 폼 · 주문 GET · dns-01 은 아직 | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
 | **v1.0** | 전체 RBAC, 백업/복구 리허설, SPOF 런북, 문서 | RTO/RPO 리허설 합격 |
 
@@ -3166,7 +3165,7 @@ slice 로 v0.5 에서 검증한다.
 | 드레인 | GOAWAY + `force_close` 약속 | **관측 + 새 트래픽 차단까지.** 강제 종료는 capability |
 | SNI 결과 분기 | 3분할 확정 | **2분할.** 3분할은 S9 통과 시 |
 | ACME / 콜드 스탠바이 | v1 문서에서 계약 확정 | **스파이크 후 ADR** 로 미룸 |
-| GUI | v0.5 에 8화면 | **3화면 slice**, 나머지 v0.6/v1.0 |
+| GUI | v0.5 에 8화면 | **3화면으로 시작.** 2026-08-19 현재 여섯 화면. Kit·드레인·https 폼은 아직 |
 
 **반대로 축소하지 않은 것** (2차 검수도 "안전성의 최소 구조"로 인정): immutable generation,
 DP 단일 writer, graph changeset, config↔membership epoch fencing.

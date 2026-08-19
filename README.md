@@ -4,32 +4,34 @@
 
 > *A barycenter is the common center of mass that bodies in a system actually orbit — the point where the whole thing balances.*
 
-> ⚠️ **Status: v0.1 — it runs, and it is a draft.**
+> ⚠️ **Status: it runs, and it is a draft.**
 > `docker compose up` gives you a control plane you can drive over REST: a change goes through
 > a changeset, gets planned, committed, rendered, published as an immutable generation, and
 > activated on real nginx — with the activation *proven* before any coordinate moves.
 > The [Quickstart](#quickstart) below ends with `curl` reaching a backend.
 >
-> **What it is not yet.** There is no membership plane (v0.3), so changing a single backend
-> still costs a full generation switch and a reload. TLS termination, ACME and health probing
-> are later milestones (§12.1). Operator screens exist for impact, listeners, pools, routes, certificates and status.
+> **What is there.** HTTP, HTTPS, TCP, UDP and SNI pass-through render. A Lua membership
+> plane updates backends without a reload. A TCP health probe publishes flips on SSE.
+> ACME http-01 and uploaded certificates terminate TLS. Operator screens exist for
+> impact, listeners, pools, routes, certificates and status.
 > Adding or removing a backend, opening a pool (with its first backend — empty pools
 > are rejected), opening/closing an HTTP or TCP listener, or adding/removing an HTTP host
 > route (proxy to a pool; websocket off), goes through a changeset and
 > stops at commit. Apply is a separate action on the impact screen.
-> HTTPS listeners are not offered yet: they need a TLS binding the form cannot fill.
-> UDP listeners need a preset the form does not fill.
-> Expiry is read from material, not from the spec. ACME order state is not shown —
-> that table has no read API. Drain progress is not shown. Leader election exists (a PostgreSQL advisory lock
+>
+> **What it is not yet.** HTTPS and UDP listeners have no GUI form (HTTPS needs a TLS
+> binding; UDP needs a preset). ACME order state is not shown — that table has no read
+> API. dns-01 has no provider. Drain progress is not shown (S2). The CLI has no
+> per-resource subcommands. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
 > not_leader` to writes) — but **failover is not automatic**: each data plane carries its own
 > nginx, so extra instances are cold standbys, and moving traffic is still DNS or an upstream
 > L4's job (§11.4).
 >
 > The design lives in [`DESIGN.md`](./DESIGN.md) and the test cases derived from it in
-> [`TESTS.md`](./TESTS.md) (both written in Korean). Fifty rounds of adversarial review are
-> folded in; what each one found — including the times the review was wrong, and the times my
-> own fix opened the next hole — is recorded in [`STATUS.md`](./STATUS.md).
+> [`TESTS.md`](./TESTS.md) (both written in Korean). What is true *now* is in
+> [`STATUS.md`](./STATUS.md). The review-round diary is in
+> [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md).
 >
 > **The API and DB schema are still not frozen** (§9.1.1). They get fixed *with* the
 > implementation, and the implementation is not finished.
@@ -163,16 +165,18 @@ not a moat. The bets that need execution quality instead:
 ## What it does
 
 - **Domain-based HTTP(S) routing** with full TLS lifecycle management (ACME + uploaded certs).
-- **Real TCP/UDP load balancing** — upstream pools, balancing algorithms, health probes that
-  are configured independently of the data protocol, and observable connection draining.
-  Not just port forwarding.
+- **Real TCP/UDP load balancing** — upstream pools, balancing algorithms, and a TCP
+  health probe that flips membership without a reload. Drain *observation* (inflight /
+  sessions) is not implemented; new traffic can be kept off a backend, existing
+  sessions are not counted or forced closed. Not just port forwarding.
 - **SNI-based TLS pass-through** on layer 4 (via `ssl_preread`). A missing or unparseable SNI
   is rejected — not configurable — so a client that sends none can never land on an arbitrary
   backend. Only *unmatched* SNI has a configurable fallback.
 - **Inbound and backend ports are independent.** `:999 → A:11` and `:888 → B:11` are just two
   listeners pointing at two pools.
-- **GUI, API, and CLI are equals.** The REST API is the only entry point; the web UI and `bary`
-  CLI are both clients of it. Anything you can click, you can script.
+- **The API is the only entry point.** The web UI and `bary` CLI are clients of it.
+  They are not yet equal: the GUI has no HTTPS/UDP form, and the CLI has no
+  per-resource subcommands. Equality is a v1.0 claim (`DESIGN.md` §1).
 - **Nothing is applied blind.** Changes accumulate in a changeset, `plan` reports the impact,
   and apply runs a durable state machine — render → validate on the real data plane → publish →
   reload → verify, with automatic rollback and an explicit failure state when rollback itself fails.
@@ -257,14 +261,14 @@ ships both `stream_realip` and `ngx_stream_lua`.
 
 | | | |
 |---|---|---|
-| **v0.0** | Architecture spike, S1–S19 — each with a pass threshold and a decision on failure | ← **S1 · S7 · S8 · S11 · S12 · S16 · S17 · S18 · S19 pass. All three block-grade gates (S8 · S11 · S12) are open; the rest are scope-reduction grade** |
-| **v0.1** | Typed model, `topology_epoch`, sealed changesets, apply state machine + crash table, DP agent, config AST renderer, minimal auth/audit | |
-| **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap validator, route compiler | ← *proof of concept ends here* |
-| **v0.3** | Membership plane — dual http/stream zones, epoch fencing, health prober, drain observation | |
-| **v0.4** | `bary` CLI, transactional `export` / `import` | |
-| **v0.5** | Web GUI — thin vertical slice (listeners, pools/drain, plan/impact) | |
-| **v0.6** | ACME (http-01, dns-01), auto-renewal, generation-bound certificate rollback | |
-| **v0.7** | Driver reference implementations, loader hardening, compatibility test kit | |
+| **v0.0** | Architecture spike, S1–S20 | S8 · S11 · S12 (block) and S1 · S7 · S13 · S16 · S17 · S18 · S19 passed. S14 is 7/8 and stays out of the gate. S20 keeps h3 out of the model. S2 drain is still open |
+| **v0.1** | Typed model, sealed changesets, apply state machine, DP agent, renderer | ← **done** |
+| **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
+| **v0.3** | Membership plane, health probe | ← **done except drain observation (S2)** |
+| **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** No per-resource subcommands |
+| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP writes | ← **slice is open.** No Kit, no drain, no HTTPS/UDP form |
+| **v0.6** | TLS terminate, ACME http-01, cert rollback | ← **engine done.** No order GET, no dns-01, no HTTPS GUI |
+| **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` has no consumer |
 | **v1.0** | Full RBAC, backup/restore rehearsal, SPOF runbook, documentation | |
 
 ## Known limitations of the nginx data plane
