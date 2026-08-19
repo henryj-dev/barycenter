@@ -61,11 +61,32 @@ describe('pool create 패치', () => {
     ]);
   });
 
-  it('source_ip_hash·least_conn 과 모르는 hashKey 는 패치를 안 만든다', () => {
+  it('source_ip_hash 풀은 hashKey 없이 첫 백엔드와 같이 넣는다', () => {
+    const patch = poolCreatePatch({
+      name: 'app', protocolClass: 'http', algorithm: 'source_ip_hash',
+      backend: 'a1', host: '10.0.0.11', port: 11,
+    });
+    expect(patch).toEqual([
+      {
+        op: 'put',
+        kind: 'pool',
+        key: 'app',
+        body: { protocolClass: 'http', algorithm: 'source_ip_hash' },
+      },
+      {
+        op: 'put',
+        kind: 'backend',
+        key: 'a1',
+        body: { pool: 'app', host: '10.0.0.11', port: 11, weight: 1 },
+      },
+    ]);
+    expect(JSON.stringify(patch)).not.toContain('hashKey');
+  });
+
+  it('least_conn 과 모르는 hashKey 는 패치를 안 만든다', () => {
     const base = { name: 'app', protocolClass: 'http', backend: 'a1', host: '10.0.0.11', port: 11 };
     expect(poolCreatePatch({ ...base, algorithm: 'hash' })).toBeUndefined();
     expect(poolCreatePatch({ ...base, algorithm: 'hash', hashKey: 'not_a_var' })).toBeUndefined();
-    expect(poolCreatePatch({ ...base, algorithm: 'source_ip_hash' })).toBeUndefined();
     expect(poolCreatePatch({ ...base, algorithm: 'least_conn' })).toBeUndefined();
     expect(poolCreatePatch({ ...base, protocolClass: 'quic' })).toBeUndefined();
   });

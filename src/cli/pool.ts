@@ -2,11 +2,14 @@
  * CLI 풀 쓰기 — DESIGN.md §5.6
  *
  * 첫 백엔드와 같이 넣는다. 빈 풀만은 plan 이 막는다.
- * round_robin 과 hash. hashKey 는 검증기와 같은 화이트리스트다.
- * source_ip_hash 는 아직이다. apply 는 안 한다.
+ * round_robin · hash · source_ip_hash. hashKey 는 검증기와 같은 화이트리스트다.
+ * source_ip_hash 는 hashKey 를 안 붙인다. apply 는 안 한다.
  */
 import { parseHashKey } from '../validate/strings.js';
-import { putHashPoolWithBackendPatch, putPoolWithBackendPatch, type ProtocolClass } from '../web/edit.js';
+import {
+  putHashPoolWithBackendPatch, putPoolWithBackendPatch, putSourceIpHashPoolWithBackendPatch,
+  type ProtocolClass,
+} from '../web/edit.js';
 
 import { changesetNew, changesetPatch, changesetPlan, commitByPlan, type Http } from './flow.js';
 
@@ -27,6 +30,7 @@ export function poolCreatePatch(
   input: PoolCreateInput,
 ): ReturnType<typeof putPoolWithBackendPatch>
   | ReturnType<typeof putHashPoolWithBackendPatch>
+  | ReturnType<typeof putSourceIpHashPoolWithBackendPatch>
   | undefined {
   const klass = protocolClass(input.protocolClass);
   if (klass === undefined) return undefined;
@@ -54,6 +58,15 @@ export function poolCreatePatch(
       port: input.port,
     });
   }
+  if (algorithm === 'source_ip_hash') {
+    return putSourceIpHashPoolWithBackendPatch({
+      pool: input.name,
+      protocolClass: klass,
+      backend: input.backend,
+      host: input.host,
+      port: input.port,
+    });
+  }
   return undefined;
 }
 
@@ -63,7 +76,7 @@ export async function poolCreate(
 ): Promise<{ revision: string; planId: string }> {
   const patch = poolCreatePatch(input);
   if (patch === undefined) {
-    throw new Error('round_robin·hash 만 연다. hash 는 --hash-key 화이트리스트다. source_ip_hash 는 아직이다');
+    throw new Error('round_robin·hash·source_ip_hash 만 연다. hash 는 --hash-key 화이트리스트다');
   }
   const cs = await changesetNew(http);
   await changesetPatch(http, cs.id, patch);
