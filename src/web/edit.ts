@@ -383,7 +383,7 @@ export type PutHttpRouteOp = {
 
 /**
  * 호스트 → 풀 proxy. websocket 은 끈다.
- * redirect·reject 는 폼이 못 채운다.
+ * redirect 는 putHttpRedirectPatch. reject 는 폼이 못 채운다.
  */
 export function putHttpRoutePatch(input: {
   key: string;
@@ -408,6 +408,61 @@ export function putHttpRoutePatch(input: {
     hosts,
     priority,
     action: { kind: 'proxy', pool: input.pool, websocket: false },
+  };
+  if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
+  return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
+}
+
+export type RedirectStatus = 301 | 302 | 307 | 308;
+
+const REDIRECT_STATUSES: readonly RedirectStatus[] = [301, 302, 307, 308];
+
+export type PutHttpRedirectOp = {
+  op: 'put';
+  kind: 'httpRoute';
+  key: string;
+  body: {
+    listener: string;
+    hosts: string[];
+    priority: number;
+    pathPrefix?: string;
+    action: { kind: 'redirect'; to: string; status: RedirectStatus };
+  };
+};
+
+/**
+ * 호스트 → URL redirect. pool·websocket 을 안 붙인다.
+ * reject 는 폼이 못 채운다. 기본 상태는 302.
+ */
+export function putHttpRedirectPatch(input: {
+  key: string;
+  listener: string;
+  hosts: readonly string[];
+  to: string;
+  status?: RedirectStatus;
+  pathPrefix?: string;
+  priority?: number;
+}): PutHttpRedirectOp[] {
+  if (input.key === '') throw new Error('키가 비어 있다');
+  if (input.listener === '') throw new Error('리스너가 비어 있다');
+  const to = input.to.trim();
+  if (to === '') throw new Error('대상이 비어 있다');
+  const hosts = input.hosts.map((h) => h.trim()).filter((h) => h !== '');
+  if (hosts.length === 0) throw new Error('호스트가 비어 있다');
+  const status = Number(input.status ?? 302) as RedirectStatus;
+  if (!REDIRECT_STATUSES.includes(status)) {
+    throw new Error('status 가 301|302|307|308 이 아니다');
+  }
+  const priority = input.priority ?? 0;
+  if (!Number.isInteger(priority) || priority < 0) {
+    throw new Error('priority 가 0 이상 정수가 아니다');
+  }
+  const pathPrefix = input.pathPrefix?.trim();
+  const body: PutHttpRedirectOp['body'] = {
+    listener: input.listener,
+    hosts,
+    priority,
+    action: { kind: 'redirect', to, status },
   };
   if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];

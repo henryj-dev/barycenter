@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -233,6 +233,41 @@ describe('설정에서 빼기', () => {
     expect(deletePatch('httpRoute', 'r-app')).toEqual([
       { op: 'delete', kind: 'httpRoute', key: 'r-app' },
     ]);
+  });
+
+  it('HTTP redirect 패치는 to·status 다 — pool 을 안 붙인다', () => {
+    expect(putHttpRedirectPatch({
+      key: 'r-https', listener: 'front', hosts: ['app.example.com'], to: 'https://app.example.com/',
+    })).toEqual([
+      {
+        op: 'put', kind: 'httpRoute', key: 'r-https',
+        body: {
+          listener: 'front', hosts: ['app.example.com'], priority: 0,
+          action: { kind: 'redirect', to: 'https://app.example.com/', status: 302 },
+        },
+      },
+    ]);
+  });
+
+  it('HTTP redirect 패치에 pool·websocket 을 안 붙인다', () => {
+    const [op] = putHttpRedirectPatch({
+      key: 'r-https', listener: 'front', hosts: ['app.example.com'], to: 'https://x/',
+    });
+    expect(op?.body.action).not.toHaveProperty('pool');
+    expect(op?.body.action).not.toHaveProperty('websocket');
+  });
+
+  it('대상이 비면 redirect 패치를 만들지 않는다', () => {
+    expect(() => putHttpRedirectPatch({
+      key: 'r-https', listener: 'front', hosts: ['app.example.com'], to: '  ',
+    })).toThrow(/대상/);
+  });
+
+  it('모르는 redirect 상태는 패치를 만들지 않는다', () => {
+    expect(() => putHttpRedirectPatch({
+      key: 'r-https', listener: 'front', hosts: ['app.example.com'], to: 'https://x/',
+      status: 418 as 302,
+    })).toThrow(/status/);
   });
 
   it('패스스루 라우트 패치는 SNI → 풀 proxy 다 — websocket 이 없다', () => {

@@ -77,7 +77,7 @@
       <p class="lede">빈 풀은 저장되지 않는다. 풀을 열 때 첫 백엔드를 같이 넣는다.</p>
     {:else if page === 'routes'}
       <h1>엔진이 보는 순서</h1>
-      <p class="lede">호스트 라우트를 넣는 것은 commit 이다. 패스스루는 SNI 를 TCP 풀에 붙인다. redirect·reject 는 아직 폼이 없다.</p>
+      <p class="lede">호스트 라우트를 넣는 것은 commit 이다. redirect 는 풀이 아니라 대상 URL 이다. reject 는 아직 폼이 없다.</p>
     {:else if page === 'certificates'}
       <h1>언제 죽는가</h1>
       <p class="lede">자료를 넣는 것은 commit 이다. HTTPS 호스트는 SNI 바인딩이 있어야 plan 이 된다.</p>
@@ -187,6 +187,9 @@
       }}
       insert={(input) => {
         void desk.insertHttpRoute(input).then((ok) => { if (ok) go('/'); });
+      }}
+      insertRedirect={(input) => {
+        void desk.insertHttpRedirect(input).then((ok) => { if (ok) go('/'); });
       }}
       insertPt={(input) => {
         void desk.insertPassthroughRoute(input).then((ok) => { if (ok) go('/'); });
