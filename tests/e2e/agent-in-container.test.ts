@@ -332,11 +332,10 @@ describe('DP Agent 를 컨테이너 안에서 돌린다 — FsEffects 실물 경
    * 기존 로그를 깔아 두면 기준선을 안 잡는 구현이 **그 줄들을 이 전환의 오류로 센다.**
    */
   it('기존 error log 는 이 전환의 오류가 아니다 — 워터마크는 신호 시점 기준이다', async () => {
-    writeFileSync(
-      join(prefix, 'logs', 'error.log'),
-      Array.from({ length: 12 }, (_, i) => `2020/01/01 00:00:00 [warn] 옛 오류 ${i}`).join('\n') + '\n',
-      'utf8',
-    );
+    // nginx(uid 0)가 만든 로그는 Linux 바인드 마운트에서 호스트가 못 연다.
+    // mac virtiofs 는 이걸 가린다. 씨앗은 컨테이너 안에서 깐다.
+    docker('exec', container, 'sh', '-c',
+      'i=0; while [ "$i" -lt 12 ]; do echo "2020/01/01 00:00:00 [warn] 옛 오류 $i"; i=$((i+1)); done > /prefix/logs/error.log');
 
     const out = runAgent('gen-2', 'inc-wm', '1');
     expect(field(out, 'PHASE'), `기존 로그를 이 전환의 오류로 셌다: ${out}`).toBe('activated');

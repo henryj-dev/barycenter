@@ -461,13 +461,16 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
     // 그리고 복원의 정본이 **세대 아티팩트면 안 된다.** 아티팩트는 그 세대가 만들어질
     // 때의 스냅샷이라, 그 뒤의 멤버십 전용 변경(세대를 안 만든다)이 통째로 사라진다.
     // 실제로 그렇게 만들었다가 :12 로 옮긴 백엔드가 재시작 뒤 :11 로 되살아났다.
-    await push([
-      { op: 'put', kind: 'listener', key: 'front',
-        body: {
-          protocol: 'http', bind: '0.0.0.0', port: 999, enabled: true,
-          http: { defaultAction: { pool: 'app' } },
-        } },
+    //
+    // 앞 테스트가 백엔드를 둘 다 넣고 풀을 source_ip_hash 로 바꿨다. 한 클라이언트
+    // IP 는 한 백엔드만 본다 — CI 가 B11 에 붙으면 여기서 영원히 B12 를 못 본다.
+    // 재는 것은 해시가 아니라 **멤버십만 :12 로 옮긴 뒤 재시작이 그걸 지키는가**다.
+    const { apply, plan } = await push([
+      { op: 'delete', kind: 'backend', key: 'b11' },
     ]);
+    expect(plan.body.impact.requiresReload).toBe(false);
+    expect(apply.body.phase, JSON.stringify(apply.body.detail)).toBe('activated');
+    expect(apply.body.detail).toMatchObject({ membershipOnly: true, reload: false });
     expect(await waitFor(hit, (v) => v === 'B12')).toBe('B12');
 
     docker('restart', DP);
