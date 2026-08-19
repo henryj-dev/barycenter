@@ -2613,17 +2613,18 @@ capability 패키지이지 apply 구현이 아니다.
   Status 는 SSE 스냅샷의 4-way 다. `/status` 를 폴링하지 않는다. nativeDns
   선택형은 그리지 않는다.
   GUI 쓰기는 changeset 을 지난다. 지금 열린 것은 백엔드 `put`/`delete`,
-  HTTP 리스너 `put`/`delete`, TCP 리스너 `put`/`delete`, 풀은 **첫 백엔드와
-  같이** `put` 한다. 빈 풀은 검증기가 막는다. HTTP 라우트 `put`/`delete` 는
-  호스트 → 풀 proxy 다. websocket 은 끈다. redirect·reject 는 폼이 없다.
-  TCP 는 `defaultPool` 이다 — `http.defaultAction` 이 아니다. https 는 tls 가
-  필수라 폼이 아직 못 채운다. UDP 는 preset 이 필요하다. commit 까지 하고
-  apply 는 Impact 가 한다. 메서드×경로 ALLOW/DENY 는 WAF 다.
+  HTTP·TCP·UDP 리스너 `put`/`delete`, 풀은 **첫 백엔드와 같이** `put` 한다.
+  빈 풀은 검증기가 막는다. HTTP 라우트 `put`/`delete` 는 호스트 → 풀 proxy 다.
+  websocket 은 끈다. redirect·reject 는 폼이 없다. TCP·UDP 는 `defaultPool`
+  이다 — `http.defaultAction` 이 아니다. UDP 는 named preset 만 받는다
+  (`dns`·`wireguard`·`game_generic`·`custom`). https 는 tls 가 필수라 폼이
+  아직 못 채운다. commit 까지 하고 apply 는 Impact 가 한다.
+  메서드×경로 ALLOW/DENY 는 WAF 다.
   폴링하지 않는다.
 
 | 화면 | 상태 |
 |---|---|
-| Listeners — head 포트, HTTP·TCP put/delete | 열림. https·UDP 폼 없음 |
+| Listeners — head 포트, HTTP·TCP·UDP put/delete | 열림. https 폼 없음 |
 | Pools & Backends — SSE 헬스, 풀+첫 백엔드, 백엔드 put/delete | 열림. 드레인 숫자 없음 (S2) |
 | Plan/Impact — diff 가 아니라 **영향**. apply 는 여기만 | 열림 |
 | Routes — 엔진 순서, HTTP 호스트 proxy put/delete | 열림. redirect·reject 없음 |
@@ -2978,7 +2979,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.2** L4 ✅ | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
 | **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2)은 아직** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. inflight/sessions 숫자는 없다 |
 | **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). 리소스별 하위 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
-| **v0.5** GUI | SSE ✅. 여섯 화면 ✅ (영향·리스너·풀·라우트·인증서·상태). Kit 아님. 드레인 화면 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
+| **v0.5** GUI | SSE ✅. 여섯 화면 ✅. HTTP·TCP·UDP 쓰기 ✅. Kit 아님. 드레인·https 폼 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
 | **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI https 폼 · 주문 GET · dns-01 은 아직 | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
 | **v1.0** | 전체 RBAC, 백업/복구 리허설, SPOF 런북, 문서 | RTO/RPO 리허설 합격 |

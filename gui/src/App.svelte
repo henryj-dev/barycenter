@@ -71,7 +71,7 @@
     </nav>
     {#if page === 'listeners'}
       <h1>열려 있는 포트</h1>
-      <p class="lede">head 모델이다. HTTP·TCP 포트를 여는 것은 commit 이다. https·udp 는 아직 폼이 없다.</p>
+      <p class="lede">head 모델이다. HTTP·TCP·UDP 포트를 여는 것은 commit 이다. https 는 아직 폼이 없다.</p>
     {:else if page === 'pools'}
       <h1>풀이 받는 것</h1>
       <p class="lede">빈 풀은 저장되지 않는다. 풀을 열 때 첫 백엔드를 같이 넣는다.</p>
@@ -123,6 +123,7 @@
       editing={desk.editing}
       pools={desk.pools.rows.filter((p) => p.protocolClass === 'http').map((p) => p.key)}
       tcpPools={desk.pools.rows.filter((p) => p.protocolClass === 'tcp').map((p) => p.key)}
+      udpPools={desk.pools.rows.filter((p) => p.protocolClass === 'udp').map((p) => p.key)}
       withdraw={(key) => {
         void desk.withdraw('listener', key).then((ok) => { if (ok) go('/'); });
       }}
@@ -131,6 +132,9 @@
       }}
       insertTcp={(key, bind, port, pool) => {
         void desk.insertTcpListener(key, { bind, port, pool }).then((ok) => { if (ok) go('/'); });
+      }}
+      insertUdp={(key, bind, port, pool, preset) => {
+        void desk.insertUdpListener(key, { bind, port, pool, preset }).then((ok) => { if (ok) go('/'); });
       }}
     />
   {:else if page === 'pools'}

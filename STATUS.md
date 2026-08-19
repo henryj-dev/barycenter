@@ -7,7 +7,7 @@
 [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md) 로 옮겼다.
 그 파일은 정본이 아니다.
 
-`origin/main` 은 `a8a84c5` (`GUI 가 TCP 포트를 연다`).
+마지막 GUI 쓰기는 UDP 리스너 put 이다.
 
 ---
 
@@ -39,6 +39,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 백엔드 | put · delete |
 | HTTP 리스너 | bind · port · `http.defaultAction.pool` |
 | TCP 리스너 | bind · port · `defaultPool` (http 프로필을 안 붙인다) |
+| UDP 리스너 | bind · port · `defaultPool` · named preset. PROXY 필드 없음 |
 | HTTP 라우트 | 호스트 → 풀 proxy. websocket 끔 |
 
 인증서는 읽기만 한다. 만료는 자료에서 읽고, 자료가 없으면 빼지 않는다.
@@ -52,7 +53,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **381** |
+| 단위 | `npm test` | **383** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -72,7 +73,6 @@ non-zero 다. API·DB 스키마는 아직 동결하지 않는다 (§9.1.1).
 - https 리스너 (`tls.policy` + `tls.defaultCertificate`). `GET /tls-policies` ·
   `GET /certificates` · `POST /certificates/material` 은 있다
 - TLS 정책 put, 인증서 메타 put, SNI 바인딩 put
-- UDP 리스너 (preset 필수)
 - 패스스루 리스너 · 패스스루 라우트
 - HTTP 라우트 redirect · reject · websocket
 - 풀 알고리즘 `hash` (`hashKey` 필요)

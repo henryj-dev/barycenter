@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -68,6 +68,27 @@ describe('설정에서 빼기', () => {
     expect(op?.body).not.toHaveProperty('http');
     expect(op?.body).not.toHaveProperty('tls');
     expect(op?.body).not.toHaveProperty('udp');
+  });
+
+  it('UDP 리스너를 넣는 패치는 put 한 줄이다 — preset 이 필수다', () => {
+    expect(putUdpListenerPatch('dns', {
+      bind: '0.0.0.0', port: 53, pool: 'resolvers', preset: 'dns',
+    })).toEqual([
+      {
+        op: 'put', kind: 'listener', key: 'dns',
+        body: {
+          protocol: 'udp', bind: '0.0.0.0', port: 53, enabled: true,
+          defaultPool: 'resolvers', udp: { preset: 'dns' },
+        },
+      },
+    ]);
+  });
+
+  it('모르는 UDP preset 은 패치를 만들지 않는다', () => {
+    expect(() => putUdpListenerPatch('dns', {
+      bind: '0.0.0.0', port: 53, pool: 'resolvers',
+      preset: '없음' as 'dns',
+    })).toThrow(/preset/);
   });
 
   it('HTTP 라우트를 넣는 패치는 put 한 줄이다 — proxy 이고 websocket 은 끈다', () => {

@@ -88,7 +88,7 @@ export type PutTcpListenerOp = {
 
 /**
  * TCP 만. defaultPool 은 최상위 필드다 — http.defaultAction 이 아니다.
- * PROXY 수신은 trustedCidrs 가 없어서 안 켠다. UDP 는 preset 이 필요하다.
+ * PROXY 수신은 trustedCidrs 가 없어서 안 켠다.
  */
 export function putTcpListenerPatch(
   key: string,
@@ -110,6 +110,54 @@ export function putTcpListenerPatch(
       port: body.port,
       enabled: true,
       defaultPool: body.pool,
+    },
+  }];
+}
+
+export type UdpPreset = 'dns' | 'wireguard' | 'game_generic' | 'custom';
+
+const UDP_PRESETS: readonly UdpPreset[] = ['dns', 'wireguard', 'game_generic', 'custom'];
+
+export type PutUdpListenerOp = {
+  op: 'put';
+  kind: 'listener';
+  key: string;
+  body: {
+    protocol: 'udp';
+    bind: string;
+    port: number;
+    enabled: true;
+    defaultPool: string;
+    udp: { preset: UdpPreset };
+  };
+};
+
+/**
+ * UDP 만. preset 이 없으면 렌더러가 custom 을 지어 낸다 — 해독기가 막는다.
+ * PROXY 수신 필드가 타입에 없다. 모르는 preset 은 패치를 안 만든다.
+ */
+export function putUdpListenerPatch(
+  key: string,
+  body: { bind: string; port: number; pool: string; preset: UdpPreset },
+): PutUdpListenerOp[] {
+  if (key === '') throw new Error('키가 비어 있다');
+  if (body.bind === '') throw new Error('바인드가 비어 있다');
+  if (body.pool === '') throw new Error('풀이 비어 있다');
+  if (!UDP_PRESETS.includes(body.preset)) throw new Error('preset 이 dns|wireguard|game_generic|custom 이 아니다');
+  if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) {
+    throw new Error('포트가 1–65535 정수가 아니다');
+  }
+  return [{
+    op: 'put',
+    kind: 'listener',
+    key,
+    body: {
+      protocol: 'udp',
+      bind: body.bind,
+      port: body.port,
+      enabled: true,
+      defaultPool: body.pool,
+      udp: { preset: body.preset },
     },
   }];
 }

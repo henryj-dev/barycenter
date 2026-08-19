@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, type EditKind, type ProtocolClass } from '@web/edit';
+import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type UdpPreset } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -320,6 +320,22 @@ export function createDesk() {
     }
   };
 
+  const insertUdpListener = async (
+    key: string,
+    body: { bind: string; port: number; pool: string; preset: UdpPreset },
+  ): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putUdpListenerPatch(key, body));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const insertHttpRoute = async (input: {
     key: string;
     listener: string;
@@ -378,6 +394,7 @@ export function createDesk() {
     insertPool,
     insertHttpListener,
     insertTcpListener,
+    insertUdpListener,
     insertHttpRoute,
     disconnect() { stop?.(); },
   };

@@ -15,12 +15,12 @@
 > ACME http-01 and uploaded certificates terminate TLS. Operator screens exist for
 > impact, listeners, pools, routes, certificates and status.
 > Adding or removing a backend, opening a pool (with its first backend — empty pools
-> are rejected), opening/closing an HTTP or TCP listener, or adding/removing an HTTP host
+> are rejected), opening/closing an HTTP, TCP or UDP listener, or adding/removing an HTTP host
 > route (proxy to a pool; websocket off), goes through a changeset and
 > stops at commit. Apply is a separate action on the impact screen.
 >
-> **What it is not yet.** HTTPS and UDP listeners have no GUI form (HTTPS needs a TLS
-> binding; UDP needs a preset). ACME order state is not shown — that table has no read
+> **What it is not yet.** HTTPS listeners have no GUI form (they need a TLS binding).
+> ACME order state is not shown — that table has no read
 > API. dns-01 has no provider. Drain progress is not shown (S2). The CLI has no
 > per-resource subcommands. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
@@ -175,7 +175,7 @@ not a moat. The bets that need execution quality instead:
 - **Inbound and backend ports are independent.** `:999 → A:11` and `:888 → B:11` are just two
   listeners pointing at two pools.
 - **The API is the only entry point.** The web UI and `bary` CLI are clients of it.
-  They are not yet equal: the GUI has no HTTPS/UDP form, and the CLI has no
+  They are not yet equal: the GUI has no HTTPS form, and the CLI has no
   per-resource subcommands. Equality is a v1.0 claim (`DESIGN.md` §1).
 - **Nothing is applied blind.** Changes accumulate in a changeset, `plan` reports the impact,
   and apply runs a durable state machine — render → validate on the real data plane → publish →
@@ -266,7 +266,7 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
 | **v0.3** | Membership plane, health probe | ← **done except drain observation (S2)** |
 | **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** No per-resource subcommands |
-| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP writes | ← **slice is open.** No Kit, no drain, no HTTPS/UDP form |
+| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP writes | ← **slice is open.** No Kit, no drain, no HTTPS form |
 | **v0.6** | TLS terminate, ACME http-01, cert rollback | ← **engine done.** No order GET, no dns-01, no HTTPS GUI |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` has no consumer |
 | **v1.0** | Full RBAC, backup/restore rehearsal, SPOF runbook, documentation | |
