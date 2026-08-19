@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -48,6 +48,26 @@ describe('설정에서 빼기', () => {
         },
       },
     ]);
+  });
+
+  it('TCP 리스너를 넣는 패치는 put 한 줄이다 — defaultPool 이지 http 가 아니다', () => {
+    expect(putTcpListenerPatch('stream', { bind: '0.0.0.0', port: 9000, pool: 'db' })).toEqual([
+      {
+        op: 'put', kind: 'listener', key: 'stream',
+        body: {
+          protocol: 'tcp', bind: '0.0.0.0', port: 9000, enabled: true,
+          defaultPool: 'db',
+        },
+      },
+    ]);
+  });
+
+  it('TCP 패치에 http 프로필을 붙이지 않는다', () => {
+    const [op] = putTcpListenerPatch('stream', { bind: '0.0.0.0', port: 9000, pool: 'db' });
+    expect(op).toBeDefined();
+    expect(op?.body).not.toHaveProperty('http');
+    expect(op?.body).not.toHaveProperty('tls');
+    expect(op?.body).not.toHaveProperty('udp');
   });
 
   it('HTTP 라우트를 넣는 패치는 put 한 줄이다 — proxy 이고 websocket 은 끈다', () => {

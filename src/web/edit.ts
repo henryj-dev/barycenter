@@ -48,7 +48,7 @@ export type PutHttpListenerOp = {
   };
 };
 
-/** HTTP 만. https 는 tls 가 필수라 지금 폼이 못 채운다. */
+/** HTTP 만. https 는 tls 가 필수라 지금 폼이 못 채운다. UDP 는 preset 이 필요하다. */
 export function putHttpListenerPatch(
   key: string,
   body: { bind: string; port: number; pool: string },
@@ -69,6 +69,47 @@ export function putHttpListenerPatch(
       port: body.port,
       enabled: true,
       http: { defaultAction: { pool: body.pool } },
+    },
+  }];
+}
+
+export type PutTcpListenerOp = {
+  op: 'put';
+  kind: 'listener';
+  key: string;
+  body: {
+    protocol: 'tcp';
+    bind: string;
+    port: number;
+    enabled: true;
+    defaultPool: string;
+  };
+};
+
+/**
+ * TCP 만. defaultPool 은 최상위 필드다 — http.defaultAction 이 아니다.
+ * PROXY 수신은 trustedCidrs 가 없어서 안 켠다. UDP 는 preset 이 필요하다.
+ */
+export function putTcpListenerPatch(
+  key: string,
+  body: { bind: string; port: number; pool: string },
+): PutTcpListenerOp[] {
+  if (key === '') throw new Error('키가 비어 있다');
+  if (body.bind === '') throw new Error('바인드가 비어 있다');
+  if (body.pool === '') throw new Error('풀이 비어 있다');
+  if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) {
+    throw new Error('포트가 1–65535 정수가 아니다');
+  }
+  return [{
+    op: 'put',
+    kind: 'listener',
+    key,
+    body: {
+      protocol: 'tcp',
+      bind: body.bind,
+      port: body.port,
+      enabled: true,
+      defaultPool: body.pool,
     },
   }];
 }

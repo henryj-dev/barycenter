@@ -1,14 +1,17 @@
 <script lang="ts">
   import type { ListenersView } from '@web/listeners-view';
   import AddListener from './AddListener.svelte';
+  import AddTcpListener from './AddTcpListener.svelte';
 
-  let { view, live, editing, pools, withdraw, insert }: {
+  let { view, live, editing, pools, tcpPools, withdraw, insert, insertTcp }: {
     view: ListenersView;
     live: boolean;
     editing: boolean;
     pools: string[];
+    tcpPools: string[];
     withdraw: (key: string) => void;
     insert: (key: string, bind: string, port: number, pool: string) => void;
+    insertTcp: (key: string, bind: string, port: number, pool: string) => void;
   } = $props();
 
   const label = (mark: string): string => {
@@ -22,7 +25,7 @@
   <p class="empty">연결하면 head 리스너가 여기 온다.</p>
 {:else}
   {#if view.rows.length === 0}
-    <p class="empty">리스너가 없다. 아래에서 HTTP 포트를 연다.</p>
+    <p class="empty">리스너가 없다. 아래에서 HTTP 또는 TCP 포트를 연다.</p>
   {:else}
     <ul class="ports">
       {#each view.rows as row (row.socket + row.key)}
@@ -39,6 +42,7 @@
     </ul>
   {/if}
   <AddListener {pools} {editing} add={insert} />
+  <AddTcpListener pools={tcpPools} {editing} add={insertTcp} />
 {/if}
 
 <style>

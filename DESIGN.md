@@ -2614,11 +2614,12 @@ capability 패키지이지 apply 구현이 아니다.
   Status 는 SSE 스냅샷의 4-way 다. `/status` 를 폴링하지 않는다. nativeDns
   선택형은 그리지 않는다.
   GUI 쓰기는 changeset 을 지난다. 지금 열린 것은 백엔드 `put`/`delete`,
-  HTTP 리스너 `put`/`delete`, 풀은 **첫 백엔드와 같이** `put` 한다. 빈 풀은
-  검증기가 막는다. HTTP 라우트 `put`/`delete` 는 호스트 → 풀 proxy 다.
-  websocket 은 끈다. redirect·reject 는 폼이 없다. https 는 tls 가 필수라
-  폼이 아직 못 채운다. commit 까지 하고 apply 는 Impact 가 한다.
-  메서드×경로 ALLOW/DENY 는 WAF 다.
+  HTTP 리스너 `put`/`delete`, TCP 리스너 `put`/`delete`, 풀은 **첫 백엔드와
+  같이** `put` 한다. 빈 풀은 검증기가 막는다. HTTP 라우트 `put`/`delete` 는
+  호스트 → 풀 proxy 다. websocket 은 끈다. redirect·reject 는 폼이 없다.
+  TCP 는 `defaultPool` 이다 — `http.defaultAction` 이 아니다. https 는 tls 가
+  필수라 폼이 아직 못 채운다. UDP 는 preset 이 필요하다. commit 까지 하고
+  apply 는 Impact 가 한다. 메서드×경로 ALLOW/DENY 는 WAF 다.
   폴링하지 않는다.
 
 | 화면 | 단계 |

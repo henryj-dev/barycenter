@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **379** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **HTTP 라우트 put** |
+| 단위 | `npm test` | **381** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **TCP 리스너 put** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,15 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### GUI 가 TCP 포트를 연다 — defaultPool 이지 http 가 아니다 (2026-08-19)
+
+TCP 풀은 이미 열 수 있는데 포트를 못 열면 L4 쓰기가 반쪽이다. TCP 리스너
+`put`: bind · port · `defaultPool`. `http.defaultAction` 을 붙이지 않는다 —
+해독기가 그 필드를 거절한다. PROXY 수신은 trustedCidrs 가 없어서 안 켠다.
+UDP 는 preset 이 필요하고 https 는 tls 가 필요하다. apply 는 안 한다.
 
 ---
 

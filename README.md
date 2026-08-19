@@ -14,10 +14,11 @@
 > still costs a full generation switch and a reload. TLS termination, ACME and health probing
 > are later milestones (§12.1). Operator screens exist for impact, listeners, pools, routes, certificates and status.
 > Adding or removing a backend, opening a pool (with its first backend — empty pools
-> are rejected), opening/closing an HTTP listener, or adding/removing an HTTP host
+> are rejected), opening/closing an HTTP or TCP listener, or adding/removing an HTTP host
 > route (proxy to a pool; websocket off), goes through a changeset and
 > stops at commit. Apply is a separate action on the impact screen.
 > HTTPS listeners are not offered yet: they need a TLS binding the form cannot fill.
+> UDP listeners need a preset the form does not fill.
 > Expiry is read from material, not from the spec. ACME order state is not shown —
 > that table has no read API. Drain progress is not shown. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
