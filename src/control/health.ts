@@ -4,8 +4,7 @@
  * ── 범위를 먼저 밝힌다 ───────────────────────────────────────────────────
  *
  * **TCP 연결 검사만 한다.** HTTP 상태 코드도, 응답 본문도, 프로토콜별 헬스체크도 없다.
- * 드레인 관측(S2)도 없다. 그건 각각의 착수 게이트가 있는 별도 일이고, 여기서 흉내내면
- * "헬스체크가 있다" 는 말이 절반만 참이 된다.
+ * 드레인 숫자는 없다. 빼는 것은 리듀서가 하고, inflight 를 지어내지 않는다.
  *
  * ── 왜 리듀서가 하나인가 (§6.6) ─────────────────────────────────────────
  *
@@ -242,10 +241,11 @@ export async function healthRows(db: Db): Promise<HealthRow[]> {
  * 계속 트래픽을 받는다. 여기서는 **뺀 결과를 그대로** 돌려주고, 남기는 판단은 하지 않는다.
  */
 export function reduceMembership(
-  model: Model, health: Map<string, HealthState>,
+  model: Model, health: Map<string, HealthState>, draining: ReadonlySet<string> = new Set(),
 ): Model {
   return {
     ...model,
-    backends: model.backends.filter((b) => health.get(b.key) !== 'unhealthy'),
+    backends: model.backends.filter((b) =>
+      health.get(b.key) !== 'unhealthy' && !draining.has(b.key)),
   };
 }

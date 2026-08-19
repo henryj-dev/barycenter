@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
+import { drainKeys } from './drain.js';
 import { currentHealth, reduceMembership } from './health.js';
 import { httpAdminConf, slotsOf, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
@@ -214,7 +215,7 @@ export class ControlPlane {
     // 프로버가 죽었다고 본 백엔드가 새 세대의 부트스트랩으로 되살아나면 안 된다 —
     // §6.4 가 경고한 바로 그 되살아남이다.
     const membership = caps.httpLua === true || caps.streamLua === true
-      ? slotsOf(reduceMembership(plan.model, await currentHealth(this.db)), caps) : undefined;
+      ? slotsOf(await this.eligible(plan.model), caps) : undefined;
     const streamAdminPort = this.opts.streamAdminPort ?? this.opts.adminPort + 1;
 
     /**
@@ -394,9 +395,7 @@ export class ControlPlane {
     if (st.published.kind !== 'owned') return undefined;
 
     const head = await this.store.head();
-    const slots = slotsOf(
-      reduceMembership(await this.store.modelAt(head.revision), await currentHealth(this.db)),
-      caps);
+    const slots = slotsOf(await this.eligible(await this.store.modelAt(head.revision)), caps);
     const planes: string[] = [];
     for (const plane of PLANES) {
       const epoch = st.planes[plane].activationEpoch;
@@ -424,8 +423,7 @@ export class ControlPlane {
     if (caps.httpLua !== true && caps.streamLua !== true) return undefined;
     const st = await this.driver.status();
     const head = await this.store.head();
-    const model = reduceMembership(await this.store.modelAt(head.revision),
-      await currentHealth(this.db));
+    const model = await this.eligible(await this.store.modelAt(head.revision));
     const slots = slotsOf(model, caps);
 
     const epochs: string[] = [];
@@ -701,6 +699,10 @@ export class ControlPlane {
   }
 
   // ── 내부 ───────────────────────────────────────────────────────────────
+
+  private async eligible(model: Model): Promise<Model> {
+    return reduceMembership(model, await currentHealth(this.db), await drainKeys(this.db));
+  }
 
   /**
    * admin 포트가 모델과 부딪히지 않는지 본다.

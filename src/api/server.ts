@@ -25,6 +25,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { createHash } from 'node:crypto';
 
 import type { ControlPlane } from '../control/plane.js';
+import { AcmeStore } from '../control/acme-store.js';
+import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.js';
+import { drainStatusOf, isDraining, startDrain } from '../control/drain.js';
 import { healthRows } from '../control/health.js';
 import { render as renderMetrics } from '../obs/metrics.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
@@ -215,6 +218,87 @@ const ROUTES: Route[] = [
         ? { state: 'unknown', observedAt: null, detail: '아직 관측이 없다' }
         : { state: row.state, observedAt: row.observedAt, ...(row.detail === undefined ? {} : { detail: row.detail }) }),
     });
+  }),
+
+  route('POST', '/api/v1/backends/:id/drain', 'write', async (c, api) => {
+    const key = c.params['id'] ?? '';
+    const m = await api.store.modelAt((await api.store.head()).revision);
+    if (!m.backends.some((b) => b.key === key)) {
+      json(c.res, 404, { error: 'not_found', message: `백엔드 '${key}' 가 없다` });
+      return;
+    }
+    const raw = (c.body as { deadline_s?: unknown } | null)?.deadline_s;
+    const deadline = typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : undefined;
+    await startDrain(api.db, key, c.who.name, deadline);
+    await api.control.projectHealth();
+    json(c.res, 200, drainStatusOf({ backend: key, draining: true }));
+  }),
+
+  route('GET', '/api/v1/backends/:id/drain-status', 'read', async (c, api) => {
+    const key = c.params['id'] ?? '';
+    const m = await api.store.modelAt((await api.store.head()).revision);
+    if (!m.backends.some((b) => b.key === key)) {
+      json(c.res, 404, { error: 'not_found', message: `백엔드 '${key}' 가 없다` });
+      return;
+    }
+    const status = drainStatusOf({ backend: key, draining: await isDraining(api.db, key) });
+    if (status === undefined) {
+      json(c.res, 404, { error: 'not_draining', message: `백엔드 '${key}' 는 드레인 중이 아니다` });
+      return;
+    }
+    json(c.res, 200, status);
+  }),
+
+  route('GET', '/api/v1/acme/orders', 'read', async (c, api) => {
+    const body = (await new AcmeStore(api.db).list()).map(publicOrder);
+    if (leaksSecret(body)) {
+      json(c.res, 500, { error: 'secret_leak', message: '주문 목록에 시크릿이 실렸다' });
+      return;
+    }
+    json(c.res, 200, body);
+  }),
+
+  route('GET', '/api/v1/acme/orders/:id/challenges', 'read', async (c, api) => {
+    const store = new AcmeStore(api.db);
+    const order = await store.get(c.params['id'] ?? '');
+    if (order === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `주문 '${c.params['id']}' 가 없다` });
+      return;
+    }
+    const body = (await store.challenges(order.id)).map(publicChallenge);
+    if (leaksSecret(body)) {
+      json(c.res, 500, { error: 'secret_leak', message: '챌린지에 시크릿이 실렸다' });
+      return;
+    }
+    json(c.res, 200, body);
+  }),
+
+  route('GET', '/api/v1/acme/orders/:id', 'read', async (c, api) => {
+    const order = await new AcmeStore(api.db).get(c.params['id'] ?? '');
+    if (order === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `주문 '${c.params['id']}' 가 없다` });
+      return;
+    }
+    const body = publicOrder(order);
+    if (leaksSecret(body)) {
+      json(c.res, 500, { error: 'secret_leak', message: '주문에 시크릿이 실렸다' });
+      return;
+    }
+    json(c.res, 200, body);
+  }),
+
+  route('GET', '/api/v1/acme/challenges/:id', 'read', async (c, api) => {
+    const ch = await new AcmeStore(api.db).challenge(c.params['id'] ?? '');
+    if (ch === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `챌린지 '${c.params['id']}' 가 없다` });
+      return;
+    }
+    const body = publicChallenge(ch);
+    if (leaksSecret(body)) {
+      json(c.res, 500, { error: 'secret_leak', message: '챌린지에 시크릿이 실렸다' });
+      return;
+    }
+    json(c.res, 200, body);
   }),
 
   /**

@@ -30,6 +30,7 @@ import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../co
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
+import { FileDns01 } from '../control/dns01.js';
 import { publishIssued } from '../control/acme-publish.js';
 import { collectSecretRoots, expandVersionRoots } from '../control/secret-roots.js';
 import { sweepSecrets } from '../dp/secret-gc.js';
@@ -394,10 +395,12 @@ export async function main(): Promise<void> {
   let stopPublish = (): void => {};
   let stopSecretGc = (): void => {};
   const acmeStore = new AcmeStore(db);
+  const dnsDir = env('BARY_DNS01_DIR', '');
   const acmeRunner = new AcmeRunner({
     store: acmeStore,
     secrets,
     placer: new HttpChallengePlacer(adminPort),
+    ...(dnsDir === '' ? {} : { dnsPlacer: new FileDns01(dnsDir) }),
     renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
   });
   if (acmeOn) {

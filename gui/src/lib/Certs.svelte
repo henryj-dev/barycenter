@@ -33,7 +33,7 @@
       <li data-mark={row.mark}>
         <span class="key">{row.key}</span>
         <span class="dom mono">{row.domains.join(', ') || '—'}</span>
-        <span class="src">{row.acme ? 'acme' : '자료'}</span>
+        <span class="src">{row.acme ? (row.orderState ?? 'acme') : '자료'}</span>
         <span class="mark">{label(row.mark, row.expiresInDays)}</span>
       </li>
     {/each}

@@ -30,7 +30,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { backendDelete, backendPut } from '../cli/backend.js';
+import { backendDelete, backendDrain, backendDrainStatus, backendPut } from '../cli/backend.js';
 import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete } from '../cli/listener.js';
 import { poolCreate, poolDelete } from '../cli/pool.js';
@@ -92,7 +92,9 @@ const usage = (): never => {
   bary status                    4-way 상태 · 미완 전환 · 미적용 커밋
   bary head                      전역 리비전
   bary get <무엇>                listeners | pools | backends | routes | certificates | tls-policies | sni-bindings | health | model | rendered | metrics
-                                 pools/<id>/backends | backends/<id>/status | operations/<id> | plans/<id>. 모르는 이름은 안 부른다
+                                 pools/<id>/backends | backends/<id>/status | operations/<id> | plans/<id>
+                                 acme/orders | acme/orders/<id> | acme/orders/<id>/challenges | acme/challenges/<id>
+                                 모르는 이름은 안 부른다
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
   bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
@@ -101,6 +103,8 @@ const usage = (): never => {
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
   bary backend delete            --name
+  bary backend drain             --name [--deadline 초]. 새 트래픽을 끊는다. apply 가 아니다
+  bary backend drain-status      --name. 관측이 없으면 숫자를 안 싣는다
   bary tls-policy create         --name [--min-version 1.2|1.3]. HSTS 안 켬
   bary certificate create        --name --fullchain <파일> --privkey <파일>. 패치에 개인키 없음
   bary sni-binding create        --name --listener --host --certificate. override 없음
@@ -340,6 +344,26 @@ async function main(): Promise<void> {
           const out = await backendDelete(call, name);
           console.error(`backend ${name} deleted r${out.revision}`);
           show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
+      if (sub === 'drain') {
+        const name = flag(argv, '--name') ?? usage();
+        const deadlineRaw = flag(argv, '--deadline');
+        try {
+          show(await backendDrain(call, name,
+            deadlineRaw === undefined ? undefined : Number(deadlineRaw)));
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
+      if (sub === 'drain-status') {
+        const name = flag(argv, '--name') ?? usage();
+        try {
+          show(await backendDrainStatus(call, name));
         } catch (e) {
           die(e);
         }

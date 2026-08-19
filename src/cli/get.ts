@@ -1,7 +1,7 @@
 /**
  * CLI 읽기 — DESIGN.md §5.2 · §5.6
  *
- * 있는 GET 만 연다. 모르는 이름은 호출하지 않는다. ACME 주문 GET 은 API 가 없다.
+ * 있는 GET 만 연다. 모르는 이름은 호출하지 않는다.
  */
 import { unwrap, type Http } from './flow.js';
 
@@ -29,6 +29,19 @@ export function getPath(what: string): string | undefined {
   if (op?.[1] !== undefined) return `/api/v1/operations/${encodeURIComponent(op[1])}`;
   const plan = /^plans\/([^/]+)$/.exec(what);
   if (plan?.[1] !== undefined) return `/api/v1/plans/${encodeURIComponent(plan[1])}`;
+  if (what === 'acme/orders') return '/api/v1/acme/orders';
+  const acmeChs = /^acme\/orders\/([^/]+)\/challenges$/.exec(what);
+  if (acmeChs?.[1] !== undefined) {
+    return `/api/v1/acme/orders/${encodeURIComponent(acmeChs[1])}/challenges`;
+  }
+  const acmeOrder = /^acme\/orders\/([^/]+)$/.exec(what);
+  if (acmeOrder?.[1] !== undefined) {
+    return `/api/v1/acme/orders/${encodeURIComponent(acmeOrder[1])}`;
+  }
+  const acmeCh = /^acme\/challenges\/([^/]+)$/.exec(what);
+  if (acmeCh?.[1] !== undefined) {
+    return `/api/v1/acme/challenges/${encodeURIComponent(acmeCh[1])}`;
+  }
   return undefined;
 }
 

@@ -1013,6 +1013,9 @@ S11 하네스의 교훈이다.
 | C5.70 | CLI recover | POST `/api/v1/recover` 만. changeset·apply 안 함 (`tests/unit/cli-nearby.test.ts`) |
 | C5.71 | CLI get 오퍼레이션·plan·metrics | 있는 GET. 주문·빈 이름은 경로를 안 만든다 |
 | C5.72 | CLI·GUI 풀 delete | `kind: pool` 한 줄. 빈 키는 패치를 안 만든다. apply 안 함 |
+| C5.73 | ACME 주문·챌린지 GET | 원장 상태만. 토큰·PRIVATE KEY 없음. 없는 id 는 not-found (`tests/unit/missing-api.test.ts`) |
+| C5.74 | dns-01 프로바이더 | place 뒤 cleanup 은 성공·실패 둘 다. 와일드카드는 dns-01 만 |
+| C5.75 | 드레인 | 멤버십에서 뺌. 관측 없으면 inflight 숫자를 안 싣는다. apply 안 함 |
 
 ---
 

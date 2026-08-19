@@ -1113,7 +1113,7 @@ websocket 은 HTTP proxy 에서만 켠다. 안 적으면 끈다.
 redirect 는 `to` 와 301·302·307·308 이다. 기본 302.
 reject 는 403·404·444 다. 기본 403. 444 는 응답 없이 끊는다.
 패스스루는 `--sni` 다. SNI → TCP 풀이거나 reject. HTTP status·websocket·path 가 없다.
-`backend create|delete`, `tls-policy create`, `certificate create`,
+`backend create|delete|drain|drain-status`, `tls-policy create`, `certificate create`,
 `sni-binding create|delete`, `listener delete`, `route delete` 가 있다.
 라우트 삭제는 `--host` 또는 `--sni` 로 HTTP 와 패스스루를 가른다.
 인증서 패치에 개인키·fullchain 이 없다. 드레인은 S2 다.
@@ -1122,8 +1122,10 @@ reject 는 403·404·444 다. 기본 403. 444 는 응답 없이 끊는다.
 `changeset discard` 는 연 것·봉인한 것을 버린다. 커밋된 것은 롤백이다.
 `changeset reopen` 은 sealed → open 이고 옛 plan 은 무효다.
 `recover` 는 `POST /api/v1/recover` 다. changeset 을 안 연다.
-`get` 은 `operations/<id>` · `plans/<id>` · `metrics` 도 있는 GET 이다.
+`get` 은 `operations/<id>` · `plans/<id>` · `metrics` · `acme/orders` 도 있는 GET 이다.
 `pool delete` 는 `kind: pool` 한 줄이다.
+`backend drain` 은 멤버십에서 빼고 apply 가 아니다. drain-status 는 관측이 없으면
+숫자를 안 싣는다.
 
 ---
 
@@ -1810,7 +1812,8 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
   → **노출은 구현됨** — `GET /certificates` 가 `domains`·`notBefore`·`notAfter`·
   `expiresInDays` 를, `/metrics` 가 `bary_certificate_expiry_seconds{certificate=...}` 를
   낸다. **자동 갱신 틱은 있다** — `AcmeRunner` 가 만료 30일 전에 주문을 연다.
-  없는 것은 주문 GET · dns-01 프로바이더 · GUI 로 수명주기를 조작하는 것이다.
+  주문 GET 과 dns-01 파일 프로바이더(`BARY_DNS01_DIR`)는 있다.
+  GUI 로 수명주기를 **조작**하는 것은 없다.
 
   **사실은 설정이 아니라 바이트에서 온다.** changeset 으로 받으면 클라이언트가 만료일을
   거짓말할 수 있고, 그러면 알람이 안 울린다. `put` 시점에 뽑아 내용 주소 참조
@@ -1918,7 +1921,7 @@ S18 이 실측했다 — 버려진 주문을 CA 는 `pending` 으로 남긴다. 
 치웠다" 를 막는다.
 
 **아직 미정으로 남기는 것.** 갱신 시점 정책(만료 30 일 전 + 지터), CA 레이트리밋 헤더
-해석, EAB, dns-01 프로바이더 인터페이스. 스케줄러를 실제로 붙이는 회차에 정한다.
+해석, EAB. dns-01 은 파일 이음새만 — 벤더 API 를 제품 계약으로 얼리지 않는다.
 
 > **위 §8.2 는 규범이 아니라 후보다.** v2 는 "스파이크 후 ADR 로 미룬다"고 써놓고 상태기계를
 > 규범적으로 남겨 뒀다 — 그건 미룬 게 아니다. v3 에서 명시한다: **§8.2 의 엔티티·상태·정책은

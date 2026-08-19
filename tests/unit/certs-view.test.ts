@@ -19,6 +19,14 @@ describe('인증서 목록', () => {
     expect(view.rows[0]?.domains).toEqual(['b.test']);
   });
 
+  it('주문 상태는 GET /acme/orders 에서 오고 인증서 목록에 섞이지 않는다', () => {
+    const view = viewOfCertificates(
+      [{ key: 'pending', facts: null, acme: { account: 'lets', domains: ['b.test'] } }],
+      [{ id: 'o1', certificate: 'pending', state: 'validating' }],
+    );
+    expect(view.rows[0]?.orderState).toBe('validating');
+  });
+
   it('만료가 먼저다 — 남은 일수가 음수면 이미 죽었다', () => {
     const view = viewOfCertificates([
       { key: 'later', expiresInDays: 40, domains: ['c.test'] },

@@ -2,8 +2,8 @@
  * Certificates 화면이 읽는 값 — DESIGN.md §8.1 · §10
  *
  * 만료는 자료에서 온다. 설정에 적은 날짜를 믿으면 알람이 거짓이다.
- * 자료가 없으면(ACME 발급 전) 목록에서 빼지 않는다. 주문·챌린지 상태는
- * GET /certificates 에 없다 — 의도는 `acme` 필드고, 주문은 운영 상태다.
+ * 자료가 없으면(ACME 발급 전) 목록에서 빼지 않는다. 주문 상태는
+ * GET /acme/orders 에서 오고, 인증서 목록에 섞지 않는다.
  */
 export type CertificateFact = {
   key: string;
@@ -24,11 +24,21 @@ export type CertRow = {
   expiresInDays: number | undefined;
   notAfter: string | undefined;
   mark: CertMark;
+  orderState: string | undefined;
 };
+
+export type OrderFact = { id: string; certificate: string; state: string };
 
 export type CertsView = { rows: CertRow[] };
 
-export function viewOfCertificates(certs: readonly CertificateFact[]): CertsView {
+export function viewOfCertificates(
+  certs: readonly CertificateFact[],
+  orders: readonly OrderFact[] = [],
+): CertsView {
+  const byCert = new Map<string, string>();
+  for (const o of orders) {
+    if (!byCert.has(o.certificate)) byCert.set(o.certificate, o.state);
+  }
   const rows = certs.map((c) => {
     const hasMaterial = c.facts !== null && c.expiresInDays !== undefined;
     const domains = c.domains ?? c.acme?.domains ?? [];
@@ -45,6 +55,7 @@ export function viewOfCertificates(certs: readonly CertificateFact[]): CertsView
       expiresInDays: hasMaterial ? c.expiresInDays : undefined,
       notAfter: hasMaterial ? c.notAfter : undefined,
       mark,
+      orderState: byCert.get(c.key),
     };
   });
   rows.sort((a, b) => rank(a) - rank(b) || a.key.localeCompare(b.key));

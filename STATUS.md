@@ -31,10 +31,10 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 |---|---|---|
 | 모델 | 리스너·풀·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩. 판별 유니온 | h3, `least_conn`, WAF, `on_nxdomain`/`on_timeout` |
 | 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백 | OpenAPI · DDL 동결 |
-| 멤버십 | 이중 zone 슬롯, Lua 밸런서, TCP connect 프로브, SSE `health` | 드레인 관측(S2), HTTP 본문 프로브 |
-| TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 | 주문 GET · dns-01 |
-| ACME | http-01 러너, shared dict 챌린지, 만료 30일 전 갱신 틱 | 주문 GET, dns-01 프로바이더 |
-| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics) | 드레인 명령 (S2) |
+| 멤버십 | 이중 zone 슬롯, Lua 밸런서, TCP connect 프로브, SSE `health`, 드레인 제외 | HTTP 본문 프로브, peer inflight 숫자 |
+| TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 | — |
+| ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, 만료 30일 전 갱신 틱 | EAB · CA 레이트리밋 헤더 |
+| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문), backend drain/drain-status | — |
 | GUI | 여덟 화면. 폴링하지 않는다. Kit 이 아니다 | 아래 §2 |
 
 ### GUI
@@ -74,7 +74,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **478** |
+| 단위 | `npm test` | **486** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -92,15 +92,11 @@ non-zero 다. API·DB 스키마는 아직 동결하지 않는다 (§9.1.1).
 가까운 GUI 구멍 — 모델에 있는 쓰기 알고리즘은 폼이 있다. 풀은 뺀다. 미완 전환은
 상태 화면에서 recover 한다. `least_conn` 은 모델에 없다.
 
-API 가 없어서 못 그리는 것.
-
-- ACME 주문·챌린지 GET
-- dns-01 프로바이더
-- 드레인 inflight/sessions (S2)
+주문 GET · dns-01 place/cleanup · 드레인 시작은 있다. 드레인 숫자는 엔진이
+안 주면 안 싣는다 (`no_new_traffic`).
 
 로드맵 잔여.
 
-- CLI 드레인 하위 명령 (S2)
 - SvelteKit (여덟 경로인데도 한 `index.html`)
 - v1.0 RBAC · 백업/복구 리허설 · SPOF 런북
 
@@ -108,7 +104,7 @@ API 가 없어서 못 그리는 것.
 
 | | 상태 |
 |---|---|
-| S2 드레인 관측 | 열림 |
+| S2 드레인 관측 | 축소: `no_new_traffic`. inflight 숫자는 엔진이 안 준다 |
 | S3 재시작 부트스트랩 | 열림 |
 | S4 CP 단절 | 열림 |
 | S5 부분 전환 | 부분 |

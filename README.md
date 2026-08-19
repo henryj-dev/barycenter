@@ -181,8 +181,9 @@ not a moat. The bets that need execution quality instead:
   and delete the kinds the GUI withdraws, including pools, stopping at commit.
   `bary get` reads the list endpoints that already exist, including health,
   operations, plans, and metrics. `bary recover` continues a broken transition.
-  Changesets can be discarded or reopened. Drain commands are still missing
-  (S2). Equality is a v1.0 claim (`DESIGN.md` §1).
+  Changesets can be discarded or reopened. `bary backend drain` excludes a
+  backend from membership; drain-status does not invent inflight counts.
+  Equality is a v1.0 claim (`DESIGN.md` §1).
 - **Nothing is applied blind.** Changes accumulate in a changeset, `plan` reports the impact,
   and apply runs a durable state machine — render → validate on the real data plane → publish →
   reload → verify, with automatic rollback and an explicit failure state when rollback itself fails.

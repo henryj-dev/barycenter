@@ -21,7 +21,8 @@ import { createPrivateKey, type KeyObject } from 'node:crypto';
 
 import { AcmeClient, dns01Value, keyAuthorization, type Authorization } from '../acme/client.js';
 import { newEcKey } from '../acme/der.js';
-import { AcmeStore, type AcmeOrderRow } from './acme-store.js';
+import { AcmeStore, type AcmeOrderRow, type ChallengeRow } from './acme-store.js';
+import { challengeTypeWanted } from './dns01.js';
 import { inspectMaterial } from '../dp/certinfo.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { log } from '../obs/log.js';
@@ -31,8 +32,7 @@ import { count } from '../obs/metrics.js';
  * 챌린지 자료를 실제로 놓고 치우는 쪽.
  *
  * http-01 은 데이터 플레인의 shared dict 이고(ADR-ACME ①), dns-01 은 DNS 프로바이더다.
- * **인터페이스로 갈라 둔다** — dns-01 프로바이더는 아직 없고, 없는 것을 있는 척하지
- * 않는다.
+ * 프로바이더가 없으면 와일드카드 주문을 있는 척하지 않는다.
  */
 export interface ChallengePlacer {
   readonly type: 'http-01' | 'dns-01';
@@ -44,6 +44,8 @@ export type AcmeRunnerOptions = {
   store: AcmeStore;
   secrets: SecretStore;
   placer: ChallengePlacer;
+  /** 없으면 와일드카드·dns-01 주문은 실패한다. */
+  dnsPlacer?: ChallengePlacer;
   /** 계정 키·인증서 키를 만든다. 테스트가 결정적으로 만들려고 갈아 끼운다. */
   newKey?: () => KeyObject;
   /** ACME 클라이언트를 만든다. 스파이크·테스트가 CA 를 바꿔 끼운다. */
@@ -74,6 +76,14 @@ export class AcmeRunner {
 
   #now(): Date {
     return this.#o.now?.() ?? new Date();
+  }
+
+  #placer(type: 'http-01' | 'dns-01'): ChallengePlacer {
+    if (type === 'dns-01') {
+      if (this.#o.dnsPlacer === undefined) throw new Error('dns-01 프로바이더가 없다');
+      return this.#o.dnsPlacer;
+    }
+    return this.#o.placer;
   }
 
   #client(directoryUrl: string, accountKey: KeyObject): AcmeClient {
@@ -154,6 +164,7 @@ export class AcmeRunner {
       const state = await this.#o.store.fail(order.id, message);
       count(`bary_acme_orders_total{event="${state}"}`);
       log.warn('acme.order.failed', { order: order.id, from, state, error: message });
+      await this.cleanupOrder(order.id);
       return { order: order.id, from, to: state, error: message };
     }
   }
@@ -212,7 +223,11 @@ export class AcmeRunner {
     const accountKey = (await this.#accountFor(order)).key;
     for (const authzUrl of created.authorizations) {
       const authz: Authorization = await client.fetchAuthorization(authzUrl);
-      const wanted = this.#o.placer.type;
+      const wanted = challengeTypeWanted(
+        { value: authz.identifier.value, ...(authz.wildcard === true ? { wildcard: true } : {}) },
+        this.#o.placer.type === 'http-01',
+      );
+      const placer = this.#placer(wanted);
       const ch = authz.challenges.find((c) => c.type === wanted);
       if (ch === undefined) {
         // S18 실측: 와일드카드 authz 에는 http-01 이 **아예 없다.**
@@ -231,7 +246,7 @@ export class AcmeRunner {
       // **놓고 나서 적는다.** 반대로 하면 "놓았다고 적혔는데 없는" 것이 생기고, 고아
       // 스캔이 없는 것을 치우려 든다. 이쪽으로 틀리면 "안 적힌 채 놓인" 것이 생기는데,
       // 그건 다음 `putChallenge` 가 같은 토큰을 덮으면서 회수된다.
-      await this.#o.placer.place(authz.identifier.value, ch.token, value);
+      await placer.place(authz.identifier.value, ch.token, value);
       await this.#o.store.markPlaced(id);
       await client.acceptChallenge(ch.url);
     }
@@ -296,8 +311,17 @@ export class AcmeRunner {
     if (certKeyRef === undefined) throw new Error('인증서 키 참조가 없다');
     await this.#o.store.markIssued(order.id, ref.ref, certKeyRef);
     // 챌린지 자료를 치운다 — §8.2 는 "성공/실패와 무관하게" 라고 적었다.
-    await this.cleanup();
+    await this.cleanupOrder(order.id);
     return 'issued';
+  }
+
+  /** 이 주문의 놓인 챌린지를 치운다. 성공·실패 둘 다 부른다. */
+  async cleanupOrder(orderId: string): Promise<number> {
+    return cleanupPlacedChallenges(
+      await this.#o.store.challenges(orderId),
+      (row) => this.#placer(row.type).remove(row.domain, row.token),
+      (id) => this.#o.store.markCleaned(id),
+    );
   }
 
   /**
@@ -307,21 +331,11 @@ export class AcmeRunner {
    * 원장이 "놓았는가" 로 판단한다.
    */
   async cleanup(olderThanSeconds = 3600): Promise<number> {
-    const orphans = await this.#o.store.orphans(olderThanSeconds);
-    let n = 0;
-    for (const o of orphans) {
-      try {
-        await this.#o.placer.remove(o.domain, o.token);
-        await this.#o.store.markCleaned(o.id);
-        n += 1;
-      } catch (e) {
-        // **치우다 실패해도 다음 것을 계속한다.** 하나 때문에 멈추면 나머지가 영원히
-        // 남고, 그건 고아 스캔이 있는 이유와 정확히 반대다.
-        log.warn('acme.cleanup.failed', { challenge: o.id, error: (e as Error).message });
-      }
-    }
-    if (n > 0) count(`bary_acme_cleanup_total{outcome="removed"}`);
-    return n;
+    return cleanupPlacedChallenges(
+      await this.#o.store.orphans(olderThanSeconds),
+      (row) => this.#placer(row.type).remove(row.domain, row.token),
+      (id) => this.#o.store.markCleaned(id),
+    );
   }
 
   start(intervalMs: number, isLeader: () => boolean, certs: () => Promise<Parameters<AcmeRunner['scan']>[0]>): void {
@@ -353,6 +367,27 @@ export class AcmeRunner {
  * 쓰고, 같은 이유로 **되읽어 대조한다**: `nginx -t` 는 Lua 를 하나도 검증하지 않으므로
  * (E64) 이 경로가 실제로 도는지는 써 놓고 다시 읽는 것으로만 알 수 있다.
  */
+/** 놓인 챌린지를 치운다. 하나 실패해도 다음을 계속한다. */
+export async function cleanupPlacedChallenges(
+  rows: readonly ChallengeRow[],
+  remove: (row: ChallengeRow) => Promise<void>,
+  markCleaned: (id: string) => Promise<void>,
+): Promise<number> {
+  let n = 0;
+  for (const o of rows) {
+    if (o.placedAt === undefined || o.cleanedAt !== undefined) continue;
+    try {
+      await remove(o);
+      await markCleaned(o.id);
+      n += 1;
+    } catch (e) {
+      log.warn('acme.cleanup.failed', { challenge: o.id, error: (e as Error).message });
+    }
+  }
+  if (n > 0) count(`bary_acme_cleanup_total{outcome="removed"}`);
+  return n;
+}
+
 export class HttpChallengePlacer implements ChallengePlacer {
   readonly type = 'http-01' as const;
 

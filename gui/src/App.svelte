@@ -180,6 +180,9 @@
       withdrawPool={(key) => {
         void desk.withdraw('pool', key).then((ok) => { if (ok) go('/'); });
       }}
+      drain={(key) => {
+        void desk.drain(key);
+      }}
       insert={(pool, key, host, port) => {
         void desk.insertBackend(key, { pool, host, port }).then((ok) => { if (ok) go('/'); });
       }}

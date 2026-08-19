@@ -214,6 +214,29 @@ export class AcmeStore {
     return this.#read(this.db, orderId);
   }
 
+  async list(): Promise<AcmeOrderRow[]> {
+    const ids = (await this.db.query(
+      'SELECT id FROM acme_orders ORDER BY updated_at DESC',
+    )).rows.map((r) => String(r['id']));
+    const out: AcmeOrderRow[] = [];
+    for (const id of ids) {
+      const row = await this.#read(this.db, id);
+      if (row !== undefined) out.push(row);
+    }
+    return out;
+  }
+
+  async challenge(id: string): Promise<ChallengeRow | undefined> {
+    const r = (await this.db.query('SELECT * FROM acme_challenges WHERE id=$1', [id])).rows[0];
+    if (r === undefined) return undefined;
+    return {
+      id: text(r, 'id'), orderId: text(r, 'order_id'), domain: text(r, 'domain'),
+      type: text(r, 'type') as ChallengeRow['type'], token: text(r, 'token'), value: text(r, 'value'),
+      authzUrl: text(r, 'authz_url'), challengeUrl: text(r, 'challenge_url'),
+      placedAt: maybe(r, 'placed_at'), cleanedAt: maybe(r, 'cleaned_at'),
+    };
+  }
+
   async #read(c: Queryable, orderId: string): Promise<AcmeOrderRow | undefined> {
     const r = (await c.query(
       `SELECT o.*, a.key AS account_key, ce.key AS certificate_key
@@ -333,7 +356,7 @@ export class AcmeStore {
       'SELECT * FROM acme_challenges WHERE order_id=$1 ORDER BY domain', [orderId],
     )).rows.map((r): ChallengeRow => ({
       id: text(r, 'id'), orderId: text(r, 'order_id'), domain: text(r, 'domain'),
-      type: text(r, 'type') as 'http-01', token: text(r, 'token'), value: text(r, 'value'),
+      type: text(r, 'type') as ChallengeRow['type'], token: text(r, 'token'), value: text(r, 'value'),
       authzUrl: text(r, 'authz_url'), challengeUrl: text(r, 'challenge_url'),
       placedAt: maybe(r, 'placed_at'), cleanedAt: maybe(r, 'cleaned_at'),
     }));
@@ -356,7 +379,7 @@ export class AcmeStore {
       [String(olderThanSeconds)],
     )).rows.map((r): ChallengeRow => ({
       id: text(r, 'id'), orderId: text(r, 'order_id'), domain: text(r, 'domain'),
-      type: text(r, 'type') as 'http-01', token: text(r, 'token'), value: text(r, 'value'),
+      type: text(r, 'type') as ChallengeRow['type'], token: text(r, 'token'), value: text(r, 'value'),
       authzUrl: text(r, 'authz_url'), challengeUrl: text(r, 'challenge_url'),
       placedAt: maybe(r, 'placed_at'), cleanedAt: maybe(r, 'cleaned_at'),
     }));

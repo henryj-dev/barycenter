@@ -14,7 +14,7 @@ import {
 import {
   viewOfRoutes, type HttpRouteFact, type PassthroughFact, type RoutesView,
 } from '@web/routes-view';
-import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
+import { viewOfCertificates, type CertificateFact, type CertsView, type OrderFact } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
@@ -172,13 +172,17 @@ export function createDesk() {
   };
 
   const refreshCerts = async (): Promise<void> => {
-    const r = await fetch('/api/v1/certificates', { headers: auth() });
-    if (!r.ok) {
-      error = `certificates ${r.status}`;
+    const [cr, or] = await Promise.all([
+      fetch('/api/v1/certificates', { headers: auth() }),
+      fetch('/api/v1/acme/orders', { headers: auth() }),
+    ]);
+    if (!cr.ok) {
+      error = `certificates ${cr.status}`;
       certs = { rows: [] };
       return;
     }
-    certs = viewOfCertificates(asList<CertificateFact>(await r.json()));
+    const orders = or.ok ? asList<OrderFact>(await or.json()) : [];
+    certs = viewOfCertificates(asList<CertificateFact>(await cr.json()), orders);
   };
 
   const refreshRoutes = async (): Promise<void> => {
@@ -639,6 +643,28 @@ export function createDesk() {
     }
   };
 
+  const drain = async (key: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await fetch(`/api/v1/backends/${encodeURIComponent(key)}/drain`, {
+        method: 'POST', headers: auth(),
+      });
+      if (!r.ok) {
+        const body = (await r.json()) as { message?: string };
+        error = body.message ?? `drain ${r.status}`;
+        return false;
+      }
+      await refreshPools();
+      return true;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const recover = async (): Promise<void> => {
     recovering = true;
     error = undefined;
@@ -673,6 +699,7 @@ export function createDesk() {
     connect,
     apply,
     recover,
+    drain,
     withdraw,
     insertBackend,
     insertPool,

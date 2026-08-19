@@ -6,12 +6,13 @@
   import AddHashPool from './AddHashPool.svelte';
   import AddSourceIpHashPool from './AddSourceIpHashPool.svelte';
 
-  let { view, live, editing, withdraw, withdrawPool, insert, openPool, openHashPool, openSourceIpHashPool }: {
+  let { view, live, editing, withdraw, withdrawPool, drain, insert, openPool, openHashPool, openSourceIpHashPool }: {
     view: PoolsView;
     live: boolean;
     editing: boolean;
     withdraw: (key: string) => void;
     withdrawPool: (key: string) => void;
+    drain: (key: string) => void;
     insert: (pool: string, key: string, host: string, port: number) => void;
     openPool: (input: {
       pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
@@ -67,6 +68,11 @@
                 <button
                   type="button"
                   disabled={editing}
+                  onclick={() => drain(be.key)}
+                >드레인</button>
+                <button
+                  type="button"
+                  disabled={editing}
                   onclick={() => withdraw(be.key)}
                 >설정에서 뺀다</button>
               </li>
@@ -108,7 +114,7 @@
   ul { list-style: none; margin: 0; padding: 0; }
   li {
     display: grid;
-    grid-template-columns: 7rem 1fr auto auto;
+    grid-template-columns: 7rem 1fr auto auto auto;
     gap: 0.6rem;
     padding: 0.45rem 0;
     border-top: 1px solid var(--rule);
