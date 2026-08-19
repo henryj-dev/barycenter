@@ -4,7 +4,8 @@
     pools: string[];
     editing: boolean;
     add: (input: {
-      key: string; listener: string; hosts: string[]; pool: string; pathPrefix?: string;
+      key: string; listener: string; hosts: string[]; pool: string;
+      pathPrefix?: string; websocket?: boolean;
     }) => void;
   } = $props();
 
@@ -13,6 +14,7 @@
   let hostsText = $state('');
   let pathPrefix = $state('');
   let pool = $state('');
+  let websocket = $state(false);
 
   const ready = $derived(listeners.length > 0 && pools.length > 0);
 
@@ -25,6 +27,7 @@
       hosts,
       pool,
       ...(prefix === '' ? {} : { pathPrefix: prefix }),
+      ...(websocket ? { websocket: true } : {}),
     });
   };
 </script>
@@ -45,18 +48,32 @@
       <option value={p}>{p}</option>
     {/each}
   </select>
+  <label class="ws">
+    <input type="checkbox" bind:checked={websocket} disabled={editing} />
+    websocket
+  </label>
   <button type="submit" disabled={editing || !ready}>호스트 라우트를 넣는다</button>
 </form>
 
 <style>
   .add {
     display: grid;
-    grid-template-columns: 6rem 7rem 1fr 6rem 7rem auto;
+    grid-template-columns: 6rem 7rem 1fr 6rem 7rem auto auto;
     gap: 0.4rem;
     margin-top: 0.8rem;
     padding-top: 0.8rem;
     border-top: 1px solid var(--rule);
+    align-items: center;
   }
+  .ws {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--mute);
+    white-space: nowrap;
+  }
+  .ws input { margin: 0; }
   input, select {
     background: var(--plate);
     border: 1px solid var(--rule);
@@ -73,7 +90,7 @@
     font-size: 0.75rem;
     cursor: pointer;
   }
-  button:disabled, input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:disabled, input:disabled, select:disabled, .ws:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
   @media (max-width: 640px) {
     .add { grid-template-columns: 1fr 1fr; }
   }

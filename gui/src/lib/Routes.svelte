@@ -17,7 +17,8 @@
     withdraw: (key: string) => void;
     withdrawPt: (key: string) => void;
     insert: (input: {
-      key: string; listener: string; hosts: string[]; pool: string; pathPrefix?: string;
+      key: string; listener: string; hosts: string[]; pool: string;
+      pathPrefix?: string; websocket?: boolean;
     }) => void;
     insertRedirect: (input: {
       key: string; listener: string; hosts: string[]; to: string;

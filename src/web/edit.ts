@@ -377,12 +377,12 @@ export type PutHttpRouteOp = {
     hosts: string[];
     priority: number;
     pathPrefix?: string;
-    action: { kind: 'proxy'; pool: string; websocket: false };
+    action: { kind: 'proxy'; pool: string; websocket: boolean };
   };
 };
 
 /**
- * 호스트 → 풀 proxy. websocket 은 끈다.
+ * 호스트 → 풀 proxy. websocket 은 기본이 끈다 — 켜려면 명시한다.
  * redirect 는 putHttpRedirectPatch. reject 는 putHttpRejectPatch.
  */
 export function putHttpRoutePatch(input: {
@@ -392,6 +392,7 @@ export function putHttpRoutePatch(input: {
   pool: string;
   pathPrefix?: string;
   priority?: number;
+  websocket?: boolean;
 }): PutHttpRouteOp[] {
   if (input.key === '') throw new Error('키가 비어 있다');
   if (input.listener === '') throw new Error('리스너가 비어 있다');
@@ -407,7 +408,7 @@ export function putHttpRoutePatch(input: {
     listener: input.listener,
     hosts,
     priority,
-    action: { kind: 'proxy', pool: input.pool, websocket: false },
+    action: { kind: 'proxy', pool: input.pool, websocket: input.websocket === true },
   };
   if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];

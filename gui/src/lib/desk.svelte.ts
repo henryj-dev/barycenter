@@ -467,6 +467,7 @@ export function createDesk() {
     hosts: string[];
     pool: string;
     pathPrefix?: string;
+    websocket?: boolean;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;

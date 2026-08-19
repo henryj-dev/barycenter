@@ -223,6 +223,21 @@ describe('설정에서 빼기', () => {
     expect(patch[0]?.body).not.toHaveProperty('pathPrefix');
   });
 
+  it('websocket 을 켜면 proxy 에 true 가 실린다', () => {
+    const [op] = putHttpRoutePatch({
+      key: 'r-app', listener: 'front', hosts: ['app.example.com'], pool: 'app',
+      websocket: true,
+    });
+    expect(op?.body.action).toEqual({ kind: 'proxy', pool: 'app', websocket: true });
+  });
+
+  it('websocket 을 안 적으면 끈다', () => {
+    const [op] = putHttpRoutePatch({
+      key: 'r-app', listener: 'front', hosts: ['app.example.com'], pool: 'app',
+    });
+    expect(op?.body.action.websocket).toBe(false);
+  });
+
   it('호스트가 없으면 패치를 만들지 않는다', () => {
     expect(() => putHttpRoutePatch({
       key: 'r-app', listener: 'front', hosts: ['  ', ''], pool: 'app',
