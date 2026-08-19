@@ -178,8 +178,9 @@ not a moat. The bets that need execution quality instead:
   listeners pointing at two pools.
 - **The API is the only entry point.** The web UI and `bary` CLI are clients of it.
   They are not yet equal: the CLI can create the same resources the GUI writes
-  and delete the kinds the GUI withdraws, stopping at commit. Drain commands
-  are still missing (S2). Equality is a v1.0 claim (`DESIGN.md` §1).
+  and delete the kinds the GUI withdraws, stopping at commit. `bary get` reads
+  the list endpoints that already exist, including health. Drain commands are
+  still missing (S2). Equality is a v1.0 claim (`DESIGN.md` §1).
 - **Nothing is applied blind.** Changes accumulate in a changeset, `plan` reports the impact,
   and apply runs a durable state machine — render → validate on the real data plane → publish →
   reload → verify, with automatic rollback and an explicit failure state when rollback itself fails.

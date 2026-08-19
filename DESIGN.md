@@ -1117,6 +1117,8 @@ reject 는 403·404·444 다. 기본 403. 444 는 응답 없이 끊는다.
 `sni-binding create|delete`, `listener delete`, `route delete` 가 있다.
 라우트 삭제는 `--host` 또는 `--sni` 로 HTTP 와 패스스루를 가른다.
 인증서 패치에 개인키·fullchain 이 없다. 드레인은 S2 다.
+`get` 은 있는 GET 만 부른다. certificates · tls-policies · sni-bindings · health
+와 `pools/<id>/backends` · `backends/<id>/status` 다. 주문 GET 은 없다.
 
 ---
 

@@ -18,7 +18,8 @@
  *   bary apply <파일.json>      한 바퀴 단축
  *   bary plan  <파일.json>      커밋하지 않고 영향만 본다
  *   bary export / import
- *   bary rollback / cancel / audit / status / head / get
+ *   bary rollback / cancel / audit / status / head
+ *   bary get listeners|pools|backends|routes|certificates|tls-policies|sni-bindings|health|model|rendered
  *
  * 환경변수: `BARY_URL`(기본 http://127.0.0.1:8088) · `BARY_TOKEN`
  *
@@ -29,6 +30,7 @@
 import { readFileSync } from 'node:fs';
 
 import { backendDelete, backendPut } from '../cli/backend.js';
+import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete } from '../cli/listener.js';
 import { poolCreate } from '../cli/pool.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
@@ -85,7 +87,8 @@ const usage = (): never => {
 
   bary status                    4-way 상태 · 미완 전환 · 미적용 커밋
   bary head                      전역 리비전
-  bary get <무엇>                listeners | pools | backends | routes | model | rendered
+  bary get <무엇>                listeners | pools | backends | routes | certificates | tls-policies | sni-bindings | health | model | rendered
+                                 pools/<id>/backends | backends/<id>/status. 모르는 이름은 안 부른다
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
   bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
@@ -157,9 +160,11 @@ async function main(): Promise<void> {
       return;
     case 'get': {
       const what = arg ?? usage();
-      const path = what === 'model' || what === 'rendered'
-        ? `/api/v1/config/${what}` : `/api/v1/${what}`;
-      show(must(await call('GET', path), what));
+      try {
+        show(await getResource(call, what));
+      } catch (e) {
+        die(e);
+      }
       return;
     }
     case 'rollback': {
