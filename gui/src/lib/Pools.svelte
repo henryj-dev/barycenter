@@ -1,13 +1,18 @@
 <script lang="ts">
   import type { PoolsView } from '@web/pools-view';
+  import type { ProtocolClass } from '@web/edit';
   import AddBackend from './AddBackend.svelte';
+  import AddPool from './AddPool.svelte';
 
-  let { view, live, editing, withdraw, insert }: {
+  let { view, live, editing, withdraw, insert, openPool }: {
     view: PoolsView;
     live: boolean;
     editing: boolean;
     withdraw: (key: string) => void;
     insert: (pool: string, key: string, host: string, port: number) => void;
+    openPool: (input: {
+      pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
+    }) => void;
   } = $props();
 
   const label = (state: string): string => {
@@ -19,9 +24,10 @@
 
 {#if !live}
   <p class="empty">연결하면 head 풀이 여기 온다.</p>
-{:else if view.rows.length === 0}
-  <p class="empty">풀이 없다. <code>bary import</code> 로 연다.</p>
 {:else}
+  {#if view.rows.length === 0}
+    <p class="empty">풀이 없다. 아래에서 풀과 첫 백엔드를 같이 연다.</p>
+  {:else}
   <div class="pools">
     {#each view.rows as pool (pool.key)}
       <section>
@@ -60,11 +66,12 @@
       </section>
     {/each}
   </div>
+  {/if}
+  <AddPool {editing} add={openPool} />
 {/if}
 
 <style>
   .empty { color: var(--mute); }
-  .empty code { font-family: var(--data); font-size: 0.85em; }
   .pools { margin-top: 1.5rem; }
   section { border-top: 1px solid var(--rule); padding: 1rem 0 0.4rem; }
   header {

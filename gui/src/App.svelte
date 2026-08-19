@@ -74,7 +74,7 @@
       <p class="lede">head 모델이다. HTTP 포트를 여는 것은 commit 이다. https·tcp·udp 는 아직 폼이 없다.</p>
     {:else if page === 'pools'}
       <h1>풀이 받는 것</h1>
-      <p class="lede">TCP 연결만 잰다. 넣거나 빼는 것은 commit 이다. 트래픽은 영향 화면에서 건다.</p>
+      <p class="lede">빈 풀은 저장되지 않는다. 풀을 열 때 첫 백엔드를 같이 넣는다.</p>
     {:else if page === 'routes'}
       <h1>엔진이 보는 순서</h1>
       <p class="lede">사용자 priority 가 매치 클래스를 이기지 못한다. 어긋나면 그림자로 말한다.</p>
@@ -139,6 +139,9 @@
       }}
       insert={(pool, key, host, port) => {
         void desk.insertBackend(key, { pool, host, port }).then((ok) => { if (ok) go('/'); });
+      }}
+      openPool={(input) => {
+        void desk.insertPool(input).then((ok) => { if (ok) go('/'); });
       }}
     />
   {:else if page === 'routes'}

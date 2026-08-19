@@ -72,3 +72,41 @@ export function putHttpListenerPatch(
     },
   }];
 }
+
+export type ProtocolClass = 'http' | 'tcp' | 'udp';
+
+export type PutPoolOp = {
+  op: 'put';
+  kind: 'pool';
+  key: string;
+  body: { protocolClass: ProtocolClass; algorithm: 'round_robin' };
+};
+
+/**
+ * 빈 풀은 검증기가 막는다. 풀만 put 하면 plan 이 실패한다.
+ * 첫 백엔드를 같은 changeset 에 얹는다.
+ */
+export function putPoolWithBackendPatch(input: {
+  pool: string;
+  protocolClass: ProtocolClass;
+  backend: string;
+  host: string;
+  port: number;
+}): [PutPoolOp, ...PutBackendOp[]] {
+  if (input.pool === '') throw new Error('풀 키가 비어 있다');
+  if (input.protocolClass !== 'http' && input.protocolClass !== 'tcp' && input.protocolClass !== 'udp') {
+    throw new Error('protocolClass 가 http|tcp|udp 가 아니다');
+  }
+  const backends = putBackendPatch(input.backend, {
+    pool: input.pool, host: input.host, port: input.port,
+  });
+  return [
+    {
+      op: 'put',
+      kind: 'pool',
+      key: input.pool,
+      body: { protocolClass: input.protocolClass, algorithm: 'round_robin' },
+    },
+    ...backends,
+  ];
+}

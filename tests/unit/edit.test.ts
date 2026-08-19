@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putHttpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putHttpListenerPatch, putPoolWithBackendPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -27,6 +27,15 @@ describe('설정에서 빼기', () => {
 
   it('포트가 정수가 아니면 패치를 만들지 않는다', () => {
     expect(() => putBackendPatch('be-b', { pool: 'web', host: '10.0.0.3', port: 0 })).toThrow(/포트/);
+  });
+
+  it('풀은 첫 백엔드와 같이 넣는다 — 빈 풀은 plan 이 막힌다', () => {
+    expect(putPoolWithBackendPatch({
+      pool: 'web', protocolClass: 'http', backend: 'a', host: '10.0.0.1', port: 80,
+    })).toEqual([
+      { op: 'put', kind: 'pool', key: 'web', body: { protocolClass: 'http', algorithm: 'round_robin' } },
+      { op: 'put', kind: 'backend', key: 'a', body: { pool: 'web', host: '10.0.0.1', port: 80, weight: 1 } },
+    ]);
   });
 
   it('HTTP 리스너를 넣는 패치는 put 한 줄이다 — tls 는 안 붙인다', () => {
