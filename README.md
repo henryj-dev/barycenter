@@ -13,7 +13,7 @@
 > **What is there.** HTTP, HTTPS, TCP, UDP and SNI pass-through render. A Lua membership
 > plane updates backends without a reload. A TCP health probe publishes flips on SSE.
 > ACME http-01 and uploaded certificates terminate TLS. Operator screens exist for
-> impact, listeners, pools, routes, certificates and status.
+> impact, listeners, pools, routes, certificates, status and the rendered conf.
 > Adding or removing a backend, opening a pool (with its first backend — empty pools
 > are rejected), opening/closing an HTTP, TCP or UDP listener, or adding/removing an HTTP host
 > route (proxy to a pool; websocket off), goes through a changeset and

@@ -2592,13 +2592,13 @@ capability 패키지이지 apply 구현이 아니다.
 ## 10. Web GUI
 
 - 스택: **Svelte 5 runes**. 코어와 같은 TypeScript 타입 공유.
-  여섯 경로가 됐는데도 **Vite + Svelte 5** 한 장이다. `pageOf` 가 자리를 가른다.
+  일곱 경로가 됐는데도 **Vite + Svelte 5** 한 장이다. `pageOf` 가 자리를 가른다.
   Kit 이주는 별도 조각이다 — 한 장에 Kit 를 깔면 없는 라우터를 있는 척한다.
 - `barycenterd` 가 `gui/build`(또는 `BARY_GUI`) 를 **같은 출처**에서 낸다. CORS 를
   열지 않기 위해서다. 페이지는 토큰 없이 열리고, `/api/v1/*` 는 그대로 Bearer 다.
   EventSource 는 Authorization 을 못 붙이므로 `GET /api/v1/events` 는 fetch 스트림
   + `pullSse` 다.
-- 열린 화면: Plan·Impact · Listeners · Pools · Routes · Certificates · Status.
+- 열린 화면: Plan·Impact · Listeners · Pools · Routes · Certificates · Status · Rendered.
   `serveGui` 의 확장자 없는 폴백이 같은 `index.html` 을 낸다.
   Plan·Impact 는 `plan.impact` 를 문장으로 접는다. diff 가 아니다.
   Listeners 는 `GET /api/v1/listeners`(head 모델) 다. 커밋됐지만 미적용이면
@@ -2613,6 +2613,8 @@ capability 패키지이지 apply 구현이 아니다.
   없으므로 그리지 않는다.
   Status 는 SSE 스냅샷의 4-way 다. `/status` 를 폴링하지 않는다. nativeDns
   선택형은 그리지 않는다.
+  Rendered 는 `GET /api/v1/config/rendered` 다. head 리비전의 산출물이다.
+  nginx.conf 는 정본이 아니다. 과거 리비전 고르기는 없다. 폴링하지 않는다.
   GUI 쓰기는 changeset 을 지난다. 지금 열린 것은 백엔드 `put`/`delete`,
   HTTP·TCP·UDP·패스스루 리스너 `put`/`delete`, 풀은 **첫 백엔드와 같이** `put` 한다.
   빈 풀은 검증기가 막는다. 알고리즘은 `round_robin` · `hash`+hashKey ·
@@ -2643,7 +2645,8 @@ capability 패키지이지 apply 구현이 아니다.
 | Routes — 엔진 순서, HTTP 호스트 proxy/redirect/reject put/delete, 패스스루 SNI proxy/reject put/delete | 열림. websocket 은 프록시에서만 |
 | Certificates — 만료는 자료. 자료 put. SNI 바인딩 put/delete | 열림. 주문 GET 없음 |
 | Status — SSE 스냅샷 4-way | 열림. nativeDns 선택형 없음 |
-| Rendered Config / Audit | API 있음. 화면은 v1.0 |
+| Rendered — GET /config/rendered. head 리비전. 폴링하지 않는다 | 열림. 모델이 정본이다 |
+| Audit | API 있음. 화면은 아직 |
 
 - 실시간: SSE (스냅샷 + 델타, 하트비트). GUI 는 폴링하지 않는다.
   스냅샷은 `status` 에 지금 `health` 를 얹는다. 판정 변경은 `health` 델타.
@@ -2992,7 +2995,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.2** L4 ✅ | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
 | **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2)은 아직** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. inflight/sessions 숫자는 없다 |
 | **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). 리소스별 하위 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
-| **v0.5** GUI | SSE ✅. 여섯 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
+| **v0.5** GUI | SSE ✅. 일곱 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
 | **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩 ✅. 주문 GET · dns-01 은 아직 | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
 | **v1.0** | 전체 RBAC, 백업/복구 리허설, SPOF 런북, 문서 | RTO/RPO 리허설 합격 |
@@ -3179,7 +3182,7 @@ slice 로 v0.5 에서 검증한다.
 | 드레인 | GOAWAY + `force_close` 약속 | **관측 + 새 트래픽 차단까지.** 강제 종료는 capability |
 | SNI 결과 분기 | 3분할 확정 | **2분할.** 3분할은 S9 통과 시 |
 | ACME / 콜드 스탠바이 | v1 문서에서 계약 확정 | **스파이크 후 ADR** 로 미룸 |
-| GUI | v0.5 에 8화면 | **3화면으로 시작.** 지금 여섯 화면 + HTTP/TCP/UDP/HTTPS 쓰기 + 인증서 자료 + SNI 바인딩. Kit·드레인은 아직 |
+| GUI | v0.5 에 8화면 | **3화면으로 시작.** 지금 일곱 화면 + HTTP/TCP/UDP/HTTPS 쓰기 + 인증서 자료 + SNI 바인딩 + 렌더된 conf. Kit·드레인·audit 은 아직 |
 
 **반대로 축소하지 않은 것** (2차 검수도 "안전성의 최소 구조"로 인정): immutable generation,
 DP 단일 writer, graph changeset, config↔membership epoch fencing.

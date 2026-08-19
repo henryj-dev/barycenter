@@ -8,6 +8,7 @@
 그 파일은 정본이 아니다.
 
 마지막 GUI 쓰기는 source_ip_hash 풀 put 이다. hashKey 를 안 붙인다.
+산출물 화면은 head 렌더다. nginx.conf 는 정본이 아니다.
 
 CI Linux 는 OpenSSL 3 출력 · 바인드 마운트 uid 0 · Lua 밸런서의 호스트 이름 거절에서
 깨졌다. 멤버십 슬롯은 넣기 전에 IP 로 푼다.
@@ -27,12 +28,13 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 | 주문 GET · dns-01 |
 | ACME | http-01 러너, shared dict 챌린지, 만료 30일 전 갱신 틱 | 주문 GET, dns-01 프로바이더 |
 | CLI | `changeset` 단계, `commit --plan`, `apply --plan`, export/import, status/rollback | 리소스 하위 명령 |
-| GUI | 여섯 화면. 폴링하지 않는다. Kit 이 아니다 | 아래 §2 |
+| GUI | 일곱 화면. 폴링하지 않는다. Kit 이 아니다 | 아래 §2 |
 
 ### GUI
 
-화면: 영향 · 리스너 · 풀 · 라우트 · 인증서 · 상태. 같은 `index.html`, `pageOf` 가
-가른다. SSE 는 fetch 스트림 + `pullSse` 다.
+화면: 영향 · 리스너 · 풀 · 라우트 · 인증서 · 상태 · 산출물. 같은 `index.html`,
+`pageOf` 가 가른다. SSE 는 fetch 스트림 + `pullSse` 다. 산출물은
+`GET /api/v1/config/rendered` 다. head 리비전이다. 폴링하지 않는다.
 
 쓰기는 changeset 을 지나 **commit 까지** 한다. apply 는 영향 화면만 한다.
 
@@ -64,7 +66,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **418** |
+| 단위 | `npm test` | **421** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -90,8 +92,8 @@ API 가 없어서 못 그리는 것.
 로드맵 잔여.
 
 - CLI 리소스 하위 명령
-- SvelteKit (여섯 경로인데도 한 `index.html`)
-- 렌더된 conf / audit 화면 (API 는 있다)
+- SvelteKit (일곱 경로인데도 한 `index.html`)
+- audit 화면 (API 는 있다)
 - v1.0 RBAC · 백업/복구 리허설 · SPOF 런북
 
 스파이크 — 기능 축소 등급. 게이트에 넣지 않는 것은 넣지 않는다.
