@@ -1,10 +1,10 @@
 /**
  * CLI 리소스 쓰기 — DESIGN.md §5.6
  *
- * HTTP 리스너 create 만. tcp·udp·https 는 아직이다. apply 는 안 한다.
- * 패치는 GUI 와 같은 `putHttpListenerPatch` 다.
+ * HTTP·TCP 리스너 create. udp·https 는 아직이다. apply 는 안 한다.
+ * 패치는 GUI 와 같은 `putHttpListenerPatch` · `putTcpListenerPatch` 다.
  */
-import { putHttpListenerPatch } from '../web/edit.js';
+import { putHttpListenerPatch, putTcpListenerPatch } from '../web/edit.js';
 
 import { changesetNew, changesetPatch, changesetPlan, commitByPlan, type Http } from './flow.js';
 
@@ -16,13 +16,24 @@ export type ListenerCreateInput = {
   pool: string;
 };
 
-export function listenerCreatePatch(input: ListenerCreateInput): ReturnType<typeof putHttpListenerPatch> | undefined {
-  if (input.protocol !== 'http') return undefined;
-  return putHttpListenerPatch(input.name, {
-    bind: input.bind,
-    port: input.port,
-    pool: input.pool,
-  });
+export function listenerCreatePatch(
+  input: ListenerCreateInput,
+): ReturnType<typeof putHttpListenerPatch> | ReturnType<typeof putTcpListenerPatch> | undefined {
+  if (input.protocol === 'http') {
+    return putHttpListenerPatch(input.name, {
+      bind: input.bind,
+      port: input.port,
+      pool: input.pool,
+    });
+  }
+  if (input.protocol === 'tcp') {
+    return putTcpListenerPatch(input.name, {
+      bind: input.bind,
+      port: input.port,
+      pool: input.pool,
+    });
+  }
+  return undefined;
 }
 
 export async function listenerCreate(
@@ -30,7 +41,7 @@ export async function listenerCreate(
   input: ListenerCreateInput,
 ): Promise<{ revision: string; planId: string }> {
   const patch = listenerCreatePatch(input);
-  if (patch === undefined) throw new Error('http 만 연다. tcp·udp·https 는 아직이다');
+  if (patch === undefined) throw new Error('http·tcp 만 연다. udp·https 는 아직이다');
   const cs = await changesetNew(http);
   await changesetPatch(http, cs.id, patch);
   const plan = await changesetPlan(http, cs.id);

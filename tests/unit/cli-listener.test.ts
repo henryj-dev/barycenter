@@ -1,5 +1,5 @@
 /**
- * CLI HTTP 리스너 create — apply 가 아니다.
+ * CLI HTTP·TCP 리스너 create — apply 가 아니다.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -38,9 +38,27 @@ describe('listener create 패치', () => {
     }]);
   });
 
-  it('http 가 아니면 패치를 안 만든다', () => {
-    expect(listenerCreatePatch({
+  it('TCP 리스너는 protocol=tcp 다. http/tls 를 안 붙인다', () => {
+    const patch = listenerCreatePatch({
       name: 'game', protocol: 'tcp', bind: '0.0.0.0', port: 999, pool: 'pool-a',
+    });
+    expect(patch).toEqual([{
+      op: 'put',
+      kind: 'listener',
+      key: 'game',
+      body: {
+        protocol: 'tcp',
+        bind: '0.0.0.0',
+        port: 999,
+        enabled: true,
+        defaultPool: 'pool-a',
+      },
+    }]);
+  });
+
+  it('udp·https 는 패치를 안 만든다', () => {
+    expect(listenerCreatePatch({
+      name: 'dns', protocol: 'udp', bind: '0.0.0.0', port: 53, pool: 'pool-a',
     })).toBeUndefined();
     expect(listenerCreatePatch({
       name: 'web', protocol: 'https', bind: '0.0.0.0', port: 443, pool: 'app',
