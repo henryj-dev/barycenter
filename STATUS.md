@@ -7,7 +7,7 @@
 [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md) 로 옮겼다.
 그 파일은 정본이 아니다.
 
-마지막 GUI 쓰기는 인증서 자료 업로드다. 개인키는 패치에 안 실린다.
+마지막 GUI 쓰기는 SNI 바인딩 put 이다. 라우트에 붙이지 않는다.
 
 ---
 
@@ -21,7 +21,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 모델 | 리스너·풀·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩. 판별 유니온 | h3, `least_conn`, WAF, `on_nxdomain`/`on_timeout` |
 | 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백 | OpenAPI · DDL 동결 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, TCP connect 프로브, SSE `health` | 드레인 관측(S2), HTTP 본문 프로브 |
-| TLS | 업로드 자료(`POST /certificates/material`), https 렌더, SNI 선택, 세대 결박 롤백 | GUI SNI 바인딩 폼 |
+| TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 | 주문 GET · dns-01 |
 | ACME | http-01 러너, shared dict 챌린지, 만료 30일 전 갱신 틱 | 주문 GET, dns-01 프로바이더 |
 | CLI | `changeset` 단계, `commit --plan`, `apply --plan`, export/import, status/rollback | 리소스 하위 명령 |
 | GUI | 여섯 화면. 폴링하지 않는다. Kit 이 아니다 | 아래 §2 |
@@ -44,6 +44,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | HTTPS 리스너 | bind · port · pool · `tls.policy` · `tls.defaultCertificate`. 자료 없는 인증서는 안 고른다 |
 | HTTP 라우트 | 호스트 → 풀 proxy. websocket 끔 |
 | 인증서 | 자료는 `POST /certificates/material`. 설정 put 은 `materialRef`·digest 만 |
+| SNI 바인딩 | listener · hosts · certificate. override 없음. 라우트에 안 붙인다 |
 
 만료는 자료에서 읽고, 자료가 없으면 빼지 않는다. 개인키는 패치에 없다.
 
@@ -56,7 +57,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **388** |
+| 단위 | `npm test` | **391** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -73,7 +74,6 @@ non-zero 다. API·DB 스키마는 아직 동결하지 않는다 (§9.1.1).
 
 가까운 GUI 구멍 — API 는 있고 폼이 없다.
 
-- SNI 바인딩 put
 - 패스스루 리스너 · 패스스루 라우트
 - HTTP 라우트 redirect · reject · websocket
 - 풀 알고리즘 `hash` (`hashKey` 필요)

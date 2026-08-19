@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -141,6 +141,30 @@ describe('설정에서 빼기', () => {
     expect(() => putCertificatePatch('cert-a', {
       materialRef: '', chainDigest: 'sha256:aa', keyDigest: 'sha256:bb',
     })).toThrow(/참조/);
+  });
+
+  it('SNI 바인딩 패치는 listener·hosts·certificate 다 — 라우트에 안 붙인다', () => {
+    expect(putSniBindingPatch({
+      key: 'sni-a', listener: 'front-tls', hosts: ['app.example.com'], certificate: 'cert-a',
+    })).toEqual([
+      {
+        op: 'put', kind: 'sniBinding', key: 'sni-a',
+        body: { listener: 'front-tls', hosts: ['app.example.com'], certificate: 'cert-a' },
+      },
+    ]);
+  });
+
+  it('SNI 바인딩에 override 를 안 붙인다', () => {
+    const patch = putSniBindingPatch({
+      key: 'sni-a', listener: 'front-tls', hosts: ['app.example.com'], certificate: 'cert-a',
+    });
+    expect(patch[0]?.body).not.toHaveProperty('override');
+  });
+
+  it('호스트가 없으면 SNI 바인딩 패치를 만들지 않는다', () => {
+    expect(() => putSniBindingPatch({
+      key: 'sni-a', listener: 'front-tls', hosts: ['  '], certificate: 'cert-a',
+    })).toThrow(/호스트/);
   });
 
   it('HTTP 라우트를 넣는 패치는 put 한 줄이다 — proxy 이고 websocket 은 끈다', () => {

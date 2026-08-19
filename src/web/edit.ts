@@ -4,7 +4,7 @@
  * 저장(commit)과 적용(apply)은 다르다. 여기서 만드는 것은 patch 뿐이다.
  * 메서드×경로 ALLOW/DENY 는 WAF 다. 여기 없다.
  */
-export type EditKind = 'backend' | 'listener' | 'pool' | 'httpRoute';
+export type EditKind = 'backend' | 'listener' | 'pool' | 'httpRoute' | 'sniBinding';
 
 export type DeleteOp = { op: 'delete'; kind: EditKind; key: string };
 
@@ -258,6 +258,36 @@ export function putCertificatePatch(
       chainDigest: body.chainDigest,
       keyDigest: body.keyDigest,
     },
+  }];
+}
+
+export type PutSniBindingOp = {
+  op: 'put';
+  kind: 'sniBinding';
+  key: string;
+  body: { listener: string; hosts: string[]; certificate: string };
+};
+
+/**
+ * HTTPS 호스트에 제시할 인증서. 라우트에 붙이지 않는다 — handshake 는 SNI 다.
+ * override 는 안 붙인다.
+ */
+export function putSniBindingPatch(input: {
+  key: string;
+  listener: string;
+  hosts: readonly string[];
+  certificate: string;
+}): PutSniBindingOp[] {
+  if (input.key === '') throw new Error('키가 비어 있다');
+  if (input.listener === '') throw new Error('리스너가 비어 있다');
+  if (input.certificate === '') throw new Error('인증서가 비어 있다');
+  const hosts = input.hosts.map((h) => h.trim()).filter((h) => h !== '');
+  if (hosts.length === 0) throw new Error('호스트가 비어 있다');
+  return [{
+    op: 'put',
+    kind: 'sniBinding',
+    key: input.key,
+    body: { listener: input.listener, hosts, certificate: input.certificate },
   }];
 }
 

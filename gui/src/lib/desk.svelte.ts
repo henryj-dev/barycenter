@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type TlsVersion, type UdpPreset } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type TlsVersion, type UdpPreset } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -44,6 +44,7 @@ export function createDesk() {
   let routes = $state<RoutesView>({ order: [], warnings: [], errors: [], passthrough: [] });
   let certs = $state<CertsView>({ rows: [] });
   let policies = $state<string[]>([]);
+  let bindings = $state<{ key: string; listener: string; hosts: string[]; certificate: string }[]>([]);
   let status = $state<StatusView>(viewOfStatus({}));
   let applying = $state(false);
   let editing = $state(false);
@@ -111,6 +112,24 @@ export function createDesk() {
     await refreshRoutes();
     await refreshCerts();
     await refreshPolicies();
+    await refreshBindings();
+  };
+
+  const refreshBindings = async (): Promise<void> => {
+    const r = await fetch('/api/v1/sni-bindings', { headers: auth() });
+    if (!r.ok) {
+      error = `sni-bindings ${r.status}`;
+      bindings = [];
+      return;
+    }
+    bindings = asList<{ key?: unknown; listener?: unknown; hosts?: unknown; certificate?: unknown }>(await r.json())
+      .flatMap((b) => {
+        if (typeof b.key !== 'string' || typeof b.listener !== 'string' || typeof b.certificate !== 'string') {
+          return [];
+        }
+        const hosts = Array.isArray(b.hosts) ? b.hosts.filter((h): h is string => typeof h === 'string') : [];
+        return [{ key: b.key, listener: b.listener, hosts, certificate: b.certificate }];
+      });
   };
 
   const refreshPolicies = async (): Promise<void> => {
@@ -379,6 +398,21 @@ export function createDesk() {
     }
   };
 
+  const insertSniBinding = async (input: {
+    key: string; listener: string; hosts: string[]; certificate: string;
+  }): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putSniBindingPatch(input));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const insertHttpsListener = async (
     key: string,
     body: { bind: string; port: number; pool: string; policy: string; certificate: string },
@@ -460,6 +494,7 @@ export function createDesk() {
     get routes() { return routes; },
     get certs() { return certs; },
     get policies() { return policies; },
+    get bindings() { return bindings; },
     get status() { return status; },
     get applying() { return applying; },
     get editing() { return editing; },
@@ -474,6 +509,7 @@ export function createDesk() {
     insertTlsPolicy,
     insertHttpsListener,
     insertCertificate,
+    insertSniBinding,
     insertHttpRoute,
     disconnect() { stop?.(); },
   };

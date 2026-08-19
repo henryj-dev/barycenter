@@ -80,7 +80,7 @@
       <p class="lede">호스트 라우트를 넣는 것은 commit 이다. 매치 클래스가 priority 를 이긴다. redirect·reject 는 아직 폼이 없다.</p>
     {:else if page === 'certificates'}
       <h1>언제 죽는가</h1>
-      <p class="lede">자료를 넣는 것은 commit 이다. 개인키는 패치에 안 실린다. 만료는 자료에서 읽는다.</p>
+      <p class="lede">자료를 넣는 것은 commit 이다. HTTPS 호스트는 SNI 바인딩이 있어야 plan 이 된다.</p>
     {:else if page === 'status'}
       <h1>네 갈래</h1>
       <p class="lede">커밋과 게시와 리더는 다르다. 스탠바이가 리더처럼 보이면 apply 가 왜 503 인지 모른다.</p>
@@ -183,6 +183,17 @@
       editing={desk.editing}
       insert={(key, fullchain, privkey) => {
         void desk.insertCertificate(key, { fullchain, privkey }).then((ok) => { if (ok) go('/'); });
+      }}
+      listeners={desk.listeners.rows
+        .filter((l) => l.mark !== 'leave' && l.protocol === 'https')
+        .map((l) => l.key)}
+      certificates={desk.certs.rows.filter((c) => c.hasMaterial).map((c) => c.key)}
+      bindings={desk.bindings}
+      insertSni={(input) => {
+        void desk.insertSniBinding(input).then((ok) => { if (ok) go('/'); });
+      }}
+      withdrawSni={(key) => {
+        void desk.withdraw('sniBinding', key).then((ok) => { if (ok) go('/'); });
       }}
     />
   {:else if page === 'status'}

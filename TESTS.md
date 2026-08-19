@@ -972,6 +972,7 @@ S11 하네스의 교훈이다.
 | C5.29 | GUI TLS 정책 put | minVersion 기본 1.2. HSTS 안 켬 (`tests/unit/edit.test.ts`) |
 | C5.30 | GUI HTTPS 리스너 put | tls 결박 필수. 빈 인증서는 패치를 안 만든다 |
 | C5.31 | GUI 인증서 put | 참조·digest 만. 개인키·fullchain 이 패치에 없다 (`tests/unit/edit.test.ts`) |
+| C5.32 | GUI SNI 바인딩 put | listener·hosts·certificate. override 없음. 빈 호스트는 패치를 안 만든다 |
 
 ---
 

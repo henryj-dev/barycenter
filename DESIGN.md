@@ -2060,7 +2060,7 @@ freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스�
 |---|---|---|
 | 멤버십 드라이버 · 이중 zone · 헬스 프로버 | §6.5 커서와 함께 | **v0.3** |
 | 드레인 관측 (S2) · `least_conn` (S6) | 기능 | v0.3 · 미정 |
-| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6 엔진은 열렸다.** 업로드 종단·SNI·policy·갱신 틱·롤백. GUI 정책·https 포트·자료 업로드는 있다. 주문 GET 은 없다. OCSP 는 **안 짓는다** (§4.6.1). GC 원장은 **안 짓는다** (S13) |
+| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6 엔진은 열렸다.** 업로드 종단·SNI·policy·갱신 틱·롤백. GUI 정책·https 포트·자료 업로드·SNI 바인딩은 있다. 주문 GET 은 없다. OCSP 는 **안 짓는다** (§4.6.1). GC 원장은 **안 짓는다** (S13) |
 | **HTTP/2** (https, server 별 `http2 on`) | §4.9 실측 — capability 로 가른다 | **v0.6** |
 | **HTTP/3 (QUIC)** | **S20 실행 완료 (2026-08-18) — h3 자체는 된다(7/8). 깨진 것은 ② 뿐이고, 그것이 결정적이다: quic↔udp 충돌을 엔진도 검증기도 못 잡는다(E65). 축소 규칙대로 h3 는 모델에서 계속 뺀다.** | v0.7 |
 | SNI 결과 **3분기 관측**(S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |
@@ -2619,7 +2619,8 @@ capability 패키지이지 apply 구현이 아니다.
   이다 — `http.defaultAction` 이 아니다. UDP 는 named preset 만 받는다
   (`dns`·`wireguard`·`game_generic`·`custom`). HTTPS 는 `tls.policy` 와
   `tls.defaultCertificate` 가 필수다. 자료 없는 인증서는 고르지 않는다.
-  호스트 라우트는 SNI 바인딩이 따로 필요하다. 인증서 자료는
+  HTTPS 호스트는 SNI 바인딩 `put`/`delete` 가 있어야 plan 이 된다.
+  바인딩은 라우트가 아니라 handshake 의 SNI 다. override 는 안 붙인다. 인증서 자료는
   `POST /certificates/material` 로 SecretStore 에 들어가고, changeset 에는
   `materialRef`·digest 만 실린다. 개인키는 패치에 없다. commit 까지 하고
   apply 는 Impact 가 한다.
@@ -2632,7 +2633,7 @@ capability 패키지이지 apply 구현이 아니다.
 | Pools & Backends — SSE 헬스, 풀+첫 백엔드, 백엔드 put/delete | 열림. 드레인 숫자 없음 (S2) |
 | Plan/Impact — diff 가 아니라 **영향**. apply 는 여기만 | 열림 |
 | Routes — 엔진 순서, HTTP 호스트 proxy put/delete | 열림. redirect·reject 없음 |
-| Certificates — 만료는 자료. 자료 put (참조만). 목록에서 빼지 않는다 | 열림. 주문 GET 없음. 개인키는 패치에 없다 |
+| Certificates — 만료는 자료. 자료 put. SNI 바인딩 put/delete | 열림. 주문 GET 없음 |
 | Status — SSE 스냅샷 4-way | 열림. nativeDns 선택형 없음 |
 | Rendered Config / Audit | API 있음. 화면은 v1.0 |
 
@@ -2984,7 +2985,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2)은 아직** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. inflight/sessions 숫자는 없다 |
 | **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). 리소스별 하위 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
 | **v0.5** GUI | SSE ✅. 여섯 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
-| **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드 ✅. 주문 GET · dns-01 · SNI 바인딩 폼은 아직 | 무중단 갱신 틱 + 롤백 시 옛 자료 |
+| **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩 ✅. 주문 GET · dns-01 은 아직 | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
 | **v1.0** | 전체 RBAC, 백업/복구 리허설, SPOF 런북, 문서 | RTO/RPO 리허설 합격 |
 
@@ -3170,7 +3171,7 @@ slice 로 v0.5 에서 검증한다.
 | 드레인 | GOAWAY + `force_close` 약속 | **관측 + 새 트래픽 차단까지.** 강제 종료는 capability |
 | SNI 결과 분기 | 3분할 확정 | **2분할.** 3분할은 S9 통과 시 |
 | ACME / 콜드 스탠바이 | v1 문서에서 계약 확정 | **스파이크 후 ADR** 로 미룸 |
-| GUI | v0.5 에 8화면 | **3화면으로 시작.** 지금 여섯 화면 + HTTP/TCP/UDP/HTTPS 쓰기 + 인증서 자료. Kit·드레인·SNI 바인딩 폼은 아직 |
+| GUI | v0.5 에 8화면 | **3화면으로 시작.** 지금 여섯 화면 + HTTP/TCP/UDP/HTTPS 쓰기 + 인증서 자료 + SNI 바인딩. Kit·드레인은 아직 |
 
 **반대로 축소하지 않은 것** (2차 검수도 "안전성의 최소 구조"로 인정): immutable generation,
 DP 단일 writer, graph changeset, config↔membership epoch fencing.
