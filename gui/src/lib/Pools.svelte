@@ -3,8 +3,9 @@
   import type { ProtocolClass } from '@web/edit';
   import AddBackend from './AddBackend.svelte';
   import AddPool from './AddPool.svelte';
+  import AddHashPool from './AddHashPool.svelte';
 
-  let { view, live, editing, withdraw, insert, openPool }: {
+  let { view, live, editing, withdraw, insert, openPool, openHashPool }: {
     view: PoolsView;
     live: boolean;
     editing: boolean;
@@ -12,6 +13,10 @@
     insert: (pool: string, key: string, host: string, port: number) => void;
     openPool: (input: {
       pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
+    }) => void;
+    openHashPool: (input: {
+      pool: string; protocolClass: ProtocolClass; hashKey: string;
+      backend: string; host: string; port: number;
     }) => void;
   } = $props();
 
@@ -68,6 +73,7 @@
   </div>
   {/if}
   <AddPool {editing} add={openPool} />
+  <AddHashPool {editing} add={openHashPool} />
 {/if}
 
 <style>

@@ -7,7 +7,7 @@
 [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md) 로 옮겼다.
 그 파일은 정본이 아니다.
 
-마지막 GUI 쓰기는 패스스루 reject put 이다. SNI 를 끊는다. 상태 코드는 없다.
+마지막 GUI 쓰기는 hash 풀 put 이다. hashKey 가 없으면 검증기가 막는다.
 
 CI Linux 는 OpenSSL 3 출력 · 바인드 마운트 uid 0 · Lua 밸런서의 호스트 이름 거절에서
 깨졌다. 멤버십 슬롯은 넣기 전에 IP 로 푼다.
@@ -38,7 +38,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 | 쓰기 | 계약 |
 |---|---|
-| 풀 | 첫 백엔드와 같이. `round_robin` 만. 빈 풀은 plan 이 막는다 |
+| 풀 | 첫 백엔드와 같이. `round_robin` 또는 `hash`+hashKey. 빈 풀은 plan 이 막는다 |
 | 백엔드 | put · delete |
 | HTTP 리스너 | bind · port · `http.defaultAction.pool` |
 | TCP 리스너 | bind · port · `defaultPool` (http 프로필을 안 붙인다) |
@@ -64,7 +64,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **413** |
+| 단위 | `npm test` | **416** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -81,7 +81,7 @@ non-zero 다. API·DB 스키마는 아직 동결하지 않는다 (§9.1.1).
 
 가까운 GUI 구멍 — API 는 있고 폼이 없다.
 
-- 풀 알고리즘 `hash` (`hashKey` 필요)
+- 풀 알고리즘 `source_ip_hash`
 
 API 가 없어서 못 그리는 것.
 

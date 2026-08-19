@@ -4,6 +4,8 @@
  * 저장(commit)과 적용(apply)은 다르다. 여기서 만드는 것은 patch 뿐이다.
  * 메서드×경로 ALLOW/DENY 는 WAF 다. 여기 없다.
  */
+import { parseHashKey } from '../validate/strings.js';
+
 export type EditKind = 'backend' | 'listener' | 'pool' | 'httpRoute' | 'passthroughRoute' | 'sniBinding';
 
 export type DeleteOp = { op: 'delete'; kind: EditKind; key: string };
@@ -339,6 +341,13 @@ export type PutPoolOp = {
   body: { protocolClass: ProtocolClass; algorithm: 'round_robin' };
 };
 
+export type PutHashPoolOp = {
+  op: 'put';
+  kind: 'pool';
+  key: string;
+  body: { protocolClass: ProtocolClass; algorithm: 'hash'; hashKey: string };
+};
+
 /**
  * 빈 풀은 검증기가 막는다. 풀만 put 하면 plan 이 실패한다.
  * 첫 백엔드를 같은 changeset 에 얹는다.
@@ -363,6 +372,40 @@ export function putPoolWithBackendPatch(input: {
       kind: 'pool',
       key: input.pool,
       body: { protocolClass: input.protocolClass, algorithm: 'round_robin' },
+    },
+    ...backends,
+  ];
+}
+
+/**
+ * hash 는 hashKey 가 필수다. 검증기와 같은 parseHashKey 를 쓴다.
+ * 자유 문자열은 패치를 안 만든다. 첫 백엔드를 같이 넣는다.
+ */
+export function putHashPoolWithBackendPatch(input: {
+  pool: string;
+  protocolClass: ProtocolClass;
+  hashKey: string;
+  backend: string;
+  host: string;
+  port: number;
+}): [PutHashPoolOp, ...PutBackendOp[]] {
+  if (input.pool === '') throw new Error('풀 키가 비어 있다');
+  if (input.protocolClass !== 'http' && input.protocolClass !== 'tcp' && input.protocolClass !== 'udp') {
+    throw new Error('protocolClass 가 http|tcp|udp 가 아니다');
+  }
+  const hashKey = input.hashKey.trim();
+  if (hashKey === '') throw new Error('hashKey 가 비어 있다');
+  const parsed = parseHashKey(input.protocolClass, hashKey);
+  if (!parsed.ok) throw new Error(parsed.message);
+  const backends = putBackendPatch(input.backend, {
+    pool: input.pool, host: input.host, port: input.port,
+  });
+  return [
+    {
+      op: 'put',
+      kind: 'pool',
+      key: input.pool,
+      body: { protocolClass: input.protocolClass, algorithm: 'hash', hashKey },
     },
     ...backends,
   ];

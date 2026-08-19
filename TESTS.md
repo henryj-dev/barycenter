@@ -980,6 +980,7 @@ S11 하네스의 교훈이다.
 | C5.37 | GUI HTTP proxy websocket | 안 적으면 false. true 를 적으면 Upgrade 헤더를 낸다 |
 | C5.38 | 멤버십 슬롯 IP | 호스트 이름은 넣기 전에 푼다. Lua `set_current_peer` 가 이름을 거절한다 |
 | C5.40 | GUI 패스스루 reject put | SNI 만 끊는다. HTTP status·pool 없음. 빈 SNI 는 패치를 안 만든다 |
+| C5.41 | GUI hash 풀 put | algorithm=hash + hashKey. 검증기와 같은 화이트리스트. 첫 백엔드와 같이 |
 | C5.39 | OpenSSL CSR 판정 | stdout+stderr, `CN=` 공백 허용 (LibreSSL · OpenSSL 3) |
 
 ---

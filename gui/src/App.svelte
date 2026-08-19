@@ -74,7 +74,7 @@
       <p class="lede">head 모델이다. 포트를 여는 것은 commit 이다. 패스스루는 인증서를 제시하지 않는다. HTTPS 는 자료 있는 인증서와 TLS 정책이 필요하다.</p>
     {:else if page === 'pools'}
       <h1>풀이 받는 것</h1>
-      <p class="lede">빈 풀은 저장되지 않는다. 풀을 열 때 첫 백엔드를 같이 넣는다.</p>
+      <p class="lede">빈 풀은 저장되지 않는다. hash 는 hashKey 가 필요하다. 자유 문자열은 안 받는다.</p>
     {:else if page === 'routes'}
       <h1>엔진이 보는 순서</h1>
       <p class="lede">호스트 라우트를 넣는 것은 commit 이다. 패스스루 reject 는 SNI 를 끊는다. HTTP 상태 코드는 없다.</p>
@@ -164,6 +164,9 @@
       }}
       openPool={(input) => {
         void desk.insertPool(input).then((ok) => { if (ok) go('/'); });
+      }}
+      openHashPool={(input) => {
+        void desk.insertHashPool(input).then((ok) => { if (ok) go('/'); });
       }}
     />
   {:else if page === 'routes'}

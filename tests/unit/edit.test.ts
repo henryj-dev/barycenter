@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -36,6 +36,33 @@ describe('설정에서 빼기', () => {
       { op: 'put', kind: 'pool', key: 'web', body: { protocolClass: 'http', algorithm: 'round_robin' } },
       { op: 'put', kind: 'backend', key: 'a', body: { pool: 'web', host: '10.0.0.1', port: 80, weight: 1 } },
     ]);
+  });
+
+  it('hash 풀은 hashKey 와 첫 백엔드를 같이 넣는다', () => {
+    expect(putHashPoolWithBackendPatch({
+      pool: 'sticky', protocolClass: 'http', hashKey: 'header(X-User)',
+      backend: 'a', host: '10.0.0.1', port: 80,
+    })).toEqual([
+      {
+        op: 'put', kind: 'pool', key: 'sticky',
+        body: { protocolClass: 'http', algorithm: 'hash', hashKey: 'header(X-User)' },
+      },
+      { op: 'put', kind: 'backend', key: 'a', body: { pool: 'sticky', host: '10.0.0.1', port: 80, weight: 1 } },
+    ]);
+  });
+
+  it('hash 풀에 모르는 hashKey 는 패치를 만들지 않는다', () => {
+    expect(() => putHashPoolWithBackendPatch({
+      pool: 'sticky', protocolClass: 'http', hashKey: 'nope',
+      backend: 'a', host: '10.0.0.1', port: 80,
+    })).toThrow(/해시 키/);
+  });
+
+  it('tcp hash 풀은 remote_addr 만 받는다', () => {
+    expect(() => putHashPoolWithBackendPatch({
+      pool: 'sticky', protocolClass: 'tcp', hashKey: 'request_uri',
+      backend: 'a', host: '10.0.0.1', port: 80,
+    })).toThrow(/remote_addr/);
   });
 
   it('HTTP 리스너를 넣는 패치는 put 한 줄이다 — tls 는 안 붙인다', () => {
