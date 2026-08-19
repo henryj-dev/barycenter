@@ -12,8 +12,9 @@
 >
 > **What it is not yet.** There is no membership plane (v0.3), so changing a single backend
 > still costs a full generation switch and a reload. TLS termination, ACME and health probing
-> are later milestones (§12.1). Plan·Impact, Listeners and Pools screens exist — impact, not a
-> diff; the listener list is the head model; pool health is SSE, not a poll.
+> are later milestones (§12.1). Plan·Impact, Listeners, Pools and Routes screens exist — impact, not a
+> diff; the listener list is the head model; pool health is SSE, not a poll;
+> routes show the engine's compiled order, not user priority.
 > Drain progress is not shown. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
 > not_leader` to writes) — but **failover is not automatic**: each data plane carries its own
@@ -234,9 +235,9 @@ See [§9 of the design doc](./DESIGN.md).
 
 ## Stack
 
-TypeScript on Node.js · PostgreSQL · Vite + Svelte 5 for Plan·Impact, Listeners
-and Pools (SvelteKit is a later cut — three routes, still one `index.html`) ·
-nginx / OpenResty as the data plane.
+TypeScript on Node.js · PostgreSQL · Vite + Svelte 5 for the operator screens
+(SvelteKit is a later cut — still one `index.html`) · nginx / OpenResty as the
+data plane.
 
 The daemon serves `gui/build` (or `BARY_GUI`) from the same origin as the API — CORS is
 not opened. Build the page with `npm ci && npm run build` inside `gui/`. Without that

@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **359** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · Plan·Impact · Listeners · **Pools** |
+| 단위 | `npm test` | **363** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · Plan·Impact · Listeners · Pools · **Routes** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,18 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### Routes 화면을 연다 — 엔진이 보는 순서다 (2026-08-19)
+
+v0.6 의 첫 장. 컴파일러는 렌더가 이미 쓴다. GUI 가 사용자 priority 를
+그대로 그리면 엔진과 다른 순서를 보여 준다. `compileHostRoutes` 가 낸
+순서와 그림자 경고를 그대로 올린다. 오류가 있으면 순서를 비운다 —
+반쯤 그린 순서는 거짓말이다. 패스스루는 호스트 매치 클래스가 아니라서
+컴파일하지 않는다.
+
+Kit 은 아직 없다. `/routes` 도 같은 `index.html` 폴백이다.
 
 ---
 

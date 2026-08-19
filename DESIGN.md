@@ -2597,16 +2597,17 @@ capability 패키지이지 apply 구현이 아니다.
   + `pullSse` 다.
 - **v0.5 는 얇은 vertical slice 로 시작한다** — Listeners / Pools & Backends(드레인) /
   Plan·Impact 3화면으로 제품 가설을 검증하고, 나머지는 뒤로 뺀다.
-  지금 열린 것은 Plan·Impact · Listeners · Pools 세 장이다. 경로는 `/` ·
-  `/listeners` · `/pools` 이고, `serveGui` 의 확장자 없는 폴백이 같은
-  `index.html` 을 낸다. Kit 이주는 별도 조각이다 — 화면과 라우터를 한 커밋에
-  갈면 둘 다 덜 검증된다.
+  지금 열린 것은 Plan·Impact · Listeners · Pools · Routes 다. 경로는 `/` ·
+  `/listeners` · `/pools` · `/routes` 이고, `serveGui` 의 확장자 없는 폴백이
+  같은 `index.html` 을 낸다. Kit 이주는 별도 조각이다.
   Plan·Impact 는 `plan.impact` 를 문장으로 접는다. diff 가 아니다.
   Listeners 는 `GET /api/v1/listeners`(head 모델) 다. 커밋됐지만 미적용이면
   그 목록은 이미 미래이고, 엔진에 남은 소켓은 impact 의 `removed` 로만 보인다.
   소켓 충돌은 검증기가 막는다 — 화면이 다시 재지 않는다.
   Pools 는 `GET /pools` · `GET /backends` 와 SSE `health` 다. 관측이 없으면
-  `unknown`. 드레인·inflight 는 없다. 폴링하지 않는다.
+  `unknown`. 드레인·inflight 는 없다.
+  Routes 는 `GET /routes` 를 `compileHostRoutes` 에 넣는다. 사용자 priority 가
+  아니라 엔진 순서다. 패스스루는 컴파일하지 않는다. 폴링하지 않는다.
 
 | 화면 | 단계 |
 |---|---|

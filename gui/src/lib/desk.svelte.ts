@@ -1,6 +1,6 @@
 /**
  * 운영 책상. SSE 를 구독하고, 폴링하지 않는다.
- * Plan·Impact · Listeners · Pools 가 같은 스트림을 본다 — 연결을 둘로 열지 않는다.
+ * Plan·Impact · Listeners · Pools · Routes 가 같은 스트림을 본다 — 연결을 둘로 열지 않는다.
  * 헬스는 스냅샷과 health 델타다. `/health/backends` 를 치지 않는다.
  */
 import { pickPending, viewOfImpact, type Impact, type ImpactView, type PendingApply } from '@web/impact-view';
@@ -11,6 +11,9 @@ import {
   applyHealthFlip, upsertHealth, viewOfPools,
   type BackendFact, type HealthFact, type PoolFact, type PoolsView,
 } from '@web/pools-view';
+import {
+  viewOfRoutes, type HttpRouteFact, type PassthroughFact, type RoutesView,
+} from '@web/routes-view';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -30,6 +33,7 @@ export function createDesk() {
   let listeners = $state<ListenersView>({ rows: [] });
   let health = $state<HealthFact[]>([]);
   let pools = $state<PoolsView>({ rows: [] });
+  let routes = $state<RoutesView>({ order: [], warnings: [], errors: [], passthrough: [] });
   let applying = $state(false);
   let stop: (() => void) | undefined;
 
@@ -91,6 +95,18 @@ export function createDesk() {
     await refreshImpact(pickPending(snap.pendingApply ?? []));
     await refreshListeners(view);
     await refreshPools();
+    await refreshRoutes();
+  };
+
+  const refreshRoutes = async (): Promise<void> => {
+    const r = await fetch('/api/v1/routes', { headers: auth() });
+    if (!r.ok) {
+      error = `routes ${r.status}`;
+      routes = { order: [], warnings: [], errors: [], passthrough: [] };
+      return;
+    }
+    const body = (await r.json()) as { http?: unknown; passthrough?: unknown };
+    routes = viewOfRoutes(asList<HttpRouteFact>(body.http), asList<PassthroughFact>(body.passthrough));
   };
 
   const onHealth = (data: unknown): void => {
@@ -172,6 +188,7 @@ export function createDesk() {
     get view() { return view; },
     get listeners() { return listeners; },
     get pools() { return pools; },
+    get routes() { return routes; },
     get applying() { return applying; },
     connect,
     apply,

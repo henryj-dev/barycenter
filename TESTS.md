@@ -956,6 +956,9 @@ S11 하네스의 교훈이다.
 | C5.12 | 헬스 관측 없음 | `unknown`. 죽은 것과 섞지 않는다 (`tests/unit/pools-view.test.ts`) |
 | C5.13 | health 델타 | 목록을 다시 치지 않고 한 줄만 옮긴다 |
 | C5.14 | `/pools` | 풀 화면. 드레인 숫자는 없다. Kit 이 아니다 |
+| C5.15 | HTTP 라우트 컴파일 | 매치 클래스가 priority 를 이긴다. 그림자를 숨기지 않는다 |
+| C5.16 | 중복 host+path | 순서를 비운다 (`tests/unit/routes-view.test.ts`) |
+| C5.17 | 패스스루 | 컴파일하지 않고 사실만 나열한다 |
 
 ---
 
