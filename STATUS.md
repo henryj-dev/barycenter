@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **369** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **Status** |
+| 단위 | `npm test` | **371** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **changeset 편집** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,17 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### GUI 가 백엔드를 뺀다 — commit 이지 apply 가 아니다 (2026-08-19)
+
+읽기 화면만 있으면 "쓰기 GUI" 가 거짓이다. 첫 쓰기는 풀에서 백엔드 하나를
+`delete` 하는 것이다. changeset new → patch → plan → commit. apply 는
+안 한다. 영향 화면이 「트래픽에 건다」를 따로 둔다.
+
+빈 풀은 검증기가 막는다(422). 실패한 changeset 은 버린다. 메서드×경로
+ALLOW/DENY 는 WAF 라 여기 없다.
 
 ---
 

@@ -74,7 +74,7 @@
       <p class="lede">head 모델이다. 커밋됐지만 적용 전이면 아직 엔진에 없는 소켓이 섞여 있다. 충돌은 검증기가 이미 막았다.</p>
     {:else if page === 'pools'}
       <h1>풀이 받는 것</h1>
-      <p class="lede">TCP 연결만 잰다. 아직 안 잰 것과 죽은 것은 다르다. 드레인 관측은 없다.</p>
+      <p class="lede">TCP 연결만 잰다. 설정에서 빼는 것은 commit 이다. 트래픽은 영향 화면에서 건다.</p>
     {:else if page === 'routes'}
       <h1>엔진이 보는 순서</h1>
       <p class="lede">사용자 priority 가 매치 클래스를 이기지 못한다. 어긋나면 그림자로 말한다.</p>
@@ -119,7 +119,14 @@
   {#if page === 'listeners'}
     <Listeners view={desk.listeners} live={desk.live} />
   {:else if page === 'pools'}
-    <Pools view={desk.pools} live={desk.live} />
+    <Pools
+      view={desk.pools}
+      live={desk.live}
+      editing={desk.editing}
+      withdraw={(key) => {
+        void desk.withdraw('backend', key).then((ok) => { if (ok) go('/'); });
+      }}
+    />
   {:else if page === 'routes'}
     <Routes view={desk.routes} live={desk.live} />
   {:else if page === 'certificates'}

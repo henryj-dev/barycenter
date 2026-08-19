@@ -16,6 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
+import { deletePatch, type EditKind } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -44,6 +45,7 @@ export function createDesk() {
   let certs = $state<CertsView>({ rows: [] });
   let status = $state<StatusView>(viewOfStatus({}));
   let applying = $state(false);
+  let editing = $state(false);
   let stop: (() => void) | undefined;
 
   const auth = (): Record<string, string> =>
@@ -182,6 +184,65 @@ export function createDesk() {
     }
   };
 
+  const call = async (method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> => {
+    const r = await fetch(path, {
+      method,
+      headers: {
+        ...auth(),
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (r.status === 204) return { ok: r.ok, status: r.status, body: {} };
+    const parsed: unknown = await r.json().catch(() => ({}));
+    const rec = parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    return { ok: r.ok, status: r.status, body: rec };
+  };
+
+  /**
+   * 설정에서 뺀다. commit 까지 하고 apply 는 안 한다.
+   * 트래픽은 Impact 화면의 「트래픽에 건다」가 바꾼다.
+   */
+  const withdraw = async (kind: EditKind, key: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    let csId: string | undefined;
+    try {
+      const headRes = await call('GET', '/api/v1/config/head');
+      if (!headRes.ok || typeof headRes.body['revision'] !== 'string') {
+        error = headRes.body['message'] as string ?? `head ${headRes.status}`;
+        return false;
+      }
+      const opened = await call('POST', '/api/v1/changesets', { base_revision: headRes.body['revision'] });
+      if (!opened.ok || typeof opened.body['id'] !== 'string') {
+        error = opened.body['message'] as string ?? `changeset ${opened.status}`;
+        return false;
+      }
+      csId = opened.body['id'];
+      const patched = await call('PATCH', `/api/v1/changesets/${csId}`, { patch: deletePatch(kind, key) });
+      if (!patched.ok) {
+        error = patched.body['message'] as string ?? `patch ${patched.status}`;
+        return false;
+      }
+      const planned = await call('POST', `/api/v1/changesets/${csId}/plan`);
+      if (!planned.ok || typeof planned.body['id'] !== 'string') {
+        error = planned.body['message'] as string ?? `plan ${planned.status}`;
+        return false;
+      }
+      const committed = await call('POST', `/api/v1/changesets/${csId}/commit`, { plan_id: planned.body['id'] });
+      if (!committed.ok) {
+        error = committed.body['message'] as string ?? `commit ${committed.status}`;
+        return false;
+      }
+      return true;
+    } finally {
+      if (csId !== undefined && error !== undefined) {
+        await call('DELETE', `/api/v1/changesets/${csId}`).catch(() => undefined);
+      }
+      editing = false;
+    }
+  };
+
   const apply = async (): Promise<void> => {
     if (view === undefined) return;
     applying = true;
@@ -213,8 +274,10 @@ export function createDesk() {
     get certs() { return certs; },
     get status() { return status; },
     get applying() { return applying; },
+    get editing() { return editing; },
     connect,
     apply,
+    withdraw,
     disconnect() { stop?.(); },
   };
 }

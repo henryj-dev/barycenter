@@ -1,7 +1,12 @@
 <script lang="ts">
   import type { PoolsView } from '@web/pools-view';
 
-  let { view, live }: { view: PoolsView; live: boolean } = $props();
+  let { view, live, editing, withdraw }: {
+    view: PoolsView;
+    live: boolean;
+    editing: boolean;
+    withdraw: (key: string) => void;
+  } = $props();
 
   const label = (state: string): string => {
     if (state === 'healthy') return '살아 있다';
@@ -36,6 +41,11 @@
                 <span class="name">{be.key}</span>
                 <span class="addr mono">{be.host}:{be.port}</span>
                 <span class="mark">{label(be.state)}</span>
+                <button
+                  type="button"
+                  disabled={editing}
+                  onclick={() => withdraw(be.key)}
+                >설정에서 뺀다</button>
               </li>
             {/each}
           </ul>
@@ -66,7 +76,7 @@
   ul { list-style: none; margin: 0; padding: 0; }
   li {
     display: grid;
-    grid-template-columns: 7rem 1fr auto;
+    grid-template-columns: 7rem 1fr auto auto;
     gap: 0.6rem;
     padding: 0.45rem 0;
     border-top: 1px solid var(--rule);
@@ -75,6 +85,15 @@
   .name { font-size: 0.9rem; }
   .addr { color: var(--mute); font-size: 0.8rem; }
   .mark { font-size: 0.75rem; color: var(--mute); }
+  button {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--mute);
+    padding: 0.2rem 0.45rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   li[data-state='healthy'] .mark { color: var(--moss); }
   li[data-state='unhealthy'] .mark { color: var(--ember); }
   li[data-state='unhealthy'] .name { text-decoration: line-through; color: var(--ember); }
