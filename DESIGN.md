@@ -1113,8 +1113,10 @@ websocket 은 HTTP proxy 에서만 켠다. 안 적으면 끈다.
 redirect 는 `to` 와 301·302·307·308 이다. 기본 302.
 reject 는 403·404·444 다. 기본 403. 444 는 응답 없이 끊는다.
 패스스루는 `--sni` 다. SNI → TCP 풀이거나 reject. HTTP status·websocket·path 가 없다.
-`backend create|delete`, `tls-policy create`, `certificate create`, `sni-binding create`
-가 있다. 인증서 패치에 개인키·fullchain 이 없다. 드레인은 S2 다.
+`backend create|delete`, `tls-policy create`, `certificate create`,
+`sni-binding create|delete`, `listener delete`, `route delete` 가 있다.
+라우트 삭제는 `--host` 또는 `--sni` 로 HTTP 와 패스스루를 가른다.
+인증서 패치에 개인키·fullchain 이 없다. 드레인은 S2 다.
 
 ---
 

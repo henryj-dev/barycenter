@@ -1003,6 +1003,9 @@ S11 하네스의 교훈이다.
 | C5.60 | CLI TLS 정책 put | minVersion 기본 1.2. HSTS 안 켬 |
 | C5.61 | CLI 인증서 put | 자료 POST 뒤 참조·digest 만. 개인키·fullchain 이 패치에 없다 |
 | C5.62 | CLI SNI 바인딩 put | listener·hosts·certificate. override 없음. 빈 호스트는 패치를 안 만든다 |
+| C5.63 | CLI listener delete | delete 한 줄. 빈 키는 패치를 안 만든다. apply 안 함 (`tests/unit/cli-delete.test.ts`) |
+| C5.64 | CLI HTTP/패스스루 라우트 delete | `--host` → httpRoute. `--sni` → passthroughRoute. 둘 다·둘 다 없음은 패치를 안 만든다 |
+| C5.65 | CLI SNI 바인딩 delete | delete 한 줄. 빈 키는 패치를 안 만든다 |
 
 ---
 

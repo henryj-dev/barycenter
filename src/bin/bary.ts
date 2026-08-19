@@ -5,13 +5,13 @@
  * **v0.4 의 전체 CLI 가 아니다.** 리스너·풀·라우트·백엔드·TLS 쓰기가 있다. 대화형 편집은 없다.
  * export/import 와 나뉜 changeset 단계는 있다. `apply <파일>` 은 단축이다.
  *
- *   bary listener create --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]
+ *   bary listener create|delete
  *   bary pool create --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]
- *   bary route create --name --listener --host|--sni --pool|--to|--reject [--status] [--path-prefix] [--websocket]
+ *   bary route create|delete
  *   bary backend create|delete
  *   bary tls-policy create --name [--min-version 1.2|1.3]
  *   bary certificate create --name --fullchain --privkey
- *   bary sni-binding create --name --listener --host --certificate
+ *   bary sni-binding create|delete
  *   bary changeset new|patch|plan|show
  *   bary commit --plan <id>
  *   bary apply --plan <id>
@@ -29,10 +29,10 @@
 import { readFileSync } from 'node:fs';
 
 import { backendDelete, backendPut } from '../cli/backend.js';
-import { listenerCreate } from '../cli/listener.js';
+import { listenerCreate, listenerDelete } from '../cli/listener.js';
 import { poolCreate } from '../cli/pool.js';
-import { routeCreate } from '../cli/route.js';
-import { certificateCreate, sniBindingCreate, tlsPolicyCreate } from '../cli/tls.js';
+import { routeCreate, routeDelete } from '../cli/route.js';
+import { certificateCreate, sniBindingCreate, sniBindingDelete, tlsPolicyCreate } from '../cli/tls.js';
 import {
   applyByPlan,
   changesetNew,
@@ -87,13 +87,16 @@ const usage = (): never => {
   bary head                      전역 리비전
   bary get <무엇>                listeners | pools | backends | routes | model | rendered
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
+  bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
   bary route create              --name --listener --host|--sni --pool|--to|--reject [--status] [--path-prefix] [--websocket]. apply 는 아니다
+  bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
   bary backend delete            --name
   bary tls-policy create         --name [--min-version 1.2|1.3]. HSTS 안 켬
   bary certificate create        --name --fullchain <파일> --privkey <파일>. 패치에 개인키 없음
   bary sni-binding create        --name --listener --host --certificate. override 없음
+  bary sni-binding delete        --name
   bary changeset new             changeset 을 연다
   bary changeset patch <id> <파일.json>
   bary changeset plan <id>       영향만 본다 (커밋하지 않는다)
@@ -189,6 +192,17 @@ async function main(): Promise<void> {
     }
     case 'listener': {
       const sub = arg ?? usage();
+      if (sub === 'delete') {
+        const name = flag(argv, '--name') ?? usage();
+        try {
+          const out = await listenerDelete(call, name);
+          console.error(`listener ${name} deleted r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       if (sub !== 'create') usage();
       const name = flag(argv, '--name') ?? usage();
       const protocol = flag(argv, '--protocol') ?? usage();
@@ -239,6 +253,21 @@ async function main(): Promise<void> {
     }
     case 'route': {
       const sub = arg ?? usage();
+      if (sub === 'delete') {
+        const name = flag(argv, '--name') ?? usage();
+        try {
+          const out = await routeDelete(call, {
+            name,
+            ...(argv.includes('--host') ? { host: true } : {}),
+            ...(argv.includes('--sni') ? { sni: true } : {}),
+          });
+          console.error(`route ${name} deleted r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       if (sub !== 'create') usage();
       const name = flag(argv, '--name') ?? usage();
       const listener = flag(argv, '--listener') ?? usage();
@@ -339,6 +368,17 @@ async function main(): Promise<void> {
     }
     case 'sni-binding': {
       const sub = arg ?? usage();
+      if (sub === 'delete') {
+        const name = flag(argv, '--name') ?? usage();
+        try {
+          const out = await sniBindingDelete(call, name);
+          console.error(`sni-binding ${name} deleted r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       if (sub !== 'create') usage();
       const name = flag(argv, '--name') ?? usage();
       const listener = flag(argv, '--listener') ?? usage();

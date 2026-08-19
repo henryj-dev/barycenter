@@ -2,9 +2,11 @@
  * CLI TLS 쓰기 — DESIGN.md §5.6 · §8.1
  *
  * 정책은 minVersion 만. 인증서는 자료 POST 뒤 참조 put. SNI 는 override 없음.
- * apply 는 안 한다.
+ * SNI 바인딩은 뺀다. 인증서·정책 삭제는 EditKind 가 아니다. apply 는 안 한다.
  */
-import { putCertificatePatch, putSniBindingPatch, putTlsPolicyPatch, type TlsVersion } from '../web/edit.js';
+import {
+  deletePatch, putCertificatePatch, putSniBindingPatch, putTlsPolicyPatch, type TlsVersion,
+} from '../web/edit.js';
 
 import { commitPatch, unwrap, type Http } from './flow.js';
 
@@ -101,5 +103,19 @@ export async function sniBindingCreate(
 ): Promise<{ revision: string; planId: string }> {
   const patch = sniBindingCreatePatch(input);
   if (patch === undefined) throw new Error('SNI 바인딩은 listener·hosts·certificate 가 필요하다');
+  return commitPatch(http, patch);
+}
+
+export function sniBindingDeletePatch(key: string): ReturnType<typeof deletePatch> | undefined {
+  if (key === '') return undefined;
+  return deletePatch('sniBinding', key);
+}
+
+export async function sniBindingDelete(
+  http: Http,
+  key: string,
+): Promise<{ revision: string; planId: string }> {
+  const patch = sniBindingDeletePatch(key);
+  if (patch === undefined) throw new Error('SNI 바인딩 키가 비어 있다');
   return commitPatch(http, patch);
 }

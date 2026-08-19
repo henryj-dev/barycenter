@@ -1,15 +1,16 @@
 /**
  * CLI 리소스 쓰기 — DESIGN.md §5.6
  *
- * HTTP·TCP·UDP·HTTPS·패스스루 리스너 create. apply 는 안 한다.
+ * HTTP·TCP·UDP·HTTPS·패스스루 리스너 create·delete. apply 는 안 한다.
  * 패스스루는 tls 를 안 붙인다. unmatched SNI 풀은 선택이다.
  */
 import {
+  deletePatch,
   putHttpListenerPatch, putHttpsListenerPatch, putPassthroughListenerPatch,
   putTcpListenerPatch, putUdpListenerPatch, type UdpPreset,
 } from '../web/edit.js';
 
-import { changesetNew, changesetPatch, changesetPlan, commitByPlan, type Http } from './flow.js';
+import { changesetNew, changesetPatch, changesetPlan, commitByPlan, commitPatch, type Http } from './flow.js';
 
 export type ListenerCreateInput = {
   name: string;
@@ -97,4 +98,18 @@ export async function listenerCreate(
   const plan = await changesetPlan(http, cs.id);
   const committed = await commitByPlan(http, plan.id);
   return { revision: committed.revision, planId: plan.id };
+}
+
+export function listenerDeletePatch(key: string): ReturnType<typeof deletePatch> | undefined {
+  if (key === '') return undefined;
+  return deletePatch('listener', key);
+}
+
+export async function listenerDelete(
+  http: Http,
+  key: string,
+): Promise<{ revision: string; planId: string }> {
+  const patch = listenerDeletePatch(key);
+  if (patch === undefined) throw new Error('리스너 키가 비어 있다');
+  return commitPatch(http, patch);
 }

@@ -178,8 +178,8 @@ not a moat. The bets that need execution quality instead:
   listeners pointing at two pools.
 - **The API is the only entry point.** The web UI and `bary` CLI are clients of it.
   They are not yet equal: the CLI can create the same resources the GUI writes
-  and stops at commit. Drain commands are still missing (S2). Equality is a
-  v1.0 claim (`DESIGN.md` §1).
+  and delete the kinds the GUI withdraws, stopping at commit. Drain commands
+  are still missing (S2). Equality is a v1.0 claim (`DESIGN.md` §1).
 - **Nothing is applied blind.** Changes accumulate in a changeset, `plan` reports the impact,
   and apply runs a durable state machine — render → validate on the real data plane → publish →
   reload → verify, with automatic rollback and an explicit failure state when rollback itself fails.
@@ -268,7 +268,7 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.1** | Typed model, sealed changesets, apply state machine, DP agent, renderer | ← **done** |
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
 | **v0.3** | Membership plane, health probe | ← **done except drain observation (S2)** |
-| **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** Resource create matches GUI writes except drain |
+| **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** Resource create matches GUI writes except drain. Delete matches GUI withdraw |
 | **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **slice is open.** No Kit, no drain |
 | **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** No order GET, no dns-01 |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` has no consumer |

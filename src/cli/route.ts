@@ -2,9 +2,10 @@
  * CLI 라우트 쓰기 — DESIGN.md §5.6
  *
  * HTTP 호스트 → 풀 proxy, URL redirect, reject. 패스스루는 SNI → TCP 풀 또는 끊기.
- * websocket 은 HTTP proxy 에서만 켠다. apply 는 안 한다.
+ * websocket 은 HTTP proxy 에서만 켠다. 삭제는 --host 또는 --sni 로 가른다. apply 는 안 한다.
  */
 import {
+  deletePatch,
   putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch,
   putPassthroughRejectPatch, putPassthroughRoutePatch,
   type RedirectStatus, type RejectStatus,
@@ -108,5 +109,28 @@ export async function routeCreate(
   if (patch === undefined) {
     throw new Error('HTTP proxy·redirect·reject 또는 패스스루다. 빈 SNI·호스트·모르는 status 는 패치를 안 만든다');
   }
+  return commitPatch(http, patch);
+}
+
+export type RouteDeleteInput = {
+  name: string;
+  host?: boolean;
+  sni?: boolean;
+};
+
+export function routeDeletePatch(input: RouteDeleteInput): ReturnType<typeof deletePatch> | undefined {
+  if (input.name === '') return undefined;
+  if (input.host === true && input.sni === true) return undefined;
+  if (input.host === true) return deletePatch('httpRoute', input.name);
+  if (input.sni === true) return deletePatch('passthroughRoute', input.name);
+  return undefined;
+}
+
+export async function routeDelete(
+  http: Http,
+  input: RouteDeleteInput,
+): Promise<{ revision: string; planId: string }> {
+  const patch = routeDeletePatch(input);
+  if (patch === undefined) throw new Error('라우트 삭제는 --host 또는 --sni 하나다');
   return commitPatch(http, patch);
 }
