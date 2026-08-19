@@ -1,7 +1,13 @@
 <script lang="ts">
   import type { CertsView } from '@web/certs-view';
+  import AddCert from './AddCert.svelte';
 
-  let { view, live }: { view: CertsView; live: boolean } = $props();
+  let { view, live, editing, insert }: {
+    view: CertsView;
+    live: boolean;
+    editing: boolean;
+    insert: (key: string, fullchain: string, privkey: string) => void;
+  } = $props();
 
   const label = (mark: string, days: number | undefined): string => {
     if (mark === 'missing') return '자료가 없다';
@@ -14,7 +20,7 @@
 {#if !live}
   <p class="empty">연결하면 head 인증서가 여기 온다.</p>
 {:else if view.rows.length === 0}
-  <p class="empty">인증서가 없다. <code>bary import</code> 로 연다.</p>
+  <p class="empty">인증서가 없다. 아래에서 자료를 넣는다.</p>
 {:else}
   <ul class="certs">
     {#each view.rows as row (row.key)}
@@ -27,10 +33,12 @@
     {/each}
   </ul>
 {/if}
+{#if live}
+  <AddCert {editing} add={insert} />
+{/if}
 
 <style>
   .empty { color: var(--mute); }
-  .empty code { font-family: var(--data); font-size: 0.85em; }
   .certs { list-style: none; margin: 1.5rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
   li {
     display: grid;

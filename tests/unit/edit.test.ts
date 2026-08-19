@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -116,6 +116,31 @@ describe('설정에서 빼기', () => {
     expect(() => putHttpsListenerPatch('front-tls', {
       bind: '0.0.0.0', port: 443, pool: 'app', policy: 'modern', certificate: '',
     })).toThrow(/인증서/);
+  });
+
+  it('인증서 패치에는 참조만 실린다 — 개인키가 없다', () => {
+    const patch = putCertificatePatch('cert-a', {
+      materialRef: 'store://cert-a@1',
+      chainDigest: 'sha256:' + 'a'.repeat(64),
+      keyDigest: 'sha256:' + 'b'.repeat(64),
+    });
+    expect(patch).toEqual([
+      {
+        op: 'put', kind: 'certificate', key: 'cert-a',
+        body: {
+          materialRef: 'store://cert-a@1',
+          chainDigest: 'sha256:' + 'a'.repeat(64),
+          keyDigest: 'sha256:' + 'b'.repeat(64),
+        },
+      },
+    ]);
+    expect(JSON.stringify(patch)).not.toMatch(/PRIVATE KEY|fullchain|privkey/);
+  });
+
+  it('자료 참조가 비면 인증서 패치를 만들지 않는다', () => {
+    expect(() => putCertificatePatch('cert-a', {
+      materialRef: '', chainDigest: 'sha256:aa', keyDigest: 'sha256:bb',
+    })).toThrow(/참조/);
   });
 
   it('HTTP 라우트를 넣는 패치는 put 한 줄이다 — proxy 이고 websocket 은 끈다', () => {

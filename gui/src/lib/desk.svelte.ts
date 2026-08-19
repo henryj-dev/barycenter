@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type TlsVersion, type UdpPreset } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type TlsVersion, type UdpPreset } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -347,6 +347,38 @@ export function createDesk() {
     }
   };
 
+  const insertCertificate = async (
+    key: string,
+    material: { fullchain: string; privkey: string },
+  ): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const uploaded = await call('POST', '/api/v1/certificates/material', {
+        name: key,
+        fullchain: material.fullchain,
+        privkey: material.privkey,
+      });
+      if (!uploaded.ok) {
+        error = (uploaded.body['message'] as string | undefined) ?? `material ${uploaded.status}`;
+        return false;
+      }
+      const materialRef = uploaded.body['ref'];
+      const chainDigest = uploaded.body['chainDigest'];
+      const keyDigest = uploaded.body['keyDigest'];
+      if (typeof materialRef !== 'string' || typeof chainDigest !== 'string' || typeof keyDigest !== 'string') {
+        error = '자료 응답에 참조가 없다';
+        return false;
+      }
+      return await commitPatch(putCertificatePatch(key, { materialRef, chainDigest, keyDigest }));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const insertHttpsListener = async (
     key: string,
     body: { bind: string; port: number; pool: string; policy: string; certificate: string },
@@ -441,6 +473,7 @@ export function createDesk() {
     insertUdpListener,
     insertTlsPolicy,
     insertHttpsListener,
+    insertCertificate,
     insertHttpRoute,
     disconnect() { stop?.(); },
   };

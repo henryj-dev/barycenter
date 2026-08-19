@@ -230,6 +230,37 @@ export function putHttpsListenerPatch(
   }];
 }
 
+export type PutCertificateOp = {
+  op: 'put';
+  kind: 'certificate';
+  key: string;
+  body: { materialRef: string; chainDigest: string; keyDigest: string };
+};
+
+/**
+ * 설정에는 참조만 실린다. fullchain·privkey 자리는 없다.
+ * 자료는 POST /certificates/material 로 SecretStore 에 먼저 들어간다.
+ */
+export function putCertificatePatch(
+  key: string,
+  body: { materialRef: string; chainDigest: string; keyDigest: string },
+): PutCertificateOp[] {
+  if (key === '') throw new Error('키가 비어 있다');
+  if (body.materialRef === '') throw new Error('자료 참조가 비어 있다');
+  if (body.chainDigest === '') throw new Error('chainDigest 가 비어 있다');
+  if (body.keyDigest === '') throw new Error('keyDigest 가 비어 있다');
+  return [{
+    op: 'put',
+    kind: 'certificate',
+    key,
+    body: {
+      materialRef: body.materialRef,
+      chainDigest: body.chainDigest,
+      keyDigest: body.keyDigest,
+    },
+  }];
+}
+
 export type ProtocolClass = 'http' | 'tcp' | 'udp';
 
 export type PutPoolOp = {

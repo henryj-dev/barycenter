@@ -19,9 +19,8 @@
 > route (proxy to a pool; websocket off), goes through a changeset and
 > stops at commit. Apply is a separate action on the impact screen.
 >
-> **What it is not yet.** Opening HTTPS in the GUI needs an existing certificate with
-> material and a TLS policy — the form does not upload keys. Host routes on HTTPS still
-> need an SNI binding. ACME order state is not shown — that table has no read
+> **What it is not yet.** Host routes on HTTPS still need an SNI binding. ACME order
+> state is not shown — that table has no read
 > API. dns-01 has no provider. Drain progress is not shown (S2). The CLI has no
 > per-resource subcommands. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
@@ -176,7 +175,7 @@ not a moat. The bets that need execution quality instead:
 - **Inbound and backend ports are independent.** `:999 → A:11` and `:888 → B:11` are just two
   listeners pointing at two pools.
 - **The API is the only entry point.** The web UI and `bary` CLI are clients of it.
-  They are not yet equal: the GUI does not upload certificate material, and the CLI has no
+  They are not yet equal: the GUI has no SNI-binding form, and the CLI has no
   per-resource subcommands. Equality is a v1.0 claim (`DESIGN.md` §1).
 - **Nothing is applied blind.** Changes accumulate in a changeset, `plan` reports the impact,
   and apply runs a durable state machine — render → validate on the real data plane → publish →
@@ -267,8 +266,8 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
 | **v0.3** | Membership plane, health probe | ← **done except drain observation (S2)** |
 | **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** No per-resource subcommands |
-| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS writes | ← **slice is open.** No Kit, no drain, no cert upload form |
-| **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI port | ← **engine done.** No order GET, no dns-01, no material upload GUI |
+| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS writes, cert upload | ← **slice is open.** No Kit, no drain, no SNI-binding form |
+| **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload | ← **engine done.** No order GET, no dns-01, no SNI-binding GUI |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` has no consumer |
 | **v1.0** | Full RBAC, backup/restore rehearsal, SPOF runbook, documentation | |
 
