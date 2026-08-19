@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **366** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **Certificates** |
+| 단위 | `npm test` | **369** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **Status** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,15 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### Status 화면을 연다 — 스탠바이를 리더처럼 안 그린다 (2026-08-19)
+
+v0.6 의 셋째 장. 스냅샷이 이미 4-way 를 든다. 새 엔드포인트를 만들지 않는다.
+스탠바이가 리더처럼 보이면 apply 503 을 권한 문제로 읽는다. 미적용 plan 과
+미완 전환은 숨기지 않는다. nativeDns 의 NXDOMAIN/timeout 선택형은 그리지
+않는다 — 엔진이 설정할 수 없다.
 
 ---
 

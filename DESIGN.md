@@ -2597,10 +2597,9 @@ capability 패키지이지 apply 구현이 아니다.
   + `pullSse` 다.
 - **v0.5 는 얇은 vertical slice 로 시작한다** — Listeners / Pools & Backends(드레인) /
   Plan·Impact 3화면으로 제품 가설을 검증하고, 나머지는 뒤로 뺀다.
-  지금 열린 것은 Plan·Impact · Listeners · Pools · Routes · Certificates 다.
-  경로는 `/` · `/listeners` · `/pools` · `/routes` · `/certificates` 이고,
-  `serveGui` 의 확장자 없는 폴백이 같은 `index.html` 을 낸다. Kit 이주는
-  별도 조각이다.
+  지금 열린 것은 Plan·Impact · Listeners · Pools · Routes · Certificates ·
+  Status 다. `serveGui` 의 확장자 없는 폴백이 같은 `index.html` 을 낸다.
+  Kit 이주는 별도 조각이다.
   Plan·Impact 는 `plan.impact` 를 문장으로 접는다. diff 가 아니다.
   Listeners 는 `GET /api/v1/listeners`(head 모델) 다. 커밋됐지만 미적용이면
   그 목록은 이미 미래이고, 엔진에 남은 소켓은 impact 의 `removed` 로만 보인다.
@@ -2611,7 +2610,9 @@ capability 패키지이지 apply 구현이 아니다.
   아니라 엔진 순서다. 패스스루는 컴파일하지 않는다.
   Certificates 는 `GET /certificates` 다. 만료는 자료에서 읽고, 자료가 없으면
   빼지 않는다. ACME **의도**(`acme`)는 설정이다. 주문·챌린지 상태는 API 에
-  없으므로 그리지 않는다. 폴링하지 않는다.
+  없으므로 그리지 않는다.
+  Status 는 SSE 스냅샷의 4-way 다. `/status` 를 폴링하지 않는다. nativeDns
+  선택형은 그리지 않는다. 폴링하지 않는다.
 
 | 화면 | 단계 |
 |---|---|

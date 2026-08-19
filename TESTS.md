@@ -961,6 +961,8 @@ S11 하네스의 교훈이다.
 | C5.17 | 패스스루 | 컴파일하지 않고 사실만 나열한다 |
 | C5.18 | 인증서 자료 없음 | 목록에서 빼지 않는다 (`tests/unit/certs-view.test.ts`) |
 | C5.19 | 만료 정렬 | 음수(이미 죽음)가 먼저. 주문 상태는 없다 |
+| C5.20 | 스탠바이 status | 리더가 아니라고 말한다 (`tests/unit/status-view.test.ts`) |
+| C5.21 | pending_apply | 숨기지 않는다 |
 
 ---
 

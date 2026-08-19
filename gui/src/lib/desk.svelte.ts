@@ -15,12 +15,18 @@ import {
   viewOfRoutes, type HttpRouteFact, type PassthroughFact, type RoutesView,
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
+import { viewOfStatus, type StatusView } from '@web/status-view';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
   head?: string;
   pendingApply?: PendingApply[];
   health?: HealthFact[];
+  engine?: unknown;
+  driver?: unknown;
+  leader?: unknown;
+  published?: unknown;
+  unfinished?: unknown;
 };
 
 const tokenKey = 'bary.token';
@@ -36,6 +42,7 @@ export function createDesk() {
   let pools = $state<PoolsView>({ rows: [] });
   let routes = $state<RoutesView>({ order: [], warnings: [], errors: [], passthrough: [] });
   let certs = $state<CertsView>({ rows: [] });
+  let status = $state<StatusView>(viewOfStatus({}));
   let applying = $state(false);
   let stop: (() => void) | undefined;
 
@@ -93,6 +100,7 @@ export function createDesk() {
 
   const onStatus = async (snap: StatusSnap): Promise<void> => {
     head = snap.head;
+    status = viewOfStatus(snap);
     if (snap.health !== undefined) health = snap.health;
     await refreshImpact(pickPending(snap.pendingApply ?? []));
     await refreshListeners(view);
@@ -203,6 +211,7 @@ export function createDesk() {
     get pools() { return pools; },
     get routes() { return routes; },
     get certs() { return certs; },
+    get status() { return status; },
     get applying() { return applying; },
     connect,
     apply,

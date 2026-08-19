@@ -5,6 +5,7 @@
   import Pools from './lib/Pools.svelte';
   import Routes from './lib/Routes.svelte';
   import Certs from './lib/Certs.svelte';
+  import Status from './lib/Status.svelte';
   import { createDesk } from './lib/desk.svelte.ts';
 
   const desk = createDesk();
@@ -62,6 +63,11 @@
         aria-current={page === 'certificates' ? 'page' : undefined}
         onclick={(e) => { e.preventDefault(); go('/certificates'); }}
       >인증서</a>
+      <a
+        href="/status"
+        aria-current={page === 'status' ? 'page' : undefined}
+        onclick={(e) => { e.preventDefault(); go('/status'); }}
+      >상태</a>
     </nav>
     {#if page === 'listeners'}
       <h1>열려 있는 포트</h1>
@@ -75,6 +81,9 @@
     {:else if page === 'certificates'}
       <h1>언제 죽는가</h1>
       <p class="lede">만료는 자료에서 읽는다. 설정에 적은 날짜가 아니다. 주문 상태는 여기 없다.</p>
+    {:else if page === 'status'}
+      <h1>네 갈래</h1>
+      <p class="lede">커밋과 게시와 리더는 다르다. 스탠바이가 리더처럼 보이면 apply 가 왜 503 인지 모른다.</p>
     {:else}
       <h1>이 적용이 하는 일</h1>
       <p class="lede">저장과 적용은 다르다. 여기 있는 것은 이미 커밋된 plan 이 트래픽에 닿을 때 생기는 영향이다.</p>
@@ -115,6 +124,8 @@
     <Routes view={desk.routes} live={desk.live} />
   {:else if page === 'certificates'}
     <Certs view={desk.certs} live={desk.live} />
+  {:else if page === 'status'}
+    <Status view={desk.status} live={desk.live} />
   {:else if desk.view}
     <Impact view={desk.view} applying={desk.applying} apply={apply} />
   {:else if desk.live}
@@ -136,7 +147,7 @@
     color: var(--mute);
     margin: 0 0 0.4rem;
   }
-  .nav { display: flex; gap: 1rem; margin: 0 0 1.1rem; }
+  .nav { display: flex; flex-wrap: wrap; gap: 1rem; margin: 0 0 1.1rem; }
   .nav a {
     font-family: var(--data);
     font-size: 0.8rem;
