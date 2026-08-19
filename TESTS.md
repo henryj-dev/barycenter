@@ -993,6 +993,7 @@ S11 하네스의 교훈이다.
 | C5.50 | CLI pool create | round_robin + 첫 백엔드. 빈 풀만은 안 만든다 (`tests/unit/cli-pool.test.ts`) |
 | C5.51 | CLI hash 풀 create | algorithm=hash + hashKey 화이트리스트. 첫 백엔드와 같이. 모르는 키는 패치를 안 만든다 |
 | C5.52 | CLI source_ip_hash 풀 create | algorithm=source_ip_hash. hashKey 없음. 첫 백엔드와 같이 |
+| C5.53 | CLI HTTP 라우트 create | proxy · websocket=false. 빈 호스트는 패치를 안 만든다 (`tests/unit/cli-route.test.ts`) |
 
 ---
 
