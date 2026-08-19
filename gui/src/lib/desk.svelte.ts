@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, putBackendPatch, type EditKind } from '@web/edit';
+import { deletePatch, putBackendPatch, putHttpListenerPatch, type EditKind } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -269,6 +269,22 @@ export function createDesk() {
     }
   };
 
+  const insertHttpListener = async (
+    key: string,
+    body: { bind: string; port: number; pool: string },
+  ): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putHttpListenerPatch(key, body));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const apply = async (): Promise<void> => {
     if (view === undefined) return;
     applying = true;
@@ -305,6 +321,7 @@ export function createDesk() {
     apply,
     withdraw,
     insertBackend,
+    insertHttpListener,
     disconnect() { stop?.(); },
   };
 }

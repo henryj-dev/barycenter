@@ -1,7 +1,15 @@
 <script lang="ts">
   import type { ListenersView } from '@web/listeners-view';
+  import AddListener from './AddListener.svelte';
 
-  let { view, live }: { view: ListenersView; live: boolean } = $props();
+  let { view, live, editing, pools, withdraw, insert }: {
+    view: ListenersView;
+    live: boolean;
+    editing: boolean;
+    pools: string[];
+    withdraw: (key: string) => void;
+    insert: (key: string, bind: string, port: number, pool: string) => void;
+  } = $props();
 
   const label = (mark: string): string => {
     if (mark === 'join') return '적용하면 열린다';
@@ -12,28 +20,33 @@
 
 {#if !live}
   <p class="empty">연결하면 head 리스너가 여기 온다.</p>
-{:else if view.rows.length === 0}
-  <p class="empty">리스너가 없다. <code>bary import</code> 로 연다.</p>
 {:else}
-  <ul class="ports">
-    {#each view.rows as row (row.socket + row.key)}
-      <li data-mark={row.mark} data-enabled={row.enabled}>
-        <span class="port mono">{row.bind}:{row.port}</span>
-        <span class="proto mono">{row.protocol}</span>
-        <span class="key">{row.mark === 'leave' ? row.socket : row.key}</span>
-        <span class="mark">{label(row.mark)}</span>
-      </li>
-    {/each}
-  </ul>
+  {#if view.rows.length === 0}
+    <p class="empty">리스너가 없다. 아래에서 HTTP 포트를 연다.</p>
+  {:else}
+    <ul class="ports">
+      {#each view.rows as row (row.socket + row.key)}
+        <li data-mark={row.mark} data-enabled={row.enabled}>
+          <span class="port mono">{row.bind}:{row.port}</span>
+          <span class="proto mono">{row.protocol}</span>
+          <span class="key">{row.mark === 'leave' ? row.socket : row.key}</span>
+          <span class="mark">{label(row.mark)}</span>
+          {#if row.mark !== 'leave'}
+            <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+  <AddListener {pools} {editing} add={insert} />
 {/if}
 
 <style>
   .empty { color: var(--mute); }
-  .empty code { font-family: var(--data); font-size: 0.85em; }
   .ports { list-style: none; margin: 1.5rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
   li {
     display: grid;
-    grid-template-columns: 11rem 5.5rem 1fr auto;
+    grid-template-columns: 11rem 5.5rem 1fr auto auto;
     gap: 0.6rem;
     align-items: baseline;
     padding: 0.7rem 0;
@@ -44,6 +57,15 @@
   .proto { color: var(--mute); font-size: 0.8rem; }
   .key { color: var(--mute); font-size: 0.85rem; }
   .mark { font-size: 0.75rem; color: var(--mute); }
+  button {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--mute);
+    padding: 0.2rem 0.45rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   li[data-mark='join'] .port,
   li[data-mark='join'] .mark { color: var(--moss); }
   li[data-mark='leave'] .port,

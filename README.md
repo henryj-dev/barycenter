@@ -13,8 +13,9 @@
 > **What it is not yet.** There is no membership plane (v0.3), so changing a single backend
 > still costs a full generation switch and a reload. TLS termination, ACME and health probing
 > are later milestones (§12.1). Operator screens exist for impact, listeners, pools, routes, certificates and status.
-> Adding or removing a backend from the GUI goes through a changeset and stops at commit —
-> apply is a separate action on the impact screen.
+> Adding or removing a backend, or opening/closing an HTTP listener, goes through a
+> changeset and stops at commit — apply is a separate action on the impact screen.
+> HTTPS listeners are not offered yet: they need a TLS binding the form cannot fill.
 > Expiry is read from material, not from the spec. ACME order state is not shown —
 > that table has no read API. Drain progress is not shown. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503

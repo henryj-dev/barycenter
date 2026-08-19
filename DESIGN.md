@@ -2613,7 +2613,8 @@ capability 패키지이지 apply 구현이 아니다.
   없으므로 그리지 않는다.
   Status 는 SSE 스냅샷의 4-way 다. `/status` 를 폴링하지 않는다. nativeDns
   선택형은 그리지 않는다.
-  GUI 쓰기는 changeset 을 지난다. 지금 열린 것은 백엔드 `put` / `delete` 다.
+  GUI 쓰기는 changeset 을 지난다. 지금 열린 것은 백엔드 `put`/`delete` 와
+  HTTP 리스너 `put`/`delete` 다. https 는 tls 가 필수라 폼이 아직 못 채운다.
   commit 까지 하고 apply 는 Impact 가 한다. 메서드×경로 ALLOW/DENY 는 WAF 다.
   폴링하지 않는다.
 

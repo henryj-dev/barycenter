@@ -71,7 +71,7 @@
     </nav>
     {#if page === 'listeners'}
       <h1>열려 있는 포트</h1>
-      <p class="lede">head 모델이다. 커밋됐지만 적용 전이면 아직 엔진에 없는 소켓이 섞여 있다. 충돌은 검증기가 이미 막았다.</p>
+      <p class="lede">head 모델이다. HTTP 포트를 여는 것은 commit 이다. https·tcp·udp 는 아직 폼이 없다.</p>
     {:else if page === 'pools'}
       <h1>풀이 받는 것</h1>
       <p class="lede">TCP 연결만 잰다. 넣거나 빼는 것은 commit 이다. 트래픽은 영향 화면에서 건다.</p>
@@ -117,7 +117,18 @@
   </p>
 
   {#if page === 'listeners'}
-    <Listeners view={desk.listeners} live={desk.live} />
+    <Listeners
+      view={desk.listeners}
+      live={desk.live}
+      editing={desk.editing}
+      pools={desk.pools.rows.map((p) => p.key)}
+      withdraw={(key) => {
+        void desk.withdraw('listener', key).then((ok) => { if (ok) go('/'); });
+      }}
+      insert={(key, bind, port, pool) => {
+        void desk.insertHttpListener(key, { bind, port, pool }).then((ok) => { if (ok) go('/'); });
+      }}
+    />
   {:else if page === 'pools'}
     <Pools
       view={desk.pools}

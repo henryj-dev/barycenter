@@ -34,3 +34,41 @@ export function putBackendPatch(
   if (!Number.isInteger(weight) || weight < 1) throw new Error('가중치가 1 이상 정수가 아니다');
   return [{ op: 'put', kind: 'backend', key, body: { pool: body.pool, host: body.host, port: body.port, weight } }];
 }
+
+export type PutHttpListenerOp = {
+  op: 'put';
+  kind: 'listener';
+  key: string;
+  body: {
+    protocol: 'http';
+    bind: string;
+    port: number;
+    enabled: true;
+    http: { defaultAction: { pool: string } };
+  };
+};
+
+/** HTTP 만. https 는 tls 가 필수라 지금 폼이 못 채운다. */
+export function putHttpListenerPatch(
+  key: string,
+  body: { bind: string; port: number; pool: string },
+): PutHttpListenerOp[] {
+  if (key === '') throw new Error('키가 비어 있다');
+  if (body.bind === '') throw new Error('바인드가 비어 있다');
+  if (body.pool === '') throw new Error('풀이 비어 있다');
+  if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) {
+    throw new Error('포트가 1–65535 정수가 아니다');
+  }
+  return [{
+    op: 'put',
+    kind: 'listener',
+    key,
+    body: {
+      protocol: 'http',
+      bind: body.bind,
+      port: body.port,
+      enabled: true,
+      http: { defaultAction: { pool: body.pool } },
+    },
+  }];
+}
