@@ -1,11 +1,13 @@
 <script lang="ts">
   import type { PoolsView } from '@web/pools-view';
+  import AddBackend from './AddBackend.svelte';
 
-  let { view, live, editing, withdraw }: {
+  let { view, live, editing, withdraw, insert }: {
     view: PoolsView;
     live: boolean;
     editing: boolean;
     withdraw: (key: string) => void;
+    insert: (pool: string, key: string, host: string, port: number) => void;
   } = $props();
 
   const label = (state: string): string => {
@@ -50,6 +52,11 @@
             {/each}
           </ul>
         {/if}
+        <AddBackend
+          pool={pool.key}
+          {editing}
+          add={(key, host, port) => insert(pool.key, key, host, port)}
+        />
       </section>
     {/each}
   </div>

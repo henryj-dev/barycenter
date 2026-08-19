@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **371** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **changeset 편집** |
+| 단위 | `npm test` | **373** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · GUI · **백엔드 put** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,14 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### GUI 가 백엔드를 넣는다 — 역시 commit 이지 apply 가 아니다 (2026-08-19)
+
+빼기만 있으면 쓰기가 반쪽이다. `put` 한 줄: pool · host · port · weight=1.
+같은 changeset 길이다. 포트가 1–65535 정수가 아니면 패치를 만들지 않는다.
+호스트 문자셋은 저장소가 막는다.
 
 ---
 

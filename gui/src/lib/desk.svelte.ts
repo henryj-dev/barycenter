@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, type EditKind } from '@web/edit';
+import { deletePatch, putBackendPatch, type EditKind } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -200,38 +200,36 @@ export function createDesk() {
   };
 
   /**
-   * 설정에서 뺀다. commit 까지 하고 apply 는 안 한다.
+   * changeset 에 patch 를 얹고 commit 까지. apply 는 안 한다.
    * 트래픽은 Impact 화면의 「트래픽에 건다」가 바꾼다.
    */
-  const withdraw = async (kind: EditKind, key: string): Promise<boolean> => {
-    editing = true;
-    error = undefined;
+  const commitPatch = async (patch: unknown[]): Promise<boolean> => {
     let csId: string | undefined;
     try {
       const headRes = await call('GET', '/api/v1/config/head');
       if (!headRes.ok || typeof headRes.body['revision'] !== 'string') {
-        error = headRes.body['message'] as string ?? `head ${headRes.status}`;
+        error = (headRes.body['message'] as string | undefined) ?? `head ${headRes.status}`;
         return false;
       }
       const opened = await call('POST', '/api/v1/changesets', { base_revision: headRes.body['revision'] });
       if (!opened.ok || typeof opened.body['id'] !== 'string') {
-        error = opened.body['message'] as string ?? `changeset ${opened.status}`;
+        error = (opened.body['message'] as string | undefined) ?? `changeset ${opened.status}`;
         return false;
       }
       csId = opened.body['id'];
-      const patched = await call('PATCH', `/api/v1/changesets/${csId}`, { patch: deletePatch(kind, key) });
+      const patched = await call('PATCH', `/api/v1/changesets/${csId}`, { patch });
       if (!patched.ok) {
-        error = patched.body['message'] as string ?? `patch ${patched.status}`;
+        error = (patched.body['message'] as string | undefined) ?? `patch ${patched.status}`;
         return false;
       }
       const planned = await call('POST', `/api/v1/changesets/${csId}/plan`);
       if (!planned.ok || typeof planned.body['id'] !== 'string') {
-        error = planned.body['message'] as string ?? `plan ${planned.status}`;
+        error = (planned.body['message'] as string | undefined) ?? `plan ${planned.status}`;
         return false;
       }
       const committed = await call('POST', `/api/v1/changesets/${csId}/commit`, { plan_id: planned.body['id'] });
       if (!committed.ok) {
-        error = committed.body['message'] as string ?? `commit ${committed.status}`;
+        error = (committed.body['message'] as string | undefined) ?? `commit ${committed.status}`;
         return false;
       }
       return true;
@@ -239,6 +237,34 @@ export function createDesk() {
       if (csId !== undefined && error !== undefined) {
         await call('DELETE', `/api/v1/changesets/${csId}`).catch(() => undefined);
       }
+    }
+  };
+
+  const withdraw = async (kind: EditKind, key: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(deletePatch(kind, key));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
+  const insertBackend = async (
+    key: string,
+    body: { pool: string; host: string; port: number; weight?: number },
+  ): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putBackendPatch(key, body));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
       editing = false;
     }
   };
@@ -278,6 +304,7 @@ export function createDesk() {
     connect,
     apply,
     withdraw,
+    insertBackend,
     disconnect() { stop?.(); },
   };
 }
