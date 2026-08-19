@@ -1010,6 +1010,9 @@ S11 하네스의 교훈이다.
 | C5.67 | CLI get 한 줄 | `pools/<id>/backends` · `backends/<id>/status`. 빈 키는 경로를 안 만든다 |
 | C5.68 | CLI changeset discard | DELETE. 빈 키는 호출하지 않는다. apply 안 함 (`tests/unit/cli-changeset.test.ts`) |
 | C5.69 | CLI changeset reopen | POST `.../reopen`. 빈 키는 호출하지 않는다. apply 안 함 |
+| C5.70 | CLI recover | POST `/api/v1/recover` 만. changeset·apply 안 함 (`tests/unit/cli-nearby.test.ts`) |
+| C5.71 | CLI get 오퍼레이션·plan·metrics | 있는 GET. 주문·빈 이름은 경로를 안 만든다 |
+| C5.72 | CLI·GUI 풀 delete | `kind: pool` 한 줄. 빈 키는 패치를 안 만든다. apply 안 함 |
 
 ---
 

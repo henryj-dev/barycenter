@@ -123,3 +123,16 @@ export async function applyByPlan(http: Http, planId: string): Promise<{
     'apply',
   ) as { phase: string; generation?: string; detail?: { failure?: string } };
 }
+
+/**
+ * 미완 전환을 이어받는다. changeset 을 열지 않는다. apply 도 아니다.
+ */
+export async function recover(http: Http): Promise<{
+  phase: string;
+  generation?: string;
+  detail?: { failure?: string };
+}> {
+  return unwrap(await http('POST', '/api/v1/recover'), 'recover') as {
+    phase: string; generation?: string; detail?: { failure?: string };
+  };
+}

@@ -3,15 +3,16 @@
  *
  * 첫 백엔드와 같이 넣는다. 빈 풀만은 plan 이 막는다.
  * round_robin · hash · source_ip_hash. hashKey 는 검증기와 같은 화이트리스트다.
- * source_ip_hash 는 hashKey 를 안 붙인다. apply 는 안 한다.
+ * source_ip_hash 는 hashKey 를 안 붙인다. 삭제는 delete 한 줄. apply 는 안 한다.
  */
 import { parseHashKey } from '../validate/strings.js';
 import {
+  deletePatch,
   putHashPoolWithBackendPatch, putPoolWithBackendPatch, putSourceIpHashPoolWithBackendPatch,
   type ProtocolClass,
 } from '../web/edit.js';
 
-import { changesetNew, changesetPatch, changesetPlan, commitByPlan, type Http } from './flow.js';
+import { changesetNew, changesetPatch, changesetPlan, commitByPlan, commitPatch, type Http } from './flow.js';
 
 export type PoolCreateInput = {
   name: string;
@@ -83,4 +84,18 @@ export async function poolCreate(
   const plan = await changesetPlan(http, cs.id);
   const committed = await commitByPlan(http, plan.id);
   return { revision: committed.revision, planId: plan.id };
+}
+
+export function poolDeletePatch(key: string): ReturnType<typeof deletePatch> | undefined {
+  if (key === '') return undefined;
+  return deletePatch('pool', key);
+}
+
+export async function poolDelete(
+  http: Http,
+  key: string,
+): Promise<{ revision: string; planId: string }> {
+  const patch = poolDeletePatch(key);
+  if (patch === undefined) throw new Error('풀 키가 비어 있다');
+  return commitPatch(http, patch);
 }

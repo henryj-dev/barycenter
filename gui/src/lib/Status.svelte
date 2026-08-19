@@ -1,7 +1,12 @@
 <script lang="ts">
   import type { StatusView } from '@web/status-view';
 
-  let { view, live }: { view: StatusView; live: boolean } = $props();
+  let { view, live, recovering, recover }: {
+    view: StatusView;
+    live: boolean;
+    recovering: boolean;
+    recover: () => void;
+  } = $props();
 </script>
 
 {#if !live}
@@ -28,7 +33,14 @@
     </div>
     <div data-on={view.unfinished}>
       <dt>미완 전환</dt>
-      <dd>{view.unfinished ? '있다 — recover 의 대상' : '없다'}</dd>
+      <dd>
+        {view.unfinished ? '있다 — recover 의 대상' : '없다'}
+        {#if view.unfinished}
+          <button type="button" disabled={recovering} onclick={recover}>
+            {recovering ? '이어받는 중' : '이어받는다'}
+          </button>
+        {/if}
+      </dd>
     </div>
     <div>
       <dt>엔진</dt>
@@ -68,6 +80,17 @@
   div[data-on='false'] dd,
   div[data-kind='none'] dd { color: var(--mute); }
   div[data-on='true'] dd { color: var(--moss); }
+  button {
+    display: block;
+    margin-top: 0.35rem;
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--ink);
+    padding: 0.2rem 0.45rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   .pend { font-size: 0.85rem; color: var(--ember); }
   ul { list-style: none; margin: 0.4rem 0 0; padding: 0; }
   li { padding: 0.25rem 0; color: var(--mute); }

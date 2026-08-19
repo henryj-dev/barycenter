@@ -177,6 +177,9 @@
       withdraw={(key) => {
         void desk.withdraw('backend', key).then((ok) => { if (ok) go('/'); });
       }}
+      withdrawPool={(key) => {
+        void desk.withdraw('pool', key).then((ok) => { if (ok) go('/'); });
+      }}
       insert={(pool, key, host, port) => {
         void desk.insertBackend(key, { pool, host, port }).then((ok) => { if (ok) go('/'); });
       }}
@@ -246,7 +249,12 @@
       }}
     />
   {:else if page === 'status'}
-    <Status view={desk.status} live={desk.live} />
+    <Status
+      view={desk.status}
+      live={desk.live}
+      recovering={desk.recovering}
+      recover={() => { void desk.recover(); }}
+    />
   {:else if page === 'rendered'}
     <Rendered view={desk.rendered} live={desk.live} />
   {:else if page === 'audit'}

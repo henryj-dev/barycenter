@@ -20,10 +20,15 @@ export function getPath(what: string): string | undefined {
   if (what === 'model' || what === 'rendered') return `/api/v1/config/${what}`;
   if (what === 'health' || what === 'health/backends') return '/api/v1/health/backends';
   if (LISTS.has(what)) return `/api/v1/${what}`;
+  if (what === 'metrics') return '/metrics';
   const pool = /^pools\/([^/]+)\/backends$/.exec(what);
   if (pool?.[1] !== undefined) return `/api/v1/pools/${encodeURIComponent(pool[1])}/backends`;
   const backend = /^backends\/([^/]+)\/status$/.exec(what);
   if (backend?.[1] !== undefined) return `/api/v1/backends/${encodeURIComponent(backend[1])}/status`;
+  const op = /^operations\/([^/]+)$/.exec(what);
+  if (op?.[1] !== undefined) return `/api/v1/operations/${encodeURIComponent(op[1])}`;
+  const plan = /^plans\/([^/]+)$/.exec(what);
+  if (plan?.[1] !== undefined) return `/api/v1/plans/${encodeURIComponent(plan[1])}`;
   return undefined;
 }
 

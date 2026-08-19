@@ -6,11 +6,12 @@
   import AddHashPool from './AddHashPool.svelte';
   import AddSourceIpHashPool from './AddSourceIpHashPool.svelte';
 
-  let { view, live, editing, withdraw, insert, openPool, openHashPool, openSourceIpHashPool }: {
+  let { view, live, editing, withdraw, withdrawPool, insert, openPool, openHashPool, openSourceIpHashPool }: {
     view: PoolsView;
     live: boolean;
     editing: boolean;
     withdraw: (key: string) => void;
+    withdrawPool: (key: string) => void;
     insert: (pool: string, key: string, host: string, port: number) => void;
     openPool: (input: {
       pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
@@ -48,6 +49,11 @@
             <span data-state="unknown">{pool.unknown}</span>
             <span data-state="unhealthy">{pool.unhealthy}</span>
           </p>
+          <button
+            type="button"
+            disabled={editing}
+            onclick={() => withdrawPool(pool.key)}
+          >설정에서 뺀다</button>
         </header>
         {#if pool.backends.length === 0}
           <p class="empty">백엔드가 없다.</p>
@@ -87,13 +93,14 @@
   section { border-top: 1px solid var(--rule); padding: 1rem 0 0.4rem; }
   header {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr auto auto;
     gap: 0.2rem 1rem;
     margin-bottom: 0.5rem;
+    align-items: center;
   }
   h2 { font-size: 1.05rem; margin: 0; font-weight: 600; }
   .meta { margin: 0; color: var(--mute); font-size: 0.75rem; }
-  .tally { margin: 0; grid-row: 1 / span 2; align-self: center; font-family: var(--data); font-size: 0.8rem; }
+  .tally { margin: 0; font-family: var(--data); font-size: 0.8rem; }
   .tally span { margin-left: 0.55rem; }
   .tally [data-state='healthy'] { color: var(--moss); }
   .tally [data-state='unknown'] { color: var(--mute); }

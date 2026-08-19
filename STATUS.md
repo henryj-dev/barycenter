@@ -10,9 +10,10 @@
 마지막 GUI 쓰기는 source_ip_hash 풀 put 이다. hashKey 를 안 붙인다.
 산출물 화면은 head 렌더다. 기록 화면은 로그다. nginx.conf 는 정본이 아니다.
 CLI 는 listener·풀·HTTP/패스스루 라우트·백엔드·TLS 정책·인증서·SNI create 가 있다.
-listener·라우트·백엔드·SNI 는 뺀다. get 은 인증서·정책·SNI·헬스와 풀/백엔드 한 줄
-읽기를 연다. 모르는 이름은 안 부른다. changeset 은 discard·reopen 이 있다.
-apply 는 아니다. websocket 은 HTTP proxy 에서만 켠다. 인증서 패치에 개인키가 없다.
+listener·라우트·백엔드·SNI·풀은 뺀다. get 은 인증서·정책·SNI·헬스·오퍼레이션·plan·
+metrics 와 풀/백엔드 한 줄 읽기를 연다. 모르는 이름은 안 부른다. recover 는 미완
+전환을 이어받는다. changeset 은 discard·reopen 이 있다. apply 는 아니다.
+websocket 은 HTTP proxy 에서만 켠다. 인증서 패치에 개인키가 없다.
 
 CI Linux 는 OpenSSL 3 출력 · 바인드 마운트 uid 0 · Lua 밸런서의 호스트 이름 거절에서
 깨졌다. 멤버십 슬롯은 넣기 전에 IP 로 푼다. 그 다음 남은 둘은 호스트가 uid 0
@@ -33,7 +34,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, TCP connect 프로브, SSE `health` | 드레인 관측(S2), HTTP 본문 프로브 |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 | 주문 GET · dns-01 |
 | ACME | http-01 러너, shared dict 챌린지, 만료 30일 전 갱신 틱 | 주문 GET, dns-01 프로바이더 |
-| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, status/rollback, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI delete, get(인증서·정책·SNI·헬스) | 드레인 명령 (S2) |
+| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics) | 드레인 명령 (S2) |
 | GUI | 여덟 화면. 폴링하지 않는다. Kit 이 아니다 | 아래 §2 |
 
 ### GUI
@@ -47,7 +48,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 | 쓰기 | 계약 |
 |---|---|
-| 풀 | 첫 백엔드와 같이. `round_robin` · `hash`+hashKey · `source_ip_hash`. 빈 풀은 plan 이 막는다 |
+| 풀 | 첫 백엔드와 같이. `round_robin` · `hash`+hashKey · `source_ip_hash`. 빈 풀은 plan 이 막는다. delete 한 줄 |
 | 백엔드 | put · delete |
 | HTTP 리스너 | bind · port · `http.defaultAction.pool` |
 | TCP 리스너 | bind · port · `defaultPool` (http 프로필을 안 붙인다) |
@@ -73,7 +74,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **472** |
+| 단위 | `npm test` | **478** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -88,7 +89,8 @@ non-zero 다. API·DB 스키마는 아직 동결하지 않는다 (§9.1.1).
 
 ## 2. 열린 것
 
-가까운 GUI 구멍 — 모델에 있는 쓰기 알고리즘은 폼이 있다. `least_conn` 은 모델에 없다.
+가까운 GUI 구멍 — 모델에 있는 쓰기 알고리즘은 폼이 있다. 풀은 뺀다. 미완 전환은
+상태 화면에서 recover 한다. `least_conn` 은 모델에 없다.
 
 API 가 없어서 못 그리는 것.
 

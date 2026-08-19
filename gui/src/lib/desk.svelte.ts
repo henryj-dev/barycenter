@@ -51,6 +51,7 @@ export function createDesk() {
   let rendered = $state<RenderedView>(viewOfRendered({}));
   let audit = $state<AuditView>(viewOfAudit([]));
   let applying = $state(false);
+  let recovering = $state(false);
   let editing = $state(false);
   let stop: (() => void) | undefined;
 
@@ -638,6 +639,18 @@ export function createDesk() {
     }
   };
 
+  const recover = async (): Promise<void> => {
+    recovering = true;
+    error = undefined;
+    try {
+      const r = await fetch('/api/v1/recover', { method: 'POST', headers: auth() });
+      const body = (await r.json()) as { phase?: string; message?: string };
+      if (!r.ok) error = body.message ?? `recover ${r.status}`;
+    } finally {
+      recovering = false;
+    }
+  };
+
   return {
     get token() { return token; },
     set token(v: string) { token = v; },
@@ -655,9 +668,11 @@ export function createDesk() {
     get rendered() { return rendered; },
     get audit() { return audit; },
     get applying() { return applying; },
+    get recovering() { return recovering; },
     get editing() { return editing; },
     connect,
     apply,
+    recover,
     withdraw,
     insertBackend,
     insertPool,

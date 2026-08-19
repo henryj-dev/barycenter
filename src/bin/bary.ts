@@ -6,7 +6,7 @@
  * export/import 와 나뉜 changeset 단계는 있다. `apply <파일>` 은 단축이다.
  *
  *   bary listener create|delete
- *   bary pool create --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]
+ *   bary pool create|delete
  *   bary route create|delete
  *   bary backend create|delete
  *   bary tls-policy create --name [--min-version 1.2|1.3]
@@ -19,7 +19,8 @@
  *   bary plan  <파일.json>      커밋하지 않고 영향만 본다
  *   bary export / import
  *   bary rollback / cancel / audit / status / head
- *   bary get listeners|pools|backends|routes|certificates|tls-policies|sni-bindings|health|model|rendered
+ *   bary get listeners|pools|backends|routes|certificates|tls-policies|sni-bindings|health|model|rendered|metrics
+ *   bary recover
  *
  * 환경변수: `BARY_URL`(기본 http://127.0.0.1:8088) · `BARY_TOKEN`
  *
@@ -32,7 +33,7 @@ import { readFileSync } from 'node:fs';
 import { backendDelete, backendPut } from '../cli/backend.js';
 import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete } from '../cli/listener.js';
-import { poolCreate } from '../cli/pool.js';
+import { poolCreate, poolDelete } from '../cli/pool.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
 import { certificateCreate, sniBindingCreate, sniBindingDelete, tlsPolicyCreate } from '../cli/tls.js';
 import {
@@ -45,6 +46,7 @@ import {
   changesetShow,
   commitByPlan,
   flag,
+  recover,
   unwrap,
 } from '../cli/flow.js';
 
@@ -89,11 +91,12 @@ const usage = (): never => {
 
   bary status                    4-way 상태 · 미완 전환 · 미적용 커밋
   bary head                      전역 리비전
-  bary get <무엇>                listeners | pools | backends | routes | certificates | tls-policies | sni-bindings | health | model | rendered
-                                 pools/<id>/backends | backends/<id>/status. 모르는 이름은 안 부른다
+  bary get <무엇>                listeners | pools | backends | routes | certificates | tls-policies | sni-bindings | health | model | rendered | metrics
+                                 pools/<id>/backends | backends/<id>/status | operations/<id> | plans/<id>. 모르는 이름은 안 부른다
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
   bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
+  bary pool delete               --name
   bary route create              --name --listener --host|--sni --pool|--to|--reject [--status] [--path-prefix] [--websocket]. apply 는 아니다
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
@@ -116,6 +119,7 @@ const usage = (): never => {
   bary import <파일.json>        단일 changeset 으로 커밋. --mode replace 는 없는 키를 지운다
   bary rollback <리비전>          그 시점 내용으로 **새 리비전**을 만들고 적용한다
   bary cancel <오퍼레이션>        진행 중인 전환을 포기한다 (활성화된 것은 못 되돌린다)
+  bary recover                   미완 전환을 이어받는다. changeset 을 안 연다
   bary audit [개수]
 
 환경변수: BARY_URL (기본 ${URL_BASE}) · BARY_TOKEN`);
@@ -194,6 +198,14 @@ async function main(): Promise<void> {
         'cancel'));
       return;
     }
+    case 'recover': {
+      try {
+        show(await recover(call));
+      } catch (e) {
+        die(e);
+      }
+      return;
+    }
     case 'audit': {
       const n = arg ?? '30';
       show(must(await call('GET', `/api/v1/audit?limit=${encodeURIComponent(n)}`), 'audit'));
@@ -239,6 +251,17 @@ async function main(): Promise<void> {
     }
     case 'pool': {
       const sub = arg ?? usage();
+      if (sub === 'delete') {
+        const name = flag(argv, '--name') ?? usage();
+        try {
+          const out = await poolDelete(call, name);
+          console.error(`pool ${name} deleted r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       if (sub !== 'create') usage();
       const name = flag(argv, '--name') ?? usage();
       const protocolClass = flag(argv, '--protocol-class') ?? usage();
