@@ -1,5 +1,5 @@
 /**
- * CLI HTTP·TCP·UDP·HTTPS 리스너 create — apply 가 아니다.
+ * CLI HTTP·TCP·UDP·HTTPS·패스스루 리스너 create — apply 가 아니다.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -96,6 +96,23 @@ describe('listener create 패치', () => {
     expect(JSON.stringify(patch)).not.toContain('http2');
   });
 
+  it('패스스루 리스너는 tls 를 안 붙인다', () => {
+    const patch = listenerCreatePatch({
+      name: 'edge', protocol: 'tls_passthrough', bind: '0.0.0.0', port: 443,
+    });
+    expect(patch).toEqual([{
+      op: 'put',
+      kind: 'listener',
+      key: 'edge',
+      body: {
+        protocol: 'tls_passthrough',
+        bind: '0.0.0.0',
+        port: 443,
+        enabled: true,
+      },
+    }]);
+  });
+
   it('모르는 udp preset 과 tls 없는 https 는 패치를 안 만든다', () => {
     expect(listenerCreatePatch({
       name: 'dns', protocol: 'udp', bind: '0.0.0.0', port: 53, pool: 'pool-a',
@@ -105,9 +122,6 @@ describe('listener create 패치', () => {
     })).toBeUndefined();
     expect(listenerCreatePatch({
       name: 'web', protocol: 'https', bind: '0.0.0.0', port: 443, pool: 'app',
-    })).toBeUndefined();
-    expect(listenerCreatePatch({
-      name: 'pt', protocol: 'tls_passthrough', bind: '0.0.0.0', port: 443, pool: 'app',
     })).toBeUndefined();
   });
 });
