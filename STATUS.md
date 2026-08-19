@@ -9,6 +9,9 @@
 
 마지막 GUI 쓰기는 HTTP 프록시 websocket 이다. 안 적으면 끈다.
 
+CI Linux 는 OpenSSL 3 출력 · 바인드 마운트 uid 0 · Lua 밸런서의 호스트 이름 거절에서
+깨졌다. 멤버십 슬롯은 넣기 전에 IP 로 푼다.
+
 ---
 
 ## 1. 지금 있는 것
@@ -61,7 +64,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **407** |
+| 단위 | `npm test` | **410** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |

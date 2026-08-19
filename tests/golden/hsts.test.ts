@@ -22,7 +22,8 @@
  * 아래 마지막 테스트가 그 불변식을 지킨다.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -89,7 +90,7 @@ function serve(conf: string): string {
         'sh /prefix/probe.sh; echo "---errorlog---"; tail -3 /prefix/logs/error.log'],
       { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    dropScratch(dir);
   }
 }
 

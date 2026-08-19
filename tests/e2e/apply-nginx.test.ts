@@ -21,7 +21,8 @@
  *   npm run test:e2e     (도커 필요)
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -346,7 +347,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
     } catch {
       /* 이미 없으면 그만 */
     }
-    rmSync(prefix, { recursive: true, force: true });
+    dropScratch(prefix);
   });
 
   it('기동 직후 gen-1 을 서빙한다 — 두 평면 다', async () => {

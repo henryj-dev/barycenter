@@ -978,6 +978,8 @@ S11 하네스의 교훈이다.
 | C5.35 | GUI HTTP redirect put | to·status. 기본 302. pool·websocket 없음. 빈 대상·모르는 상태는 패치를 안 만든다 |
 | C5.36 | GUI HTTP reject put | status 403·404·444. 기본 403. to·pool 없음. 모르는 상태는 패치를 안 만든다 |
 | C5.37 | GUI HTTP proxy websocket | 안 적으면 false. true 를 적으면 Upgrade 헤더를 낸다 |
+| C5.38 | 멤버십 슬롯 IP | 호스트 이름은 넣기 전에 푼다. Lua `set_current_peer` 가 이름을 거절한다 |
+| C5.39 | OpenSSL CSR 판정 | stdout+stderr, `CN=` 공백 허용 (LibreSSL · OpenSSL 3) |
 
 ---
 

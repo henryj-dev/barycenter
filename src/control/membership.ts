@@ -9,6 +9,9 @@
  * 함수여야 하기 때문이고(그래야 plan 이 렌더러 드리프트를 잡는다), 세대 admin 조각은
  * `include` 가 conf_prefix 기준으로 풀리므로 세대에 결박된다(E62).
  */
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+
 import { ACME_DICT, render, MEMBERSHIP_DICT, type RenderCapabilities } from '../conf/render.js';
 
 import type { Model } from '../model/provisional.js';
@@ -76,6 +79,29 @@ function upstreamNameIn(conf: string, poolKey: string): string | undefined {
 export const encodeSlots = (slots: Slots): string =>
   Object.entries(slots).sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([name, peers]) => `${name}=${peers.join(',')}`).join('\n');
+
+/**
+ * Lua `ngx.balancer.set_current_peer` 는 호스트 이름을 거절한다.
+ * 슬롯에 넣기 전에 A/AAAA 를 풀어 둔다. 이미 IP 면 그대로다.
+ */
+export async function resolveSlots(slots: Slots): Promise<Slots> {
+  const out: Slots = {};
+  for (const [name, peers] of Object.entries(slots)) {
+    out[name] = await Promise.all(peers.map(resolvePeer));
+  }
+  return out;
+}
+
+async function resolvePeer(hp: string): Promise<string> {
+  const cut = hp.lastIndexOf(':');
+  if (cut <= 0) return hp;
+  const host = hp.slice(0, cut);
+  const port = hp.slice(cut + 1);
+  const bare = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  if (isIP(bare)) return hp;
+  const { address, family } = await lookup(bare);
+  return family === 6 ? `[${address}]:${port}` : `${address}:${port}`;
+}
 
 /**
  * http 평면의 세대 admin 조각.

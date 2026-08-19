@@ -26,7 +26,7 @@ import { EventHub } from '../api/events.js';
 import { FsSecretStore } from '../dp/secrets.js';
 import { TokenAuth, type TokenSpec } from '../api/auth.js';
 import { render } from '../conf/render.js';
-import { encodeSlots, httpAdminConf, streamAdminConf } from '../control/membership.js';
+import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
@@ -235,7 +235,7 @@ export async function main(): Promise<void> {
   const pushMembership = async (
     plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>,
   ): Promise<void> => {
-    const want = encodeSlots(slots);
+    const want = encodeSlots(await resolveSlots(slots));
     const got = plane === 'http'
       ? await pushHttp(adminPort, epoch, want)
       : await pushStream(streamAdminPort, epoch, want);

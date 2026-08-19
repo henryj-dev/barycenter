@@ -18,7 +18,8 @@
  * 검증기가 막는 것을 여기서 확인한다.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -73,7 +74,7 @@ function serve(conf: string, probe: string): string {
       { stdio: ['ignore', 'pipe', 'pipe'] },
     ).toString().trim();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    dropScratch(dir);
   }
 }
 

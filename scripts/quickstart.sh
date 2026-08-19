@@ -63,13 +63,14 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 1
 done
 
-[ $CLEAN -eq 1 ] && docker compose -f deploy/docker-compose.yml down -v >/dev/null 2>&1
-
 if [ "$got" = "hello from A:11" ]; then
   echo ""
   echo "  ok    Quickstart 가 README 대로 동작한다 — curl → '$got'"
+  [ $CLEAN -eq 1 ] && docker compose -f deploy/docker-compose.yml down -v >/dev/null 2>&1
 else
   echo ""
   echo "  FAIL  기대 'hello from A:11', 실제 '$got'"
+  docker compose -f deploy/docker-compose.yml logs --tail 80 dataplane || true
+  [ $CLEAN -eq 1 ] && docker compose -f deploy/docker-compose.yml down -v >/dev/null 2>&1
   exit 1
 fi

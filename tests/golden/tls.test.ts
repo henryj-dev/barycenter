@@ -12,7 +12,8 @@
  * 도커가 필요하다:  npm run test:golden
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -67,7 +68,7 @@ function serveTls(
       { stdio: ['ignore', 'pipe', 'pipe'] },
     ).toString().trim();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    dropScratch(dir);
   }
 }
 

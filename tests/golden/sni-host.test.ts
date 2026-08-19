@@ -18,7 +18,8 @@
  * 안 끊는지**를 잰다. 후자가 더 중요하다 — 잘못 켜면 서비스가 죽는다.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -83,7 +84,7 @@ function serve(conf: string, probe: string): string {
         'sh /prefix/probe.sh; echo "---errorlog---"; tail -4 /prefix/logs/error.log'],
       { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    dropScratch(dir);
   }
 }
 

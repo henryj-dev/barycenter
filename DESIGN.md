@@ -1629,7 +1629,8 @@ prefix 가 아니라 **conf_prefix(= conf 파일이 있는 디렉토리)** 기�
 
 **`balancer_by_lua` 는 stream 서브시스템과 UDP 세션에도 적용된다.** 다만 이건 native upstream
 멤버 목록을 바꾸는 게 아니라, 매 연결·요청·세션마다 Lua 가 `set_current_peer()` 로 peer 를
-고르는 **커스텀 밸런서**다. 채택 비용:
+고르는 **커스텀 밸런서**다. **호스트 이름은 거절된다** — 슬롯에 넣기 전에 A/AAAA 를 푼다.
+채택 비용:
 
 - 가중 RR·일관 해시는 `lua-resty-balancer` 가 제공한다. **다만 이 패키지는 "선택 알고리즘
   라이브러리"일 뿐이고 experimental 로 표시돼 있다.** 멤버십 저장, 워커 수렴, DNS,

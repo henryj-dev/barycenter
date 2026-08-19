@@ -7,7 +7,8 @@
  * 도커가 필요하다:  npm run test:golden
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -46,7 +47,7 @@ function nginxTest(conf: string): string | null {
       return (err.stderr?.toString() || err.stdout?.toString() || err.message || 'unknown').trim();
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    dropScratch(dir);
   }
 }
 
@@ -70,7 +71,7 @@ function nginxProbe(conf: string, probe: string): string {
       { stdio: ['ignore', 'pipe', 'pipe'] },
     ).toString().trim();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    dropScratch(dir);
   }
 }
 

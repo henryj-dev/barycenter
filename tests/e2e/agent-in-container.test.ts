@@ -23,7 +23,8 @@
  *   npm run test:e2e     (도커 필요)
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dropScratch } from '../scratch.js';
 import { materializeGeneration } from '../../src/dp/materialize.js';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -264,7 +265,7 @@ describe('DP Agent 를 컨테이너 안에서 돌린다 — FsEffects 실물 경
     } catch {
       /* 이미 없으면 그만 */
     }
-    rmSync(prefix, { recursive: true, force: true });
+    dropScratch(prefix);
   });
 
   it('컨테이너 안의 FsEffects 가 실제 nginx 를 gen-2 로 옮긴다', async () => {

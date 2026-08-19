@@ -13,7 +13,7 @@
  *   · **CSR DER** — 한 바이트만 틀려도 CA 가 거절한다. 여기서는 `openssl` 에게 판정을
  *     맡긴다. 내가 만든 것을 내가 파싱해서 확인하면 같은 오해를 두 번 하는 것이다.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createPublicKey, createSign, createVerify } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -82,9 +82,11 @@ describe.runIf(hasOpenssl)('CSR — 판정은 openssl 이 한다', () => {
     const key = newEcKey();
     const path = join(dir, 'verify.csr');
     writeFileSync(path, createCsr(['a.test'], key).pem);
-    const out = execFileSync('openssl', ['req', '-in', path, '-noout', '-verify'],
-      { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
-    expect(out.toLowerCase()).toContain('verify ok');
+    const r = spawnSync('openssl', ['req', '-in', path, '-noout', '-verify'], {
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(0);
+    expect(`${r.stdout}${r.stderr}`.toLowerCase()).toContain('verify ok');
   });
 
   it('SAN 이 전부 들어간다 — 와일드카드도', () => {
@@ -101,7 +103,7 @@ describe.runIf(hasOpenssl)('CSR — 판정은 openssl 이 한다', () => {
 
   it('원하면 CN 을 넣는다', () => {
     const text = parse(createCsr(['a.test'], newEcKey(), { includeCommonName: true }).pem);
-    expect(text).toContain('CN=a.test');
+    expect(text).toMatch(/CN\s*=\s*a\.test/);
   });
 
   it('도메인이 없으면 던진다 — 빈 CSR 은 CA 가 어차피 거절한다', () => {
