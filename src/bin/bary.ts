@@ -2,11 +2,11 @@
 /**
  * `bary` — 컨트롤 플레인 CLI (DESIGN.md §5.6)
  *
- * **v0.4 의 전체 CLI 가 아니다.** 리스너 create 와 round_robin 풀 create 가 있다. 대화형 편집은 없다.
+ * **v0.4 의 전체 CLI 가 아니다.** 리스너 create 와 round_robin·hash 풀 create 가 있다. 대화형 편집은 없다.
  * export/import 와 나뉜 changeset 단계는 있다. `apply <파일>` 은 단축이다.
  *
  *   bary listener create --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]
- *   bary pool create --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin]
+ *   bary pool create --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash] [--hash-key]
  *   bary changeset new|patch|plan|show
  *   bary commit --plan <id>
  *   bary apply --plan <id>
@@ -79,7 +79,7 @@ const usage = (): never => {
   bary head                      전역 리비전
   bary get <무엇>                listeners | pools | backends | routes | model | rendered
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
-  bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin]. 첫 백엔드와 같이. apply 는 아니다
+  bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
   bary changeset new             changeset 을 연다
   bary changeset patch <id> <파일.json>
   bary changeset plan <id>       영향만 본다 (커밋하지 않는다)
@@ -209,10 +209,12 @@ async function main(): Promise<void> {
       const host = flag(argv, '--host') ?? usage();
       const portRaw = flag(argv, '--port') ?? usage();
       const algorithm = flag(argv, '--algorithm');
+      const hashKey = flag(argv, '--hash-key');
       try {
         const out = await poolCreate(call, {
           name, protocolClass, backend, host, port: Number(portRaw),
           ...(algorithm === undefined ? {} : { algorithm }),
+          ...(hashKey === undefined ? {} : { hashKey }),
         });
         console.error(`pool ${name} committed r${out.revision}`);
         show(out);

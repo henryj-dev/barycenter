@@ -23,8 +23,8 @@
 > **What it is not yet.** ACME order
 > state is not shown — that table has no read
 > API. dns-01 has no provider. Drain progress is not shown (S2). The CLI can
-> create listeners and a round-robin pool (with its first backend; commit, not
-> apply); other resource commands are still missing. Leader election exists (a PostgreSQL advisory lock
+> create listeners and a round-robin or hash pool (with its first backend;
+> commit, not apply); other resource commands are still missing. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
 > not_leader` to writes) — but **failover is not automatic**: each data plane carries its own
 > nginx, so extra instances are cold standbys, and moving traffic is still DNS or an upstream
@@ -177,9 +177,9 @@ not a moat. The bets that need execution quality instead:
 - **Inbound and backend ports are independent.** `:999 → A:11` and `:888 → B:11` are just two
   listeners pointing at two pools.
 - **The API is the only entry point.** The web UI and `bary` CLI are clients of it.
-  They are not yet equal: the CLI can create listeners and a round-robin pool
-  (with its first backend) and stops at commit. Other resource commands are
-  still missing. Equality is a
+  They are not yet equal: the CLI can create listeners and a round-robin or
+  hash pool (with its first backend) and stops at commit. Other resource
+  commands are still missing. Equality is a
   v1.0 claim (`DESIGN.md` §1).
 - **Nothing is applied blind.** Changes accumulate in a changeset, `plan` reports the impact,
   and apply runs a durable state machine — render → validate on the real data plane → publish →
@@ -269,7 +269,7 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.1** | Typed model, sealed changesets, apply state machine, DP agent, renderer | ← **done** |
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
 | **v0.3** | Membership plane, health probe | ← **done except drain observation (S2)** |
-| **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** listener create and round-robin pool create exist. Hash pool and route commands do not |
+| **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** listener create and round-robin/hash pool create exist. source_ip_hash pool and route commands do not |
 | **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **slice is open.** No Kit, no drain |
 | **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** No order GET, no dns-01 |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` has no consumer |
