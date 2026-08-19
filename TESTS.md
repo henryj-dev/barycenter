@@ -967,6 +967,7 @@ S11 하네스의 교훈이다.
 | C5.23 | GUI 백엔드 추가 패치 | `put` 한 줄. 포트 0 은 패치를 안 만든다 |
 | C5.24 | GUI HTTP 리스너 put | protocol=http. tls 를 안 붙인다 (`tests/unit/edit.test.ts`) |
 | C5.25 | GUI 풀 생성 | pool+backend 두 줄. 빈 풀만은 안 만든다 |
+| C5.26 | GUI HTTP 라우트 put | proxy · websocket=false. 빈 호스트는 패치를 안 만든다 (`tests/unit/edit.test.ts`) |
 
 ---
 

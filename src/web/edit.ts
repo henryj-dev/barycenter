@@ -4,7 +4,7 @@
  * 저장(commit)과 적용(apply)은 다르다. 여기서 만드는 것은 patch 뿐이다.
  * 메서드×경로 ALLOW/DENY 는 WAF 다. 여기 없다.
  */
-export type EditKind = 'backend' | 'listener' | 'pool';
+export type EditKind = 'backend' | 'listener' | 'pool' | 'httpRoute';
 
 export type DeleteOp = { op: 'delete'; kind: EditKind; key: string };
 
@@ -109,4 +109,49 @@ export function putPoolWithBackendPatch(input: {
     },
     ...backends,
   ];
+}
+
+export type PutHttpRouteOp = {
+  op: 'put';
+  kind: 'httpRoute';
+  key: string;
+  body: {
+    listener: string;
+    hosts: string[];
+    priority: number;
+    pathPrefix?: string;
+    action: { kind: 'proxy'; pool: string; websocket: false };
+  };
+};
+
+/**
+ * 호스트 → 풀 proxy. websocket 은 끈다.
+ * redirect·reject 는 폼이 못 채운다.
+ */
+export function putHttpRoutePatch(input: {
+  key: string;
+  listener: string;
+  hosts: readonly string[];
+  pool: string;
+  pathPrefix?: string;
+  priority?: number;
+}): PutHttpRouteOp[] {
+  if (input.key === '') throw new Error('키가 비어 있다');
+  if (input.listener === '') throw new Error('리스너가 비어 있다');
+  if (input.pool === '') throw new Error('풀이 비어 있다');
+  const hosts = input.hosts.map((h) => h.trim()).filter((h) => h !== '');
+  if (hosts.length === 0) throw new Error('호스트가 비어 있다');
+  const priority = input.priority ?? 0;
+  if (!Number.isInteger(priority) || priority < 0) {
+    throw new Error('priority 가 0 이상 정수가 아니다');
+  }
+  const pathPrefix = input.pathPrefix?.trim();
+  const body: PutHttpRouteOp['body'] = {
+    listener: input.listener,
+    hosts,
+    priority,
+    action: { kind: 'proxy', pool: input.pool, websocket: false },
+  };
+  if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
+  return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
 }

@@ -77,7 +77,7 @@
       <p class="lede">빈 풀은 저장되지 않는다. 풀을 열 때 첫 백엔드를 같이 넣는다.</p>
     {:else if page === 'routes'}
       <h1>엔진이 보는 순서</h1>
-      <p class="lede">사용자 priority 가 매치 클래스를 이기지 못한다. 어긋나면 그림자로 말한다.</p>
+      <p class="lede">호스트 라우트를 넣는 것은 commit 이다. 매치 클래스가 priority 를 이긴다. redirect·reject 는 아직 폼이 없다.</p>
     {:else if page === 'certificates'}
       <h1>언제 죽는가</h1>
       <p class="lede">만료는 자료에서 읽는다. 설정에 적은 날짜가 아니다. 주문 상태는 여기 없다.</p>
@@ -145,7 +145,21 @@
       }}
     />
   {:else if page === 'routes'}
-    <Routes view={desk.routes} live={desk.live} />
+    <Routes
+      view={desk.routes}
+      live={desk.live}
+      editing={desk.editing}
+      listeners={desk.listeners.rows
+        .filter((l) => l.mark !== 'leave' && (l.protocol === 'http' || l.protocol === 'https'))
+        .map((l) => l.key)}
+      pools={desk.pools.rows.filter((p) => p.protocolClass === 'http').map((p) => p.key)}
+      withdraw={(key) => {
+        void desk.withdraw('httpRoute', key).then((ok) => { if (ok) go('/'); });
+      }}
+      insert={(input) => {
+        void desk.insertHttpRoute(input).then((ok) => { if (ok) go('/'); });
+      }}
+    />
   {:else if page === 'certificates'}
     <Certs view={desk.certs} live={desk.live} />
   {:else if page === 'status'}

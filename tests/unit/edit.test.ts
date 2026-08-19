@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putHttpListenerPatch, putPoolWithBackendPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -47,6 +47,40 @@ describe('설정에서 빼기', () => {
           http: { defaultAction: { pool: 'app' } },
         },
       },
+    ]);
+  });
+
+  it('HTTP 라우트를 넣는 패치는 put 한 줄이다 — proxy 이고 websocket 은 끈다', () => {
+    expect(putHttpRoutePatch({
+      key: 'r-app', listener: 'front', hosts: ['app.example.com'], pool: 'app',
+    })).toEqual([
+      {
+        op: 'put', kind: 'httpRoute', key: 'r-app',
+        body: {
+          listener: 'front', hosts: ['app.example.com'], priority: 0,
+          action: { kind: 'proxy', pool: 'app', websocket: false },
+        },
+      },
+    ]);
+  });
+
+  it('경로가 비면 pathPrefix 를 붙이지 않는다', () => {
+    const patch = putHttpRoutePatch({
+      key: 'r-app', listener: 'front', hosts: ['app.example.com'], pool: 'app',
+      pathPrefix: '  ',
+    });
+    expect(patch[0]?.body).not.toHaveProperty('pathPrefix');
+  });
+
+  it('호스트가 없으면 패치를 만들지 않는다', () => {
+    expect(() => putHttpRoutePatch({
+      key: 'r-app', listener: 'front', hosts: ['  ', ''], pool: 'app',
+    })).toThrow(/호스트/);
+  });
+
+  it('HTTP 라우트를 빼는 패치는 delete 한 줄이다', () => {
+    expect(deletePatch('httpRoute', 'r-app')).toEqual([
+      { op: 'delete', kind: 'httpRoute', key: 'r-app' },
     ]);
   });
 });
