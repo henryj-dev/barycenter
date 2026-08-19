@@ -9,7 +9,7 @@
 
 마지막 GUI 쓰기는 source_ip_hash 풀 put 이다. hashKey 를 안 붙인다.
 산출물 화면은 head 렌더다. 기록 화면은 로그다. nginx.conf 는 정본이 아니다.
-CLI 는 HTTP·TCP listener create 가 있다. apply 는 아니다.
+CLI 는 HTTP·TCP·UDP listener create 가 있다. apply 는 아니다. UDP 는 named preset 이다.
 
 CI Linux 는 OpenSSL 3 출력 · 바인드 마운트 uid 0 · Lua 밸런서의 호스트 이름 거절에서
 깨졌다. 멤버십 슬롯은 넣기 전에 IP 로 푼다.
@@ -28,7 +28,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, TCP connect 프로브, SSE `health` | 드레인 관측(S2), HTTP 본문 프로브 |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 | 주문 GET · dns-01 |
 | ACME | http-01 러너, shared dict 챌린지, 만료 30일 전 갱신 틱 | 주문 GET, dns-01 프로바이더 |
-| CLI | `changeset` 단계, `commit --plan`, `apply --plan`, export/import, status/rollback, HTTP·TCP listener create | udp·https·풀·라우트 명령 |
+| CLI | `changeset` 단계, `commit --plan`, `apply --plan`, export/import, status/rollback, HTTP·TCP·UDP listener create | https·풀·라우트 명령 |
 | GUI | 여덟 화면. 폴링하지 않는다. Kit 이 아니다 | 아래 §2 |
 
 ### GUI
@@ -68,7 +68,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **428** |
+| 단위 | `npm test` | **429** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -93,7 +93,7 @@ API 가 없어서 못 그리는 것.
 
 로드맵 잔여.
 
-- CLI 리소스 하위 명령 (HTTP·TCP listener create 말고)
+- CLI 리소스 하위 명령 (HTTP·TCP·UDP listener create 말고)
 - SvelteKit (여덟 경로인데도 한 `index.html`)
 - v1.0 RBAC · 백업/복구 리허설 · SPOF 런북
 

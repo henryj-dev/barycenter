@@ -1,5 +1,5 @@
 /**
- * CLI HTTP·TCP 리스너 create — apply 가 아니다.
+ * CLI HTTP·TCP·UDP 리스너 create — apply 가 아니다.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -56,9 +56,31 @@ describe('listener create 패치', () => {
     }]);
   });
 
-  it('udp·https 는 패치를 안 만든다', () => {
+  it('UDP 리스너는 named preset 이다. PROXY 필드가 없다', () => {
+    const patch = listenerCreatePatch({
+      name: 'dns', protocol: 'udp', bind: '0.0.0.0', port: 53, pool: 'pool-a', preset: 'dns',
+    });
+    expect(patch).toEqual([{
+      op: 'put',
+      kind: 'listener',
+      key: 'dns',
+      body: {
+        protocol: 'udp',
+        bind: '0.0.0.0',
+        port: 53,
+        enabled: true,
+        defaultPool: 'pool-a',
+        udp: { preset: 'dns' },
+      },
+    }]);
+  });
+
+  it('https 와 모르는 udp preset 은 패치를 안 만든다', () => {
     expect(listenerCreatePatch({
       name: 'dns', protocol: 'udp', bind: '0.0.0.0', port: 53, pool: 'pool-a',
+    })).toBeUndefined();
+    expect(listenerCreatePatch({
+      name: 'dns', protocol: 'udp', bind: '0.0.0.0', port: 53, pool: 'pool-a', preset: 'quic',
     })).toBeUndefined();
     expect(listenerCreatePatch({
       name: 'web', protocol: 'https', bind: '0.0.0.0', port: 443, pool: 'app',

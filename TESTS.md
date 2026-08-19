@@ -987,6 +987,7 @@ S11 하네스의 교훈이다.
 | C5.44 | `/audit` | 로그. 모르는 본문은 빈 목록. 지어내지 않는다 (`tests/unit/audit-view.test.ts`) |
 | C5.45 | CLI HTTP listener create | protocol=http. tls 없음. changeset 을 지나 commit. apply 안 함 (`tests/unit/cli-listener.test.ts`) |
 | C5.46 | CLI TCP listener create | protocol=tcp · defaultPool. http/tls 없음. apply 안 함 |
+| C5.47 | CLI UDP listener create | protocol=udp · defaultPool · named preset. 모르는 preset 은 패치를 안 만든다 |
 
 ---
 
