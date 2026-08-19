@@ -990,6 +990,7 @@ S11 하네스의 교훈이다.
 | C5.47 | CLI UDP listener create | protocol=udp · defaultPool · named preset. 모르는 preset 은 패치를 안 만든다 |
 | C5.48 | CLI HTTPS listener create | tls.policy · tls.defaultCertificate 필수. http2 안 적음. 빈 인증서는 패치를 안 만든다 |
 | C5.49 | CLI 패스스루 listener create | protocol=tls_passthrough. tls·http·defaultPool 없음. unmatched 풀은 선택 |
+| C5.50 | CLI pool create | round_robin + 첫 백엔드. 빈 풀만은 안 만든다. hash 는 패치를 안 만든다 (`tests/unit/cli-pool.test.ts`) |
 
 ---
 

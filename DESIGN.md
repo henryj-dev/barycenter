@@ -1085,8 +1085,8 @@ bary listener create --name game --protocol tcp --bind 0.0.0.0 --port 999 --pool
 bary listener create --name dns --protocol udp --bind 0.0.0.0 --port 53 --pool pool-a --preset dns
 bary listener create --name web --protocol https --bind 0.0.0.0 --port 443 --pool app --policy modern --certificate site
 bary listener create --name edge --protocol tls_passthrough --bind 0.0.0.0 --port 443
-bary pool create --name pool-a --protocol-class tcp --algorithm round_robin
-bary backend add --pool pool-a --host 10.0.0.11 --port 11 --weight 2
+bary pool create --name pool-a --protocol-class tcp --backend a1 --host 10.0.0.11 --port 11
+bary backend add --pool pool-a --host 10.0.0.11 --port 11 --weight 2   # 아직
 bary backend drain <id> --deadline 300s
 bary backend drain-status <id>          # inflight / active_sessions / drain_condition
 bary route create --listener web --host api.example.com --pool api-pool
@@ -1105,7 +1105,9 @@ bary import barycenter.yaml --mode merge
 tcp·udp 는 `defaultPool` 이다. udp 는 named preset 만 받는다.
 https 는 `tls.policy` 와 `tls.defaultCertificate` 가 필수다. http2 는 안 적는다.
 패스스루는 `tls_passthrough` 다. tls 를 안 붙인다. unmatched SNI 풀은 선택이다.
-풀·라우트 명령은 아직이다. 드레인은 S2 다.
+`pool create` 는 첫 백엔드와 같이 넣는다. 빈 풀만은 plan 이 막는다.
+알고리즘은 지금 `round_robin` 만. hash·source_ip_hash 는 아직이다.
+라우트 명령은 아직이다. 드레인은 S2 다.
 
 ---
 
@@ -3006,7 +3008,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.1** 골격 ✅ | (동결은 둘로 나뉜다 — §9.1.1) 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
 | **v0.2** L4 ✅ | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
 | **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2)은 아직** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. inflight/sessions 숫자는 없다 |
-| **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). listener create ✅ (http·tcp·udp·https·tls_passthrough). 풀·라우트 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
+| **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). listener create ✅. round_robin 풀 create ✅. hash·라우트 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
 | **v0.5** GUI | SSE ✅. 여덟 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
 | **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩 ✅. 주문 GET · dns-01 은 아직 | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
