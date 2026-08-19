@@ -993,7 +993,7 @@ POST   /api/v1/operations/{id}/cancel
 GET    /api/v1/status                   # 4-way + topology_epoch + membership + 드리프트
 GET    /api/v1/config/rendered?revision=
 GET    /api/v1/health/backends
-GET    /api/v1/events                   # SSE — 스냅샷(`status`) + `revision`/`apply` 델타 + 하트비트 주석. 인증 필요.
+GET    /api/v1/events                   # SSE — 스냅샷(`status` + `health`) + `revision`/`apply`/`health` 델타 + 하트비트 주석. 인증 필요. `/status` 는 그대로다.
 GET    /api/v1/audit
 ```
 
@@ -2616,6 +2616,8 @@ capability 패키지이지 apply 구현이 아니다.
 | Rendered Config (읽기 전용) / Audit | v1.0 |
 
 - 실시간: SSE (스냅샷 + 델타, 하트비트). GUI 는 폴링하지 않는다.
+  스냅샷은 `status` 에 지금 `health` 를 얹는다. 판정 변경은 `health` 델타.
+  드레인 진행률(inflight/sessions)은 아직 없다 — S2 가 그 게이트다.
 - **GUI 는 changeset 위에서 편집한다.** "저장"=commit, "적용"=apply 를 시각적으로 분리한다.
 
 ---

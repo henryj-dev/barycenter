@@ -371,6 +371,7 @@ const ROUTES: Route[] = [
 
   /**
    * §5.2 · §10 SSE. 스냅샷 + 델타 + 하트비트. GUI 는 폴링하지 않는다.
+   * 스냅샷에 지금 헬스를 실는다. 판정 변경은 `health` 델타 — `/status` 는 그대로다.
    * 핸들러가 연결이 끊길 때까지 await 한다.
    */
   route('GET', '/api/v1/events', 'read', async (c, api) => {
@@ -378,7 +379,13 @@ const ROUTES: Route[] = [
       req: c.req,
       res: c.res,
       hub: eventsOf(api),
-      snapshot: () => api.control.status(),
+      snapshot: async () => {
+        const [status, health] = await Promise.all([
+          api.control.status(),
+          healthRows(api.db),
+        ]);
+        return { ...status, health };
+      },
       ...(api.heartbeatMs === undefined ? {} : { heartbeatMs: api.heartbeatMs }),
     });
   }),

@@ -22,7 +22,7 @@ DESIGN.md    2,400+ 줄
 | typecheck | `npm run typecheck` | — | strict + `exactOptionalPropertyTypes` |
 | 표면 | `node scripts/surface.mjs --check` | — | **계약이 움직였나** — 동결 카운터 |
 | 모델 | `npm run test:model` | **13** | **교차를 생성해서** 속성 P0~P10 을 때린다 |
-| 단위 | `npm test` | **355** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · Plan·Impact · **Listeners** |
+| 단위 | `npm test` | **356** | 렌더러·검증기·라우트·DP · 드라이버 · 기동 · export/import · CLI · SSE · Plan·Impact · Listeners · **헬스 델타** |
 | conformance | `npm run test:conformance` | **392** | **검수가 재현한 반례** (5~14차) · S14 선택형 거절 |
 | 골든 | `npm run test:golden` | **44** | `nginx -t` + 런타임 프로브 (TLS 4건 · ACME 챌린지 7건 포함) |
 | 엔진 사실 | `npm run test:engine` | **73** | 설계가 전제한 nginx 동작 (SKIP 2) |
@@ -623,6 +623,19 @@ REST → PG(changeset·plan·commit) → render → materialize(세대) → 게�
 `S19.same_digest` 는 **이빨이 없어서 걷어냈다** — 이 스파이크의 admin 에 digest 로직이 한 줄도
 없으니 "같은 digest 라 거부됐다" 가 나올 경로가 아예 없고, **통과할 수밖에 없는 체크는
 PASS 수만 부풀린다.** 그 축은 엔진이 아니라 DP 층의 질문이고 거기서 이미 본다.
+
+---
+
+### 헬스 델타를 연다 — 폴링하지 않는다 (2026-08-19)
+
+Pools 화면을 그리려면 헬스 변화가 스트림에 있어야 한다. `health_events` 는
+이미 판정 변경과 같은 트랜잭션에 쓰이는데, SSE 로는 안 나갔다. 화면을 먼저
+열면 `/health/backends` 를 폴링하게 된다.
+
+스냅샷에 지금 `health` 를 실는다. `/status` 는 그대로다 — 4-way 에 헬스 표를
+섞지 않는다. 판정이 바뀌면 `health` 델타 `{backendKey, state}` 다. 프로버가
+꺼진 배포(멤버십 평면 없음)에서는 델타가 없다. 드레인·inflight 는 없다 —
+없는 숫자를 그리지 않는다.
 
 ---
 

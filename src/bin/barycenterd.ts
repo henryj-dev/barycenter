@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { createApi } from '../api/server.js';
+import { EventHub } from '../api/events.js';
 import { FsSecretStore } from '../dp/secrets.js';
 import { TokenAuth, type TokenSpec } from '../api/auth.js';
 import { render } from '../conf/render.js';
@@ -355,6 +356,7 @@ export async function main(): Promise<void> {
    * 정적 `server` 줄은 세대 전환으로만 바뀐다. 판정만 쌓고 못 쓰는 것보다 안 하는 편이
    * 정직하다.
    */
+  const events = new EventHub();
   const proberOn = renderCaps.httpLua === true || renderCaps.streamLua === true;
   const prober = new HealthProber(db, {
     intervalMs: Number(env('BARY_PROBE_INTERVAL_MS', '2000')),
@@ -365,8 +367,9 @@ export async function main(): Promise<void> {
   if (proberOn) {
     prober.start(
       async () => (election.state.isLeader ? control.headModel() : undefined),
-      async () => {
+      async (flips) => {
         count('bary_health_transition_total');
+        for (const flip of flips) events.publish('health', flip);
         const out = await control.projectHealth();
         if (out !== undefined) {
           log.info('health.projected', { epochs: out.epochs, planes: out.planes });
@@ -501,7 +504,7 @@ export async function main(): Promise<void> {
   const serveRoot = existsSync(guiRoot) ? guiRoot : undefined;
 
   const server = createApi({
-    db, store, control, auth, election, secrets,
+    db, store, control, auth, election, secrets, events,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
   });
   await new Promise<void>((resolve) => {

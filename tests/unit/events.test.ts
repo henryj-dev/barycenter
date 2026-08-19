@@ -21,8 +21,9 @@ const listen = async (hub: EventHub, heartbeatMs = 40): Promise<{ url: string; c
   ]);
   const election = { state: { isLeader: true, token: '1', holder: 't', since: '', reason: undefined } };
   const control = { status: async () => ({ head: '7', engine: { probed: false } }) };
+  const db = { query: async () => ({ rows: [] }) };
   const server: Server = createApi({
-    db: {} as Db,
+    db: db as unknown as Db,
     store: {} as ConfigStore,
     control: control as unknown as ControlPlane,
     auth,
@@ -136,6 +137,29 @@ describe('GET /api/v1/events', () => {
     const beat = await readUntil(reader, acc, (s) => s.includes(': hb'));
     expect(beat).toContain(': hb');
 
+    ac.abort();
+  });
+
+  it('스냅샷에 지금 헬스가 있다 — 연결 직후 폴링하지 않는다', async () => {
+    const hub = new EventHub();
+    const srv = await listen(hub);
+    close = srv.close;
+    ac = new AbortController();
+    const r = await fetch(`${srv.url}/api/v1/events`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+      signal: ac.signal,
+    });
+    const reader = r.body?.getReader();
+    if (reader === undefined) throw new Error('body 가 없다');
+    const acc = { text: '' };
+    const first = await readUntil(reader, acc, (s) => s.includes('"health"') && s.includes('\n\n'));
+    expect(first).toContain('event: snapshot');
+    expect(first).toContain('"health":[]');
+    hub.publish('health', { backendKey: 'be-a', state: 'unhealthy' });
+    const delta = await readUntil(reader, acc, (s) => s.includes('event: health') && s.includes('be-a'));
+    expect(delta).toContain('event: health');
+    expect(delta).toContain('"backendKey":"be-a"');
+    expect(delta).toContain('"state":"unhealthy"');
     ac.abort();
   });
 });

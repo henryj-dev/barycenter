@@ -39,6 +39,9 @@ export type HealthRow = {
   detail: string | undefined;
 };
 
+/** 판정이 바뀐 한 줄. SSE `health` 델타가 이 모양이다. */
+export type HealthFlip = { backendKey: string; state: HealthState };
+
 export type ProbeOptions = {
   /** 프로브 주기. */
   intervalMs?: number;
@@ -112,7 +115,7 @@ export class HealthProber {
   ) {}
 
   /** 한 바퀴 돈다. 테스트가 직접 부를 수 있도록 공개한다. */
-  async sweep(model: Model): Promise<{ changed: string[] }> {
+  async sweep(model: Model): Promise<{ flipped: HealthFlip[] }> {
     const timeoutMs = this.opts.timeoutMs ?? DEFAULTS.timeoutMs;
     const fail = this.opts.failThreshold ?? DEFAULTS.failThreshold;
     const rise = this.opts.riseThreshold ?? DEFAULTS.riseThreshold;
@@ -132,9 +135,9 @@ export class HealthProber {
       reason: await probeTcp(backend.host, backend.port, timeoutMs),
     })));
 
-    const changed: string[] = [];
+    const flipped: HealthFlip[] = [];
     for (const r of results) {
-      const flipped = await this.db.tx(async (c) => {
+      const flip = await this.db.tx(async (c) => {
         const row = (await c.query(
           `SELECT state, probe_start_seq, consecutive, last_ok FROM backend_health
             WHERE backend_key = $1 FOR UPDATE`, [r.key],
@@ -171,14 +174,17 @@ export class HealthProber {
         if (next === prevState) return undefined;
         // **판정 변경과 이벤트를 같은 트랜잭션에서** 쓴다 (§6.6).
         await emit(c, r.key, next, r.reason);
-        return r.key;
+        return { backendKey: r.key, state: next };
       });
-      if (flipped !== undefined) changed.push(flipped);
+      if (flip !== undefined) flipped.push(flip);
     }
-    return { changed };
+    return { flipped };
   }
 
-  start(onSweep: () => Promise<Model | undefined>, onChange: () => Promise<void>): void {
+  start(
+    onSweep: () => Promise<Model | undefined>,
+    onChange: (flips: HealthFlip[]) => Promise<void>,
+  ): void {
     if (this.#timer !== undefined) return;
     const tick = async (): Promise<void> => {
       if (this.#running) return;
@@ -186,8 +192,8 @@ export class HealthProber {
       try {
         const model = await onSweep();
         if (model !== undefined) {
-          const { changed } = await this.sweep(model);
-          if (changed.length > 0) await onChange();
+          const { flipped } = await this.sweep(model);
+          if (flipped.length > 0) await onChange(flipped);
         }
       } catch (e) {
         // **프로버 장애는 판정 동결이다** (§6.7). 마지막 판정을 유지하고 멤버십도 유지한다.

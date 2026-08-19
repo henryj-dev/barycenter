@@ -951,6 +951,8 @@ S11 하네스의 교훈이다.
 | C5.7 | head 리스너 + 미적용 added | `join`. 검증기를 다시 돌리지 않는다 (`tests/unit/listeners-view.test.ts`) |
 | C5.8 | head 에 없고 impact.removed 인 소켓 | `leave` — 엔진에 아직 있다 |
 | C5.9 | `/listeners` | 리스너 화면. Kit 이 아니다 |
+| C5.10 | SSE 스냅샷 | `health` 배열이 있다. `/status` 는 그대로 |
+| C5.11 | 판정 변경 | `event: health` 델타. 폴링하지 않는다 |
 
 ---
 
