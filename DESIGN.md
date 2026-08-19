@@ -2615,8 +2615,9 @@ capability 패키지이지 apply 구현이 아니다.
   선택형은 그리지 않는다.
   GUI 쓰기는 changeset 을 지난다. 지금 열린 것은 백엔드 `put`/`delete`,
   HTTP·TCP·UDP·패스스루 리스너 `put`/`delete`, 풀은 **첫 백엔드와 같이** `put` 한다.
-  빈 풀은 검증기가 막는다. 알고리즘은 `round_robin` 또는 `hash`+hashKey 다.
-  hashKey 는 검증기와 같은 화이트리스트다. HTTP 라우트 `put`/`delete` 는 호스트 → 풀 proxy 다.
+  빈 풀은 검증기가 막는다. 알고리즘은 `round_robin` · `hash`+hashKey ·
+  `source_ip_hash` 다. hashKey 는 검증기와 같은 화이트리스트다. source_ip_hash 는
+  hashKey 를 안 붙인다. HTTP 라우트 `put`/`delete` 는 호스트 → 풀 proxy 다.
   websocket 은 기본이 끈다. 프록시에서만 켠다. redirect 는 `to` 와 301·302·307·308 이다. 기본 302.
   pool 을 안 붙인다. reject 는 403·404·444 다. 기본 403. to 를 안 붙인다.
   패스스루 라우트는 SNI → TCP 풀 proxy 이거나 reject 다. reject 는 HTTP
@@ -2637,7 +2638,7 @@ capability 패키지이지 apply 구현이 아니다.
 | 화면 | 상태 |
 |---|---|
 | Listeners — head 포트, HTTP·TCP·UDP·HTTPS·패스스루 put/delete | 열림. HTTPS 는 자료 있는 인증서 + 정책. 패스스루는 tls 없음 |
-| Pools & Backends — SSE 헬스, 풀+첫 백엔드, hash+hashKey, 백엔드 put/delete | 열림. 드레인 숫자 없음 (S2). source_ip_hash 폼 없음 |
+| Pools & Backends — SSE 헬스, 풀+첫 백엔드, hash+hashKey, source_ip_hash, 백엔드 put/delete | 열림. 드레인 숫자 없음 (S2) |
 | Plan/Impact — diff 가 아니라 **영향**. apply 는 여기만 | 열림 |
 | Routes — 엔진 순서, HTTP 호스트 proxy/redirect/reject put/delete, 패스스루 SNI proxy/reject put/delete | 열림. websocket 은 프록시에서만 |
 | Certificates — 만료는 자료. 자료 put. SNI 바인딩 put/delete | 열림. 주문 GET 없음 |

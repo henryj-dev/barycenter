@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -341,6 +341,25 @@ export function createDesk() {
     }
   };
 
+  const insertSourceIpHashPool = async (input: {
+    pool: string;
+    protocolClass: ProtocolClass;
+    backend: string;
+    host: string;
+    port: number;
+  }): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putSourceIpHashPoolWithBackendPatch(input));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const insertHttpListener = async (
     key: string,
     body: { bind: string; port: number; pool: string },
@@ -615,6 +634,7 @@ export function createDesk() {
     insertBackend,
     insertPool,
     insertHashPool,
+    insertSourceIpHashPool,
     insertHttpListener,
     insertTcpListener,
     insertPassthroughListener,

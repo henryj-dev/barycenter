@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -63,6 +63,25 @@ describe('설정에서 빼기', () => {
       pool: 'sticky', protocolClass: 'tcp', hashKey: 'request_uri',
       backend: 'a', host: '10.0.0.1', port: 80,
     })).toThrow(/remote_addr/);
+  });
+
+  it('source_ip_hash 풀은 hashKey 없이 첫 백엔드와 같이 넣는다', () => {
+    expect(putSourceIpHashPoolWithBackendPatch({
+      pool: 'byip', protocolClass: 'http', backend: 'a', host: '10.0.0.1', port: 80,
+    })).toEqual([
+      {
+        op: 'put', kind: 'pool', key: 'byip',
+        body: { protocolClass: 'http', algorithm: 'source_ip_hash' },
+      },
+      { op: 'put', kind: 'backend', key: 'a', body: { pool: 'byip', host: '10.0.0.1', port: 80, weight: 1 } },
+    ]);
+  });
+
+  it('source_ip_hash 패치에 hashKey 를 안 붙인다', () => {
+    const [op] = putSourceIpHashPoolWithBackendPatch({
+      pool: 'byip', protocolClass: 'tcp', backend: 'a', host: '10.0.0.1', port: 80,
+    });
+    expect(op?.body).not.toHaveProperty('hashKey');
   });
 
   it('HTTP 리스너를 넣는 패치는 put 한 줄이다 — tls 는 안 붙인다', () => {

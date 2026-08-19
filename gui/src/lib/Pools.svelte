@@ -4,8 +4,9 @@
   import AddBackend from './AddBackend.svelte';
   import AddPool from './AddPool.svelte';
   import AddHashPool from './AddHashPool.svelte';
+  import AddSourceIpHashPool from './AddSourceIpHashPool.svelte';
 
-  let { view, live, editing, withdraw, insert, openPool, openHashPool }: {
+  let { view, live, editing, withdraw, insert, openPool, openHashPool, openSourceIpHashPool }: {
     view: PoolsView;
     live: boolean;
     editing: boolean;
@@ -17,6 +18,9 @@
     openHashPool: (input: {
       pool: string; protocolClass: ProtocolClass; hashKey: string;
       backend: string; host: string; port: number;
+    }) => void;
+    openSourceIpHashPool: (input: {
+      pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
     }) => void;
   } = $props();
 
@@ -74,6 +78,7 @@
   {/if}
   <AddPool {editing} add={openPool} />
   <AddHashPool {editing} add={openHashPool} />
+  <AddSourceIpHashPool {editing} add={openSourceIpHashPool} />
 {/if}
 
 <style>

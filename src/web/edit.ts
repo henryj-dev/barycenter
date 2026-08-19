@@ -411,6 +411,42 @@ export function putHashPoolWithBackendPatch(input: {
   ];
 }
 
+export type PutSourceIpHashPoolOp = {
+  op: 'put';
+  kind: 'pool';
+  key: string;
+  body: { protocolClass: ProtocolClass; algorithm: 'source_ip_hash' };
+};
+
+/**
+ * source_ip_hash. hashKey 를 안 붙인다 — 키는 소스 IP 다.
+ * 첫 백엔드를 같이 넣는다.
+ */
+export function putSourceIpHashPoolWithBackendPatch(input: {
+  pool: string;
+  protocolClass: ProtocolClass;
+  backend: string;
+  host: string;
+  port: number;
+}): [PutSourceIpHashPoolOp, ...PutBackendOp[]] {
+  if (input.pool === '') throw new Error('풀 키가 비어 있다');
+  if (input.protocolClass !== 'http' && input.protocolClass !== 'tcp' && input.protocolClass !== 'udp') {
+    throw new Error('protocolClass 가 http|tcp|udp 가 아니다');
+  }
+  const backends = putBackendPatch(input.backend, {
+    pool: input.pool, host: input.host, port: input.port,
+  });
+  return [
+    {
+      op: 'put',
+      kind: 'pool',
+      key: input.pool,
+      body: { protocolClass: input.protocolClass, algorithm: 'source_ip_hash' },
+    },
+    ...backends,
+  ];
+}
+
 export type PutHttpRouteOp = {
   op: 'put';
   kind: 'httpRoute';
