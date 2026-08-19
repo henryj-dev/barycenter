@@ -16,8 +16,9 @@ git -C "$MAIN" config core.hooksPath scripts/git-hooks
 chmod +x "$MAIN/scripts/git-hooks/pre-commit" "$MAIN/scripts/git-hooks/commit-msg"
 
 echo "core.hooksPath = $(git -C "$MAIN" config core.hooksPath)"
-echo "설치됨: $MAIN/scripts/git-hooks/pre-commit"
+echo "설치됨: $MAIN/scripts/git-hooks/pre-commit  (에이전트 메인 커밋 차단, 사람은 통과)"
 echo "설치됨: $MAIN/scripts/git-hooks/commit-msg"
 echo
-echo "확인:  cd $MAIN && git commit --allow-empty -m probe   → 거부돼야 정상"
+echo "확인:  사람 셸에서 git commit --allow-empty -m probe   → 통과돼야 정상"
+echo "       에이전트 세션에서 같은 명령                      → 거부돼야 정상"
 echo "⚠️  --no-verify 로는 우회됩니다. 이건 경계가 아니라 위생 장치입니다."
