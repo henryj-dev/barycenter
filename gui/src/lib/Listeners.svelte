@@ -1,21 +1,27 @@
 <script lang="ts">
   import type { ListenersView } from '@web/listeners-view';
-  import type { UdpPreset } from '@web/edit';
+  import type { TlsVersion, UdpPreset } from '@web/edit';
   import AddListener from './AddListener.svelte';
   import AddTcpListener from './AddTcpListener.svelte';
   import AddUdpListener from './AddUdpListener.svelte';
+  import AddTlsPolicy from './AddTlsPolicy.svelte';
+  import AddHttpsListener from './AddHttpsListener.svelte';
 
-  let { view, live, editing, pools, tcpPools, udpPools, withdraw, insert, insertTcp, insertUdp }: {
+  let { view, live, editing, pools, tcpPools, udpPools, policies, certificates, withdraw, insert, insertTcp, insertUdp, insertPolicy, insertHttps }: {
     view: ListenersView;
     live: boolean;
     editing: boolean;
     pools: string[];
     tcpPools: string[];
     udpPools: string[];
+    policies: string[];
+    certificates: string[];
     withdraw: (key: string) => void;
     insert: (key: string, bind: string, port: number, pool: string) => void;
     insertTcp: (key: string, bind: string, port: number, pool: string) => void;
     insertUdp: (key: string, bind: string, port: number, pool: string, preset: UdpPreset) => void;
+    insertPolicy: (key: string, minVersion: TlsVersion) => void;
+    insertHttps: (key: string, bind: string, port: number, pool: string, policy: string, certificate: string) => void;
   } = $props();
 
   const label = (mark: string): string => {
@@ -29,7 +35,7 @@
   <p class="empty">연결하면 head 리스너가 여기 온다.</p>
 {:else}
   {#if view.rows.length === 0}
-    <p class="empty">리스너가 없다. 아래에서 HTTP · TCP · UDP 포트를 연다.</p>
+    <p class="empty">리스너가 없다. 아래에서 포트를 연다. HTTPS 는 자료 있는 인증서가 필요하다.</p>
   {:else}
     <ul class="ports">
       {#each view.rows as row (row.socket + row.key)}
@@ -48,6 +54,8 @@
   <AddListener {pools} {editing} add={insert} />
   <AddTcpListener pools={tcpPools} {editing} add={insertTcp} />
   <AddUdpListener pools={udpPools} {editing} add={insertUdp} />
+  <AddTlsPolicy {editing} add={insertPolicy} />
+  <AddHttpsListener {pools} {policies} {certificates} {editing} add={insertHttps} />
 {/if}
 
 <style>

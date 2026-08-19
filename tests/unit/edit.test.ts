@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putUdpListenerPatch } from '../../src/web/edit.js';
+import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch } from '../../src/web/edit.js';
 
 describe('설정에서 빼기', () => {
   it('백엔드를 빼는 패치는 delete 한 줄이다 — apply 가 아니다', () => {
@@ -89,6 +89,33 @@ describe('설정에서 빼기', () => {
       bind: '0.0.0.0', port: 53, pool: 'resolvers',
       preset: '없음' as 'dns',
     })).toThrow(/preset/);
+  });
+
+  it('TLS 정책은 minVersion 한 줄이다', () => {
+    expect(putTlsPolicyPatch('modern')).toEqual([
+      { op: 'put', kind: 'tlsPolicy', key: 'modern', body: { minVersion: '1.2' } },
+    ]);
+  });
+
+  it('HTTPS 리스너를 넣는 패치는 tls 결박을 붙인다 — 평문 443 이 아니다', () => {
+    expect(putHttpsListenerPatch('front-tls', {
+      bind: '0.0.0.0', port: 443, pool: 'app', policy: 'modern', certificate: 'cert-a',
+    })).toEqual([
+      {
+        op: 'put', kind: 'listener', key: 'front-tls',
+        body: {
+          protocol: 'https', bind: '0.0.0.0', port: 443, enabled: true,
+          http: { defaultAction: { pool: 'app' } },
+          tls: { policy: 'modern', defaultCertificate: 'cert-a' },
+        },
+      },
+    ]);
+  });
+
+  it('인증서가 비면 HTTPS 패치를 만들지 않는다', () => {
+    expect(() => putHttpsListenerPatch('front-tls', {
+      bind: '0.0.0.0', port: 443, pool: 'app', policy: 'modern', certificate: '',
+    })).toThrow(/인증서/);
   });
 
   it('HTTP 라우트를 넣는 패치는 put 한 줄이다 — proxy 이고 websocket 은 끈다', () => {

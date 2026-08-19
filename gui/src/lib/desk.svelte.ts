@@ -16,7 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
-import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type UdpPreset } from '@web/edit';
+import { deletePatch, putBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRoutePatch, putPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type TlsVersion, type UdpPreset } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -43,6 +43,7 @@ export function createDesk() {
   let pools = $state<PoolsView>({ rows: [] });
   let routes = $state<RoutesView>({ order: [], warnings: [], errors: [], passthrough: [] });
   let certs = $state<CertsView>({ rows: [] });
+  let policies = $state<string[]>([]);
   let status = $state<StatusView>(viewOfStatus({}));
   let applying = $state(false);
   let editing = $state(false);
@@ -109,6 +110,19 @@ export function createDesk() {
     await refreshPools();
     await refreshRoutes();
     await refreshCerts();
+    await refreshPolicies();
+  };
+
+  const refreshPolicies = async (): Promise<void> => {
+    const r = await fetch('/api/v1/tls-policies', { headers: auth() });
+    if (!r.ok) {
+      error = `tls-policies ${r.status}`;
+      policies = [];
+      return;
+    }
+    policies = asList<{ key?: unknown }>(await r.json())
+      .map((p) => p.key)
+      .filter((k): k is string => typeof k === 'string' && k !== '');
   };
 
   const refreshCerts = async (): Promise<void> => {
@@ -320,6 +334,35 @@ export function createDesk() {
     }
   };
 
+  const insertTlsPolicy = async (key: string, minVersion?: TlsVersion): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putTlsPolicyPatch(key, minVersion === undefined ? {} : { minVersion }));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
+  const insertHttpsListener = async (
+    key: string,
+    body: { bind: string; port: number; pool: string; policy: string; certificate: string },
+  ): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(putHttpsListenerPatch(key, body));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const insertUdpListener = async (
     key: string,
     body: { bind: string; port: number; pool: string; preset: UdpPreset },
@@ -384,6 +427,7 @@ export function createDesk() {
     get pools() { return pools; },
     get routes() { return routes; },
     get certs() { return certs; },
+    get policies() { return policies; },
     get status() { return status; },
     get applying() { return applying; },
     get editing() { return editing; },
@@ -395,6 +439,8 @@ export function createDesk() {
     insertHttpListener,
     insertTcpListener,
     insertUdpListener,
+    insertTlsPolicy,
+    insertHttpsListener,
     insertHttpRoute,
     disconnect() { stop?.(); },
   };

@@ -969,6 +969,8 @@ S11 하네스의 교훈이다.
 | C5.26 | GUI HTTP 라우트 put | proxy · websocket=false. 빈 호스트는 패치를 안 만든다 (`tests/unit/edit.test.ts`) |
 | C5.27 | GUI TCP 리스너 put | protocol=tcp · defaultPool. http/tls/udp 를 안 붙인다 (`tests/unit/edit.test.ts`) |
 | C5.28 | GUI UDP 리스너 put | protocol=udp · defaultPool · named preset. 모르는 preset 은 패치를 안 만든다 |
+| C5.29 | GUI TLS 정책 put | minVersion 기본 1.2. HSTS 안 켬 (`tests/unit/edit.test.ts`) |
+| C5.30 | GUI HTTPS 리스너 put | tls 결박 필수. 빈 인증서는 패치를 안 만든다 |
 
 ---
 

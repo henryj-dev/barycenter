@@ -71,7 +71,7 @@
     </nav>
     {#if page === 'listeners'}
       <h1>열려 있는 포트</h1>
-      <p class="lede">head 모델이다. HTTP·TCP·UDP 포트를 여는 것은 commit 이다. https 는 아직 폼이 없다.</p>
+      <p class="lede">head 모델이다. 포트를 여는 것은 commit 이다. HTTPS 는 자료 있는 인증서와 TLS 정책이 필요하다.</p>
     {:else if page === 'pools'}
       <h1>풀이 받는 것</h1>
       <p class="lede">빈 풀은 저장되지 않는다. 풀을 열 때 첫 백엔드를 같이 넣는다.</p>
@@ -135,6 +135,14 @@
       }}
       insertUdp={(key, bind, port, pool, preset) => {
         void desk.insertUdpListener(key, { bind, port, pool, preset }).then((ok) => { if (ok) go('/'); });
+      }}
+      policies={desk.policies}
+      certificates={desk.certs.rows.filter((c) => c.hasMaterial).map((c) => c.key)}
+      insertPolicy={(key, minVersion) => {
+        void desk.insertTlsPolicy(key, minVersion).then((ok) => { if (ok) go('/'); });
+      }}
+      insertHttps={(key, bind, port, pool, policy, certificate) => {
+        void desk.insertHttpsListener(key, { bind, port, pool, policy, certificate }).then((ok) => { if (ok) go('/'); });
       }}
     />
   {:else if page === 'pools'}

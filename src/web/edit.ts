@@ -48,7 +48,7 @@ export type PutHttpListenerOp = {
   };
 };
 
-/** HTTP 만. https 는 tls 가 필수라 지금 폼이 못 채운다. UDP 는 preset 이 필요하다. */
+/** HTTP 만. HTTPS 는 tls 결박이 따로 있다. */
 export function putHttpListenerPatch(
   key: string,
   body: { bind: string; port: number; pool: string },
@@ -158,6 +158,74 @@ export function putUdpListenerPatch(
       enabled: true,
       defaultPool: body.pool,
       udp: { preset: body.preset },
+    },
+  }];
+}
+
+export type TlsVersion = '1.2' | '1.3';
+
+export type PutTlsPolicyOp = {
+  op: 'put';
+  kind: 'tlsPolicy';
+  key: string;
+  body: { minVersion: TlsVersion };
+};
+
+/** minVersion 만. cipherPolicy 는 안 적으면 intermediate-2026. HSTS 는 안 켠다. */
+export function putTlsPolicyPatch(
+  key: string,
+  body: { minVersion?: TlsVersion } = {},
+): PutTlsPolicyOp[] {
+  if (key === '') throw new Error('키가 비어 있다');
+  const minVersion = body.minVersion ?? '1.2';
+  if (minVersion !== '1.2' && minVersion !== '1.3') {
+    throw new Error('minVersion 이 1.2|1.3 이 아니다');
+  }
+  return [{ op: 'put', kind: 'tlsPolicy', key, body: { minVersion } }];
+}
+
+export type PutHttpsListenerOp = {
+  op: 'put';
+  kind: 'listener';
+  key: string;
+  body: {
+    protocol: 'https';
+    bind: string;
+    port: number;
+    enabled: true;
+    http: { defaultAction: { pool: string } };
+    tls: { policy: string; defaultCertificate: string };
+  };
+};
+
+/**
+ * HTTPS. tls.policy 와 tls.defaultCertificate 가 필수다.
+ * 자료 없는 인증서는 검증기가 막는다 — 여기서 자료를 지어내지 않는다.
+ * http2 는 안 적는다 (기본이 켠다).
+ */
+export function putHttpsListenerPatch(
+  key: string,
+  body: { bind: string; port: number; pool: string; policy: string; certificate: string },
+): PutHttpsListenerOp[] {
+  if (key === '') throw new Error('키가 비어 있다');
+  if (body.bind === '') throw new Error('바인드가 비어 있다');
+  if (body.pool === '') throw new Error('풀이 비어 있다');
+  if (body.policy === '') throw new Error('정책이 비어 있다');
+  if (body.certificate === '') throw new Error('인증서가 비어 있다');
+  if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) {
+    throw new Error('포트가 1–65535 정수가 아니다');
+  }
+  return [{
+    op: 'put',
+    kind: 'listener',
+    key,
+    body: {
+      protocol: 'https',
+      bind: body.bind,
+      port: body.port,
+      enabled: true,
+      http: { defaultAction: { pool: body.pool } },
+      tls: { policy: body.policy, defaultCertificate: body.certificate },
     },
   }];
 }
