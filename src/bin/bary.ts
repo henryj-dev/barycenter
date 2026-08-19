@@ -2,12 +2,12 @@
 /**
  * `bary` — 컨트롤 플레인 CLI (DESIGN.md §5.6)
  *
- * **v0.4 의 전체 CLI 가 아니다.** 리스너·풀·HTTP proxy/redirect 라우트 create 가 있다. 대화형 편집은 없다.
+ * **v0.4 의 전체 CLI 가 아니다.** 리스너·풀·HTTP 라우트 create 가 있다. 대화형 편집은 없다.
  * export/import 와 나뉜 changeset 단계는 있다. `apply <파일>` 은 단축이다.
  *
  *   bary listener create --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]
  *   bary pool create --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]
- *   bary route create --name --listener --host --pool|--to [--status] [--path-prefix]
+ *   bary route create --name --listener --host --pool|--to|--reject [--status] [--path-prefix]
  *   bary changeset new|patch|plan|show
  *   bary commit --plan <id>
  *   bary apply --plan <id>
@@ -82,7 +82,7 @@ const usage = (): never => {
   bary get <무엇>                listeners | pools | backends | routes | model | rendered
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
-  bary route create              --name --listener --host --pool|--to [--status 301|302|307|308] [--path-prefix]. proxy 또는 redirect. apply 는 아니다
+  bary route create              --name --listener --host --pool|--to|--reject [--status] [--path-prefix]. proxy·redirect·reject. apply 는 아니다
   bary changeset new             changeset 을 연다
   bary changeset patch <id> <파일.json>
   bary changeset plan <id>       영향만 본다 (커밋하지 않는다)
@@ -234,7 +234,8 @@ async function main(): Promise<void> {
       const hosts = flag(argv, '--host') ?? usage();
       const pool = flag(argv, '--pool');
       const to = flag(argv, '--to');
-      if ((pool === undefined || pool === '') && (to === undefined || to === '')) usage();
+      const reject = argv.includes('--reject');
+      if (!reject && (pool === undefined || pool === '') && (to === undefined || to === '')) usage();
       const status = flag(argv, '--status');
       const pathPrefix = flag(argv, '--path-prefix');
       try {
@@ -243,6 +244,7 @@ async function main(): Promise<void> {
           ...(pool === undefined ? {} : { pool }),
           ...(to === undefined ? {} : { to }),
           ...(status === undefined ? {} : { status }),
+          ...(reject ? { reject: true } : {}),
           ...(pathPrefix === undefined ? {} : { pathPrefix }),
         });
         console.error(`route ${name} committed r${out.revision}`);

@@ -1,5 +1,5 @@
 /**
- * CLI HTTP 라우트 create — proxy 또는 redirect. apply 가 아니다.
+ * CLI HTTP 라우트 create — proxy · redirect · reject. apply 가 아니다.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -54,6 +54,23 @@ describe('route create 패치', () => {
     }]);
   });
 
+  it('HTTP reject 는 403·404·444 다. to·pool 이 없다', () => {
+    const patch = routeCreatePatch({
+      name: 'deny', listener: 'web', hosts: 'bad.example.com', reject: true,
+    });
+    expect(patch).toEqual([{
+      op: 'put',
+      kind: 'httpRoute',
+      key: 'deny',
+      body: {
+        listener: 'web',
+        hosts: ['bad.example.com'],
+        priority: 0,
+        action: { kind: 'reject', status: 403 },
+      },
+    }]);
+  });
+
   it('빈 호스트·대상·모르는 status 와 pool+to 는 패치를 안 만든다', () => {
     expect(routeCreatePatch({
       name: 'api', listener: 'web', hosts: '  ,  ', pool: 'app',
@@ -66,6 +83,12 @@ describe('route create 패치', () => {
     })).toBeUndefined();
     expect(routeCreatePatch({
       name: 'old', listener: 'web', hosts: 'old.example.com', pool: 'app', to: 'https://x',
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'deny', listener: 'web', hosts: 'bad.example.com', reject: true, status: '302',
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'deny', listener: 'web', hosts: 'bad.example.com', reject: true, pool: 'app',
     })).toBeUndefined();
   });
 });
