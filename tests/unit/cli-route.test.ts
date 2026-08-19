@@ -91,6 +91,79 @@ describe('route create 패치', () => {
       name: 'deny', listener: 'web', hosts: 'bad.example.com', reject: true, pool: 'app',
     })).toBeUndefined();
   });
+
+  it('websocket 을 켜면 proxy 에 true 가 실린다', () => {
+    const patch = routeCreatePatch({
+      name: 'api', listener: 'web', hosts: 'api.example.com', pool: 'app', websocket: true,
+    });
+    expect(patch).toEqual([{
+      op: 'put',
+      kind: 'httpRoute',
+      key: 'api',
+      body: {
+        listener: 'web',
+        hosts: ['api.example.com'],
+        priority: 0,
+        action: { kind: 'proxy', pool: 'app', websocket: true },
+      },
+    }]);
+  });
+
+  it('패스스루 라우트는 SNI → 풀이다. websocket·path 가 없다', () => {
+    const patch = routeCreatePatch({
+      name: 'edge', listener: 'pt', snis: 'a.example.com', pool: 'tcp-a',
+    });
+    expect(patch).toEqual([{
+      op: 'put',
+      kind: 'passthroughRoute',
+      key: 'edge',
+      body: {
+        listener: 'pt',
+        snis: ['a.example.com'],
+        priority: 0,
+        action: { kind: 'proxy', pool: 'tcp-a' },
+      },
+    }]);
+    expect(JSON.stringify(patch)).not.toContain('websocket');
+    expect(JSON.stringify(patch)).not.toContain('path');
+  });
+
+  it('패스스루 reject 는 SNI 만 끊는다 — status 가 없다', () => {
+    const patch = routeCreatePatch({
+      name: 'edge', listener: 'pt', snis: 'bad.example.com', reject: true,
+    });
+    expect(patch).toEqual([{
+      op: 'put',
+      kind: 'passthroughRoute',
+      key: 'edge',
+      body: {
+        listener: 'pt',
+        snis: ['bad.example.com'],
+        priority: 0,
+        action: { kind: 'reject' },
+      },
+    }]);
+    expect(JSON.stringify(patch)).not.toContain('status');
+    expect(JSON.stringify(patch)).not.toContain('pool');
+  });
+
+  it('redirect·reject·패스스루에 websocket 과 빈 SNI 는 패치를 안 만든다', () => {
+    expect(routeCreatePatch({
+      name: 'old', listener: 'web', hosts: 'old.example.com', to: 'https://x', websocket: true,
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'deny', listener: 'web', hosts: 'bad.example.com', reject: true, websocket: true,
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'edge', listener: 'pt', snis: 'a.example.com', pool: 'tcp-a', websocket: true,
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'edge', listener: 'pt', snis: '  ,  ', pool: 'tcp-a',
+    })).toBeUndefined();
+    expect(routeCreatePatch({
+      name: 'edge', listener: 'pt', snis: 'a.example.com', reject: true, pool: 'tcp-a',
+    })).toBeUndefined();
+  });
 });
 
 describe('route create 단계', () => {

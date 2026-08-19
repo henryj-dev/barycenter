@@ -81,6 +81,18 @@ export async function commitByPlan(http: Http, planId: string): Promise<{ revisi
   ) as { revision: string };
 }
 
+/** changeset new → patch → plan → commit. apply 는 안 한다. */
+export async function commitPatch(
+  http: Http,
+  patch: unknown[],
+): Promise<{ revision: string; planId: string }> {
+  const cs = await changesetNew(http);
+  await changesetPatch(http, cs.id, patch);
+  const plan = await changesetPlan(http, cs.id);
+  const committed = await commitByPlan(http, plan.id);
+  return { revision: committed.revision, planId: plan.id };
+}
+
 export async function applyByPlan(http: Http, planId: string): Promise<{
   phase: string;
   generation?: string;

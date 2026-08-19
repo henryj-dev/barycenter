@@ -996,6 +996,13 @@ S11 하네스의 교훈이다.
 | C5.53 | CLI HTTP 라우트 create | proxy · websocket=false. 빈 호스트는 패치를 안 만든다 (`tests/unit/cli-route.test.ts`) |
 | C5.54 | CLI HTTP redirect create | to·status. 기본 302. pool 없음. 모르는 상태는 패치를 안 만든다 |
 | C5.55 | CLI HTTP reject create | status 403·404·444. 기본 403. to·pool 없음. 모르는 상태는 패치를 안 만든다 |
+| C5.56 | CLI HTTP proxy websocket | 안 적으면 false. true 를 적으면 Upgrade 헤더를 낸다. redirect·reject·패스스루에는 안 붙인다 |
+| C5.57 | CLI 패스스루 라우트 create | SNI → TCP 풀. websocket·path 없음. 빈 SNI 는 패치를 안 만든다 (`tests/unit/cli-route.test.ts`) |
+| C5.58 | CLI 패스스루 reject create | SNI 만 끊는다. HTTP status·pool 없음 |
+| C5.59 | CLI 백엔드 put/delete | put 한 줄 · delete 한 줄. 포트 0 은 패치를 안 만든다 (`tests/unit/cli-holes.test.ts`) |
+| C5.60 | CLI TLS 정책 put | minVersion 기본 1.2. HSTS 안 켬 |
+| C5.61 | CLI 인증서 put | 자료 POST 뒤 참조·digest 만. 개인키·fullchain 이 패치에 없다 |
+| C5.62 | CLI SNI 바인딩 put | listener·hosts·certificate. override 없음. 빈 호스트는 패치를 안 만든다 |
 
 ---
 
