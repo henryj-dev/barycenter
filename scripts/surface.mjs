@@ -14,6 +14,8 @@
  *   node scripts/surface.mjs --check    SURFACE.txt 와 대조한다 (다르면 exit 1)
  *   node scripts/surface.mjs --write    계약을 옮겼다 — 기준을 갱신하고 카운터를 0 으로
  *   node scripts/surface.mjs --round    검수 한 회차가 표면을 안 건드리고 지나갔다
+ *   node scripts/surface.mjs --freeze   3 회차 이상이면 A 표면을 동결한다
+ *   node scripts/surface.mjs --freeze-check  동결 상태와 현재 표면을 대조한다
  *
  * 주석은 뺀다. 문서를 고쳤다고 계약이 움직인 것은 아니다.
  *
@@ -29,7 +31,8 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const BASELINE = join(ROOT, 'SURFACE.txt');
+const BASELINE = process.env.BARYCENTER_SURFACE_BASELINE ?? join(ROOT, 'SURFACE.txt');
+const FREEZE_ROUNDS = 3;
 
 /** tsconfig 를 그대로 쓴다 — 표면은 컴파일러 설정에 따라 달라진다 (`exactOptionalPropertyTypes` 등). */
 function compilerOptions() {
@@ -184,41 +187,81 @@ try {
       return undefined;
     }
     const at = raw.indexOf(MARK);
+    if (at < 0) return undefined;
     const header = raw.slice(0, at);
-    const rounds = /동결 카운터: (\d+)/.exec(header)?.[1];
-    return { body: raw.slice(at + MARK.length), rounds: rounds === undefined ? 0 : Number(rounds) };
+    const lines = header.split('\n');
+    const exactlyOne = (pattern) => {
+      const matches = lines.map((line) => pattern.exec(line)).filter((match) => match !== null);
+      return matches.length === 1 ? matches[0] : undefined;
+    };
+    const rounds = exactlyOne(/^# 동결 카운터: (\d+) 회차 \(표면이 안 움직인 검수 회차 수\)$/)?.[1];
+    const claimed = exactlyOne(/^# (\d+) 심볼 · (sha256:[0-9a-f]{64})$/);
+    const freeze = exactlyOne(/^# A 동결: (선언|미선언) \(선언 기준 (\d+) 회차\)$/);
+    if (rounds === undefined || claimed === undefined || freeze === undefined
+      || Number(freeze[2]) !== FREEZE_ROUNDS) return undefined;
+    return {
+      body: raw.slice(at + MARK.length), rounds: Number(rounds), frozen: freeze[1] === '선언',
+      claimedSymbols: claimed === null ? undefined : Number(claimed[1]), claimedDigest: claimed?.[2],
+    };
   };
-  const stamp = (rounds) =>
+  const stamp = (rounds, frozen = false) =>
     `# barycenter v0.1 공개 표면\n`
     + `# ${symbols} 심볼 · ${digest}\n`
     + `# 동결 카운터: ${rounds} 회차 (표면이 안 움직인 검수 회차 수)\n`
+    + `# A 동결: ${frozen ? '선언' : '미선언'} (선언 기준 ${FREEZE_ROUNDS} 회차)\n`
     + `#\n`
     + `# 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.\n`
     + `# 13차 검수가 준 동결 기준: 여러 적대적 회차 동안 이 파일이 변하지 않을 것.\n`
     + `# 계약이 움직이면 카운터는 0 부터 다시 센다.\n\n${body}`;
 
   const previous = readBaseline();
+  const baselineMatches = previous !== undefined && previous.body === body
+    && previous.claimedSymbols === symbols && previous.claimedDigest === digest;
 
   if (mode === '--write') {
     // 계약을 옮겼다. 카운터는 0 부터 다시 센다.
+    if (previous?.frozen === true) {
+      console.error('A 표면은 이미 동결됐다 — 해제·버전 전환 결정 없이 기준을 옮길 수 없다');
+      process.exit(1);
+    }
     writeFileSync(BASELINE, stamp(0));
     console.log(`SURFACE.txt 를 갱신했다 — ${symbols} 심볼 · ${digest} · 동결 카운터 0 으로 되돌림`);
   } else if (mode === '--round') {
     // 검수 한 회차가 표면을 안 건드리고 지나갔다.
-    if (previous === undefined || previous.body !== body) {
+    if (!baselineMatches) {
       console.error('표면이 움직인 상태다 — 먼저 --check 로 확인한다');
       process.exit(1);
     }
-    writeFileSync(BASELINE, stamp(previous.rounds + 1));
+    writeFileSync(BASELINE, stamp(previous.rounds + 1, previous.frozen));
     console.log(`동결 카운터: ${previous.rounds} → ${previous.rounds + 1} 회차`);
+  } else if (mode === '--freeze') {
+    if (!baselineMatches) {
+      console.error('표면이 기준과 다르다 — 동결할 수 없다');
+      process.exit(1);
+    }
+    if (previous.rounds < FREEZE_ROUNDS) {
+      console.error(`동결 카운터 ${previous.rounds} 회차 — 선언 기준 ${FREEZE_ROUNDS} 회차에 못 미친다`);
+      process.exit(1);
+    }
+    writeFileSync(BASELINE, stamp(previous.rounds, true));
+    console.log(`A 타입·DP ABI 동결 선언 — ${symbols} 심볼 · ${digest} · ${previous.rounds} 회차`);
+  } else if (mode === '--freeze-check') {
+    if (!baselineMatches || !previous.frozen || previous.rounds < FREEZE_ROUNDS) {
+      console.error('A 타입·DP ABI 동결 게이트 실패');
+      process.exit(1);
+    }
+    console.log(`ok  A freeze  ${symbols} symbols · ${previous.rounds} rounds`);
   } else if (mode === '--check') {
     if (previous === undefined) {
       console.error('SURFACE.txt 가 없다 — `node scripts/surface.mjs --write` 로 기준을 만든다');
       process.exit(1);
     }
-    if (previous.body === body) {
-      console.log(`표면 그대로 — ${symbols} 심볼 · ${digest} · 동결 카운터 ${previous.rounds} 회차`);
+    if (baselineMatches) {
+      console.log(`표면 그대로 — ${symbols} 심볼 · ${digest} · 동결 카운터 ${previous.rounds} 회차 · A ${previous.frozen ? '동결' : '미선언'}`);
     } else {
+      if (previous.claimedSymbols !== symbols || previous.claimedDigest !== digest) {
+        console.error(`표면 헤더가 다르다 — 기준 ${previous.claimedSymbols ?? '?'} 심볼 · ${previous.claimedDigest ?? '?'} / 현재 ${symbols} 심볼 · ${digest}`);
+      }
       const before = previous.body.split('\n');
       const after = body.split('\n');
       const moved = after.filter((l) => l.startsWith('── ') && !before.includes(l));
@@ -234,7 +277,7 @@ try {
       process.exit(1);
     }
   } else {
-    process.stdout.write(stamp(previous?.rounds ?? 0));
+    process.stdout.write(stamp(previous?.rounds ?? 0, previous?.frozen ?? false));
   }
 } finally {
   if (dtsDir !== undefined) rmSync(dtsDir, { recursive: true, force: true });

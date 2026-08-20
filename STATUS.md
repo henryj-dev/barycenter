@@ -31,7 +31,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 |---|---|---|
 | 모델 | 리스너·풀·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩. 판별 유니온 | h3, `least_conn`, WAF, `on_nxdomain`/`on_timeout` |
 | 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백 | — |
-| 동결 | 구현된 OpenAPI (`SURFACE-API.json`) · DDL (`SURFACE-DDL.sql`) | 미구현 계약 |
+| 동결 | A 타입·DP ABI (`SURFACE.txt`) · 구현된 OpenAPI (`SURFACE-API.json`) · DDL (`SURFACE-DDL.sql`) | 미구현 계약 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 본문 프로브(HTTP 풀) · TCP connect(L4), SSE `health`, 드레인 제외, peer inflight 관측 | — |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
@@ -83,8 +83,8 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 스파이크 | `spike/*/run.sh` | 91 |
 | 저장소 | `npm run test:store` | 107 |
 
-스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 B(구현된 API·DDL) 드리프트를
-막는다. A 표면 안정 회차는 `SURFACE.txt` 카운터다.
+스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
+B(구현된 API·DDL) 드리프트를 둘 다 막는다. A 동결 근거는 `SURFACE.txt` 의 3 회차다.
 
 ---
 
@@ -101,9 +101,9 @@ HTTP 풀은 GET 본문으로 판정한다. 인증서·TLS 정책은 뺀다. Back
 `docs/runbook-spof.md` 다. RTO/RPO 는 ADR-SPOF 가 v1 운영 정책으로 확정한다
 (랩 SLA 아님). OIDC 는 ID Token Bearer 와 Authorization Code 로그인이다.
 
-로드맵 잔여.
-
-- A 표면 안정 회차 (동결 카운터 2. 더 쌓을 수 있다)
+로드맵 잔여에 A 표면은 없다. 신원 비교 census 게이트가 닫힌 뒤 연속
+2 회 런타임 반례 0 조건을 충족했고, 추가 적대적 검수까지 표면 무변동이어서
+**3 회차·111 심볼**로 A 타입·DP ABI 동결을 선언했다.
 
 스파이크 — 기능 축소 등급. 게이트에 넣지 않는 것은 넣지 않는다.
 

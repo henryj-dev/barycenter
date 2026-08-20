@@ -2059,6 +2059,12 @@ A 는 다르다. 렌더러는 61 개의 엔진 사실 위에 서 있고, DP ABI 
 `tests/conformance/v01-surface.test.ts` 가 깨진다. 6차 검수가 "뺐다고 적은 기능이 공개
 타입에 남아 있다" 고 지적했는데, 그건 표면이 코드로 정의돼 있지 않아서 생긴 일이다.
 
+> **A 동결 (2026-08-20).** 신원 비교 부류 census 게이트가 닫힌 뒤 연속 2 회
+> 커밋된 상·중급 런타임 반례가 없었고, 추가 적대적 검수에서도
+> `src/index.ts` 폐포가 변하지 않았다. `SURFACE.txt` 의 111 심볼·연속 3 회차를
+> 동결 선언의 정본으로 삼고, `scripts/surface.mjs --freeze-check` 로 게이트한다.
+> S14·S15·S20 및 `least_conn` 제외는 그대로이며 A 표면을 다시 열지 않는다.
+
 **B 로 미루는 것.** REST 서버 · OpenAPI · PG migration/DDL · `ConfigRevision`/changeset
 sealing · `AuditSink`/`Notifier`/`AuthProvider` · §4 의 `ResourceMeta`. 이것들은 v0.1
 **출시**에는 필요하지만 지금 고정할 근거가 없다.

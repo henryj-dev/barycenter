@@ -15,7 +15,7 @@
  * 뮤테이션이 잴 값이 아니다.
  */
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,17 +35,23 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 function makeWorktree() {
   const dir = mkdtempSync(join(tmpdir(), 'barycenter-mutate-'));
   const tree = join(dir, 'tree');
-  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', tree, 'HEAD'], { cwd: REPO });
+  // 훅이 소유하지 않은 `git worktree add` 를 거부하는 프로젝트에서도 돈다.
+  // 변이 스위프은 git 메타데이터가 필요 없으므로 읽기 전용 스냅샷이 더 작은 경계다.
+  cpSync(REPO, tree, {
+    recursive: true,
+    filter: (source) => {
+      const relative = source.slice(REPO.length + 1);
+      return relative !== '.git' && !relative.startsWith('.git/')
+        && relative !== 'node_modules' && !relative.startsWith('node_modules/')
+        && relative !== '.omc' && !relative.startsWith('.omc/')
+        && relative !== '.claude/worktrees' && !relative.startsWith('.claude/worktrees/');
+    },
+  });
   symlinkSync(join(REPO, 'node_modules'), join(tree, 'node_modules'), 'dir');
   return { dir, tree };
 }
 
 function dropWorktree(w) {
-  try {
-    execFileSync('git', ['worktree', 'remove', '--force', w.tree], { cwd: REPO });
-  } catch {
-    // 이미 사라졌으면 그만이다.
-  }
   rmSync(w.dir, { recursive: true, force: true });
 }
 
@@ -163,6 +169,7 @@ const say = (line) => {
   }
 };
 
+mkdirSync(dirname(LOG), { recursive: true });
 writeFileSync(LOG, '');
 say(`뮤턴트 ${all.length} 개 생성 · ${chosen.length} 개 실행 (seed ${seed})`);
 say('');

@@ -82,11 +82,18 @@
 node scripts/surface.mjs --check     계약이 움직였나
 node scripts/surface.mjs --write     옮겼다 — 카운터 0 으로 리셋
 node scripts/surface.mjs --round     한 회차가 표면을 안 건드리고 지나갔다
+node scripts/surface.mjs --freeze    3 회차 이상에서 A 동결을 선언한다
+node scripts/surface.mjs --freeze-check  동결 선언·카운터·현재 표면을 대조한다
 ```
 
 13차가 준 동결 기준이 "여러 적대적 회차 동안 표면이 안 변할 것" 이다. 내부만 고쳐서
 반례가 사라지면 카운터가 오르고, 계약을 옮겨야 하면 0 으로 돌아간다. **`--write` 는
 가볍게 누르지 않는다.**
+
+선언 임계값은 **3 회차**다. 42차에 정한 본체 런타임 종료 조건(신원 비교
+부류 게이트 후 상·중급 반례 0 연속 2 회)에 추가 적대적 무변동 회차 하나를
+더한 값이다. 동결 후 `--write` 는 실패한다. 표면을 다시 열려면 버전 전환과 해제
+결정을 먼저 기록해야 한다.
 
 ### 믿을 수 없는 상태를 새로 만들면, 판정 자리를 **전부** 찾아야 한다
 
@@ -358,7 +365,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | 묶음 | 명령 | 결과 |
 |---|---|---|
 | 단위 | `npm test` | **288 PASS** |
-| 표면 (계약 고정) | `node scripts/surface.mjs --check` | **86 심볼 고정** — 카운터는 `SURFACE.txt` 가 답한다 |
+| 표면 (계약 고정) | `node scripts/surface.mjs --freeze-check` | **111 심볼·3 회차 A 동결** — `SURFACE.txt` 가 답한다 |
 | conformance | `npm run test:conformance` | **391 PASS** — 5~33차 반례 · 크래시 지점 매핑 · 세대 materializer · **DESIGN↔ABI 대조**. 단위와 합쳐 679 건이 전부 **불변식 테스트이기도 하다** |
 | 골든 (`nginx -t` + 런타임 프로브) | `npm run test:golden` | **16 PASS** — TLS 종단 4건 포함 |
 | **e2e (실제 nginx)** | `npm run test:e2e` | **60 PASS** — 저널이 실제 nginx 를 수렴시킨다 (http·stream 두 평면). 그중 6건은 **DP 컨테이너 안에서** `FsEffects` 까지 실물로 돈다 |
@@ -394,10 +401,9 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 
 | ❌ | S2 S3 S4 S6 S9 S10 S14 S15 · **S20**(HTTP/3) | 미착수 — 전부 **기능 축소** 등급이다 (떨어져도 설계를 다시 하지 않는다) |
 
-> **block 등급 셋(S8·S11·S12)이 전부 열렸다.** 그래도 스위트가 green 인 것과 게이트가
-> 열리는 것은 다르다 — `./scripts/verify.sh` 가 둘을 나눠서 출력한다. 지금 A 를 막는 것은
-> 구멍이 아니라 **표면이 안 변한 회차가 없다** 는 것이다 (v0.6 에서 카운터가 0 으로
-> 되돌아갔다).
+> **block 등급 셋(S8·S11·S12)이 전부 열렸다.** 스위트 green 과 동결 게이트는
+> 여전히 다른 물음이다. 현재 A 는 111 심볼·3 회차로 동결됐고,
+> `./scripts/verify.sh --freeze-gate` 가 A 표면과 B OpenAPI·DDL 드리프트를 둘 다 막는다.
 
 ---
 
