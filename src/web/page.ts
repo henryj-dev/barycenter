@@ -1,10 +1,10 @@
 /**
- * GUI 자리. Kit 여덟 경로가 정본이다. pageOf 는 그 이름을 읽는다.
+ * GUI 자리. Kit 경로가 정본이다. pageOf 는 그 이름을 읽는다.
  */
 export type Place =
-  | 'impact' | 'listeners' | 'pools' | 'routes' | 'certificates' | 'status' | 'rendered' | 'audit';
+  | 'impact' | 'listeners' | 'pools' | 'routes' | 'certificates' | 'status' | 'rendered' | 'audit' | 'login';
 
-/** SvelteKit 이 프리렌더하는 여덟 자리. 한 index.html 폴백이 아니다. */
+/** SvelteKit 이 프리렌더하는 자리. 한 index.html 폴백이 아니다. */
 export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'impact', path: '/' },
   { place: 'listeners', path: '/listeners' },
@@ -14,6 +14,7 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'status', path: '/status' },
   { place: 'rendered', path: '/rendered' },
   { place: 'audit', path: '/audit' },
+  { place: 'login', path: '/login' },
 ];
 
 export function pageOf(pathname: string): Place {
@@ -24,5 +25,6 @@ export function pageOf(pathname: string): Place {
   if (pathname === '/status' || pathname.startsWith('/status/')) return 'status';
   if (pathname === '/rendered' || pathname.startsWith('/rendered/')) return 'rendered';
   if (pathname === '/audit' || pathname.startsWith('/audit/')) return 'audit';
+  if (pathname === '/login' || pathname.startsWith('/login/')) return 'login';
   return 'impact';
 }

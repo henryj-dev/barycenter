@@ -25,6 +25,7 @@ import { createApi } from '../api/server.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore } from '../dp/secrets.js';
 import { TokenAuth, type OidcSettings, type TokenSpec } from '../api/auth.js';
+import type { OidcRpSettings } from '../api/oidc-code.js';
 import { render } from '../conf/render.js';
 import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
@@ -502,6 +503,22 @@ export async function main(): Promise<void> {
     ? { issuer: oidcIss, audience: oidcAud, key: oidcKey }
     : undefined;
   const auth = oidc === undefined ? new TokenAuth(loadTokens()) : new TokenAuth(loadTokens(), oidc);
+  const oidcAuthz = env('BARY_OIDC_AUTHORIZATION', '');
+  const oidcToken = env('BARY_OIDC_TOKEN', '');
+  const oidcClient = env('BARY_OIDC_CLIENT_ID', '');
+  const oidcRedirect = env('BARY_OIDC_REDIRECT_URI', '');
+  const oidcSecret = env('BARY_OIDC_CLIENT_SECRET', '');
+  const oidcRp: OidcRpSettings | undefined = oidc !== undefined
+    && oidcAuthz !== '' && oidcToken !== '' && oidcClient !== '' && oidcRedirect !== ''
+    ? {
+        ...oidc,
+        authorizationEndpoint: oidcAuthz,
+        tokenEndpoint: oidcToken,
+        clientId: oidcClient,
+        redirectUri: oidcRedirect,
+        ...(oidcSecret === '' ? {} : { clientSecret: oidcSecret }),
+      }
+    : undefined;
 
   const explicitGui = process.env['BARY_GUI'];
   const guiRoot = explicitGui !== undefined && explicitGui !== ''
@@ -515,6 +532,7 @@ export async function main(): Promise<void> {
   const server = createApi({
     db, store, control, auth, election, secrets, events,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
+    ...(oidcRp === undefined ? {} : { oidcRp }),
   });
   await new Promise<void>((resolve) => {
     server.listen(Number(port), host, resolve);

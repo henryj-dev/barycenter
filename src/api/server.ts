@@ -22,7 +22,7 @@
  * 편집을 낼 때 함께 들어온다.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore } from '../control/acme-store.js';
@@ -38,6 +38,9 @@ import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
 import { serveGui } from '../web/serve-gui.js';
 import { can, TokenAuth, type Principal, type Scope } from './auth.js';
 import { EventHub, openEventStream } from './events.js';
+import {
+  authorizationRequest, exchangeAuthorizationCode, type OidcRpSettings,
+} from './oidc-code.js';
 
 export type ApiOptions = {
   db: Db;
@@ -58,6 +61,14 @@ export type ApiOptions = {
    * API 와 같은 출처에서 내보낸다 — 브라우저 CORS 를 열지 않기 위해.
    */
   guiRoot?: string;
+  /**
+   * Authorization Code RP. 없으면 로그인 시작·교환이 404 다.
+   * ID Token Bearer 검증은 TokenAuth 가 따로 든다. 스코프 표에 안 올린다 —
+   * 토큰이 없는 사람이 여기를 지난다.
+   */
+  oidcRp?: OidcRpSettings;
+  /** 테스트가 Token Endpoint 응답을 주입할 때. 없으면 전역 fetch. */
+  oidcFetch?: typeof fetch;
 };
 
 const eventsOf = (api: ApiOptions): EventHub => {
@@ -658,6 +669,49 @@ async function handle(
   // 토큰을 들고 다녀야 하고, 그 토큰이 곧 새는 경로가 된다.
   if (url.pathname === '/healthz') {
     json(res, 200, { ok: true });
+    return;
+  }
+
+  // Authorization Code 시작·교환. 아직 Bearer 가 없다. 스코프 표에 안 올린다.
+  if (req.method === 'GET' && url.pathname === '/api/v1/oidc/authorization-request') {
+    const rp = api.oidcRp;
+    if (rp === undefined) {
+      json(res, 404, { code: 'oidc_not_configured', message: 'Authorization Code 가 설정되지 않았다' });
+      return;
+    }
+    const state = randomBytes(16).toString('hex');
+    json(res, 200, { url: authorizationRequest(rp, { state }).toString(), state });
+    return;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/v1/oidc/token') {
+    const rp = api.oidcRp;
+    if (rp === undefined) {
+      json(res, 404, { code: 'oidc_not_configured', message: 'Authorization Code 가 설정되지 않았다' });
+      return;
+    }
+    let raw: unknown;
+    try {
+      raw = await readBody(req, max);
+    } catch (e) {
+      if (e instanceof StoreError) {
+        json(res, e.status, { code: e.code, message: e.message });
+        return;
+      }
+      throw e;
+    }
+    const code = raw !== null && typeof raw === 'object'
+      ? (raw as Record<string, unknown>)['code']
+      : undefined;
+    if (typeof code !== 'string' || code === '') {
+      json(res, 400, { code: 'malformed', message: 'code 가 필요하다' });
+      return;
+    }
+    const exchanged = await exchangeAuthorizationCode(rp, code, api.oidcFetch ?? fetch);
+    if (exchanged === undefined) {
+      json(res, 401, { code: 'unauthenticated', message: 'ID Token 이 거절됐다' });
+      return;
+    }
+    json(res, 200, { id_token: exchanged.id_token });
     return;
   }
 

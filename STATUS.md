@@ -36,11 +36,11 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
 | CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문), backend drain/drain-status | — |
-| GUI | 여덟 Kit 경로. 폴링하지 않는다 | 아래 §2 |
+| GUI | Kit 경로(로그인 포함). 폴링하지 않는다 | 아래 §2 |
 
 ### GUI
 
-화면: 영향 · 리스너 · 풀 · 라우트 · 인증서 · 상태 · 산출물 · 기록. Kit 여덟
+화면: 영향 · 리스너 · 풀 · 라우트 · 인증서 · 상태 · 산출물 · 기록 · 로그인. Kit
 경로다. SSE 는 fetch 스트림 + `pullSse` 다.
 산출물은 `GET /api/v1/config/rendered` 다. 기록은 `GET /api/v1/audit` 다.
 폴링하지 않는다.
@@ -83,8 +83,8 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 스파이크 | `spike/*/run.sh` | 91 |
 | 저장소 | `npm run test:store` | 107 |
 
-스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 미해소 항목이 있으면
-non-zero 다. API·DB 스키마는 아직 동결하지 않는다 (§9.1.1).
+스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 B(구현된 API·DDL) 드리프트를
+막는다. A 표면 안정 회차는 `SURFACE.txt` 카운터다.
 
 ---
 
@@ -98,12 +98,12 @@ admin `/membership/inflight` 가 주면 싣고, 없으면 안 싣는다 (`no_new
 HTTP 풀은 GET 본문으로 판정한다. 인증서·TLS 정책은 뺀다. BackendDiscovery 는
 멤버십이 발견한 엔드포인트를 받는다. 역할은 auditor · operator · admin 이다.
 백업은 `GET /backup`, 복구는 `POST /restore` (`admin`). SPOF 런북은
-`docs/runbook-spof.md` 다. 숫자는 목표 후보다.
+`docs/runbook-spof.md` 다. RTO/RPO 는 ADR-SPOF 가 v1 운영 정책으로 확정한다
+(랩 SLA 아님). OIDC 는 ID Token Bearer 와 Authorization Code 로그인이다.
 
 로드맵 잔여.
 
-- A 표면 안정 회차 (동결 카운터 1)
-- OIDC Authorization Code UI (ID Token 검증은 있다)
+- A 표면 안정 회차 (동결 카운터 2. 더 쌓을 수 있다)
 
 스파이크 — 기능 축소 등급. 게이트에 넣지 않는 것은 넣지 않는다.
 

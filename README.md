@@ -274,10 +274,10 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
 | **v0.3** | Membership plane, health probe | ← **done except drain inflight numbers (S2)** |
 | **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** Resource create matches GUI writes. Delete matches GUI withdraw |
-| **v0.5** | Web GUI: eight Kit routes, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **done.** No polling |
+| **v0.5** | Web GUI: Kit routes including login, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **done.** No polling |
 | **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** Order GET, dns-01, EAB, Retry-After |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` consumer is membership slots; not frozen on the v0.1 surface |
-| **v1.0** | Roles, backup/restore, SPOF runbook, OpenAPI/DDL freeze, OIDC ID Token | ← **slice open.** Authorization Code UI is not this slice. RTO/RPO remain candidates |
+| **v1.0** | Roles, backup/restore, SPOF runbook, OpenAPI/DDL freeze, OIDC ID Token + Authorization Code | ← **slice open.** RTO/RPO are v1 operating policy (ADR-SPOF), not a lab SLA |
 
 ## Known limitations of the nginx data plane
 

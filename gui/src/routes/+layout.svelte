@@ -48,6 +48,10 @@
       h: '이 적용이 하는 일',
       p: '저장과 적용은 다르다. 여기 있는 것은 이미 커밋된 plan 이 트래픽에 닿을 때 생기는 영향이다.',
     },
+    login: {
+      h: '로그인',
+      p: 'IdP Authorization Code 로 들어오거나, 해시 토큰을 위 칸에 넣는다. 폴링하지 않는다.',
+    },
   };
 </script>
 
@@ -63,6 +67,7 @@
       <a href="/status" aria-current={place === 'status' ? 'page' : undefined}>상태</a>
       <a href="/rendered" aria-current={place === 'rendered' ? 'page' : undefined}>산출물</a>
       <a href="/audit" aria-current={place === 'audit' ? 'page' : undefined}>기록</a>
+      <a href="/login" aria-current={place === 'login' ? 'page' : undefined}>로그인</a>
     </nav>
     <h1>{lede[place]?.h}</h1>
     <p class="lede">{lede[place]?.p}</p>

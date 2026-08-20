@@ -2624,14 +2624,13 @@ capability 패키지이지 apply 구현이 아니다.
 ## 10. Web GUI
 
 - 스택: **Svelte 5 runes**. 코어와 같은 TypeScript 타입 공유.
-  여덟 경로가 됐는데도 **Vite + Svelte 5** 한 장이다. `pageOf` 가 자리를 가른다.
-  Kit 이주는 별도 조각이다 — 한 장에 Kit 를 깔면 없는 라우터를 있는 척한다.
+  Kit adapter-static 경로가 정본이다. `pageOf` 가 자리를 가른다. 로그인 화면은
+  `/login` 이다. 한 `index.html` SPA 폴백이 아니다.
 - `barycenterd` 가 `gui/build`(또는 `BARY_GUI`) 를 **같은 출처**에서 낸다. CORS 를
   열지 않기 위해서다. 페이지는 토큰 없이 열리고, `/api/v1/*` 는 그대로 Bearer 다.
   EventSource 는 Authorization 을 못 붙이므로 `GET /api/v1/events` 는 fetch 스트림
   + `pullSse` 다.
-- 열린 화면: Plan·Impact · Listeners · Pools · Routes · Certificates · Status · Rendered · Audit.
-  `serveGui` 의 확장자 없는 폴백이 같은 `index.html` 을 낸다.
+- 열린 화면: Plan·Impact · Listeners · Pools · Routes · Certificates · Status · Rendered · Audit · Login.
   Plan·Impact 는 `plan.impact` 를 문장으로 접는다. diff 가 아니다.
   Listeners 는 `GET /api/v1/listeners`(head 모델) 다. 커밋됐지만 미적용이면
   그 목록은 이미 미래이고, 엔진에 남은 소켓은 impact 의 `removed` 로만 보인다.
@@ -2733,9 +2732,9 @@ k8s 네이티브 배포는 별도 과제.
 | 백업/복구 | `bary export` + PG 덤프 + SecretStore 백업 3종 + **분기별 복구 리허설** |
 | 리소스 알람 | `serving_generations` 수, FD, 메모리, UDP 세션, conntrack |
 
-> **위 표는 규범이 아니라 목표 후보다.** ADR-SPOF 가 확정하기 전까지 구속력이 없다.
-> 근거 없는 숫자를 계약처럼 적어 두면 검증되지 않은 채 굳는다. 페일오버·복구 리허설의
-> 합격 조건과 함께 v1.0 전에 확정한다.
+> **위 표의 RTO ≤ 15분 · RPO 0 · PG 손실 시 RPO ≤ 5분은 ADR-SPOF 가 v1 운영 정책으로
+> 확정한다.** 랩에서 잰 SLA 가 아니다. 페일오버는 수동 콜드 스탠바이다. 멀티 노드 HA 는
+> 이 절의 범위가 아니다. 런북은 `docs/runbook-spof.md`.
 
 ---
 
@@ -3032,7 +3031,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.5** GUI | SSE ✅. 여덟 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
 | **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩·인증서/정책 삭제 ✅. 주문 GET · dns-01 · EAB · Retry-After ✅ | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 소비자는 멤버십 슬롯. 표면에는 안 올림 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
-| **v1.0** | 역할 RBAC (auditor/operator/admin), `bary backup`/`restore`, SPOF 런북, 구현된 OpenAPI/DDL 동결 | OIDC 는 별도. RTO/RPO 는 목표 후보 |
+| **v1.0** | 역할 RBAC (auditor/operator/admin), `bary backup`/`restore`, SPOF 런북, 구현된 OpenAPI/DDL 동결, OIDC ID Token · Authorization Code | RTO/RPO 는 ADR-SPOF 운영 정책 (랩 SLA 아님) |
 
 > **v0.1 완료 판정 통과 (2026-08-16).** `tests/e2e/v01-curl.test.ts` 10건이 실물로 판정한다 —
 > REST → PG(changeset·plan·commit) → render → materialize → 게시 → HUP → 활성화 증거 →
@@ -3251,7 +3250,7 @@ v2 의 §15.3 은 축소를 선언했지만 스키마와 본문에는 그대로 
 |---|---|---|
 | `least_conn` | "v0 기본에서 제외" 라고 쓰고 enum 에 남김 | **enum 에서 제거.** `src/model/provisional.ts` 의 `Algorithm` 에 없다 |
 | ACME 상태기계 | "ADR 로 미룸" 이라 쓰고 §8.2 를 규범으로 남김 | **구속력 없음을 명시**, v0.1 freeze 범위에서 제외, S18 신설 |
-| RTO/RPO | "ADR 에서 확정" 이라 쓰고 수치를 표로 남김 | **목표 후보임을 명시.** ADR-SPOF 전까지 구속력 없음 |
+| RTO/RPO | "ADR 에서 확정" 이라 쓰고 수치를 표로 남김 | **ADR-SPOF 가 v1 운영 정책으로 확정.** 랩 SLA 아님 |
 | SNI 분기 | 2분할이되 `on_no_sni` 를 설정 가능하게 둠 | **`on_unmatched_sni` 하나만 설정 가능.** 부재·파싱실패는 `reject` 고정. 렌더도 map 하나 |
 
 ### 15.6 3차 검수가 옳았던 것 — R8 재판정 수용

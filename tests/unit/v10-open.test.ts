@@ -128,7 +128,7 @@ describe('OpenAPI · DDL 동결', () => {
   });
 });
 
-describe('Kit 여덟 경로', () => {
+describe('Kit 경로', () => {
   it('GUI 는 adapter-static Kit 이고 SPA 폴백이 아니다', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'gui/package.json'), 'utf8')) as {
       devDependencies: Record<string, string>;
@@ -144,8 +144,9 @@ describe('Kit 여덟 경로', () => {
     expect(viteCfg).not.toMatch(/plugins:\s*\[svelte\(\)\]/);
   });
 
-  it('여덟 자리가 Kit 라우트고 pageOf 가 같은 이름을 읽는다', () => {
-    expect(KIT_ROUTES).toHaveLength(8);
+  it('Kit 자리가 라우트고 pageOf 가 같은 이름을 읽는다', () => {
+    expect(KIT_ROUTES.some((r) => r.place === 'login' && r.path === '/login')).toBe(true);
+    expect(KIT_ROUTES).toHaveLength(9);
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);
@@ -153,6 +154,7 @@ describe('Kit 여덟 경로', () => {
         ? join(routesDir, '+page.svelte')
         : join(routesDir, r.path.slice(1), '+page.svelte');
       expect(readdirSync(dirname(file))).toContain('+page.svelte');
+      expect(readFileSync(file, 'utf8')).not.toMatch(/setInterval|setTimeout\(\s*\(\)\s*=>\s*fetch/);
     }
     expect(readFileSync(join(root, 'gui/src/routes/+layout.svelte'), 'utf8'))
       .not.toMatch(/setInterval|setTimeout\(\s*\(\)\s*=>\s*fetch/);
