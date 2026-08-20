@@ -3,8 +3,8 @@
  *
  * ── 범위를 먼저 밝힌다 ───────────────────────────────────────────────────
  *
- * **TCP 연결 검사만 한다.** HTTP 상태 코드도, 응답 본문도, 프로토콜별 헬스체크도 없다.
- * 드레인 숫자는 없다. 빼는 것은 리듀서가 하고, inflight 를 지어내지 않는다.
+ * HTTP 풀은 GET 본문으로 판정한다. TCP/UDP 는 연결만 본다. 드레인 숫자는 없다.
+ * 빼는 것은 리듀서가 하고, inflight 를 지어내지 않는다.
  *
  * ── 왜 리듀서가 하나인가 (§6.6) ─────────────────────────────────────────
  *
@@ -23,6 +23,7 @@
  * 끝나면** 낡은 결과가 최신 판정을 덮는다. 그래서 프로브마다 시작 순번을 싣고, 그 번호가
  * 마지막 반영값보다 클 때만 적용한다.
  */
+import { request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 
 import type { Model } from '../model/provisional.js';
@@ -54,12 +55,14 @@ export type ProbeOptions = {
 
 const DEFAULTS = { intervalMs: 2000, timeoutMs: 1000, failThreshold: 2, riseThreshold: 1 };
 
+/** HTTP 풀이 기본으로 GET 하는 경로. 백엔드가 트래픽 경로와 같은 `/` 를 연다. */
+export const HTTP_PROBE_PATH = '/';
+
 /**
  * TCP 로 붙어 본다. **붙으면 산 것으로 본다.**
  *
- * 붙자마자 끊는다 — 백엔드에 요청을 남기지 않는 가장 싼 신호다. 이걸로 알 수 없는 것도
- * 분명히 있다(포트는 열렸는데 애플리케이션이 죽은 경우). 그건 프로토콜별 헬스체크의
- * 몫이고 여기서는 안 한다.
+ * 붙자마자 끊는다 — 백엔드에 요청을 남기지 않는 가장 싼 신호다. HTTP 풀은 이걸로
+ * 안 판정한다. 포트만 열린 죽은 앱을 살았다고 하면 본문 프로브가 있는 이유가 없다.
  */
 export function probeTcp(host: string, port: number, timeoutMs: number): Promise<string | undefined> {
   return new Promise((resolve) => {
@@ -72,6 +75,52 @@ export function probeTcp(host: string, port: number, timeoutMs: number): Promise
     s.on('connect', () => done(undefined));
     s.on('error', (e) => done(e.message));
   });
+}
+
+export type HttpProbeOpts = {
+  path: string;
+  /** 있으면 본문이 이 문자열이어야 산다. 없으면 비어 있지 않으면 산다. */
+  expectBody?: string;
+};
+
+/**
+ * HTTP GET 의 **본문**으로 판정한다. 연결만 열린 서버가 틀린 본문·빈 본문을 주면 죽는다.
+ */
+export function probeHttp(
+  host: string, port: number, timeoutMs: number, opts: HttpProbeOpts,
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const req = httpRequest({ host, port, path: opts.path, method: 'GET', timeout: timeoutMs }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => { chunks.push(c); });
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        const expect = opts.expectBody;
+        if (expect !== undefined) {
+          resolve(body === expect ? undefined : (body === '' ? '본문이 비어 있다' : '본문이 기대와 다르다'));
+          return;
+        }
+        resolve(body === '' ? '본문이 비어 있다' : undefined);
+      });
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(`${timeoutMs}ms 안에 응답이 없다`);
+    });
+    req.on('error', (e) => resolve(e.message));
+    req.end();
+  });
+}
+
+/** 스위퍼가 풀 `protocolClass` 로 고르는 자리. HTTP 는 본문, 나머지는 TCP 연결. */
+export function probeBackend(
+  protocolClass: 'http' | 'tcp' | 'udp' | undefined,
+  host: string, port: number, timeoutMs: number, httpOpts?: HttpProbeOpts,
+): Promise<string | undefined> {
+  if (protocolClass === 'http') {
+    return probeHttp(host, port, timeoutMs, httpOpts ?? { path: HTTP_PROBE_PATH });
+  }
+  return probeTcp(host, port, timeoutMs);
 }
 
 /**
@@ -127,11 +176,14 @@ export class HealthProber {
     }
 
     // **시작 순번을 먼저 다 발급한다.** 프로브가 끝나는 순서는 시작 순서와 다르다.
+    const classOf = new Map(model.pools.map((p) => [p.key, p.protocolClass]));
     const runs = model.backends.map((b) => ({ backend: b, seq: this.#next++ }));
 
     const results = await Promise.all(runs.map(async ({ backend, seq }) => ({
       key: backend.key, seq,
-      reason: await probeTcp(backend.host, backend.port, timeoutMs),
+      reason: await probeBackend(
+        classOf.get(backend.pool), backend.host, backend.port, timeoutMs,
+      ),
     })));
 
     const flipped: HealthFlip[] = [];

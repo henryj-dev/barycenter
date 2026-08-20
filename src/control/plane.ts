@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
+import { type DiscoveryIntake } from './discovery.js';
 import { drainKeys } from './drain.js';
 import { currentHealth, reduceMembership } from './health.js';
 import { httpAdminConf, slotsOf, streamAdminConf } from './membership.js';
@@ -62,6 +63,11 @@ export type ControlPlaneOptions = {
    * `nginx -t` 에서 죽으므로, 조용히 넘어가면 전환이 실패로만 보이고 원인은 안 보인다.
    */
   secrets?: SecretStore;
+  /**
+   * 드라이버가 발견한 엔드포인트. 광고했는데 비면 정적 peer 를 안 남긴다.
+   * vendor 클라우드 API 는 여기 없다.
+   */
+  discovery?: DiscoveryIntake | (() => DiscoveryIntake | undefined);
 };
 
 export type OperationView = {
@@ -215,7 +221,7 @@ export class ControlPlane {
     // 프로버가 죽었다고 본 백엔드가 새 세대의 부트스트랩으로 되살아나면 안 된다 —
     // §6.4 가 경고한 바로 그 되살아남이다.
     const membership = caps.httpLua === true || caps.streamLua === true
-      ? slotsOf(await this.eligible(plan.model), caps) : undefined;
+      ? slotsOf(await this.eligible(plan.model), caps, this.discoveryOf()) : undefined;
     const streamAdminPort = this.opts.streamAdminPort ?? this.opts.adminPort + 1;
 
     /**
@@ -395,7 +401,7 @@ export class ControlPlane {
     if (st.published.kind !== 'owned') return undefined;
 
     const head = await this.store.head();
-    const slots = slotsOf(await this.eligible(await this.store.modelAt(head.revision)), caps);
+    const slots = slotsOf(await this.eligible(await this.store.modelAt(head.revision)), caps, this.discoveryOf());
     const planes: string[] = [];
     for (const plane of PLANES) {
       const epoch = st.planes[plane].activationEpoch;
@@ -424,7 +430,7 @@ export class ControlPlane {
     const st = await this.driver.status();
     const head = await this.store.head();
     const model = await this.eligible(await this.store.modelAt(head.revision));
-    const slots = slotsOf(model, caps);
+    const slots = slotsOf(model, caps, this.discoveryOf());
 
     const epochs: string[] = [];
     const planes: string[] = [];
@@ -702,6 +708,11 @@ export class ControlPlane {
 
   private async eligible(model: Model): Promise<Model> {
     return reduceMembership(model, await currentHealth(this.db), await drainKeys(this.db));
+  }
+
+  private discoveryOf(): DiscoveryIntake | undefined {
+    const raw = this.opts.discovery;
+    return typeof raw === 'function' ? raw() : raw;
   }
 
   /**

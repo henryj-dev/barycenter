@@ -168,6 +168,9 @@
       insertHttps={(key, bind, port, pool, policy, certificate) => {
         void desk.insertHttpsListener(key, { bind, port, pool, policy, certificate }).then((ok) => { if (ok) go('/'); });
       }}
+      withdrawPolicy={(key) => {
+        void desk.withdraw('tlsPolicy', key).then((ok) => { if (ok) go('/'); });
+      }}
     />
   {:else if page === 'pools'}
     <Pools
@@ -249,6 +252,9 @@
       }}
       withdrawSni={(key) => {
         void desk.withdraw('sniBinding', key).then((ok) => { if (ok) go('/'); });
+      }}
+      withdraw={(key) => {
+        void desk.withdraw('certificate', key).then((ok) => { if (ok) go('/'); });
       }}
     />
   {:else if page === 'status'}

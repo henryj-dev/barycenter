@@ -20,11 +20,11 @@
 > route (proxy to a pool; websocket off), goes through a changeset and
 > stops at commit. Apply is a separate action on the impact screen.
 >
-> **What it is not yet.** ACME order
-> state is not shown — that table has no read
-> API. dns-01 has no provider. Drain progress is not shown (S2). The CLI can
+> **What it is not yet.** Drain *progress numbers* are omitted when the engine
+> has no per-peer inflight gauge (S2). The CLI can
 > create listeners, pools, HTTP and pass-through routes, backends, TLS
-> policies, certificates and SNI bindings (commit, not apply). Leader election exists (a PostgreSQL advisory lock
+> policies, certificates and SNI bindings (commit, not apply), and delete the
+> same kinds including certificates and TLS policies. Leader election exists (a PostgreSQL advisory lock
 > issues strictly monotonic fencing tokens, and a non-leader serves reads but answers `503
 > not_leader` to writes) — but **failover is not automatic**: each data plane carries its own
 > nginx, so extra instances are cold standbys, and moving traffic is still DNS or an upstream
@@ -167,10 +167,11 @@ not a moat. The bets that need execution quality instead:
 ## What it does
 
 - **Domain-based HTTP(S) routing** with full TLS lifecycle management (ACME + uploaded certs).
-- **Real TCP/UDP load balancing** — upstream pools, balancing algorithms, and a TCP
-  health probe that flips membership without a reload. Drain *observation* (inflight /
-  sessions) is not implemented; new traffic can be kept off a backend, existing
-  sessions are not counted or forced closed. Not just port forwarding.
+- **Real TCP/UDP load balancing** — upstream pools, balancing algorithms, and a
+  health probe that flips membership without a reload (HTTP GET body for HTTP
+  pools, TCP connect for L4). Drain *observation* (inflight / sessions) is
+  reported only from a real engine read; otherwise omitted. New traffic can be
+  kept off a backend; existing sessions are not forced closed. Not just port forwarding.
 - **SNI-based TLS pass-through** on layer 4 (via `ssl_preread`). A missing or unparseable SNI
   is rejected — not configurable — so a client that sends none can never land on an arbitrary
   backend. Only *unmatched* SNI has a configurable fallback.
@@ -271,11 +272,11 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.0** | Architecture spike, S1–S20 | S8 · S11 · S12 (block) and S1 · S7 · S13 · S16 · S17 · S18 · S19 passed. S14 is 7/8 and stays out of the gate. S20 keeps h3 out of the model. S2 drain is still open |
 | **v0.1** | Typed model, sealed changesets, apply state machine, DP agent, renderer | ← **done** |
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
-| **v0.3** | Membership plane, health probe | ← **done except drain observation (S2)** |
-| **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** Resource create matches GUI writes except drain. Delete matches GUI withdraw |
-| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **slice is open.** No Kit, no drain |
-| **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** No order GET, no dns-01 |
-| **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` has no consumer |
+| **v0.3** | Membership plane, health probe | ← **done except drain inflight numbers (S2)** |
+| **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** Resource create matches GUI writes. Delete matches GUI withdraw |
+| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **slice is open.** No Kit |
+| **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** Order GET, dns-01, EAB, Retry-After |
+| **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` consumer is membership slots; not frozen on the v0.1 surface |
 | **v1.0** | Full RBAC, backup/restore rehearsal, SPOF runbook, documentation | |
 
 ## Known limitations of the nginx data plane

@@ -6,7 +6,9 @@
  */
 import { parseHashKey } from '../validate/strings.js';
 
-export type EditKind = 'backend' | 'listener' | 'pool' | 'httpRoute' | 'passthroughRoute' | 'sniBinding';
+export type EditKind =
+  | 'backend' | 'listener' | 'pool' | 'httpRoute' | 'passthroughRoute'
+  | 'sniBinding' | 'certificate' | 'tlsPolicy';
 
 export type DeleteOp = { op: 'delete'; kind: EditKind; key: string };
 

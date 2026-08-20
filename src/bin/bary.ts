@@ -9,8 +9,8 @@
  *   bary pool create|delete
  *   bary route create|delete
  *   bary backend create|delete
- *   bary tls-policy create --name [--min-version 1.2|1.3]
- *   bary certificate create --name --fullchain --privkey
+ *   bary tls-policy create|delete
+ *   bary certificate create|delete
  *   bary sni-binding create|delete
  *   bary changeset new|patch|plan|show|discard|reopen
  *   bary commit --plan <id>
@@ -35,7 +35,10 @@ import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete } from '../cli/listener.js';
 import { poolCreate, poolDelete } from '../cli/pool.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
-import { certificateCreate, sniBindingCreate, sniBindingDelete, tlsPolicyCreate } from '../cli/tls.js';
+import {
+  certificateCreate, certificateDelete, sniBindingCreate, sniBindingDelete,
+  tlsPolicyCreate, tlsPolicyDelete,
+} from '../cli/tls.js';
 import {
   applyByPlan,
   changesetDiscard,
@@ -106,7 +109,9 @@ const usage = (): never => {
   bary backend drain             --name [--deadline 초]. 새 트래픽을 끊는다. apply 가 아니다
   bary backend drain-status      --name. 관측이 없으면 숫자를 안 싣는다
   bary tls-policy create         --name [--min-version 1.2|1.3]. HSTS 안 켬
+  bary tls-policy delete         --name
   bary certificate create        --name --fullchain <파일> --privkey <파일>. 패치에 개인키 없음
+  bary certificate delete        --name
   bary sni-binding create        --name --listener --host --certificate. override 없음
   bary sni-binding delete        --name
   bary changeset new             changeset 을 연다
@@ -389,6 +394,17 @@ async function main(): Promise<void> {
     }
     case 'tls-policy': {
       const sub = arg ?? usage();
+      if (sub === 'delete') {
+        const name = flag(argv, '--name') ?? usage();
+        try {
+          const out = await tlsPolicyDelete(call, name);
+          console.error(`tls-policy ${name} deleted r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       if (sub !== 'create') usage();
       const name = flag(argv, '--name') ?? usage();
       const minVersion = flag(argv, '--min-version');
@@ -405,6 +421,17 @@ async function main(): Promise<void> {
     }
     case 'certificate': {
       const sub = arg ?? usage();
+      if (sub === 'delete') {
+        const name = flag(argv, '--name') ?? usage();
+        try {
+          const out = await certificateDelete(call, name);
+          console.error(`certificate ${name} deleted r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       if (sub !== 'create') usage();
       const name = flag(argv, '--name') ?? usage();
       const chainPath = flag(argv, '--fullchain') ?? usage();

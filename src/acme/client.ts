@@ -14,12 +14,50 @@
  * 함정인데, **Node 의 기본 EC 서명은 DER 인코딩이고 JWS 는 raw R‖S 를 요구한다.**
  * `dsaEncoding: 'ieee-p1363'` 을 안 주면 CA 가 전부 `malformed` 로 거절한다.
  */
-import { createHash, createSign, type KeyObject, createPublicKey } from 'node:crypto';
+import { createHash, createHmac, createSign, type KeyObject, createPublicKey } from 'node:crypto';
 
 import { createCsr } from './der.js';
 
 export const b64url = (b: Buffer | string): string =>
   Buffer.from(b).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+export const b64urlDecode = (s: string): Buffer => {
+  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
+  return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64');
+};
+
+/**
+ * Retry-After 초 또는 HTTP-date. 없거나 못 읽으면 fallback.
+ * CA 레이트리밋 헤더를 무시하지 않는다 (RFC 8555 · RFC 7231).
+ */
+export function retryAfterMs(headers: Headers, fallbackMs: number): number {
+  const raw = headers.get('retry-after');
+  if (raw === null || raw === '') return fallbackMs;
+  const sec = Number(raw);
+  if (Number.isFinite(sec) && sec >= 0) return Math.min(sec * 1000, 3_600_000);
+  const when = Date.parse(raw);
+  if (!Number.isNaN(when)) return Math.min(Math.max(0, when - Date.now()), 3_600_000);
+  return fallbackMs;
+}
+
+export type ExternalAccountBinding = {
+  kid: string;
+  /** HMAC 키. base64url. */
+  hmacKey: string;
+};
+
+/** RFC 8555 §7.3.4 — newAccount 의 `externalAccountBinding` HMAC JWS. */
+export function externalAccountBinding(
+  url: string,
+  jwk: { crv: string; kty: string; x: string; y: string },
+  eab: ExternalAccountBinding,
+): { protected: string; payload: string; signature: string } {
+  const protectedB64 = b64url(JSON.stringify({ alg: 'HS256', kid: eab.kid, url }));
+  const payload = b64url(JSON.stringify(jwk));
+  const key = b64urlDecode(eab.hmacKey);
+  const signature = createHmac('sha256', key).update(`${protectedB64}.${payload}`).digest();
+  return { protected: protectedB64, payload, signature: b64url(signature) };
+}
 
 /** 공개 JWK. **키 순서가 계약이다** — thumbprint 가 정렬된 JSON 위에서 계산된다. */
 export function publicJwk(key: KeyObject): { crv: string; kty: string; x: string; y: string } {
@@ -108,6 +146,11 @@ export type AcmeOptions = {
    * 실서비스 CA 의 거부율은 이보다 낮지만, **한 바퀴에 요청이 많다는 성질은 같다.**
    */
   nonceRetries?: number;
+  /** RFC 8555 §7.3.4. 없으면 newAccount 에 EAB 를 안 붙인다. */
+  eab?: ExternalAccountBinding;
+  sleep?: (ms: number) => Promise<void>;
+  /** 429 / rateLimited 재시도 횟수. 기본 5. */
+  rateLimitRetries?: number;
 };
 
 /**
@@ -123,10 +166,14 @@ export class AcmeClient {
   #kid: string | undefined;
   readonly #fetch: typeof fetch;
   readonly #nonceRetries: number;
+  readonly #rateLimitRetries: number;
+  readonly #sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly opts: AcmeOptions) {
     this.#fetch = opts.fetchImpl ?? fetch;
     this.#nonceRetries = opts.nonceRetries ?? 5;
+    this.#rateLimitRetries = opts.rateLimitRetries ?? 5;
+    this.#sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
   get accountUrl(): string | undefined {
@@ -207,6 +254,11 @@ export class AcmeClient {
           this.#nonce = fresh ?? undefined;
           continue;
         }
+        const rateLimited = r.status === 429 || problem.type?.endsWith(':rateLimited') === true;
+        if (rateLimited && attempt < this.#rateLimitRetries) {
+          await this.#sleep(retryAfterMs(r.headers, 1000));
+          continue;
+        }
         throw new AcmeHttpError(r.status, problem, url);
       }
       return { status: r.status, body: parsed, headers: r.headers };
@@ -216,9 +268,15 @@ export class AcmeClient {
   /** 계정을 만들거나(있으면) 찾는다. `kid` 를 기억한다. */
   async register(contact: readonly string[] = []): Promise<string> {
     const dir = await this.directory();
+    const eab = this.opts.eab;
     const r = await this.post(dir.newAccount, {
       termsOfServiceAgreed: true,
       ...(contact.length > 0 ? { contact: [...contact] } : {}),
+      ...(eab === undefined ? {} : {
+        externalAccountBinding: externalAccountBinding(
+          dir.newAccount, publicJwk(this.opts.accountKey), eab,
+        ),
+      }),
     });
     const location = r.headers.get('location');
     if (location === null) throw new Error('newAccount 가 Location 을 안 줬다');

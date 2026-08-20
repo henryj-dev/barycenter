@@ -2,7 +2,7 @@
  * CLI TLS 쓰기 — DESIGN.md §5.6 · §8.1
  *
  * 정책은 minVersion 만. 인증서는 자료 POST 뒤 참조 put. SNI 는 override 없음.
- * SNI 바인딩은 뺀다. 인증서·정책 삭제는 EditKind 가 아니다. apply 는 안 한다.
+ * SNI 바인딩·인증서·정책은 뺀다. apply 는 안 한다.
  */
 import {
   deletePatch, putCertificatePatch, putSniBindingPatch, putTlsPolicyPatch, type TlsVersion,
@@ -117,5 +117,33 @@ export async function sniBindingDelete(
 ): Promise<{ revision: string; planId: string }> {
   const patch = sniBindingDeletePatch(key);
   if (patch === undefined) throw new Error('SNI 바인딩 키가 비어 있다');
+  return commitPatch(http, patch);
+}
+
+export function tlsPolicyDeletePatch(key: string): ReturnType<typeof deletePatch> | undefined {
+  if (key === '') return undefined;
+  return deletePatch('tlsPolicy', key);
+}
+
+export async function tlsPolicyDelete(
+  http: Http,
+  key: string,
+): Promise<{ revision: string; planId: string }> {
+  const patch = tlsPolicyDeletePatch(key);
+  if (patch === undefined) throw new Error('TLS 정책 키가 비어 있다');
+  return commitPatch(http, patch);
+}
+
+export function certificateDeletePatch(key: string): ReturnType<typeof deletePatch> | undefined {
+  if (key === '') return undefined;
+  return deletePatch('certificate', key);
+}
+
+export async function certificateDelete(
+  http: Http,
+  key: string,
+): Promise<{ revision: string; planId: string }> {
+  const patch = certificateDeletePatch(key);
+  if (patch === undefined) throw new Error('인증서 키가 비어 있다');
   return commitPatch(http, patch);
 }

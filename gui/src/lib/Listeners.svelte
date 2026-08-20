@@ -8,7 +8,7 @@
   import AddTlsPolicy from './AddTlsPolicy.svelte';
   import AddHttpsListener from './AddHttpsListener.svelte';
 
-  let { view, live, editing, pools, tcpPools, udpPools, policies, certificates, withdraw, insert, insertTcp, insertPassthrough, insertUdp, insertPolicy, insertHttps }: {
+  let { view, live, editing, pools, tcpPools, udpPools, policies, certificates, withdraw, withdrawPolicy, insert, insertTcp, insertPassthrough, insertUdp, insertPolicy, insertHttps }: {
     view: ListenersView;
     live: boolean;
     editing: boolean;
@@ -18,6 +18,7 @@
     policies: string[];
     certificates: string[];
     withdraw: (key: string) => void;
+    withdrawPolicy: (key: string) => void;
     insert: (key: string, bind: string, port: number, pool: string) => void;
     insertTcp: (key: string, bind: string, port: number, pool: string) => void;
     insertPassthrough: (key: string, bind: string, port: number, pool?: string) => void;
@@ -57,6 +58,17 @@
   <AddTcpListener pools={tcpPools} {editing} add={insertTcp} />
   <AddPassthroughListener pools={tcpPools} {editing} add={insertPassthrough} />
   <AddUdpListener pools={udpPools} {editing} add={insertUdp} />
+  {#if policies.length > 0}
+    <h2>TLS 정책</h2>
+    <ul class="policies">
+      {#each policies as key (key)}
+        <li>
+          <span class="key">{key}</span>
+          <button type="button" disabled={editing} onclick={() => withdrawPolicy(key)}>설정에서 뺀다</button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
   <AddTlsPolicy {editing} add={insertPolicy} />
   <AddHttpsListener {pools} {policies} {certificates} {editing} add={insertHttps} />
 {/if}
@@ -86,6 +98,13 @@
     cursor: pointer;
   }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
+  h2 { font-size: 0.85rem; color: var(--mute); font-weight: 600; margin: 1.5rem 0 0; }
+  .policies { list-style: none; margin: 0.4rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
+  .policies li {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.6rem;
+  }
   li[data-mark='join'] .port,
   li[data-mark='join'] .mark { color: var(--moss); }
   li[data-mark='leave'] .port,

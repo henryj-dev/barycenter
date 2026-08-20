@@ -6,12 +6,27 @@
  */
 import type { Db } from '../store/pg.js';
 
-export type DrainCondition = 'no_new_traffic';
+export type DrainCondition = 'no_new_traffic' | 'quiesced';
 
 export type DrainStatus = {
   backend: string;
   drain_condition: DrainCondition;
 };
+
+/**
+ * 엔진이 준 관측만 받는다. 필드가 없거나 정수가 아니면 **숫자를 안 만든다.**
+ * `inflight: 0` 을 기본값으로 두지 않는다.
+ */
+export function parsePeerObservation(raw: unknown): { inflight: number; sessions: number } | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const inflight = o['inflight'];
+  const sessions = o['active_sessions'] ?? o['sessions'];
+  if (typeof inflight !== 'number' || typeof sessions !== 'number') return undefined;
+  if (!Number.isInteger(inflight) || !Number.isInteger(sessions)) return undefined;
+  if (inflight < 0 || sessions < 0) return undefined;
+  return { inflight, sessions };
+}
 
 export async function startDrain(
   db: Db, backendKey: string, by: string, deadlineSeconds?: number,
@@ -56,5 +71,6 @@ export function drainStatusOf(opts: {
   };
   if (opts.inflight !== undefined) out.inflight = opts.inflight;
   if (opts.sessions !== undefined) out.active_sessions = opts.sessions;
+  if (opts.inflight === 0 && opts.sessions === 0) out.drain_condition = 'quiesced';
   return out;
 }

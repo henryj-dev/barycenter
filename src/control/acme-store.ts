@@ -66,7 +66,8 @@ const maybe = (r: Row, k: string): string | undefined =>
  * **상한을 둔다.** 무한히 늘리면 사람이 고친 뒤에도 몇 시간을 기다리게 되고, 그건
  * "포기" 와 구분되지 않는다. 포기는 `abandoned` 라는 이름이 따로 있다.
  */
-export function backoffSeconds(attempts: number): number {
+export function backoffSeconds(attempts: number, retryAfterSeconds?: number): number {
+  if (retryAfterSeconds !== undefined) return Math.min(Math.max(0, retryAfterSeconds), 3600);
   return Math.min(60 * 2 ** Math.max(0, attempts - 1), 3600);
 }
 

@@ -3,7 +3,7 @@
   import AddCert from './AddCert.svelte';
   import AddSniBinding from './AddSniBinding.svelte';
 
-  let { view, live, editing, insert, listeners, certificates, bindings, insertSni, withdrawSni }: {
+  let { view, live, editing, insert, listeners, certificates, bindings, insertSni, withdrawSni, withdraw }: {
     view: CertsView;
     live: boolean;
     editing: boolean;
@@ -13,6 +13,7 @@
     bindings: { key: string; listener: string; hosts: string[]; certificate: string }[];
     insertSni: (input: { key: string; listener: string; hosts: string[]; certificate: string }) => void;
     withdrawSni: (key: string) => void;
+    withdraw: (key: string) => void;
   } = $props();
 
   const label = (mark: string, days: number | undefined): string => {
@@ -35,6 +36,7 @@
         <span class="dom mono">{row.domains.join(', ') || '—'}</span>
         <span class="src">{row.acme ? (row.orderState ?? 'acme') : '자료'}</span>
         <span class="mark">{label(row.mark, row.expiresInDays)}</span>
+        <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
       </li>
     {/each}
   </ul>
@@ -62,7 +64,7 @@
   .certs { list-style: none; margin: 1.5rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
   li {
     display: grid;
-    grid-template-columns: 8rem 1fr auto auto;
+    grid-template-columns: 8rem 1fr auto auto auto;
     gap: 0.6rem;
     align-items: baseline;
     padding: 0.65rem 0;
@@ -73,6 +75,15 @@
   .dom { color: var(--mute); font-size: 0.8rem; }
   .src { color: var(--mute); font-size: 0.75rem; }
   .mark { font-size: 0.75rem; color: var(--mute); }
+  button {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--mute);
+    padding: 0.2rem 0.45rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   li[data-mark='expired'] .key,
   li[data-mark='expired'] .mark { color: var(--ember); }
   li[data-mark='missing'] .mark { color: var(--ember); }

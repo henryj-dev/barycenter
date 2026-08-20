@@ -14,6 +14,7 @@ import { isIP } from 'node:net';
 
 import { ACME_DICT, render, MEMBERSHIP_DICT, type RenderCapabilities } from '../conf/render.js';
 
+import { applyDiscoveredEndpoints, type DiscoveryIntake } from './discovery.js';
 import type { Model } from '../model/provisional.js';
 
 /**
@@ -40,16 +41,21 @@ export type Slots = Record<string, string[]>;
  * **렌더된 upstream 이름을 키로 쓴다.** 풀 키를 그대로 쓰면 밸런서가 보는 이름과
  * 달라진다 — 렌더러가 nginx 식별자로 바꾸면서 단사성을 위해 다이제스트를 붙일 수 있다.
  */
-export function slotsOf(model: Model, caps: RenderCapabilities): Record<Plane, Slots> {
+export function slotsOf(
+  model: Model, caps: RenderCapabilities, discovery?: DiscoveryIntake,
+): Record<Plane, Slots> {
+  const used = applyDiscoveredEndpoints(model, discovery);
   const out: Record<Plane, Slots> = { http: {}, stream: {} };
+  // 렌더는 풀의 upstream 이름을 읽기 위한 것이다. 광고가 비면 백엔드가 없어
+  // validate 가 막으므로 이름은 정적 모델에서 읽고, peer 만 발견한 집합에서 온다.
   const conf = render(model, caps).conf;
   const byPool = new Map<string, string[]>();
-  for (const b of model.backends) {
+  for (const b of used.backends) {
     const list = byPool.get(b.pool) ?? [];
     list.push(`${b.host}:${b.port}`);
     byPool.set(b.pool, list);
   }
-  for (const pool of model.pools) {
+  for (const pool of used.pools) {
     const peers = byPool.get(pool.key);
     if (peers === undefined || peers.length === 0) continue;
     // 렌더된 conf 에서 그 풀의 upstream 이름을 찾는다. **이름 규칙을 여기서 다시

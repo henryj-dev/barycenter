@@ -28,7 +28,7 @@ const model = (): Model => ({
   listeners: [],
   httpRoutes: [],
   passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
-  pools: [{ key: 'p', protocolClass: 'http', algorithm: 'round_robin' }],
+  pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' }],
   backends: [
     { key: 'live', pool: 'p', host: '127.0.0.1', port: livePort, weight: 1 },
     { key: 'dead', pool: 'p', host: '127.0.0.1', port: DEAD, weight: 1 },
@@ -199,7 +199,7 @@ describe('헬스 프로버', () => {
 describe('리듀서 (§6.6)', () => {
   const base: Model = {
     listeners: [], httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
-    pools: [{ key: 'p', protocolClass: 'http', algorithm: 'round_robin' }],
+    pools: [{ key: 'p', protocolClass: 'tcp', algorithm: 'round_robin' }],
     backends: [
       { key: 'a', pool: 'p', host: '10.0.0.1', port: 1, weight: 1 },
       { key: 'b', pool: 'p', host: '10.0.0.2', port: 2, weight: 1 },

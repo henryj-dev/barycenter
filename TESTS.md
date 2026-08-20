@@ -1016,6 +1016,11 @@ S11 하네스의 교훈이다.
 | C5.73 | ACME 주문·챌린지 GET | 원장 상태만. 토큰·PRIVATE KEY 없음. 없는 id 는 not-found (`tests/unit/missing-api.test.ts`) |
 | C5.74 | dns-01 프로바이더 | place 뒤 cleanup 은 성공·실패 둘 다. 와일드카드는 dns-01 만 |
 | C5.75 | 드레인 | 멤버십에서 뺌. 관측 없으면 inflight 숫자를 안 싣는다. apply 안 함 |
+| C5.76 | HTTP 본문 프로브 | 맞는 본문은 산다. 틀리거나 빈 본문은 죽는다. 같은 포트의 TCP 연결은 산다 (`tests/unit/product-gaps.test.ts`) |
+| C5.77 | 드레인 관측 접기 | 주입한 `{inflight,sessions}` 는 싣는다. 없으면 숫자를 안 싣는다. `0/0` 은 quiesced |
+| C5.78 | ACME EAB · Retry-After | kid/hmac 있을 때만 newAccount 에 HMAC JWS. Retry-After 가 다음 대기를 바꾼다 |
+| C5.79 | 인증서·TLS 정책 delete | `kind: certificate`/`tlsPolicy`. 빈 키는 패치를 안 만든다. apply 안 함 |
+| C5.80 | BackendDiscovery 소비자 | 발견한 엔드포인트를 쓴다. 빈 광고는 정적 peer 를 안 남긴다. 표면 아님 |
 
 ---
 

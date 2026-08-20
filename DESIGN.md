@@ -1920,8 +1920,9 @@ S18 이 실측했다 — 버려진 주문을 CA 는 `pending` 으로 남긴다. 
 자료는 즉시·진행 중인 주문의 자료는 오래됐을 때 고아로 본다. DB 가 "놓지도 않은 것을
 치웠다" 를 막는다.
 
-**아직 미정으로 남기는 것.** 갱신 시점 정책(만료 30 일 전 + 지터), CA 레이트리밋 헤더
-해석, EAB. dns-01 은 파일 이음새만 — 벤더 API 를 제품 계약으로 얼리지 않는다.
+**아직 미정으로 남기는 것.** 갱신 시점의 지터. dns-01 은 파일 이음새만 — 벤더 API 를
+제품 계약으로 얼리지 않는다. EAB 는 RFC 8555 §7.3.4 HMAC JWS 최소다. 429/`Retry-After`
+는 그 지연으로 백오프한다.
 
 > **위 §8.2 는 규범이 아니라 후보다.** v2 는 "스파이크 후 ADR 로 미룬다"고 써놓고 상태기계를
 > 규범적으로 남겨 뒀다 — 그건 미룬 게 아니다. v3 에서 명시한다: **§8.2 의 엔티티·상태·정책은
@@ -2606,8 +2607,9 @@ type DriverPin = {
 사내 레포의 CI 는 `node scripts/driver-compat.mjs <entry>` 를 돌린다 — 코어를
 수정하지 않고 자기 엔트리가 로드되는지 잰다.
 
-`BackendDiscovery` 는 아직 고정하지 않는다. 멤버십·렌더가 엔드포인트 집합을
-받는 경로가 없다. 구현하지 않은 계약을 올리면 §9.1 이 막으려던 일이 난다.
+`BackendDiscovery` 소비자는 `applyDiscoveredEndpoints` / `slotsOf` 다. 광고했는데
+엔드포인트가 비면 정적 peer 를 안 남긴다. vendor 클라우드 API 는 표면에 안 올린다
+(`src/index.ts` 의 `Discovery` 제외는 그대로).
 
 기동 배선은 `src/dp/boot.ts` 다. `BARY_DRIVER_PINS` / `BARY_DRIVER_PINS_FILE` 이
 없으면 핀을 안 읽는다. 있으면 목록 전체를 `assertDriverPins` 한 뒤 `BARY_DRIVER`
@@ -2615,8 +2617,7 @@ type DriverPin = {
 로 드러낸다. **설정 평면은 계속 `LocalDataplaneDriver`.** 로드하는 것은
 capability 패키지이지 apply 구현이 아니다.
 
-`BackendDiscovery` 는 아직 고정하지 않는다. 멤버십·렌더가 엔드포인트 집합을
-받는 경로가 없다.
+`BackendDiscovery` 소비자는 멤버십 슬롯이다. 표면에는 아직 올리지 않는다.
 
 ---
 
@@ -3026,11 +3027,11 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 |---|---|---|
 | **v0.1** 골격 ✅ | (동결은 둘로 나뉜다 — §9.1.1) 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
 | **v0.2** L4 ✅ | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
-| **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2)은 아직** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. inflight/sessions 숫자는 없다 |
+| **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · HTTP 본문 프로브 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2) 숫자는 엔진이 안 주면 안 싣는다** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. HTTP 틀린 본문은 죽는다 |
 | **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). listener·풀·라우트(HTTP·패스스루)·백엔드·TLS 정책·인증서·SNI create ✅. 드레인 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
 | **v0.5** GUI | SSE ✅. 여덟 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
-| **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩 ✅. 주문 GET · dns-01 은 아직 | 무중단 갱신 틱 + 롤백 시 옛 자료 |
-| **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 는 받는 쪽이 없어 아직 고정하지 않는다 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
+| **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩·인증서/정책 삭제 ✅. 주문 GET · dns-01 · EAB · Retry-After ✅ | 무중단 갱신 틱 + 롤백 시 옛 자료 |
+| **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 소비자는 멤버십 슬롯. 표면에는 안 올림 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
 | **v1.0** | 전체 RBAC, 백업/복구 리허설, SPOF 런북, 문서 | RTO/RPO 리허설 합격 |
 
 > **v0.1 완료 판정 통과 (2026-08-16).** `tests/e2e/v01-curl.test.ts` 10건이 실물로 판정한다 —
@@ -3096,8 +3097,8 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 > 살아나면 돌아온다. 판정은 `GET /health/backends` 로 드러나고 `unknown` 을 숨기지 않는다
 > (아직 못 잰 것과 산 것은 다르다 — §6.7 프로버 장애).
 >
-> **범위**: TCP 연결 검사만이다. HTTP 상태 코드도, 프로토콜별 헬스체크도, 드레인
-> 관측(S2)도 없다. 흉내내면 "헬스체크가 있다" 가 절반만 참이 된다.
+> **범위 (2026-08-20)**: HTTP 풀은 GET 본문, TCP/UDP 는 연결. 드레인 관측(S2)
+> 숫자는 엔진이 안 주면 안 싣는다.
 >
 > §6.6 이 요구한 것 셋을 지켰다 — **단일 리듀서**(커밋된 모델 ∩ 원시 헬스) ·
 > **커서는 `nextval` 이 아니다**(잠금 행. `nextval` 은 커밋 순서와 달라 cut 이후 커밋된
