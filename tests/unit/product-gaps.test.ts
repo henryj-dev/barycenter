@@ -14,11 +14,13 @@ import {
 import { backoffSeconds } from '../../src/control/acme-store.js';
 import { applyDiscoveredEndpoints } from '../../src/control/discovery.js';
 import { drainStatusOf, parsePeerObservation } from '../../src/control/drain.js';
-import { HTTP_PROBE_PATH, probeBackend, probeHttp, probeTcp } from '../../src/control/health.js';
+import { currentHealth, HealthProber, HTTP_PROBE_PATH, probeBackend, probeHttp, probeTcp } from '../../src/control/health.js';
 import { slotsOf } from '../../src/control/membership.js';
 import { certificateDeletePatch, tlsPolicyDeletePatch } from '../../src/cli/tls.js';
 import { deletePatch } from '../../src/web/edit.js';
 import type { Model } from '../../src/model/provisional.js';
+import type { Db, Queryable, Row } from '../../src/store/pg.js';
+import * as surface from '../../src/index.js';
 
 const closers: Array<() => void> = [];
 afterEach(() => {
@@ -58,6 +60,62 @@ const model = (backends: Model['backends']): Model => ({
   backends,
 });
 
+/** HealthProber.sweep 가 치는 SQL 만 받는다. 본체를 안 돌린다. */
+function fakeHealthDb(): Db {
+  const health = new Map<string, {
+    state: string; seq: number; consecutive: number; last_ok: boolean;
+  }>();
+  let cursor = 1;
+  const query: Queryable['query'] = async (text, values) => {
+    const rows = (): { rows: Row[]; rowCount: number } => {
+      if (text.includes('MAX(probe_start_seq)')) {
+        let m = 0;
+        for (const r of health.values()) m = Math.max(m, r.seq);
+        return { rows: [{ m: String(m) }], rowCount: 1 };
+      }
+      if (text.includes('FROM backend_health') && text.includes('FOR UPDATE')) {
+        const row = health.get(String(values?.[0]));
+        if (row === undefined) return { rows: [], rowCount: 0 };
+        return {
+          rows: [{
+            state: row.state, probe_start_seq: row.seq,
+            consecutive: row.consecutive, last_ok: row.last_ok,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes('INSERT INTO backend_health')) {
+        health.set(String(values?.[0]), {
+          state: String(values?.[1]),
+          seq: Number(values?.[2]),
+          consecutive: Number(values?.[3]),
+          last_ok: Boolean(values?.[4]),
+        });
+        return { rows: [], rowCount: 1 };
+      }
+      if (text.includes('FROM health_cursor')) {
+        return { rows: [{ n: String(cursor) }], rowCount: 1 };
+      }
+      if (text.includes('UPDATE health_cursor')) {
+        cursor += 1;
+        return { rows: [], rowCount: 1 };
+      }
+      if (text.includes('INSERT INTO health_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (text.includes('SELECT backend_key, state FROM backend_health')) {
+        return {
+          rows: [...health.entries()].map(([backend_key, r]) => ({ backend_key, state: r.state })),
+          rowCount: health.size,
+        };
+      }
+      throw new Error(`unexpected sql: ${text}`);
+    };
+    return rows();
+  };
+  return { query, tx: async <T>(fn: (c: Queryable) => Promise<T>): Promise<T> => fn({ query }) } as unknown as Db;
+}
+
 describe('HTTP 본문 프로브', () => {
   it('HTTP 본문이 맞으면 살고 틀리거나 비면 죽는다', async () => {
     const ok = await httpBody('ok');
@@ -81,6 +139,38 @@ describe('HTTP 본문 프로브', () => {
     expect(await probeBackend('tcp', '127.0.0.1', nope, 500)).toBeUndefined();
     expect(await probeBackend('http', '127.0.0.1', tcp, 500)).not.toBeUndefined();
     expect(await probeBackend('tcp', '127.0.0.1', tcp, 500)).toBeUndefined();
+  });
+
+  it('스위퍼는 HTTP 풀에 본문 프로브를 쓴다 — TCP 만 열린 서버는 죽는다', async () => {
+    const body = await httpBody('ok');
+    const empty = await httpBody('');
+    const tcp = await tcpOnly();
+    const db = fakeHealthDb();
+    const prober = new HealthProber(db, { failThreshold: 1, riseThreshold: 1, timeoutMs: 500 });
+    await prober.sweep({
+      listeners: [], httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],
+      pools: [
+        { key: 'h', protocolClass: 'http', algorithm: 'round_robin' },
+        { key: 't', protocolClass: 'tcp', algorithm: 'round_robin' },
+      ],
+      backends: [
+        { key: 'ok', pool: 'h', host: '127.0.0.1', port: body, weight: 1 },
+        { key: 'empty', pool: 'h', host: '127.0.0.1', port: empty, weight: 1 },
+        { key: 'http-tcp', pool: 'h', host: '127.0.0.1', port: tcp, weight: 1 },
+        { key: 'l4', pool: 't', host: '127.0.0.1', port: tcp, weight: 1 },
+      ],
+    });
+    const h = await currentHealth(db);
+    expect(h.get('ok')).toBe('healthy');
+    expect(h.get('empty')).toBe('unhealthy');
+    expect(h.get('http-tcp')).toBe('unhealthy');
+    expect(h.get('l4')).toBe('healthy');
+  });
+});
+
+describe('표면', () => {
+  it('Discovery 는 v0.1 표면에 없다', () => {
+    expect(Object.keys(surface).join(' ')).not.toContain('Discovery');
   });
 });
 
