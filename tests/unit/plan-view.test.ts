@@ -1,7 +1,7 @@
 /**
  * Plan·Impact 화면의 값 — 브라우저 없이 계약을 지킨다.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -111,14 +111,18 @@ describe('같은 출처에서 GUI', () => {
   it('같은 출처에서 GUI 를 낸다 — CORS 를 열지 않는다', async () => {
     root = mkdtempSync(join(tmpdir(), 'bary-gui-'));
     writeFileSync(join(root, 'index.html'), '<title>이 적용이 하는 일</title>');
+    mkdirSync(join(root, 'listeners'));
+    writeFileSync(join(root, 'listeners', 'index.html'), '<title>열려 있는 포트</title>');
     const url = await listen(root);
     const page = await fetch(`${url}/`);
     expect(page.status).toBe(200);
     expect(page.headers.get('content-type')).toContain('text/html');
     expect(await page.text()).toContain('이 적용이 하는 일');
-    const spa = await fetch(`${url}/plan`);
-    expect(spa.status).toBe(200);
-    expect(await spa.text()).toContain('이 적용이 하는 일');
+    const kit = await fetch(`${url}/listeners`);
+    expect(kit.status).toBe(200);
+    expect(await kit.text()).toContain('열려 있는 포트');
+    const missing = await fetch(`${url}/plan`);
+    expect(missing.status).not.toBe(200);
   });
 
   it('API 는 토큰 없이 안 열린다 — 페이지와 계약을 섞지 않는다', async () => {

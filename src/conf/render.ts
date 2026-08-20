@@ -300,8 +300,11 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
             for hp in peers:gmatch("[^,]+") do list[#list + 1] = hp end
             local n = #list
             ${pickExpression(pool)}
-            local h, p = list[idx]:match("^(.*):(%d+)$")
+            local peer = list[idx]
+            local h, p = peer:match("^(.*):(%d+)$")
             assert(balancer.set_current_peer(h, tonumber(p)))
+            ngx.ctx.bary_peer = peer
+            d:incr("in:" .. peer, 1, 0)
         `),
   ]);
 }
@@ -1010,6 +1013,13 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     const children: ConfNode[] = [adminInclude];
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).
     if (caps.httpLua === true) {
+      children.unshift(lua('log_by_lua_block', `
+            local peer = ngx.ctx.bary_peer
+            if not peer then return end
+            local d = ngx.shared.${MEMBERSHIP_DICT.http}
+            local n = d:incr("in:" .. peer, -1)
+            if n and n < 0 then d:set("in:" .. peer, 0) end
+        `));
       children.unshift(directive('lua_shared_dict', [lit(MEMBERSHIP_DICT.http), lit('1m')]));
       // ACME 토큰은 멤버십과 **다른 dict** 다. 같이 쓰면 멤버십 staging 이 토큰을 밀어내고
       // (dict 는 LRU 로 밀어낸다) 그 실패는 "인증서 발급이 가끔 안 된다" 로 보인다.
@@ -1103,6 +1113,13 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     const children: ConfNode[] = [];
     if (caps.streamLua === true) {
       children.push(directive('lua_shared_dict', [lit(MEMBERSHIP_DICT.stream), lit('1m')]));
+      children.push(lua('log_by_lua_block', `
+            local peer = ngx.ctx.bary_peer
+            if not peer then return end
+            local d = ngx.shared.${MEMBERSHIP_DICT.stream}
+            local n = d:incr("in:" .. peer, -1)
+            if n and n < 0 then d:set("in:" .. peer, 0) end
+        `));
       // stream 에도 세대별 admin 조각을 끌어들인다 — epoch 리터럴이 거기 산다.
       children.push(directive('include', [lit('stream-admin/*.conf')]));
     }

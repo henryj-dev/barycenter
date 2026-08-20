@@ -386,8 +386,12 @@ GATES
 # 게이트를 물으려면 명시적으로 물어야 한다.
 if [ "${1:-}" = --freeze-gate ]; then
   echo ""
-  echo " --freeze-gate: B(API·DB)가 없고 A는 미확인 → non-zero 로 끝낸다."
-  exit 2
+  if ! node scripts/freeze-b.mjs --check; then
+    echo " --freeze-gate: B(API·DB) 가 구현과 갈라졌다."
+    exit 2
+  fi
+  echo " --freeze-gate: B(구현된 API·DDL) 는 동결됐다. A 표면 안정 회차는 별개다."
+  exit $FAILED
 fi
 
 exit $FAILED

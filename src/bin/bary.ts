@@ -28,7 +28,8 @@
  * 다른 모양을 CLI 가 들고 있으면 그 둘이 갈라지는 것은 시간 문제고, 갈라지면 어느
  * 쪽이 계약인지 아무도 모른다(6차 검수가 문서와 코드에서 겪은 것과 같은 병이다).
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { backupNow, restoreNow } from '../cli/backup.js';
 
 import { backendDelete, backendDrain, backendDrainStatus, backendPut } from '../cli/backend.js';
 import { getResource } from '../cli/get.js';
@@ -126,6 +127,8 @@ const usage = (): never => {
   bary apply <파일.json>         changeset → plan → commit → apply 한 바퀴
   bary export                    spec-only 매니페스트 (stdout)
   bary import <파일.json>        단일 changeset 으로 커밋. --mode replace 는 없는 키를 지운다
+  bary backup [파일.json]        GET /backup. 시크릿 바이트 없음
+  bary restore <파일.json>       POST /restore. admin 스코프. apply 는 아니다
   bary rollback <리비전>          그 시점 내용으로 **새 리비전**을 만들고 적용한다
   bary cancel <오퍼레이션>        진행 중인 전환을 포기한다 (활성화된 것은 못 되돌린다)
   bary recover                   미완 전환을 이어받는다. changeset 을 안 연다
@@ -480,6 +483,22 @@ async function main(): Promise<void> {
       const { plan } = await upToPlan(arg ?? usage());
       // **영향을 먼저 보여 준다.** 전체 모델을 쏟으면 정작 봐야 할 것이 묻힌다.
       show({ id: plan.id, impact: plan.impact, renderDigest: plan.renderDigest });
+      return;
+    }
+    case 'backup': {
+      const bundle = await backupNow(call);
+      if (arg !== undefined) writeFileSync(arg, JSON.stringify(bundle, null, 2));
+      show(bundle);
+      return;
+    }
+    case 'restore': {
+      const path = arg ?? usage();
+      const bundle = JSON.parse(readFileSync(path, 'utf8')) as { revision?: string; manifest?: unknown };
+      if (bundle.manifest === undefined) {
+        console.error('백업 파일에 manifest 가 없다');
+        process.exit(2);
+      }
+      show(await restoreNow(call, { revision: bundle.revision ?? '', manifest: bundle.manifest }));
       return;
     }
     case 'export':

@@ -21,10 +21,17 @@ export function serveGui(res: ServerResponse, pathname: string, root: string): b
   const base = resolve(root);
   const inside = target === base || relative(base, target).split(sep)[0] !== '..';
   if (!inside) return false;
+  if (existsSync(target) && statSync(target).isDirectory()) {
+    const indexed = join(target, 'index.html');
+    if (existsSync(indexed)) target = indexed;
+  }
   if (!existsSync(target) || !statSync(target).isFile()) {
-    const fallback = join(base, 'index.html');
-    if (extname(rel) !== '' || !existsSync(fallback)) return false;
-    target = fallback;
+    const asHtml = resolve(root, `${rel}.html`);
+    if (existsSync(asHtml) && statSync(asHtml).isFile()) {
+      target = asHtml;
+    } else {
+      return false;
+    }
   }
   const type = MIME[extname(target)] ?? 'application/octet-stream';
   res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' });

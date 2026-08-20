@@ -214,6 +214,18 @@ server {
             ngx.print(table.concat(out, "\\n"))
         }
     }
+
+    # peer 별 inflight. 밸런서가 올린 숫자만 준다. 없으면 빈 객체 — 숫자를 안 짓는다.
+    location = /membership/inflight {
+        content_by_lua_block {
+            local peer = ngx.var.arg_peer or ""
+            if peer == "" then ngx.status = 400; ngx.print("{}"); return end
+            local d = ngx.shared.${MEMBERSHIP_DICT.http}
+            local n = d:get("in:" .. peer)
+            if n == nil then ngx.print("{}"); return end
+            ngx.print('{"inflight":' .. n .. ',"active_sessions":' .. n .. '}')
+        }
+    }
 }
 `;
 

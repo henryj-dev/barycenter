@@ -3032,7 +3032,7 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.5** GUI | SSE ✅. 여덟 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
 | **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩·인증서/정책 삭제 ✅. 주문 GET · dns-01 · EAB · Retry-After ✅ | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 소비자는 멤버십 슬롯. 표면에는 안 올림 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
-| **v1.0** | 전체 RBAC, 백업/복구 리허설, SPOF 런북, 문서 | RTO/RPO 리허설 합격 |
+| **v1.0** | 역할 RBAC (auditor/operator/admin), `bary backup`/`restore`, SPOF 런북, 구현된 OpenAPI/DDL 동결 | OIDC 는 별도. RTO/RPO 는 목표 후보 |
 
 > **v0.1 완료 판정 통과 (2026-08-16).** `tests/e2e/v01-curl.test.ts` 10건이 실물로 판정한다 —
 > REST → PG(changeset·plan·commit) → render → materialize → 게시 → HUP → 활성화 증거 →

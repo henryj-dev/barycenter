@@ -253,7 +253,7 @@ See [§9 of the design doc](./DESIGN.md).
 ## Stack
 
 TypeScript on Node.js · PostgreSQL · Vite + Svelte 5 for the operator screens
-(SvelteKit is a later cut — still one `index.html`) · nginx / OpenResty as the
+(SvelteKit eight routes, adapter-static) · nginx / OpenResty as the
 data plane.
 
 The daemon serves `gui/build` (or `BARY_GUI`) from the same origin as the API — CORS is
@@ -274,10 +274,10 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
 | **v0.3** | Membership plane, health probe | ← **done except drain inflight numbers (S2)** |
 | **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** Resource create matches GUI writes. Delete matches GUI withdraw |
-| **v0.5** | Web GUI: six screens, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **slice is open.** No Kit |
+| **v0.5** | Web GUI: eight Kit routes, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **done.** No polling |
 | **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** Order GET, dns-01, EAB, Retry-After |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` consumer is membership slots; not frozen on the v0.1 surface |
-| **v1.0** | Full RBAC, backup/restore rehearsal, SPOF runbook, documentation | |
+| **v1.0** | Roles (auditor/operator/admin), backup/restore, SPOF runbook, implemented OpenAPI/DDL freeze | ← **slice open.** OIDC is not this slice. RTO/RPO remain candidates |
 
 ## Known limitations of the nginx data plane
 

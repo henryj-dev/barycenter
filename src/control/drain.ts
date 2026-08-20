@@ -17,6 +17,26 @@ export type DrainStatus = {
  * 엔진이 준 관측만 받는다. 필드가 없거나 정수가 아니면 **숫자를 안 만든다.**
  * `inflight: 0` 을 기본값으로 두지 않는다.
  */
+/**
+ * 엔진 admin 에서 peer 관측을 읽는다. 없거나 깨지면 undefined — 숫자를 안 짓는다.
+ */
+export async function observePeerFromAdmin(
+  fetchImpl: typeof fetch, adminPort: number, peer: string,
+): Promise<unknown> {
+  try {
+    const r = await fetchImpl(
+      `http://127.0.0.1:${adminPort}/membership/inflight?peer=${encodeURIComponent(peer)}`,
+      { signal: AbortSignal.timeout(2000) },
+    );
+    if (!r.ok) return undefined;
+    const text = await r.text();
+    if (text === '' || text === '{}') return undefined;
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 export function parsePeerObservation(raw: unknown): { inflight: number; sessions: number } | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const o = raw as Record<string, unknown>;

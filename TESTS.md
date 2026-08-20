@@ -1021,6 +1021,11 @@ S11 하네스의 교훈이다.
 | C5.78 | ACME EAB · Retry-After | kid/hmac 있을 때만 newAccount 에 HMAC JWS. Retry-After 가 다음 대기를 바꾼다 |
 | C5.79 | 인증서·TLS 정책 delete | `kind: certificate`/`tlsPolicy`. 빈 키는 패치를 안 만든다. apply 안 함 |
 | C5.80 | BackendDiscovery 소비자 | 발견한 엔드포인트를 쓴다. 빈 광고는 정적 peer 를 안 남긴다. 표면 아님 |
+| C5.81 | 드레인 엔진 관측 | admin inflight 본문을 `parsePeerObservation` 으로 접는다. 빈 객체는 숫자를 안 싣는다 (`tests/unit/v10-open.test.ts`) |
+| C5.82 | RBAC 역할 | auditor 는 POST /restore (`admin`) 를 못 지난다. operator 는 read+write |
+| C5.83 | 백업·복구 | GET /backup 뒤 POST /restore. apply 안 함. 시크릿 참조만 모은다 |
+| C5.84 | OpenAPI·DDL 동결 | `SURFACE-API.json` · `SURFACE-DDL.sql` 이 구현과 같다. `--freeze-gate` 는 드리프트만 막는다 |
+| C5.85 | Kit 여덟 경로 | `gui/src/routes` 에 자리마다 `+page.svelte`. 폴링 없음 |
 
 ---
 

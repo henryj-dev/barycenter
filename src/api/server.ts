@@ -27,7 +27,7 @@ import { createHash } from 'node:crypto';
 import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.js';
-import { drainStatusOf, isDraining, startDrain } from '../control/drain.js';
+import { drainStatusOf, isDraining, parsePeerObservation, startDrain } from '../control/drain.js';
 import { healthRows } from '../control/health.js';
 import { render as renderMetrics } from '../obs/metrics.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
@@ -78,6 +78,7 @@ type Ctx = {
 
 type Route = {
   method: string;
+  path: string;
   pattern: RegExp;
   keys: string[];
   scope: Scope;
@@ -102,7 +103,12 @@ function route(
       return '([^/]+)';
     }) + '$',
   );
-  return { method, pattern, keys, scope, handle };
+  return { method, path, pattern, keys, scope, handle };
+}
+
+/** 구현된 REST 표면. OpenAPI 동결이 이 표를 본다. */
+export function apiRouteTable(): { method: string; path: string; scope: Scope }[] {
+  return ROUTES.map((r) => ({ method: r.method, path: r.path, scope: r.scope }));
 }
 
 const asPatchOps = (v: unknown): PatchOp[] => {
@@ -164,6 +170,29 @@ const ROUTES: Route[] = [
     const input = wrapped ? (body as { manifest: unknown }).manifest : body;
     const out = await api.store.importFromManifest(input, mode, c.who.name);
     eventsOf(api).publish('revision', { revision: out.revision, unchanged: out.unchanged });
+    json(c.res, 200, out);
+  }),
+
+  /**
+   * 백업 묶음. spec-only export + head 리비전. 시크릿 바이트는 안 실는다.
+   */
+  route('GET', '/api/v1/backup', 'read', async (c, api) => {
+    const head = await api.store.head();
+    const manifest = await api.store.exportAt(head.revision);
+    json(c.res, 200, { revision: head.revision, manifest });
+  }),
+
+  /**
+   * 백업 복구. `admin` 스코프. 적용은 `/apply` 의 몫이다.
+   */
+  route('POST', '/api/v1/restore', 'admin', async (c, api) => {
+    const body = c.body;
+    const wrapped = body !== null && typeof body === 'object' && !Array.isArray(body);
+    const manifest = wrapped && 'manifest' in (body as object)
+      ? (body as { manifest: unknown }).manifest
+      : body;
+    const out = await api.store.importFromManifest(manifest, 'replace', c.who.name);
+    eventsOf(api).publish('revision', { revision: out.revision, restored: true });
     json(c.res, 200, out);
   }),
 
@@ -241,7 +270,16 @@ const ROUTES: Route[] = [
       json(c.res, 404, { error: 'not_found', message: `백엔드 '${key}' 가 없다` });
       return;
     }
-    const status = drainStatusOf({ backend: key, draining: await isDraining(api.db, key) });
+    const be = m.backends.find((b) => b.key === key);
+    const raw = be === undefined
+      ? undefined
+      : await api.control.observePeer(`${be.host}:${be.port}`);
+    const obs = parsePeerObservation(raw);
+    const status = drainStatusOf({
+      backend: key,
+      draining: await isDraining(api.db, key),
+      ...(obs === undefined ? {} : { inflight: obs.inflight, sessions: obs.sessions }),
+    });
     if (status === undefined) {
       json(c.res, 404, { error: 'not_draining', message: `백엔드 '${key}' 는 드레인 중이 아니다` });
       return;

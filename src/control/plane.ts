@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
 import { type DiscoveryIntake } from './discovery.js';
-import { drainKeys } from './drain.js';
+import { drainKeys, observePeerFromAdmin } from './drain.js';
 import { currentHealth, reduceMembership } from './health.js';
 import { httpAdminConf, slotsOf, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
@@ -106,6 +106,13 @@ export class ControlPlane {
    * 판정에는 절대 쓰지 않는다 — 캐시된 상태로 판정하면 그 사이 남이 옮긴 좌표를 못 본다.
    */
   private lastStatus: DriverStatus | undefined;
+
+  /**
+   * 엔진이 준 peer 관측. 못 읽으면 undefined — 드레인이 0 을 짓지 않는다.
+   */
+  async observePeer(peer: string): Promise<unknown> {
+    return observePeerFromAdmin(fetch, this.opts.adminPort, peer);
+  }
 
   constructor(
     private readonly db: Db,
