@@ -15,8 +15,8 @@ import { randomUUID } from 'node:crypto';
 import { render, type RenderCapabilities } from '../conf/render.js';
 import { type DiscoveryIntake } from './discovery.js';
 import { drainKeys, observationPeerOf, observePeerFromAdmin } from './drain.js';
-import { currentHealth, reduceMembership } from './health.js';
-import { httpAdminConf, slotsOf, streamAdminConf } from './membership.js';
+import { currentHealth, eligibleCountForPlane, reduceMembership, shouldPushMembership } from './health.js';
+import { httpAdminConf, slotsForEligible, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
@@ -229,7 +229,9 @@ export class ControlPlane {
     // 프로버가 죽었다고 본 백엔드가 새 세대의 부트스트랩으로 되살아나면 안 된다 —
     // §6.4 가 경고한 바로 그 되살아남이다.
     const membership = caps.httpLua === true || caps.streamLua === true
-      ? slotsOf(await this.eligible(plan.model), caps, this.discoveryOf()) : undefined;
+      ? slotsForEligible(
+        plan.model, await this.eligible(plan.model), caps, this.discoveryOf(),
+      ) : undefined;
     const streamAdminPort = this.opts.streamAdminPort ?? this.opts.adminPort + 1;
 
     /**
@@ -397,10 +399,7 @@ export class ControlPlane {
    * 변경(세대를 안 만든다)이 통째로 사라진다. 실제로 백엔드를 :12 로 옮긴 뒤 재시작했더니
    * :11 이 되살아났다. §6.4 가 *"옛 부트스트랩만 쓰면 되살아난다"* 고 경고한 그 모양이다.
    *
-   * ⚠️ **아직 절반이다.** §6.4 는 헬스까지 포함한 *"마지막 호환 멤버십 스냅샷"* 을 별도로
-   * durable 저장하라고 한다. 지금 복원하는 것은 **desired**(커밋된 것)뿐이라, 프로버가
-   * 죽었다고 판정했던 백엔드는 다음 프로브까지 되살아난다. 헬스 프로버(3단계)가 붙어야
-   * 닫히는 자리다 — 안 한 것을 했다고 적지 않는다.
+   * 적격은 durable 헬스 ∩ 드레인이다. 죽은 백엔드가 세대 스냅샷으로 되살아나지 않는다 (S3).
    */
   async restageMembership(): Promise<{ epoch: string; planes: string[] } | undefined> {
     const caps = this.opts.renderCaps ?? { streamRealip: false };
@@ -409,12 +408,16 @@ export class ControlPlane {
     if (st.published.kind !== 'owned') return undefined;
 
     const head = await this.store.head();
-    const slots = slotsOf(await this.eligible(await this.store.modelAt(head.revision)), caps, this.discoveryOf());
+    const headModel = await this.store.modelAt(head.revision);
+    const eligible = await this.eligible(headModel);
+    const slots = slotsForEligible(headModel, eligible, caps, this.discoveryOf());
     const planes: string[] = [];
     for (const plane of PLANES) {
       const epoch = st.planes[plane].activationEpoch;
       if (epoch === '0') continue;                       // 그 평면은 아직 활성화 안 됐다
-      if (Object.keys(slots[plane]).length === 0) continue;
+      if (!shouldPushMembership(
+        eligibleCountForPlane(eligible, plane), Object.keys(slots[plane]).length,
+      )) continue;
       await this.driver.pushMembershipDirect(plane, epoch, slots[plane]);
       planes.push(plane);
     }
@@ -437,15 +440,18 @@ export class ControlPlane {
     if (caps.httpLua !== true && caps.streamLua !== true) return undefined;
     const st = await this.driver.status();
     const head = await this.store.head();
-    const model = await this.eligible(await this.store.modelAt(head.revision));
-    const slots = slotsOf(model, caps, this.discoveryOf());
+    const headModel = await this.store.modelAt(head.revision);
+    const model = await this.eligible(headModel);
+    const slots = slotsForEligible(headModel, model, caps, this.discoveryOf());
 
     const epochs: string[] = [];
     const planes: string[] = [];
     for (const plane of PLANES) {
       const epoch = st.planes[plane].activationEpoch;
       if (epoch === '0') continue;
-      if (Object.keys(slots[plane]).length === 0 && model.backends.length > 0) continue;
+      if (!shouldPushMembership(
+        eligibleCountForPlane(model, plane), Object.keys(slots[plane]).length,
+      )) continue;
       // **의도적 zero-peer 는 그대로 쓴다** (§6.7). 모든 백엔드가 죽었으면 멤버십은
       // 실제로 비어 있고 요청은 실패해야 한다 — 옛 peer 를 남기면 죽은 백엔드가 계속
       // 트래픽을 받는다. 갱신 *실패* 의 fail-open 과는 다른 사건이다.

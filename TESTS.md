@@ -1026,6 +1026,10 @@ S11 하네스의 교훈이다.
 | C5.83 | 백업·복구 | GET /backup 뒤 POST /restore. apply 안 함. 시크릿 참조만 모은다 |
 | C5.84 | OpenAPI·DDL 동결 | `SURFACE-API.json` · `SURFACE-DDL.sql` 이 구현과 같다. `--freeze-gate` 는 드리프트만 막는다 |
 | C5.85 | Kit 여덟 경로 | `gui/src/routes` 에 자리마다 `+page.svelte`. 폴링 없음 |
+| C5.86 | OIDC ID Token | 서명·iss·aud·exp·sub. 해시 토큰은 그대로. auditor 는 restore 를 못 지난다 (`tests/unit/oidc-spikes.test.ts`) |
+| C5.87 | S3 재시작 | durable unhealthy 는 eligible 에서 빠진다. 전부 죽으면 빈 셋을 민다 |
+| C5.88 | S4 슬롯 TTL | 멤버십 set 은 exptime 없음. ACME 만 TTL |
+| C5.89 | S5·S15 | 한 평면이 비어도 다른 평면 슬롯을 남긴다. Lua 에 math.random 없음 |
 
 ---
 

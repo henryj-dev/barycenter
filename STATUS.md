@@ -75,7 +75,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **504** |
+| 단위 | `npm test` | **510** |
 | conformance | `npm run test:conformance` | **392** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
@@ -102,22 +102,22 @@ HTTP 풀은 GET 본문으로 판정한다. 인증서·TLS 정책은 뺀다. Back
 
 로드맵 잔여.
 
-- A 표면 안정 회차 (동결 카운터)
-- OIDC (사람은 토큰 역할로 연다)
+- A 표면 안정 회차 (동결 카운터 1)
+- OIDC Authorization Code UI (ID Token 검증은 있다)
 
 스파이크 — 기능 축소 등급. 게이트에 넣지 않는 것은 넣지 않는다.
 
 | | 상태 |
 |---|---|
 | S2 드레인 관측 | 밸런서 inflight 관측. 없으면 숫자를 안 싣는다 |
-| S3 재시작 부트스트랩 | 열림 |
-| S4 CP 단절 | 열림 |
-| S5 부분 전환 | 부분 |
+| S3 재시작 부트스트랩 | eligible ∩ durable 헬스. 빈 슬롯은 의도적 zero-peer 로 민다 |
+| S4 CP 단절 | 멤버십 슬롯에 TTL 없음. 갱신 실패는 마지막 셋 유지 |
+| S5 부분 전환 | 평면별 슬롯. 한 평면이 비어도 다른 평면을 안 지운다 |
 | S6 `least_conn` | v0 알고리즘에서 제외 |
 | S9 SNI 3분기 | 현행 유지 (부재·파싱실패는 reject) |
 | S10 `strict_priority` | 안 연다 |
 | S14 native DNS | 7/8. 게이트에 안 넣는다 |
-| S15 밸런서 품질 | 열림 |
+| S15 밸런서 품질 | Lua 가 round_robin/hash/source_ip_hash. 수치 게이트는 스파이크 |
 | S20 HTTP/3 | 모델에서 뺀다. 게이트에 안 넣는다 |
 
 block 등급 S8 · S11 · S12 는 열려 지나갔다. S13 은 원장을 안 짓기로 닫았다 —

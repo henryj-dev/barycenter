@@ -301,3 +301,24 @@ export function reduceMembership(
       health.get(b.key) !== 'unhealthy' && !draining.has(b.key)),
   };
 }
+
+/**
+ * 슬롯을 엔진에 쓸지.
+ *
+ * 적격 peer 가 있는데 슬롯이 비면 **갱신 실패**다 — 마지막 셋을 지워서는 안 된다 (S4 fail-open).
+ * 적격이 0 이고 슬롯도 비면 **의도적 zero-peer** 다 — 빈 셋을 써서 죽은 peer 가
+ * 재시작 부트스트랩으로 되살아나면 안 된다 (S3).
+ */
+export function shouldPushMembership(eligibleCount: number, slotCount: number): boolean {
+  if (slotCount > 0) return true;
+  return eligibleCount === 0;
+}
+
+/** 이 평면의 적격 백엔드 수. HTTP 가 비었다고 stream 을 건너뛰면 안 된다 (S5). */
+export function eligibleCountForPlane(model: Model, plane: 'http' | 'stream'): number {
+  return model.backends.filter((b) => {
+    const pool = model.pools.find((p) => p.key === b.pool);
+    if (pool === undefined) return false;
+    return plane === 'http' ? pool.protocolClass === 'http' : pool.protocolClass !== 'http';
+  }).length;
+}

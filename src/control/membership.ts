@@ -69,6 +69,24 @@ export function slotsOf(
 }
 
 /**
+ * head 모델로 이름을 읽고, 적격 peer 만 남긴다. 한 평면이 비어도 렌더가 막히지 않는다.
+ * 빈 목록은 슬롯에 `name=` 으로 써서 죽은 peer 가 옛 값을 유지하지 못하게 한다 (S3).
+ */
+export function slotsForEligible(
+  head: Model, eligible: Model, caps: RenderCapabilities, discovery?: DiscoveryIntake,
+): Record<Plane, Slots> {
+  const full = slotsOf(head, caps, discovery);
+  const allowed = new Set(eligible.backends.map((b) => `${b.host}:${b.port}`));
+  const out: Record<Plane, Slots> = { http: {}, stream: {} };
+  for (const plane of ['http', 'stream'] as const) {
+    for (const [name, peers] of Object.entries(full[plane])) {
+      out[plane][name] = peers.filter((p) => allowed.has(p));
+    }
+  }
+  return out;
+}
+
+/**
  * 렌더된 conf 에서 풀의 upstream 이름을 읽는다.
  *
  * 렌더러의 `upstreamName` 을 여기서 다시 구현하고 싶어지는데, 그러면 **이름을 정하는

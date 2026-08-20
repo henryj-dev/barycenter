@@ -277,7 +277,7 @@ ships both `stream_realip` and `ngx_stream_lua`.
 | **v0.5** | Web GUI: eight Kit routes, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **done.** No polling |
 | **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** Order GET, dns-01, EAB, Retry-After |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` consumer is membership slots; not frozen on the v0.1 surface |
-| **v1.0** | Roles (auditor/operator/admin), backup/restore, SPOF runbook, implemented OpenAPI/DDL freeze | ← **slice open.** OIDC is not this slice. RTO/RPO remain candidates |
+| **v1.0** | Roles, backup/restore, SPOF runbook, OpenAPI/DDL freeze, OIDC ID Token | ← **slice open.** Authorization Code UI is not this slice. RTO/RPO remain candidates |
 
 ## Known limitations of the nginx data plane
 

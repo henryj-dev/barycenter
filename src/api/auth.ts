@@ -3,15 +3,14 @@
  *
  * *"인증: API 토큰(스코프) + OIDC(사람). RBAC. **v0.1 부터 최소 형태로 존재한다**"*
  *
- * **최소가 무슨 뜻인지 정한다.** v0.1 은 토큰만이다. OIDC 도 역할 테이블도 없다. 대신
- * *있는 것은 진짜로 동작한다* — 스코프가 없으면 403 이고, 토큰이 없으면 401 이고,
- * 비교는 타이밍 세이프다. "나중에 붙일 자리" 로 열어 두지 않는다. 열어 두면 그 상태로
- * 나간다.
+ * **최소가 무슨 뜻인지 정한다.** 해시 토큰은 그대로다. 사람이 들고 온 Bearer 가
+ * JWT 이면 서명·iss·aud·exp·sub 를 검증하고 기존 역할에 얹는다. 스코프가 없으면 403,
+ * 토큰이 없거나 검증이 실패하면 401. 비교는 타이밍 세이프다.
  *
  * 토큰은 **해시로 보관한다.** 설정 파일에 평문을 두면 그 파일이 곧 비밀이 되고, 감사
  * 로그·에러 메시지·코어 덤프로 새는 경로가 늘어난다.
  */
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, createVerify, timingSafeEqual, type KeyObject } from 'node:crypto';
 
 /**
  * v0.1 의 스코프 셋 + v1.0 `admin`.
@@ -54,10 +53,79 @@ export function scopesOf(spec: TokenSpec): Scope[] {
 export const hashToken = (token: string): string =>
   `sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}`;
 
+export type OidcSettings = {
+  issuer: string;
+  audience: string;
+  /** HS256 비밀 또는 RS256 공개키. */
+  key: string | KeyObject;
+  now?: () => number;
+};
+
+const b64urlDecode = (s: string): Buffer => {
+  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
+  return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64');
+};
+
+const isRole = (v: unknown): v is Role =>
+  v === 'auditor' || v === 'operator' || v === 'admin';
+
+function verifyJwtSig(
+  alg: string | undefined, input: string, sigB64: string, key: string | KeyObject,
+): boolean {
+  const sig = b64urlDecode(sigB64);
+  if (alg === 'HS256') {
+    if (typeof key !== 'string') return false;
+    const mac = createHmac('sha256', key).update(input).digest();
+    return mac.length === sig.length && timingSafeEqual(mac, sig);
+  }
+  if (alg === 'RS256') {
+    if (typeof key === 'string') return false;
+    try {
+      return createVerify('RSA-SHA256').update(input).verify(key, sig);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** OpenID Connect Core — 서명 · iss · aud · exp · sub. 실패하면 없음 (401). */
+export function principalFromIdToken(token: string, oidc: OidcSettings): Principal | undefined {
+  const parts = token.split('.');
+  if (parts.length !== 3) return undefined;
+  const headerB64 = parts[0] ?? '';
+  const payloadB64 = parts[1] ?? '';
+  const sigB64 = parts[2] ?? '';
+  let header: { alg?: string };
+  let payload: Record<string, unknown>;
+  try {
+    header = JSON.parse(b64urlDecode(headerB64).toString()) as { alg?: string };
+    payload = JSON.parse(b64urlDecode(payloadB64).toString()) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  if (!verifyJwtSig(header.alg, `${headerB64}.${payloadB64}`, sigB64, oidc.key)) return undefined;
+  const now = oidc.now?.() ?? Math.floor(Date.now() / 1000);
+  if (payload['iss'] !== oidc.issuer) return undefined;
+  const aud = payload['aud'];
+  const audOk = aud === oidc.audience
+    || (Array.isArray(aud) && aud.includes(oidc.audience));
+  if (!audOk) return undefined;
+  const exp = payload['exp'];
+  if (typeof exp !== 'number' || !Number.isFinite(exp) || exp <= now) return undefined;
+  const sub = payload['sub'];
+  if (typeof sub !== 'string' || sub === '') return undefined;
+  const role = payload['role'];
+  if (!isRole(role)) return undefined;
+  return { name: sub, scopes: new Set(scopesOfRole(role)), role };
+}
+
 export class TokenAuth {
   readonly #byHash = new Map<string, Principal>();
+  readonly #oidc: OidcSettings | undefined;
 
-  constructor(specs: readonly TokenSpec[]) {
+  constructor(specs: readonly TokenSpec[], oidc?: OidcSettings) {
+    this.#oidc = oidc;
     for (const s of specs) {
       if (!/^sha256:[0-9a-f]{64}$/.test(s.hash)) {
         throw new Error(`토큰 해시 모양이 아니다 (${s.name}): sha256:<64 hex> 여야 한다`);
@@ -73,22 +141,22 @@ export class TokenAuth {
   /**
    * `Authorization: Bearer <token>` 을 principal 로.
    *
-   * **비교는 타이밍 세이프다.** 해시를 키로 쓰는 Map 조회는 그 자체로 내용 의존 시간을
-   * 노출할 수 있으므로, 후보를 전부 훑으면서 상수 시간 비교를 한다. 토큰 수가 수십 개
-   * 수준이라 감당할 수 있는 비용이고, 여기서 아끼면 아낄 이유가 없는 것을 아끼는 셈이다.
+   * 해시 토큰을 먼저 본다. 아니면 OIDC ID Token. **비교는 타이밍 세이프다.**
    */
   authenticate(header: string | undefined): Principal | undefined {
     if (header === undefined) return undefined;
     const m = /^Bearer\s+(\S+)$/.exec(header.trim());
     if (m === null) return undefined;
-    const want = Buffer.from(hashToken(m[1] ?? ''), 'utf8');
+    const token = m[1] ?? '';
+    const want = Buffer.from(hashToken(token), 'utf8');
     let found: Principal | undefined;
     for (const [hash, principal] of this.#byHash) {
       const got = Buffer.from(hash, 'utf8');
-      // 길이가 같음이 보장된다 (둘 다 `sha256:` + 64 hex).
       if (got.length === want.length && timingSafeEqual(got, want)) found = principal;
     }
-    return found;
+    if (found !== undefined) return found;
+    if (this.#oidc === undefined) return undefined;
+    return principalFromIdToken(token, this.#oidc);
   }
 
   get size(): number {

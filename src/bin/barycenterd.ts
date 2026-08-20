@@ -24,7 +24,7 @@ import { promisify } from 'node:util';
 import { createApi } from '../api/server.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore } from '../dp/secrets.js';
-import { TokenAuth, type TokenSpec } from '../api/auth.js';
+import { TokenAuth, type OidcSettings, type TokenSpec } from '../api/auth.js';
 import { render } from '../conf/render.js';
 import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
@@ -495,7 +495,13 @@ export async function main(): Promise<void> {
     });
   }
 
-  const auth = new TokenAuth(loadTokens());
+  const oidcIss = env('BARY_OIDC_ISSUER', '');
+  const oidcAud = env('BARY_OIDC_AUD', '');
+  const oidcKey = env('BARY_OIDC_KEY', '');
+  const oidc: OidcSettings | undefined = oidcIss !== '' && oidcAud !== '' && oidcKey !== ''
+    ? { issuer: oidcIss, audience: oidcAud, key: oidcKey }
+    : undefined;
+  const auth = oidc === undefined ? new TokenAuth(loadTokens()) : new TokenAuth(loadTokens(), oidc);
 
   const explicitGui = process.env['BARY_GUI'];
   const guiRoot = explicitGui !== undefined && explicitGui !== ''
