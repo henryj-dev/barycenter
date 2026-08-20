@@ -25,8 +25,8 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-IMAGE="${BARY_ENGINE_IMAGE:-openresty/openresty:alpine}"
-NODE_IMAGE="${NODE_IMAGE:-node:24-alpine}"
+IMAGE="${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}"
+NODE_IMAGE="${NODE_IMAGE:-docker.io/library/node:24-alpine}"
 NET=bary-s14-net
 SUBNET=172.31.77.0/24
 SUBNET6=fd00:5140::/64

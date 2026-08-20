@@ -260,7 +260,7 @@ The daemon serves `gui/build` (or `BARY_GUI`) from the same origin as the API �
 not opened. Build the page with `npm ci && npm run build` inside `gui/`. Without that
 directory the API is unchanged: `GET /` still asks for a token.
 
-Pinned engine for the test suites: `openresty/openresty:alpine` (OpenResty 1.31.1.1). Override
+Pinned engine for the test suites: `docker.io/openresty/openresty:alpine` (OpenResty 1.31.1.1). Override
 with `BARY_ENGINE_IMAGE=… npm run test:engine` to check a candidate image — the suite reports
 which capabilities it has rather than assuming a fixed module list, because no public image
 ships both `stream_realip` and `ngx_stream_lua`.

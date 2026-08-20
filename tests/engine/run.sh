@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-IMAGE="${1:-${BARY_ENGINE_IMAGE:-openresty/openresty:alpine}}"
+IMAGE="${1:-${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "image: $IMAGE"

@@ -412,7 +412,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 **목적**: DESIGN.md 가 사실로 전제한 nginx/OpenResty 동작을 *우리가 pin 할 실제 이미지에서*
 확인한다. 검수 3라운드 동안 "맞다/틀리다"로 뒤집힌 항목이 전부 여기 있다.
 
-### 최근 실행 결과 — `openresty/openresty:alpine` (openresty/1.31.1.1)
+### 최근 실행 결과 — `docker.io/openresty/openresty:alpine` (openresty/1.31.1.1)
 
 ```
 PASS=43  FAIL=0  SKIP=1

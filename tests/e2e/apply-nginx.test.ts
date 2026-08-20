@@ -40,7 +40,7 @@ import type {
 } from '../../src/dp/operation.js';
 import { materializeGeneration, verifyGeneration } from '../../src/dp/materialize.js';
 
-const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
+const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const PORT = 18099;
 
 let prefix: string;

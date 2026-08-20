@@ -53,12 +53,21 @@ jobs:
           cache: npm
       - run: npm ci
 
+      # runner-01의 `docker`는 Podman 호환 명령이다. Compose provider를 명시적으로
+      # 준비해 runner 이미지의 전역 패키지 상태에 CI 결과가 좌우되지 않게 한다.
+      - name: Podman Compose 준비
+        run: |
+          python3 -m venv "$RUNNER_TEMP/podman-compose"
+          "$RUNNER_TEMP/podman-compose/bin/pip" install 'podman-compose==1.6.0'
+          echo "$RUNNER_TEMP/podman-compose/bin" >> "$GITHUB_PATH"
+          echo "PODMAN_COMPOSE_PROVIDER=$RUNNER_TEMP/podman-compose/bin/podman-compose" >> "$GITHUB_ENV"
+
       # 이미지를 미리 받아 둔다. 안 그러면 첫 스파이크의 타임아웃 안에 pull 이 들어가
       # 느린 날 거짓 실패가 난다.
       - name: 엔진·DB 이미지 준비
         run: |
-          docker pull openresty/openresty:alpine
-          docker pull postgres:17-alpine
+          docker pull docker.io/openresty/openresty:alpine
+          docker pull docker.io/library/postgres:17-alpine
 
       - run: ./scripts/verify.sh
 
@@ -118,6 +127,12 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Podman Compose 준비
+        run: |
+          python3 -m venv "$RUNNER_TEMP/podman-compose"
+          "$RUNNER_TEMP/podman-compose/bin/pip" install 'podman-compose==1.6.0'
+          echo "$RUNNER_TEMP/podman-compose/bin" >> "$GITHUB_PATH"
+          echo "PODMAN_COMPOSE_PROVIDER=$RUNNER_TEMP/podman-compose/bin/podman-compose" >> "$GITHUB_ENV"
       - run: ./scripts/quickstart.sh --clean
       - name: 실패 시 데이터 플레인 로그
         if: failure()

@@ -56,7 +56,7 @@ export function startPg(pg: PgHandle): void {
   }
   docker('run', '-d', '--name', pg.name,
     '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary',
-    '-p', `${pg.port}:5432`, 'postgres:17-alpine');
+    '-p', `${pg.port}:5432`, 'docker.io/library/postgres:17-alpine');
 
   // **고정 sleep 은 거짓 실패를 만든다.** `pg_isready` 는 초기화 중에도 한 번 참을
   // 돌려줄 수 있어서(초기 부팅의 임시 서버), 실제 접속으로 확인한다.

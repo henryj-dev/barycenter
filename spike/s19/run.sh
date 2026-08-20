@@ -7,7 +7,7 @@
 #            활성화했을 때, S8(세대 결박)과 S11(새 epoch)이 **함께** 성립한다.
 # 실패 시 → 설계 재작업 (S19 는 프로젝트 block).
 set -euo pipefail
-IMAGE="${1:-${BARY_ENGINE_IMAGE:-openresty/openresty:alpine}}"
+IMAGE="${1:-${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "image: $IMAGE"
 docker run --rm -v "$HERE:/spike:ro" --entrypoint /bin/sh "$IMAGE" /spike/probe.sh

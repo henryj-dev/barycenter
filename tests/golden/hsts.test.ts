@@ -32,7 +32,7 @@ import { render } from '../../src/conf/render.js';
 import { ModelValidationError } from '../../src/validate/model.js';
 import type { HstsPolicy, Model } from '../../src/model/provisional.js';
 
-const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
+const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const PORT = 18921;
 const V = 'a'.repeat(32);
 

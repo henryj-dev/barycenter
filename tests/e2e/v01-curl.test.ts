@@ -27,7 +27,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
+const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const NET = 'bary-v01-net';
 const PG = 'bary-v01-pg';
 const DP = 'bary-v01-dp';
@@ -161,7 +161,7 @@ beforeAll(async () => {
   docker('network', 'create', NET);
 
   docker('run', '-d', '--name', PG, '--network', NET,
-    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'postgres:17-alpine');
+    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'docker.io/library/postgres:17-alpine');
 
   // **백엔드 A:11 은 DP 컨테이너 안의 별도 nginx 가 아니다.** 백엔드까지 컨트롤 플레인이
   // 렌더한 설정 안에 두면 "우리 설정이 우리 설정으로 프록시한다" 가 되어 아무것도 증명하지

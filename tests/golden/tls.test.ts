@@ -21,7 +21,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
 
-const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
+const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 
 function dockerAvailable(): boolean {
   try {

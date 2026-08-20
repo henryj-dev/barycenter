@@ -9,7 +9,7 @@
 # 이 스파이크가 모델의 `https` 를 되살리는 전제다 — 렌더러가 TLS 를 못 내는데 타입만
 # 주면 v3 처럼 `protocol: 'https'` 가 평문 `listen 443;` 으로 나간다.
 set -euo pipefail
-IMAGE="${1:-${BARY_ENGINE_IMAGE:-openresty/openresty:alpine}}"
+IMAGE="${1:-${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "image: $IMAGE"
 docker run --rm -v "$HERE:/spike:ro" --entrypoint /bin/sh "$IMAGE" /spike/probe.sh

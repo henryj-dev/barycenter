@@ -8,7 +8,7 @@
 #
 # `dist/` 를 마운트하므로 먼저 빌드해야 한다 — verify.sh 는 build 뒤에 부른다.
 set -euo pipefail
-IMAGE="${1:-${BARY_ENGINE_IMAGE:-openresty/openresty:alpine}}"
+IMAGE="${1:-${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 [ -d "$ROOT/dist" ] || { echo "dist/ 가 없다 — ./scripts/build.sh 를 먼저 돌린다"; exit 1; }

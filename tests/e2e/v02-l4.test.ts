@@ -24,7 +24,7 @@ import { createSocket } from 'node:dgram';
 import { connect as tlsConnect } from 'node:tls';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
+const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const NET = 'bary-v02-net';
 const PG = 'bary-v02-pg';
 const DP = 'bary-v02-dp';
@@ -208,7 +208,7 @@ beforeAll(async () => {
   tearDown();
   docker('network', 'create', NET);
   docker('run', '-d', '--name', PG, '--network', NET,
-    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'postgres:17-alpine');
+    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'docker.io/library/postgres:17-alpine');
 
   docker('run', '-d', '--name', DP, '--network', NET,
     '-p', `${API_PORT}:8088`,

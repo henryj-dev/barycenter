@@ -11,7 +11,7 @@
 # 실패 시 결정: 둘 중 하나라도 떨어지면 → 대안 B (순수 nginx + DNS resolve).
 set -euo pipefail
 
-IMAGE="${1:-${BARY_ENGINE_IMAGE:-openresty/openresty:alpine}}"
+IMAGE="${1:-${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "image: $IMAGE"

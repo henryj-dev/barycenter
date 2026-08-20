@@ -14,12 +14,12 @@
 # 런타임 의존성만 따로 준비한다. 런타임 이미지에 `npm` 을 넣지 않기 위해서다 —
 # 처음엔 거기서 `npm ci` 를 돌리려다 `exit 127` 로 죽었다(openresty 이미지에는 `nodejs`
 # 는 넣어도 `npm` 은 없다). 도구를 프로덕션 이미지에 끌어들이지 않는 편이 낫다.
-FROM node:24-alpine AS deps
+FROM docker.io/library/node:24-alpine AS deps
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-FROM node:24-alpine AS build
+FROM docker.io/library/node:24-alpine AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
 # 빌드에는 devDependency(typescript)가 필요하다.
@@ -29,7 +29,7 @@ COPY scripts ./scripts
 COPY src ./src
 RUN ./scripts/build.sh
 
-FROM openresty/openresty:alpine
+FROM docker.io/openresty/openresty:alpine
 
 # 엔진 이미지 위에 Node 를 얹는다. 반대로(node 이미지에 openresty 를 얹기) 하면
 # OpenResty 를 소스에서 빌드해야 한다 — alpine 저장소에 패키지가 없다.

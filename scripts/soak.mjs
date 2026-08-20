@@ -69,7 +69,7 @@ async function up() {
   tearDown();
   docker('network', 'create', NET);
   docker('run', '-d', '--name', PG, '--network', NET,
-    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'postgres:17-alpine');
+    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'docker.io/library/postgres:17-alpine');
   const hash = createHash('sha256').update(TOKEN).digest('hex');
   docker('run', '-d', '--name', DP, '--network', NET,
     '-p', `${API}:8088`, '-p', `${DATA}:999`,
@@ -81,7 +81,7 @@ async function up() {
     '-e', `BARY_TOKENS=[{"name":"soak","hash":"sha256:${hash}","scopes":["read","write","apply"]}]`,
     '-e', 'BARY_RELOAD_CMD=kill -HUP $(cat /prefix/logs/nginx.pid)',
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
-    '--entrypoint', '/bin/sh', 'openresty/openresty:alpine', '-c', [
+    '--entrypoint', '/bin/sh', 'docker.io/openresty/openresty:alpine', '-c', [
       'set -e',
       'apk add --no-cache nodejs >/dev/null 2>&1',
       'mkdir -p /prefix/logs /prefix/state /prefix/generations /backend/logs',

@@ -34,8 +34,8 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-IMAGE="${BARY_ENGINE_IMAGE:-openresty/openresty:alpine}"
-H3CLIENT="${BARY_H3_CLIENT:-ymuski/curl-http3}"
+IMAGE="${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}"
+H3CLIENT="${BARY_H3_CLIENT:-docker.io/ymuski/curl-http3}"
 NET=bary-s20-net
 ENGINE=bary-s20-engine
 PORT=19860
@@ -280,7 +280,7 @@ CONF
   # 소켓이 몇 개 열렸나. 하나면 nginx 가 합친 것이고, 그러면 둘 중 하나가 조용히 진다.
   nudp=$(docker exec "$ENGINE" sh -c "cat /proc/net/udp /proc/net/udp6 2>/dev/null | awk '{print \$2}' | grep -c ':$PORT_HEX\$'" 2>/dev/null || echo 0)
   h3=$(curl_run --http3-only "https://$ENGINE:$PORT/")
-  udp=$(docker run --rm --network "$NET" busybox:latest \
+  udp=$(docker run --rm --network "$NET" docker.io/library/busybox:latest \
         sh -c "echo ping | nc -u -w2 $ENGINE $PORT 2>/dev/null | head -c 40" 2>/dev/null)
   [ -z "$udp" ] && udp="(무응답)"
   engine_stop

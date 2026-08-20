@@ -23,7 +23,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
+const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const NET = 'bary-v03-net';
 const PG = 'bary-v03-pg';
 const DP = 'bary-v03-dp';
@@ -120,7 +120,7 @@ beforeAll(async () => {
   tearDown();
   docker('network', 'create', NET);
   docker('run', '-d', '--name', PG, '--network', NET,
-    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'postgres:17-alpine');
+    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'docker.io/library/postgres:17-alpine');
 
   const hash = execFileSync('node', ['-e',
     `process.stdout.write(require('crypto').createHash('sha256').update('${TOKEN}').digest('hex'))`,

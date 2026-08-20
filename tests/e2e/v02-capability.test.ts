@@ -21,7 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /** **공식 nginx 다.** 여기에는 `stream_realip` 이 있고 lua 는 없다. */
-const IMAGE = process.env['BARY_NGINX_IMAGE'] ?? 'nginx:alpine';
+const IMAGE = process.env['BARY_NGINX_IMAGE'] ?? 'docker.io/library/nginx:alpine';
 const NET = 'bary-cap-net';
 const PG = 'bary-cap-pg';
 const DP = 'bary-cap-dp';
@@ -86,7 +86,7 @@ beforeAll(async () => {
   tearDown();
   docker('network', 'create', NET);
   docker('run', '-d', '--name', PG, '--network', NET,
-    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'postgres:17-alpine');
+    '-e', 'POSTGRES_PASSWORD=bary', '-e', 'POSTGRES_DB=bary', 'docker.io/library/postgres:17-alpine');
 
   const hash = execFileSync('node', ['-e',
     `process.stdout.write(require('crypto').createHash('sha256').update('${TOKEN}').digest('hex'))`,

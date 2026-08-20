@@ -25,7 +25,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 NET=bary-s18-net
 PEBBLE=bary-s18-pebble
 PEBBLE_IMAGE="${PEBBLE_IMAGE:-ghcr.io/letsencrypt/pebble:latest}"
-NODE_IMAGE="${NODE_IMAGE:-node:24-alpine}"
+NODE_IMAGE="${NODE_IMAGE:-docker.io/library/node:24-alpine}"
 
 cleanup() {
   docker rm -f "$PEBBLE" >/dev/null 2>&1 || true

@@ -17,7 +17,7 @@
 
 services:
   db:
-    image: postgres:17-alpine
+    image: docker.io/library/postgres:17-alpine
     environment:
       POSTGRES_PASSWORD: bary
       POSTGRES_DB: bary
@@ -34,7 +34,7 @@ services:
   # 예제용 백엔드. **제품의 일부가 아니다** — `examples/hello.json` 의 `:11` 이
   # 가리킬 곳이 필요해서 둔다. 실제 배포에서는 지운다.
   demo-backend:
-    image: openresty/openresty:alpine
+    image: docker.io/openresty/openresty:alpine
     entrypoint: ["/bin/sh", "-c"]
     command:
       # http :11 · tcp :12 · udp :13 — `examples/hello.json` 과 `examples/l4.json` 이

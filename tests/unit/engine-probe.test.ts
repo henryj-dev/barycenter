@@ -81,7 +81,7 @@ describe('엔진 조회', () => {
     try {
       out = execFileSync('docker', ['run', '--rm', '--entrypoint',
         '/usr/local/openresty/bin/openresty',
-        process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine', '-V'],
+        process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine', '-V'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
       const err = e as { stdout?: string; stderr?: string };

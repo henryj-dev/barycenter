@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 
-const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'openresty/openresty:alpine';
+const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 
 export function dropScratch(dir: string): void {
   if (dir === '') return;
