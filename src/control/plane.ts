@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
 import { type DiscoveryIntake } from './discovery.js';
-import { drainKeys, observePeerFromAdmin } from './drain.js';
+import { drainKeys, observationPeerOf, observePeerFromAdmin } from './drain.js';
 import { currentHealth, reduceMembership } from './health.js';
 import { httpAdminConf, slotsOf, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
@@ -110,7 +110,8 @@ export class ControlPlane {
   /**
    * 엔진이 준 peer 관측. 못 읽으면 undefined — 드레인이 0 을 짓지 않는다.
    */
-  async observePeer(peer: string): Promise<unknown> {
+  async observePeer(host: string, port: number): Promise<unknown> {
+    const peer = await observationPeerOf(host, port);
     return observePeerFromAdmin(fetch, this.opts.adminPort, peer);
   }
 

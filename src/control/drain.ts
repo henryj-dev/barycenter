@@ -4,6 +4,7 @@
  * 새 트래픽은 멤버십에서 뺀다. peer 별 inflight/sessions 를 엔진이 안 주면
  * 조건은 `no_new_traffic` 뿐이고 **숫자를 짓지 않는다.**
  */
+import { resolvePeer } from './membership.js';
 import type { Db } from '../store/pg.js';
 
 export type DrainCondition = 'no_new_traffic' | 'quiesced';
@@ -17,6 +18,14 @@ export type DrainStatus = {
  * 엔진이 준 관측만 받는다. 필드가 없거나 정수가 아니면 **숫자를 안 만든다.**
  * `inflight: 0` 을 기본값으로 두지 않는다.
  */
+/**
+ * 슬롯과 같은 키. 밸런서는 resolve 된 IP 로 `in:` 을 올린다.
+ * 모델 호스트 이름을 그대로 치면 관측이 있어도 숫자를 못 읽는다.
+ */
+export async function observationPeerOf(host: string, port: number): Promise<string> {
+  return resolvePeer(`${host}:${port}`);
+}
+
 /**
  * 엔진 admin 에서 peer 관측을 읽는다. 없거나 깨지면 undefined — 숫자를 안 짓는다.
  */

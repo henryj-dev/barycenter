@@ -12,7 +12,7 @@ import { ddlFromMigrations, MIGRATIONS_DIR, openApiOf } from '../../src/api/free
 import { backupNow, restoreNow, secretRefsIn } from '../../src/cli/backup.js';
 import type { Http, HttpResult } from '../../src/cli/flow.js';
 import {
-  drainStatusOf, observePeerFromAdmin, parsePeerObservation,
+  drainStatusOf, observationPeerOf, observePeerFromAdmin, parsePeerObservation,
 } from '../../src/control/drain.js';
 import { KIT_ROUTES, pageOf } from '../../src/web/page.js';
 
@@ -46,6 +46,28 @@ describe('드레인 관측', () => {
 
     const miss = await observePeerFromAdmin(async () => new Response('{}', { status: 200 }), 1, 'x:1');
     expect(parsePeerObservation(miss)).toBeUndefined();
+  });
+
+  it('모델 호스트가 이름이면 관측 키는 푼 IP 다', async () => {
+    const ipPeer = await observationPeerOf('localhost', 80);
+    expect(ipPeer === '127.0.0.1:80' || ipPeer === '[::1]:80').toBe(true);
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.includes('localhost')) return new Response('{}', { status: 200 });
+      if (url.includes(encodeURIComponent(ipPeer))) {
+        return new Response(JSON.stringify({ inflight: 3, active_sessions: 3 }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200 });
+    };
+    expect(parsePeerObservation(await observePeerFromAdmin(fetchImpl, 19999, 'localhost:80')))
+      .toBeUndefined();
+    const raw = await observePeerFromAdmin(fetchImpl, 19999, ipPeer);
+    expect(parsePeerObservation(raw)).toEqual({ inflight: 3, sessions: 3 });
+    expect(drainStatusOf({
+      backend: 'demo', draining: true, ...parsePeerObservation(raw),
+    })).toMatchObject({ inflight: 3, active_sessions: 3 });
   });
 });
 
@@ -101,10 +123,27 @@ describe('OpenAPI · DDL 동결', () => {
     const generated = `${JSON.stringify(openApiOf(table), null, 2)}\n`;
     expect(generated).toBe(readFileSync(join(root, 'SURFACE-API.json'), 'utf8'));
     expect(ddlFromMigrations(MIGRATIONS_DIR)).toBe(readFileSync(join(root, 'SURFACE-DDL.sql'), 'utf8'));
+    const drifted = openApiOf(table.slice(0, -1));
+    expect(JSON.stringify(drifted)).not.toBe(JSON.stringify(openApiOf(table)));
   });
 });
 
 describe('Kit 여덟 경로', () => {
+  it('GUI 는 adapter-static Kit 이고 SPA 폴백이 아니다', () => {
+    const pkg = JSON.parse(readFileSync(join(root, 'gui/package.json'), 'utf8')) as {
+      devDependencies: Record<string, string>;
+    };
+    expect(pkg.devDependencies['@sveltejs/kit']).toBeDefined();
+    expect(pkg.devDependencies['@sveltejs/adapter-static']).toBeDefined();
+    const svelteCfg = readFileSync(join(root, 'gui/svelte.config.js'), 'utf8');
+    expect(svelteCfg).toContain('@sveltejs/adapter-static');
+    expect(svelteCfg).toMatch(/fallback:\s*undefined/);
+    const viteCfg = readFileSync(join(root, 'gui/vite.config.ts'), 'utf8');
+    expect(viteCfg).toContain('@sveltejs/kit/vite');
+    expect(viteCfg).toContain('sveltekit()');
+    expect(viteCfg).not.toMatch(/plugins:\s*\[svelte\(\)\]/);
+  });
+
   it('여덟 자리가 Kit 라우트고 pageOf 가 같은 이름을 읽는다', () => {
     expect(KIT_ROUTES).toHaveLength(8);
     const routesDir = join(root, 'gui/src/routes');

@@ -273,7 +273,7 @@ const ROUTES: Route[] = [
     const be = m.backends.find((b) => b.key === key);
     const raw = be === undefined
       ? undefined
-      : await api.control.observePeer(`${be.host}:${be.port}`);
+      : await api.control.observePeer(be.host, be.port);
     const obs = parsePeerObservation(raw);
     const status = drainStatusOf({
       backend: key,

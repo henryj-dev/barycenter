@@ -98,7 +98,7 @@ export async function resolveSlots(slots: Slots): Promise<Slots> {
   return out;
 }
 
-async function resolvePeer(hp: string): Promise<string> {
+export async function resolvePeer(hp: string): Promise<string> {
   const cut = hp.lastIndexOf(':');
   if (cut <= 0) return hp;
   const host = hp.slice(0, cut);
