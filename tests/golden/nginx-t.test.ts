@@ -7,7 +7,7 @@
  * 도커가 필요하다:  npm run test:golden
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +30,7 @@ function dockerAvailable(): boolean {
 /** 실제 엔진에서 nginx -t 를 돌린다. 통과하면 null, 아니면 stderr. */
 function nginxTest(conf: string): string | null {
   const dir = mkdtempSync(join(tmpdir(), 'bary-golden-'));
+  chmodSync(dir, 0o777);
   try {
     mkdirSync(join(dir, 'conf'), { recursive: true });
     mkdirSync(join(dir, 'logs'), { recursive: true });
@@ -57,6 +58,7 @@ function nginxTest(conf: string): string | null {
  */
 function nginxProbe(conf: string, probe: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'bary-runtime-'));
+  chmodSync(dir, 0o777);
   try {
     mkdirSync(join(dir, 'conf'), { recursive: true });
     mkdirSync(join(dir, 'logs'), { recursive: true });

@@ -21,7 +21,7 @@
  *   npm run test:e2e     (도커 필요)
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -315,6 +315,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
   beforeEach(async () => {
     reapStrays();
     prefix = mkdtempSync(join(tmpdir(), 'bary-e2e-'));
+    chmodSync(prefix, 0o777);
     mkdirSync(join(prefix, 'generations'), { recursive: true });
     mkdirSync(join(prefix, 'logs'), { recursive: true });
     makeGeneration('gen-1');

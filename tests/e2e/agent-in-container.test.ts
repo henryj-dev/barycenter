@@ -23,7 +23,7 @@
  *   npm run test:e2e     (도커 필요)
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
 import { materializeGeneration } from '../../src/dp/materialize.js';
 import { tmpdir } from 'node:os';
@@ -67,6 +67,7 @@ const docker = (...args: string[]): string =>
  */
 function buildAgentBundle(): string {
   const out = mkdtempSync(join(tmpdir(), 'bary-agent-'));
+  chmodSync(out, 0o777);
   const entry = join(out, 'entry.mjs');
   const src = (f: string) => JSON.stringify(join(repo, 'src/dp', f));
   writeFileSync(
@@ -236,6 +237,7 @@ describe('DP Agent 를 컨테이너 안에서 돌린다 — FsEffects 실물 경
   beforeEach(async () => {
     reapStrays();
     prefix = mkdtempSync(join(tmpdir(), 'bary-inc-'));
+    chmodSync(prefix, 0o777);
     mkdirSync(join(prefix, 'generations'), { recursive: true });
     mkdirSync(join(prefix, 'logs'), { recursive: true });
     mkdirSync(join(prefix, 'state'), { recursive: true });

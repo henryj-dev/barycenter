@@ -18,7 +18,7 @@
  * 검증기가 막는 것을 여기서 확인한다.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,6 +58,7 @@ const model: Model = {
 /** 렌더 산출물로 nginx 를 띄우고 프로브를 돌린다. admin 조각을 세대에 넣는다. */
 function serve(conf: string, probe: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'bary-acme-'));
+  chmodSync(dir, 0o777);
   try {
     mkdirSync(join(dir, 'conf', 'admin'), { recursive: true });
     mkdirSync(join(dir, 'logs'), { recursive: true });

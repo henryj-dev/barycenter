@@ -22,7 +22,7 @@
  * 아래 마지막 테스트가 그 불변식을 지킨다.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,6 +73,7 @@ echo "deny=$(hdr /deny)"
 
 function serve(conf: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'bary-hsts-'));
+  chmodSync(dir, 0o777);
   try {
     mkdirSync(join(dir, 'conf'), { recursive: true });
     mkdirSync(join(dir, 'logs'), { recursive: true });

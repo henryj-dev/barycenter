@@ -18,7 +18,7 @@
  * 안 끊는지**를 잰다. 후자가 더 중요하다 — 잘못 켜면 서비스가 죽는다.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -66,6 +66,7 @@ const CERTS = [{ key: 'cert-a', cn: 'a.test' }, { key: 'cert-b', cn: 'b.test' }]
 
 function serve(conf: string, probe: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'bary-snihost-'));
+  chmodSync(dir, 0o777);
   try {
     mkdirSync(join(dir, 'conf'), { recursive: true });
     mkdirSync(join(dir, 'logs'), { recursive: true });

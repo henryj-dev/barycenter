@@ -14,7 +14,7 @@
  * 켜게 두면 안 되는 종류의 설정이다.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,6 +62,7 @@ echo "bodylen=$(wc -c < /prefix/body 2>/dev/null | tr -d ' ')"
 
 function serve(conf: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'bary-wst-'));
+  chmodSync(dir, 0o777);
   try {
     mkdirSync(join(dir, 'conf'), { recursive: true });
     mkdirSync(join(dir, 'logs'), { recursive: true });

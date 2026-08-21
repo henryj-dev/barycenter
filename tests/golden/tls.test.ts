@@ -12,7 +12,7 @@
  * 도커가 필요하다:  npm run test:golden
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,6 +45,7 @@ function serveTls(
   probe: string,
 ): string {
   const dir = mkdtempSync(join(tmpdir(), 'bary-tls-'));
+  chmodSync(dir, 0o777);
   try {
     mkdirSync(join(dir, 'conf'), { recursive: true });
     mkdirSync(join(dir, 'logs'), { recursive: true });
