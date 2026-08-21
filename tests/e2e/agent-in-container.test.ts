@@ -250,7 +250,7 @@ describe('DP Agent 를 컨테이너 안에서 돌린다 — FsEffects 실물 경
     container = `bary-inc-${process.pid}-${Date.now()}`;
     docker(
       'run', '-d', '--name', container,
-      '-v', `${prefix}:/prefix`,
+      '-v', `${prefix}:/prefix:Z`,
       '--entrypoint', '/usr/local/openresty/bin/openresty',
       IMAGE, '-p', '/prefix', '-c', 'current/nginx.conf',
     );

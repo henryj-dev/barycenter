@@ -73,7 +73,7 @@ function serve(conf: string): string {
     writeFileSync(join(dir, 'conf', 'nginx.conf'), `daemon off;\n${conf}`, 'utf8');
     writeFileSync(join(dir, 'probe.sh'), PROBE, 'utf8');
     return execFileSync('docker',
-      ['run', '--rm', '-v', `${dir}:/prefix`, '--entrypoint', '/bin/sh', IMAGE, '-c',
+      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
         'apk add --no-cache openssl >/dev/null 2>&1; ' +
         `mkdir -p /prefix/conf/certs/c/${V} && ` +
         'openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=a.test" ' +

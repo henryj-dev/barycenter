@@ -74,7 +74,7 @@ function serve(conf: string): string {
       `pid logs/nginx.pid;\n${withSlow}`, 'utf8');
     writeFileSync(join(dir, 'probe.sh'), PROBE, 'utf8');
     return execFileSync('docker',
-      ['run', '--rm', '-v', `${dir}:/prefix`, '--entrypoint', '/bin/sh', IMAGE, '-c',
+      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
         'apk add --no-cache curl >/dev/null 2>&1; ' +
         '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf; sleep 1.2; ' +
         'sh /prefix/probe.sh'],

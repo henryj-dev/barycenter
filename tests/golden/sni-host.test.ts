@@ -79,7 +79,7 @@ function serve(conf: string, probe: string): string {
       `-keyout /prefix/conf/certs/${c.key}/${'a'.repeat(32)}/privkey.pem ` +
       `-out /prefix/conf/certs/${c.key}/${'a'.repeat(32)}/fullchain.pem >/dev/null 2>&1`).join('; ');
     return execFileSync('docker',
-      ['run', '--rm', '-v', `${dir}:/prefix`, '--entrypoint', '/bin/sh', IMAGE, '-c',
+      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
         'apk add --no-cache openssl >/dev/null 2>&1; ' + mk + '; ' +
         '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.5; ' +
         'sh /prefix/probe.sh; echo "---errorlog---"; tail -4 /prefix/logs/error.log'],

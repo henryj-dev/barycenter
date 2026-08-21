@@ -38,7 +38,7 @@ function nginxTest(conf: string): string | null {
     try {
       execFileSync(
         'docker',
-        ['run', '--rm', '-v', `${dir}:/prefix`, '--entrypoint',
+        ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint',
          '/usr/local/openresty/bin/openresty', IMAGE, '-t', '-p', '/prefix', '-c', 'conf/nginx.conf'],
         { stdio: ['ignore', 'pipe', 'pipe'] },
       );
@@ -66,7 +66,7 @@ function nginxProbe(conf: string, probe: string): string {
     writeFileSync(join(dir, 'probe.sh'), probe, 'utf8');
     return execFileSync(
       'docker',
-      ['run', '--rm', '-v', `${dir}:/prefix`, '--entrypoint', '/bin/sh', IMAGE, '-c',
+      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
        'apk add --no-cache curl >/dev/null 2>&1; ' +
        '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.2; ' +
        'sh /prefix/probe.sh'],

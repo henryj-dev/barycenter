@@ -329,7 +329,7 @@ describe('S12 end-to-end — 실제 nginx', () => {
     container = `bary-e2e-${process.pid}-${Date.now()}`;
     docker(
       'run', '-d', '--name', container,
-      '-v', `${prefix}:/prefix`,
+      '-v', `${prefix}:/prefix:Z`,
       '-p', `127.0.0.1:${PORT}:8080`,
       '--entrypoint', '/usr/local/openresty/bin/openresty',
       IMAGE, '-p', '/prefix', '-c', 'current/nginx.conf',
