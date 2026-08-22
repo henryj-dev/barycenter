@@ -30,7 +30,7 @@ import {
 } from '../api/auth.js';
 import type { OidcRpSettings } from '../api/oidc-code.js';
 import { render } from '../conf/render.js';
-import { adminFetch } from '../control/admin-client.js';
+import { adminFetch, clearStaleSockets } from '../control/admin-client.js';
 import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
@@ -182,6 +182,15 @@ export async function main(): Promise<void> {
   const streamAdminSocket = env('BARY_STREAM_ADMIN_SOCKET', defaultStreamSocket(adminSocket));
 
   if (process.argv.includes('--write-bootstrap')) {
+    /**
+     * **엔진을 띄우기 직전이 여기다.** 부트스트랩을 쓰는 이 호출은 컨테이너 기동에서
+     * nginx 바로 앞에 한 번 돈다 — 죽은 소켓 파일을 치울 자리가 정확히 그 자리다.
+     *
+     * 데몬만 재기동하는 경로(`exec node barycenterd.js`)에는 이 플래그가 없으므로
+     * 여기 안 온다. 그래도 `clearStaleSockets` 는 붙어 보고 정한다 — 이 순서에
+     * 기대는 것과 안전이 두 겹이라야 다음 사람이 순서를 바꿔도 안 깨진다.
+     */
+    await clearStaleSockets([adminSocket, streamAdminSocket]);
     writeBootstrap(prefix, adminSocket, streamAdminSocket);
     return;
   }

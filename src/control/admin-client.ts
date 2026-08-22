@@ -20,7 +20,9 @@
  * API 가 아니다). `node:http` 로 직접 만든다 — 런타임 의존성은 `pg` 하나라는 계약(§11.2)
  * 을 지킨다.
  */
-import { request } from 'node:http';
+import { existsSync, unlinkSync } from 'node:fs';
+import { Agent, request } from 'node:http';
+import { connect } from 'node:net';
 
 /**
  * 이 소켓에 붙는 `fetch`.
@@ -30,6 +32,21 @@ import { request } from 'node:http';
  * 다른 곳으로 나가지 않는다. 그게 이 함수가 주는 보장이다.
  */
 export function adminFetch(socketPath: string): typeof fetch {
+  /**
+   * **연결을 재사용하지 않는다.**
+   *
+   * Node 의 전역 agent 는 keep-alive 가 기본이고, 풀은 `socketPath` 로 묶인다. 그런데
+   * nginx 는 놀고 있는 연결을 자기 판단으로 닫는다 — 그러면 풀에 죽은 소켓이 남고
+   * 다음 호출이 `ECONNRESET` 으로 터진다. **부르는 쪽에서는 간헐 실패로 보인다.**
+   *
+   * 전역 `fetch`(undici)는 이 경우를 안에서 다시 걸어 준다. `http.request` 는 그렇지
+   * 않으므로 여기서 원인을 없앤다.
+   *
+   * 대가는 호출마다 소켓 하나인데, 이 평면의 호출은 멤버십 push · 드레인 관측 · ACME
+   * 적재가 전부다. 초당 수천 건이 아니다 — `health_cursor` 에서 직렬화 비용을 내고
+   * 정확성을 산 것과 같은 거래다.
+   */
+  const agent = new Agent({ keepAlive: false });
   return async (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === 'string' ? input : input.toString());
     const body = init?.body === undefined || init.body === null
@@ -39,6 +56,7 @@ export function adminFetch(socketPath: string): typeof fetch {
     return new Promise<Response>((resolve, reject) => {
       const req = request(
         {
+          agent,
           socketPath,
           method: init?.method ?? 'GET',
           path: `${url.pathname}${url.search}`,
@@ -80,4 +98,37 @@ export function adminFetch(socketPath: string): typeof fetch {
       req.end();
     });
   };
+}
+
+/**
+ * 죽은 소켓 파일을 치운다. **nginx 를 띄우기 직전에** 부른다.
+ *
+ * TCP 포트는 프로세스가 죽으면 커널이 거둔다. **유닉스 소켓은 파일이라 남는다.**
+ * nginx 는 우아하게 끝날 때 자기 소켓을 지우지만 `docker restart`/`SIGKILL` 에는 그
+ * 기회가 없고, 다음 nginx 가 그 경로에 bind 하지 못한다 — 엔진이 안 뜨면 데몬은 HUP
+ * 보낼 곳이 없다. e2e 가 이걸로 10 개를 연쇄로 깼다.
+ *
+ * ⚠️ **무조건 지우면 안 된다.** 데몬만 재기동하는 경로에서는 nginx 가 살아서 이 소켓을
+ * 듣고 있다. 그때 지우면 도는 엔진의 admin 평면을 우리가 끊는 것이고, 그건 고치려던
+ * 것보다 나쁘다.
+ *
+ * 붙어 보고 정한다 — 누가 듣고 있으면 손대지 않고, 거절당하면 시체다. 소켓이 아닌
+ * 파일도 같은 판정에 걸린다(거기에는 아무도 안 붙는다), 그리고 그 자리에 소켓이 아닌
+ * 것이 있으면 nginx 는 어차피 bind 를 못 한다.
+ */
+export async function clearStaleSockets(paths: readonly string[]): Promise<void> {
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    const live = await new Promise<boolean>((resolve) => {
+      const probe = connect({ path });
+      // 붙었으면 산 것이다. 바로 끊는다 — 우리는 듣는 쪽이 있는지만 물었다.
+      probe.on('connect', () => {
+        probe.destroy();
+        resolve(true);
+      });
+      probe.on('error', () => resolve(false));
+    });
+    if (live) continue;
+    unlinkSync(path);
+  }
 }
