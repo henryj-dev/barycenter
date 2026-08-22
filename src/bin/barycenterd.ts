@@ -47,6 +47,7 @@ import { count } from '../obs/metrics.js';
 import { dataplaneCapabilitiesOf } from '../engine/native-dns.js';
 import { probeEngine } from '../engine/probe.js';
 import { renderCapsOf } from '../engine/render-caps.js';
+import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
 import { isLoopbackBind } from '../validate/sockets.js';
@@ -378,6 +379,38 @@ export async function main(): Promise<void> {
   }
 
   /**
+   * **DB 보존** (검수 B-08 · 제안#10).
+   *
+   * 세대는 상한이 있고(`dp/retention.ts`) 시크릿도 뒤늦게 얻었는데(`dp/secret-gc.ts`)
+   * DB 는 없었다. `health_events` 와 `audit` 은 삽입만 있고 지우는 코드가 없다.
+   *
+   * **ACME 와 무관하게 돈다.** 시크릿 청소는 `acmeOn` 안에 사는데, 그건 자동 갱신이
+   * 만드는 쓰레기를 치우는 것이라 그렇다. 이 둘은 ACME 를 안 켠 배포에서도 자란다.
+   *
+   * **리더만.** 여러 노드가 동시에 밀면 서로의 잠금을 기다리기만 한다.
+   */
+  const auditDaysRaw = env('BARY_AUDIT_RETENTION_DAYS', '');
+  const dbRetention = {
+    healthEventDays: Number(env('BARY_HEALTH_EVENT_RETENTION_DAYS', String(DEFAULT_HEALTH_EVENT_DAYS))),
+    // 빈 값은 **무한 보존**이다. 감사 추적의 보존 기간은 우리가 정할 것이 아니라
+    // 운영자가 정하는 것이고, 기본값으로 지우면 업그레이드가 곧 데이터 소실이다.
+    ...(auditDaysRaw === '' ? {} : { auditDays: Number(auditDaysRaw) }),
+  };
+  const dbRetentionTimer = setInterval(() => {
+    void (async (): Promise<void> => {
+      if (!election.state.isLeader) return;
+      try {
+        const out = await sweepDatabase({ db, ...dbRetention });
+        if (out.healthEvents > 0 || out.audit > 0) log.info('db.swept', out);
+      } catch (e) {
+        log.error('db.sweep_failed', { error: (e as Error).message });
+      }
+    })();
+  }, Number(env('BARY_DB_RETENTION_INTERVAL_MS', '3600000')));
+  dbRetentionTimer.unref?.();
+  const stopDbRetention = (): void => clearInterval(dbRetentionTimer);
+
+  /**
    * ACME 갱신 러너 (§8.2 · ADR-ACME).
    *
    * **`httpLua` 가 있어야 돈다.** 챌린지는 shared dict 에서 서빙되고(ADR-ACME ①), 그게
@@ -560,6 +593,7 @@ export async function main(): Promise<void> {
       acmeRunner.stop();
       stopPublish();
       stopSecretGc();
+      stopDbRetention();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은
       // 주인을 가려내는 `/proc` 폴백에 기댄다 — 그 파일을 못 읽는 플랫폼에서는
       // `stillHolding` 이 안전한 쪽(살아 있다)으로 틀려 기동이 막힌다.

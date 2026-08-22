@@ -116,8 +116,17 @@ export async function reset(db: Db): Promise<void> {
                            -- 트리거가 정상 경로를 덮지만, 픽스처의 TRUNCATE 는 트리거를
                            -- 안 태운다 — 여기 안 적으면 앞 테스트의 판정이 살아남는다.
                            backend_drain, backend_health,
+                           -- **헬스 이벤트와 그 커서도** (검수 B-08). 여기 없어서 seq 가
+                           -- 테스트 사이에 넘어갔고, health_events 에 직접 쓰는 테스트가
+                           -- 앞 테스트의 번호와 PK 로 충돌했다. engine_settings 때와
+                           -- 같은 누락이다. (표 이름에 백틱을 쓰면 이 템플릿이 끊긴다.)
+                           health_events, health_cursor,
                            leadership, config_head, config_revisions
                   RESTART IDENTITY CASCADE`);
+  // 커서는 **단일 행 표**다 — 비웠으면 다시 넣어야 한다. 행이 없으면 `emit()` 의
+  // `SELECT ... FOR UPDATE` 가 빈 결과를 받아 seq 를 매번 1 로 발급하고, 두 번째
+  // 이벤트에서 PK 가 터진다. `config_head` 와 같은 짝이다.
+  await db.query(`INSERT INTO health_cursor DEFAULT VALUES`);
   await db.query(`ALTER SEQUENCE config_revision_seq RESTART 1`);
   await db.query(`ALTER SEQUENCE activation_epoch_seq RESTART 1`);
   await db.query(`ALTER SEQUENCE leader_token_seq RESTART 1`);
