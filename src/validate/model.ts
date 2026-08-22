@@ -278,7 +278,12 @@ export function validateModel(
   // `nginx -t` 가 실패하므로 어차피 못 쓴다. **게시 전에 실패하는 것보다 저장에서 막는
   // 편이 낫다** — 운영자가 plan 단계에서 알게 된다.
   for (const l of model.listeners) {
-    if (!l.enabled || l.protocol === 'udp' || l.protocol === 'http') continue;
+    // **https 는 stream 이 아니다.** 여기서 `http` 만 빼고 있었고, 그래서 https 의 PROXY
+    // 수신이 `stream_realip` 을 요구했다 — OpenResty 에는 그 모듈이 없으므로 조합 자체가
+    // 저장 불가였다. https 는 http 컨텍스트에서 서빙되고 `http_realip_module` 을 쓴다
+    // (검수 S-02, 렌더러의 `realipNodes` 와 같은 기준이어야 한다).
+    if (!l.enabled || l.protocol === 'udp'
+      || l.protocol === 'http' || l.protocol === 'https') continue;
     if (l.acceptProxyProtocol === undefined) continue;
     if (caps.streamRealip) continue;
     issues.push({

@@ -491,7 +491,13 @@ function realipNodes(listener: Listener): ConfNode[] {
     // 처음엔 양쪽에 똑같이 냈다가 공식 nginx e2e 가 잡았다. OpenResty 이미지에는
     // stream_realip 이 없어 그 조합이 애초에 검증기에 막히므로 **기본 이미지로는
     // 영원히 안 드러나는 자리**였다.
-    ...(listener.protocol === 'http'
+    //
+    // **`http` 가 아니라 http *컨텍스트* 가 기준이다.** 처음엔 `protocol === 'http'` 로
+    // 적었고, 그래서 **https 리스너에 `set_real_ip_from` 만 나갔다** — nginx 의 기본
+    // `real_ip_header` 는 `X-Real-IP` 이므로 PROXY 주소가 아니라 앞단이 넘긴 HTTP 헤더가
+    // `$remote_addr` 가 된다. 신뢰 경계를 걸었다고 믿으면서 클라이언트가 정하는 값으로
+    // 해시하고 XFF 를 쌓고 있었다 (검수 S-02).
+    ...(listener.protocol === 'http' || listener.protocol === 'https'
       ? [directive('real_ip_header', [lit('proxy_protocol')])]
       : []),
   ];
