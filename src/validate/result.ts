@@ -9,7 +9,8 @@ export type ErrCode =
   | 'invalid_header_name'
   | 'invalid_header_value'
   | 'invalid_hash_key'
-  | 'invalid_bind_address';
+  | 'invalid_bind_address'
+  | 'invalid_path_prefix';
 
 export const ok = <T>(value: T): Ok<T> => ({ ok: true, value });
 export const err = (code: ErrCode, message: string): Err => ({ ok: false, code, message });

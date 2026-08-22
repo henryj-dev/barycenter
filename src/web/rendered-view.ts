@@ -4,13 +4,6 @@
  * GET /api/v1/config/rendered 는 **head 리비전**의 산출물이다.
  * nginx.conf 는 정본이 아니다. 폴링하지 않는다.
  */
-export type RenderedFact = {
-  revision?: unknown;
-  digest?: unknown;
-  planes?: unknown;
-  conf?: unknown;
-};
-
 export type RenderedView = {
   revision: string | undefined;
   digest: string | undefined;

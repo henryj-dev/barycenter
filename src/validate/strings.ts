@@ -9,6 +9,8 @@
  *   2) 그래도 남는 것은 직렬화가 인용·이스케이프한다 (ast.ts)
  * 한 겹만으로는 부족하다 — 1 은 실수로 넓어질 수 있고, 2 는 값이 아닌 위치엔 못 쓴다.
  */
+import { isIP } from 'node:net';
+
 import { err, ok, type Result } from './result.js';
 import type { ProtocolClass } from '../model/provisional.js';
 
@@ -161,6 +163,45 @@ export function validateHeaderValue(input: string): Result<string> {
       return err('invalid_header_value', `허용되지 않은 변수 참조: $${name}`);
     }
     i += m[0].length;
+  }
+  return ok(input);
+}
+
+/**
+ * 백엔드 주소 (검수 S-11).
+ *
+ * IP 이거나 LDH 호스트 이름이어야 한다. **IPv6 를 별도로 받는 이유**: `normalizeHost` 는
+ * `:` 를 안 받는다(IDNA 대상 문자만 받는다). 그런데 렌더러는 IPv6 백엔드를 대괄호로
+ * 싸서 낼 줄 알고(E34), 골든 R20 이 그 조합을 잰다 — 여기서 막으면 되는 것을 못 쓰게 된다.
+ *
+ * 검증이 없으면 실패가 **저장이 아니라 게시 시점**에 난다. `nginx -t` 가 잡긴 하지만,
+ * 그때 보이는 것은 "설정이 이상하다" 이지 "백엔드 주소가 호스트가 아니다" 가 아니다.
+ */
+export function validateBackendHost(input: string): Result<string> {
+  if (isIP(input) !== 0) return ok(input);
+  const normalized = normalizeHost(input);
+  if (!normalized.ok) {
+    return err('invalid_host', `백엔드 주소가 IP 도 호스트 이름도 아니다: ${JSON.stringify(input)}`);
+  }
+  return normalized;
+}
+
+/**
+ * HTTP 라우트의 경로 접두사 (검수 S-11).
+ *
+ * `location <prefix>` 로 나간다. 문법 검사가 전혀 없어서 `/` 로 시작하지 않아도 됐고,
+ * `^~` 같은 값이면 nginx 가 그것을 **수식어**로 읽어 기동이 깨진다 — 그것도 apply
+ * 시점에.
+ *
+ * 좁게 잡는다: 절대 경로이고, URI 에 쓰이는 문자만. 정규식 location 은 v0 의 표면이
+ * 아니다(`compileHostRoutes` 가 접두사만 다룬다).
+ */
+const PATH_PREFIX = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@/%]*$/;
+
+export function validatePathPrefix(input: string): Result<string> {
+  if (!PATH_PREFIX.test(input)) {
+    return err('invalid_path_prefix',
+      `경로 접두사는 '/' 로 시작하는 절대 경로여야 한다: ${JSON.stringify(input)}`);
   }
   return ok(input);
 }

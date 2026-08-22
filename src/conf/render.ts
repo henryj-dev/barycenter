@@ -24,7 +24,6 @@ import {
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
 import { coversHost, parseHostPattern } from '../validate/strings.js';
 import { parseRef } from '../dp/secrets.js';
-import { poolsReachedBy } from '../validate/engine-constraints.js';
 import { ModelValidationError, validateModel } from '../validate/model.js';
 import { decodeModel } from '../model/decode.js';
 import { parseHashKey } from '../validate/strings.js';

@@ -22,7 +22,6 @@ import {
   renameSync,
   symlinkSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Effects, PreflightResult } from './apply.js';

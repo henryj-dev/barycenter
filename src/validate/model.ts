@@ -15,9 +15,8 @@ import { findSocketConflicts, normalizeBind, type SocketReservation } from './so
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
 import { ACME_PREFIX } from '../conf/render.js';
 import { coversHost, parseHashKey, parseHostPattern } from './strings.js';
-import { poolsReachedBy } from './engine-constraints.js';
 import type {
-  Listener, Model, RawListener, RawModel, ProtocolClass, SniCertificateBinding,
+  RawListener, RawModel, ProtocolClass, SniCertificateBinding,
 } from '../model/provisional.js';
 
 export type ModelIssueCode =

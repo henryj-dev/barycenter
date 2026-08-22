@@ -18,6 +18,9 @@ import { randomUUID } from 'node:crypto';
 import { render, type RenderCapabilities, type RenderedConfig } from '../conf/render.js';
 import { decodeModel } from '../model/decode.js';
 import { certCoversHost } from '../dp/certinfo.js';
+import {
+  validateBackendHost, validateHeaderValue, validatePathPrefix,
+} from '../validate/strings.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { ModelValidationError } from '../validate/model.js';
 import type {
@@ -1280,6 +1283,51 @@ function shapeCheck(op: PatchOp): void {
   if (!decoded.ok) {
     throw new StoreError(400, 'malformed',
       `${op.kind} '${op.key}' 의 모양이 잘못됐다`, decoded.issues);
+  }
+  assertDirectiveStrings(op, body);
+}
+
+/**
+ * **디렉티브로 가는 문자열을 검증한다** (검수 S-11).
+ *
+ * `src/validate/strings.ts` 의 첫 줄이 *"어떤 사용자 문자열도 raw nginx 디렉티브로
+ * 흘러들지 않는다"* 인데, 실제로 검증기를 안 지나는 값이 셋 있었다:
+ *
+ *   · `redirect.to`  — `return 301 "<to>"`. nginx 는 **인용 안에서도 변수를 보간한다.**
+ *   · `pathPrefix`   — `location <prefix>`. `^~` 면 nginx 가 수식어로 읽는다.
+ *   · `backend.host` — `server <host>:<port>`.
+ *
+ * 그리고 이미 있던 `validateHeaderValue`(변수 화이트리스트까지 구현돼 있다)를 **아무도
+ * 안 불렀다.** 여기가 그 호출자다.
+ *
+ * ⚠️ **해독기가 아니라 여기다.** key 문법(S-01b)과 같은 이유다 — `modelAt` 이 옛 리비전
+ * 스냅샷을 `decodeModel` 로 읽으므로 좁히면 그런 값이 든 리비전이 해독 불가가 되고
+ * **롤백할 수 없다.** `validateModel` 도 안 된다: `render()` 가 그것을 부르므로 옛
+ * 리비전이 렌더 불가가 되고, 롤백은 렌더를 지난다.
+ */
+function assertDirectiveStrings(op: PatchOp & { op: 'put' }, body: Record<string, unknown>): void {
+  const fail = (what: string, message: string): never => {
+    throw new StoreError(400, 'malformed', `${op.kind} '${op.key}' 의 ${what}: ${message}`);
+  };
+
+  if (op.kind === 'backend' && typeof body['host'] === 'string') {
+    const r = validateBackendHost(body['host']);
+    if (!r.ok) fail('host', r.message);
+  }
+
+  if (op.kind === 'httpRoute') {
+    const prefix = body['pathPrefix'];
+    if (typeof prefix === 'string') {
+      const r = validatePathPrefix(prefix);
+      if (!r.ok) fail('pathPrefix', r.message);
+    }
+    const action = obj(body['action']);
+    if (action['kind'] === 'redirect' && typeof action['to'] === 'string') {
+      // 리다이렉트 목적지는 헤더 값과 같은 규칙이다 — 제어문자 금지 + 변수 화이트리스트.
+      // `$host`·`$request_uri` 는 실제로 쓸모가 있어서 화이트리스트에 있다.
+      const r = validateHeaderValue(action['to']);
+      if (!r.ok) fail('action.to', r.message);
+    }
   }
 }
 
