@@ -144,6 +144,19 @@ export type ListenerChange = 'added' | 'removed' | 'changed';
 /** §5.4 — plan 이 보여주는 것. */
 export type Impact = {
   requiresReload: boolean;
+  /**
+   * 이 전환이 **새 `activation_epoch` 를 쓰는가** (§3.3 · §6.1 분류기).
+   *
+   * `requiresReload` 와 같은 값이 아니다. 멤버십 평면이 **없는** 엔진에서는 백엔드가
+   * conf 에 렌더되므로 백엔드 하나만 옮겨도 세대가 새로 서고, 세대에는 epoch 이
+   * 구워진다(§6.5-1). 같은 변경이 엔진에 따라 좌표를 옮기기도 하고 안 옮기기도 한다 —
+   * 그게 §7.3 이 말한 "열등한 것이 아니라 다른 계약" 이다.
+   *
+   * epoch 이 움직이면 멤버십을 **전면 재전송**하고 옛 슬롯을 서빙이 끝날 때까지
+   * 들고 있어야 한다 (§6.5-5). plan 이 그걸 미리 말해 주지 않으면 운영자는
+   * "백엔드만 바꿨는데 왜 세대가 늘었나" 를 사후에 묻게 된다.
+   */
+  topologyEpochChange: boolean;
   affectedListeners: {
     key: string; protocol: string; bind: string; port: number; change: ListenerChange;
   }[];
@@ -937,7 +950,8 @@ export class ConfigStore {
 
     // **이전 conf 뿐 아니라 이전 모델도 넘긴다.** 산출물 비교는 "reload 가 필요한가"
     // 까지만 답한다 — *누가* 영향받는가는 모델을 봐야 나온다 (§5.4).
-    const impact = impactOf({ model: priorModel, conf: before?.conf ?? '' }, { model, rendered });
+    const impact = impactOf(
+      { model: priorModel, conf: before?.conf ?? '' }, { model, rendered }, this.caps);
     const id = randomUUID();
     await this.db.tx(async (c) => {
       await c.query(
@@ -1462,10 +1476,21 @@ function affectedListeners(before: Model, after: Model): Impact['affectedListene
 function impactOf(
   before: { model: Model; conf: string },
   after: { model: Model; rendered: RenderedConfig },
+  caps: RenderCapabilities,
 ): Impact {
   const { conf: beforeConf } = before;
   const { model, rendered } = after;
   const sockets = new Set(model.listeners.filter((l) => l.enabled).map(socketOf));
+  const requiresReload = beforeConf !== rendered.conf;
+  /**
+   * **멤버십 평면이 있어야 멤버십 전용 전환이 가능하다** (`control/plane.ts`).
+   *
+   * apply 는 `caps.httpLua || caps.streamLua` 일 때만 산출물 digest 를 비교해 세대를
+   * 건너뛴다. lua 가 없으면 그 지름길 자체가 없으므로 산출물이 같아도 새 세대다.
+   * 판정을 여기서 다시 짓지 않고 **같은 근거를 쓴다** — 두 자리가 갈리면 plan 이
+   * 거짓말한다.
+   */
+  const membershipPlane = caps.httpLua === true || caps.streamLua === true;
   const beforeSockets = new Set(
     [...beforeConf.matchAll(/listen\s+([^\s;]+)(\s+udp)?/g)].map((m) =>
       `${m[2] !== undefined ? 'udp' : 'tcp'}://${m[1] ?? ''}`),
@@ -1484,7 +1509,8 @@ function impactOf(
      * 그때는 plan 이 "reload 없음" 이라고 했는데 apply 가 세대를 만든다. 예측이
      * 보수적으로 틀리는 쪽이라 두지만, 사실이므로 적어 둔다.
      */
-    requiresReload: beforeConf !== rendered.conf,
+    requiresReload,
+    topologyEpochChange: requiresReload || !membershipPlane,
     affectedListeners: affectedListeners(before.model, model),
     socketChanges: {
       added: [...sockets].filter((s) => !beforeSockets.has(s)).sort(),

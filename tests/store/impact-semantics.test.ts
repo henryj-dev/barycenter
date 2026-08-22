@@ -69,6 +69,62 @@ async function planOf(ops: PatchOp[]) {
   return store.plan(cs, 't');
 }
 
+describe('§5.4 topologyEpochChange — 이 전환이 좌표를 옮기는가', () => {
+  /**
+   * 멤버십 평면이 켜진 엔진. 백엔드는 conf 가 아니라 dict 에 산다 (§7.3 · S1).
+   *
+   * **capability 로 갈리는 것을 capability 를 바꿔 가며 잰다.** 하나만 재면 다른
+   * 배포에서 이 값이 거짓이 되는 것을 아무도 못 본다 — 같은 변경이 엔진에 따라
+   * 세대 전환을 하기도 하고 안 하기도 한다.
+   */
+  const luaStore = (): ConfigStore =>
+    new ConfigStore(db, { streamRealip: false, httpLua: true, streamLua: true });
+
+  it('멤버십 평면이 있으면 백엔드 변경은 좌표를 안 옮긴다', async () => {
+    const s = luaStore();
+    const head = await s.head();
+    const cs0 = await s.createChangeset(head.revision, 't');
+    await s.patchChangeset(cs0, two, 't');
+    const p0 = await s.plan(cs0, 't');
+    await s.commit(cs0, p0.id, 't');
+
+    const cs = await s.createChangeset((await s.head()).revision, 't');
+    await s.patchChangeset(cs, [
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.9', port: 80, weight: 1 }),
+    ], 't');
+    const plan = await s.plan(cs, 't');
+
+    expect(plan.impact.requiresReload).toBe(false);
+    expect(plan.impact.topologyEpochChange).toBe(false);
+  });
+
+  it('멤버십 평면이 없으면 같은 변경이 좌표를 옮긴다', async () => {
+    await commitAll(two);
+    const plan = await planOf([
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.9', port: 80, weight: 1 }),
+    ]);
+    // 백엔드가 conf 에 렌더되므로 세대가 새로 서고, 세대에는 epoch 이 구워진다.
+    expect(plan.impact.topologyEpochChange).toBe(true);
+  });
+
+  it('리스너를 바꾸면 멤버십 평면이 있어도 좌표를 옮긴다', async () => {
+    const s = luaStore();
+    const head = await s.head();
+    const cs0 = await s.createChangeset(head.revision, 't');
+    await s.patchChangeset(cs0, two, 't');
+    const p0 = await s.plan(cs0, 't');
+    await s.commit(cs0, p0.id, 't');
+
+    const cs = await s.createChangeset((await s.head()).revision, 't');
+    await s.patchChangeset(cs, [PUT('listener', 'edge', {
+      protocol: 'tcp', bind: '0.0.0.0', port: 8888, enabled: true, defaultPool: 'game',
+    })], 't');
+    const plan = await s.plan(cs, 't');
+
+    expect(plan.impact.topologyEpochChange).toBe(true);
+  });
+});
+
 describe('§5.4 affectedListeners — 영향과 목록은 다르다', () => {
   it('영향받는 리스너만 싣는다', async () => {
     await commitAll(two);
