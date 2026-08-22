@@ -312,6 +312,16 @@ describe('§5.4 sessionImpact — 기존 세션은 어떻게 되는가', () => {
     expect(effectOf(plan.impact, 'http')).toBe('none');
   });
 
+  it('자리를 옮긴 리스너도 기존 세션을 끊는다', async () => {
+    await commitAll(two);
+    // 포트를 옮기면 **옛 소켓이 닫힌다.** 새 소켓만 보고 판정하면 이걸 놓친다 —
+    // 지운 것과 옮긴 것은 그 위에 있던 연결 입장에서 같다.
+    const plan = await planOf([PUT('listener', 'edge', {
+      protocol: 'tcp', bind: '0.0.0.0', port: 8888, enabled: true, defaultPool: 'game',
+    })]);
+    expect(effectOf(plan.impact, 'tcp')).toBe('may_reset');
+  });
+
   it('소켓이 그대로면 새 트래픽부터다', async () => {
     await commitAll(two);
     const plan = await planOf([

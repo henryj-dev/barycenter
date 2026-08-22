@@ -1553,6 +1553,12 @@ function sessionImpactOf(
     [...before.listeners, ...after.listeners].map((l) => l.protocol),
   )].sort();
   const byKey = new Map([...before.listeners, ...after.listeners].map((l) => [l.key, l]));
+  /**
+   * **옛 자리로 판정한다.** 닫히는 소켓은 이전 모델의 것이다 — 포트를 옮기면 새 소켓은
+   * `added` 에 있고 옛 소켓이 `removed` 에 있다. 지금 자리만 보면 *"지운 것"* 만 잡고
+   * *"옮긴 것"* 을 놓치는데, 그 위에 있던 연결 입장에서 둘은 같은 일이다.
+   */
+  const wasAt = new Map(before.listeners.map((l) => [l.key, socketOf(l)]));
   const removed = new Set(removedSockets);
   // 상한은 **적용될 모델**의 것이다. 지금 걸려 있어도 이 전환에서 풀면 안 잘린다.
   const cutoff = after.engine?.workerShutdownTimeoutS;
@@ -1563,8 +1569,8 @@ function sessionImpactOf(
       return { protocol, effect: 'none' as const, why: '이 프로토콜의 리스너는 안 바뀐다' };
     }
     const dropped = mine.filter((a) => {
-      const l = byKey.get(a.key);
-      return l !== undefined && removed.has(socketOf(l));
+      const was = wasAt.get(a.key);
+      return was !== undefined && removed.has(was);
     });
     if (dropped.length > 0) {
       return {
