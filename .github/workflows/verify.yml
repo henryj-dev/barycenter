@@ -6,6 +6,13 @@
 #
 # 조용히 건너뛰지 않는다. 도커가 없으면 `verify.sh` 는 건너뛰는 대신 실패한다 —
 # 통과 신호를 위조하는 것보다 빨간 것이 낫다.
+#
+# **러너는 GitHub hosted 다.** 셀프호스트 ARC 로 잠깐 옮겼다가 되돌렸다 — 공개 저장소에서
+# 포크 PR 이 남의 인프라 위에서 도는 것을 만들지 않기 위해서다. 그 회차에 겪은 것을 남긴다:
+# 도커 데몬이 옆 컨테이너(dind)면 **`docker run -v <호스트경로>` 의 왼쪽이 러너가 아니라
+# 그 컨테이너에서 풀린다** — 골든·스파이크가 물리는 prefix 가 빈 디렉터리가 된다. compose
+# 플러그인도 buildx 도 러너 이미지에 없고, 중첩 컨테이너는 이름 해석이 따로 논다.
+# **다시 셀프호스트로 옮길 일이 생기면 이 셋을 먼저 확인할 것.**
 
 name: verify
 
@@ -18,16 +25,14 @@ on:
 
 # 같은 브랜치에 새 푸시가 오면 **앞엣것을 취소한다 — main 도 포함한다.**
 #
-# 원래는 main 만 예외로 뒀다("main 의 초록은 기록이라 중간에 사라지면 안 된다").
-# 그 규칙은 러너가 넉넉할 때의 이야기였다. 이 저장소가 쓰는 ARC scale set 은
-# **동시에 세 대**고 한 run 이 잡 넷을 요구한다. 그래서 main 에 커밋이 연달아 오면
-# 낡은 run 들이 러너를 붙들고, **가장 최신 커밋이 30분씩 큐에서 굶는다**(2026-08-22
-# 실측 — run 32553768528·32554320789 가 큐를 막고 있었고 그 뒤의 것은 잡을 하나도
-# 못 잡았다). 지금 무엇이 초록인지 모르는 채로 기다리는 것이 기록보다 나쁘다.
+# ⚠️ **원래 근거는 사라졌다.** 셀프호스트 러너가 하나뿐이던 시절, 낡은 run 이 그 하나를
+# 붙들어 최신 커밋이 30분씩 큐에서 굶었다(2026-08-22 실측). hosted 러너로 옮기면서
+# 그 굶주림은 없어졌다. 그래도 유지하는 이유는 **가장 최근 커밋의 판정이 가장 빨리
+# 나오는 것**이 이 저장소의 작업 리듬(커밋을 잘게, 자주)에 맞기 때문이다.
 #
-# 취소된 run 의 커밋은 검증을 건너뛴 것이 아니다 — 그 커밋을 포함한 최신 run 이
-# 곧 판정한다. 중간 커밋 하나하나의 초록이 필요하면 그 커밋을 직접 밀거나
-# `workflow_dispatch` 로 돌린다.
+# 대가는 명확하다 — **중간 커밋은 자기 run 이 끝까지 안 갈 수 있다.** 검증을 건너뛰는
+# 것은 아니다: 그 커밋을 포함한 최신 run 이 곧 판정한다. 특정 커밋 하나의 초록이
+# 필요하면 `workflow_dispatch` 로 그 ref 를 직접 돌린다.
 concurrency:
   group: verify-${{ github.ref }}
   cancel-in-progress: true
@@ -36,18 +41,15 @@ jobs:
   # 빠른 신호. 도커 없이 도는 것만 먼저 돌려서 오타 하나에 20 분을 쓰지 않게 한다.
   # **이건 게이트가 아니다** — 아래 `verify` 가 게이트다.
   #
-  # **재현물 핀 검사가 여기 얹혀 있다.** 원래 `pinned` 라는 제 잡이었는데, run 하나가
-  # 요구하는 잡이 넷이면 ARC 풀이 그만큼을 동시에 못 준다. 2026-08-22 실측:
-  # run 32557242379 에서 러너를 잡은 것은 `verify` 하나뿐이었고 47초짜리 핀 검사가
-  # **20분을 기다리다 다음 push 에 취소됐다.** 게이트가 늦는 것이 아니라 아예 안 돈다.
-  # 둘 다 도커가 필요 없고 합쳐도 10분이 안 되므로 한 잡에 둔다.
+  # **재현물 핀 검사가 여기 얹혀 있다.** 원래 `pinned` 라는 제 잡이었는데 러너가 하나뿐일
+  # 때 47초짜리 검사가 20분을 기다리다 취소되는 일이 있어 합쳤다(2026-08-22). hosted 로
+  # 옮긴 지금은 나눠도 되지만, 둘 다 도커가 필요 없고 합쳐도 10분이 안 되므로 그대로 둔다.
   #
-  # 합치면서 잃는 것은 체크 두 칸이 하나가 되는 것뿐이다 — 스텝은 그대로 둘이라
-  # 어느 쪽이 깨졌는지는 로그에서 바로 보이고, 핀 검사는 `!cancelled()` 로 걸어
-  # **앞의 --quick 이 빨개져도 반드시 돈다**. 안 그러면 한쪽 실패가 다른 쪽 신호를
-  # 가린다.
+  # 합쳐서 잃는 것은 체크 두 칸이 하나가 되는 것뿐이다 — 스텝은 그대로 둘이라 어느 쪽이
+  # 깨졌는지는 로그에서 바로 보이고, 핀 검사는 `!cancelled()` 로 걸어 **앞의 --quick 이
+  # 빨개져도 반드시 돈다**. 안 그러면 한쪽 실패가 다른 쪽 신호를 가린다.
   quick:
-    runs-on: arc-mack-erel-barycenter
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -85,20 +87,9 @@ jobs:
           node scripts/pinned.mjs "$BASE"
 
   verify:
-    runs-on: arc-mack-erel-barycenter
+    runs-on: ubuntu-latest
     # 스파이크 다섯 개가 각각 컨테이너를 세우고 e2e 가 nginx·PG 를 띄운다.
     timeout-minutes: 60
-    # **dind 경계.** ARC 러너에서 도커 데몬은 옆 컨테이너(dind sidecar)다. 따라서
-    # `docker run -v <호스트경로>` 의 왼쪽은 **러너가 아니라 dind 의 파일 시스템**에서
-    # 풀린다 — 러너의 `/tmp` 에 쓴 것을 마운트하면 컨테이너 안은 **빈 디렉터리**다.
-    # 골든·스파이크가 `mkdtemp`/`mktemp -d` 로 만든 prefix 를 nginx 에 물리므로
-    # 그대로 두면 `open() "/prefix/conf/nginx.conf" failed (2)` 로 죽는다(실측,
-    # run 32456859777). `_work` 볼륨은 러너와 dind 가 **같은 경로로** 함께 붙이므로
-    # 임시 뿌리를 그 아래(`$RUNNER_TEMP`)로 옮긴다. `github.workspace` 를 쓰면
-    # 재현물 게이트의 `git worktree`/`status` 에 잡히므로 쓰지 않는다.
-    #
-    # 잡 수준 `env:` 에는 못 쓴다 — `runner` 컨텍스트가 거기서는 안 보인다(워크플로
-    # 파싱 자체가 거부된다, run 32555690440). 도커를 쓰는 스텝에 직접 건다.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -119,8 +110,6 @@ jobs:
           docker pull docker.io/library/postgres:17-alpine
 
       - run: ./scripts/verify.sh
-        env:
-          TMPDIR: ${{ runner.temp }}   # dind 경계 — 위 주석 참조
 
       # 실패했을 때 남은 컨테이너의 로그를 남긴다. CI 의 실패는 재현이 어려우므로
       # 그때 손에 있는 것을 다 챙긴다.
@@ -136,7 +125,7 @@ jobs:
   # **문서에 적힌 절차가 정말 도는가.** 문서를 읽어서는 알 수 없고, 손으로 확인하는 한
   # 반드시 썩는다.
   quickstart:
-    runs-on: arc-mack-erel-barycenter
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -146,41 +135,7 @@ jobs:
           cache: npm
       - run: npm ci
 
-      # **Compose 는 러너 이미지에 없다.** ARC 러너(`ghcr.io/actions/actions-runner`)는
-      # dind 모드에서 docker **CLI 만** 얻는다 — compose 도 buildx 도 플러그인이라
-      # 따라오지 않는다. 없는 채로 `docker compose -f ...` 를 부르면 CLI 가 명령 이름
-      # 대신 플래그를 먼저 물고 `unknown shorthand flag: 'f' in -f` 로 죽는다(실측,
-      # run 32553768528). 러너 이미지의 전역 상태에 CI 결과가 좌우되지 않도록
-      # **버전을 고정해 잡 안에서 깐다** — 로컬 개발 머신과 같은 v5.3.1 이다.
-      #
-      # ⚠️ **레지스트리에서 가져온다. GitHub Releases 가 아니다.**
-      # 처음엔 `docker/setup-compose-action` 을 썼는데 이 클러스터에서
-      # `getaddrinfo EAI_AGAIN raw.githubusercontent.com` 으로 죽었다(실측,
-      # run 32559082503). 같은 러너에서 `npm ci` 와 `docker pull` 은 멀쩡히 된다 —
-      # **이미 도는 것이 확인된 경로**로 가져오는 편이 낫다. `docker/compose-bin` 은
-      # 그 바이너리 하나만 든 scratch 이미지이고, `docker cp` 는 API 스트림이라
-      # dind 경계를 그대로 넘는다.
-      - name: Compose 플러그인 준비
-        run: |
-          set -euo pipefail
-          if docker compose version >/dev/null 2>&1; then
-            echo "이미 있다: $(docker compose version)"
-            exit 0
-          fi
-          IMAGE=docker.io/docker/compose-bin:v5.3.1
-          DIR="$HOME/.docker/cli-plugins"
-          mkdir -p "$DIR"
-          docker pull -q "$IMAGE"
-          # scratch 이미지라 실행할 것이 없다. 만들기만 하고 파일만 꺼낸다.
-          cid=$(docker create --entrypoint /docker-compose "$IMAGE")
-          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-          docker cp "$cid:/docker-compose" "$DIR/docker-compose"
-          chmod +x "$DIR/docker-compose"
-          docker compose version
-
       - run: ./scripts/quickstart.sh --clean
-        env:
-          TMPDIR: ${{ runner.temp }}   # dind 경계 — verify 잡의 주석 참조
       - name: 실패 시 데이터 플레인 로그
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail 100 || true
