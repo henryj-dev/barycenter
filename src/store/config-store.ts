@@ -155,6 +155,12 @@ export type ListenerChange = 'added' | 'removed' | 'changed';
  */
 export type SessionEffect = 'none' | 'new_only' | 'may_reset';
 
+/**
+ * 인증서가 어떻게 바뀌는가. 리스너와 달리 `replaced` 가 있다 — 같은 이름의 자료가
+ * **다른 바이트**로 바뀌는 것이 갱신이고, 그게 이 표에서 제일 자주 일어나는 일이다.
+ */
+export type MaterialChange = 'added' | 'removed' | 'replaced';
+
 /** §5.4 — plan 이 보여주는 것. */
 export type Impact = {
   requiresReload: boolean;
@@ -175,6 +181,14 @@ export type Impact = {
     key: string; protocol: string; bind: string; port: number; change: ListenerChange;
   }[];
   sessionImpact: { protocol: string; effect: SessionEffect; why: string }[];
+  /**
+   * 교체되는 인증서와 **그 자료의 만료일** (§5.4 · §8.1).
+   *
+   * `notAfter` 는 설정이 아니라 **자료**에서 온다. 설정에 적은 날짜를 믿으면 알람이
+   * 거짓이 되고, 그 거짓은 handshake 가 깨지는 날에만 드러난다. 자료를 모르면
+   * 비워 둔다 — 지어내지 않고, 항목을 감추지도 않는다.
+   */
+  certificateChanges: { key: string; change: MaterialChange; notAfter?: string }[];
   socketChanges: { added: string[]; removed: string[] };
   planes: ('http' | 'stream')[];
   confDiff: { before: number; after: number };
@@ -966,7 +980,8 @@ export class ConfigStore {
     // **이전 conf 뿐 아니라 이전 모델도 넘긴다.** 산출물 비교는 "reload 가 필요한가"
     // 까지만 답한다 — *누가* 영향받는가는 모델을 봐야 나온다 (§5.4).
     const impact = impactOf(
-      { model: priorModel, conf: before?.conf ?? '' }, { model, rendered }, this.caps);
+      { model: priorModel, conf: before?.conf ?? '' }, { model, rendered },
+      this.caps, this.certFacts);
     const id = randomUUID();
     await this.db.tx(async (c) => {
       await c.query(
@@ -1551,10 +1566,42 @@ function sessionImpactOf(
   });
 }
 
+/**
+ * 교체되는 인증서 (§5.4 `certificate_changes`).
+ *
+ * 판정 기준은 **`materialRef`** 다. 갱신은 새 버전 참조를 만들 뿐 옛 것을 안 덮으므로
+ * (§8.3), 참조가 달라졌다는 것이 곧 "제시되는 바이트가 달라진다" 는 뜻이다. 그리고
+ * 그때가 §7.2 가 경고한 자리다 — 경로에 버전이 안 들어가면 갱신이 세대를 안 만들고
+ * 조용히 지나간다.
+ */
+function certificateChanges(
+  before: Model, after: Model, facts?: Pick<SecretStore, 'facts'>,
+): Impact['certificateChanges'] {
+  const b = new Map(before.certificates.map((c) => [c.key, c]));
+  const a = new Map(after.certificates.map((c) => [c.key, c]));
+  const out: Impact['certificateChanges'] = [];
+
+  for (const key of [...new Set([...b.keys(), ...a.keys()])].sort()) {
+    const prev = b.get(key);
+    const next = a.get(key);
+    const change: MaterialChange | undefined =
+      prev === undefined ? 'added'
+        : next === undefined ? 'removed'
+          : prev.materialRef === next.materialRef ? undefined : 'replaced';
+    if (change === undefined) continue;
+    // 만료는 **앞으로 제시될** 자료의 것이다. 지워지는 인증서에는 그 자료가 없다.
+    const ref = next?.materialRef;
+    const notAfter = ref === undefined ? undefined : facts?.facts(ref)?.notAfter;
+    out.push({ key, change, ...(notAfter === undefined ? {} : { notAfter }) });
+  }
+  return out;
+}
+
 function impactOf(
   before: { model: Model; conf: string },
   after: { model: Model; rendered: RenderedConfig },
   caps: RenderCapabilities,
+  facts?: Pick<SecretStore, 'facts'>,
 ): Impact {
   const { conf: beforeConf } = before;
   const { model, rendered } = after;
@@ -1604,6 +1651,7 @@ function impactOf(
     topologyEpochChange: requiresReload || !membershipPlane,
     affectedListeners: affected,
     sessionImpact: sessionImpactOf(before.model, model, affected, socketsRemoved, requiresReload),
+    certificateChanges: certificateChanges(before.model, model, facts),
     socketChanges: {
       added: [...sockets].filter((s) => !beforeSockets.has(s)).sort(),
       removed: socketsRemoved,

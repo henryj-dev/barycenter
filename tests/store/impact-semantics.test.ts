@@ -11,6 +11,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ConfigStore, type PatchOp } from '../../src/store/config-store.js';
+import type { CertFacts } from '../../src/dp/certinfo.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('impact');
@@ -122,6 +123,78 @@ describe('§5.4 topologyEpochChange — 이 전환이 좌표를 옮기는가', (
     const plan = await s.plan(cs, 't');
 
     expect(plan.impact.topologyEpochChange).toBe(true);
+  });
+});
+
+describe('§5.4 certificateChanges — 무엇이 교체되고 언제 만료되는가', () => {
+  const REF = (n: string, v: string): string => `store://${n}@${v.repeat(32)}`;
+  const FACTS: Record<string, CertFacts> = {
+    [REF('site', 'a')]: {
+      subject: 'CN=a.test', issuer: 'CN=Test CA', domains: ['a.test'],
+      notBefore: '2026-01-01T00:00:00.000Z', notAfter: '2026-04-01T00:00:00.000Z',
+      chainLength: 2,
+    },
+    [REF('site', 'b')]: {
+      subject: 'CN=a.test', issuer: 'CN=Test CA', domains: ['a.test'],
+      notBefore: '2026-03-01T00:00:00.000Z', notAfter: '2026-06-01T00:00:00.000Z',
+      chainLength: 2,
+    },
+  };
+  const digests = {
+    chainDigest: `sha256:${'a'.repeat(64)}`, keyDigest: `sha256:${'b'.repeat(64)}`,
+  };
+  const certStore = (): ConfigStore => new ConfigStore(
+    db, { streamRealip: false }, { facts: (r: string) => FACTS[r] },
+  );
+
+  const tlsSetup = (ref: string): PatchOp[] => [
+    PUT('pool', 'web', { protocolClass: 'http', algorithm: 'round_robin' }),
+    PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.1', port: 80, weight: 1 }),
+    PUT('certificate', 'site', { materialRef: ref, ...digests }),
+    PUT('tlsPolicy', 'pol', { minVersion: '1.2' }),
+    PUT('listener', 'secure', {
+      protocol: 'https', bind: '0.0.0.0', port: 443, enabled: true,
+      tls: { policy: 'pol', defaultCertificate: 'site' },
+      http: { defaultAction: { pool: 'web' } },
+    }),
+    PUT('sniBinding', 'b1', { listener: 'secure', hosts: ['a.test'], certificate: 'site' }),
+  ];
+
+  it('갱신은 교체로 보이고 새 만료일을 싣는다', async () => {
+    const s = certStore();
+    const cs0 = await s.createChangeset((await s.head()).revision, 't');
+    await s.patchChangeset(cs0, tlsSetup(REF('site', 'a')), 't');
+    const p0 = await s.plan(cs0, 't');
+    await s.commit(cs0, p0.id, 't');
+
+    const cs = await s.createChangeset((await s.head()).revision, 't');
+    await s.patchChangeset(cs, [
+      PUT('certificate', 'site', { materialRef: REF('site', 'b'), ...digests }),
+    ], 't');
+    const plan = await s.plan(cs, 't');
+
+    expect(plan.impact.certificateChanges).toEqual([
+      { key: 'site', change: 'replaced', notAfter: '2026-06-01T00:00:00.000Z' },
+    ]);
+  });
+
+  it('자료를 모르면 날짜를 안 싣는다', async () => {
+    // §8.1 — 만료는 자료에서 온다. 설정에 적힌 날짜를 믿으면 알람이 거짓이다.
+    // 모르면 **비워 둔다.** 지어내지 않고, 그렇다고 항목을 감추지도 않는다.
+    const blind = new ConfigStore(db, { streamRealip: false }, { facts: () => undefined });
+    const cs = await blind.createChangeset((await blind.head()).revision, 't');
+    await blind.patchChangeset(cs, tlsSetup(REF('site', 'a')), 't');
+    const plan = await blind.plan(cs, 't');
+
+    expect(plan.impact.certificateChanges).toEqual([{ key: 'site', change: 'added' }]);
+  });
+
+  it('인증서를 안 건드리면 아무것도 안 싣는다', async () => {
+    await commitAll(two);
+    const plan = await planOf([
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.9', port: 80, weight: 1 }),
+    ]);
+    expect(plan.impact.certificateChanges).toEqual([]);
   });
 });
 
