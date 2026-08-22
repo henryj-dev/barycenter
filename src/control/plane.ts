@@ -28,6 +28,7 @@ import {
   count, fileBytes, measureGenerations, type Gauges, type LabeledGauge,
 } from '../obs/metrics.js';
 import type { Db, Row } from '../store/pg.js';
+import { isLoopbackBind } from '../validate/sockets.js';
 import type { LeaderElection } from './leader.js';
 
 export type ControlPlaneOptions = {
@@ -738,14 +739,13 @@ export class ControlPlane {
    * 보수적으로 본다: bind 주소와 무관하게 **포트가 같으면** 막는다. `0.0.0.0:PORT` 는
    * `127.0.0.1:PORT` 를 함께 차지하므로 주소별로 따지면 틀린다.
    */
-  private assertAdminPortFree(model: { listeners: { key: string; port: number; protocol: string; enabled: boolean }[] }): void {
-    for (const l of model.listeners) {
-      if (!l.enabled || l.protocol === 'udp') continue;
-      if (l.port === this.opts.adminPort) {
-        throw new StoreError(409, 'admin_port_conflict',
-          `리스너 '${l.key}' 가 admin 포트 ${this.opts.adminPort} 를 쓴다 — `
-          + `활성 세대 마커를 서빙할 수 없어 활성화를 증명할 수 없다`);
-      }
+  private assertAdminPortFree(model: Model): void {
+    const conflicts = adminPortConflicts(model, {
+      adminPort: this.opts.adminPort,
+      streamAdminPort: this.opts.streamAdminPort ?? this.opts.adminPort + 1,
+    });
+    if (conflicts.length > 0) {
+      throw new StoreError(409, 'admin_port_conflict', conflicts.join('\n'));
     }
   }
 
@@ -830,6 +830,57 @@ export class ControlPlane {
     );
   }
 }
+
+/**
+ * 모델이 admin 표면과 부딪히는 자리들 (검수 S-08a).
+ *
+ * ── 왜 백엔드도 보는가 ──────────────────────────────────────────────────
+ *
+ * admin 평면(`/membership` · `/acme`)은 **인증이 없다.** 보호는 "루프백에만 뜬다" 하나뿐인데,
+ * 에이전트와 엔진은 **한 컨테이너**에 산다(§3.2 · §11.1 — 규범이 아니라 실측이다).
+ * 그러면 풀 하나가 `127.0.0.1:<adminPort>` 를 백엔드로 갖는 순간 **외부 요청이 그 표면에
+ * 그대로 닿는다** — 밸런서 슬롯을 덮어쓰거나 ACME 챌린지를 심을 수 있다.
+ *
+ * 전에는 리스너 포트만 봤다. 리스너는 "우리가 그 포트를 못 연다" 는 문제이고, 백엔드는
+ * **"남이 그 포트에 닿는다"** 는 문제다 — 후자가 더 나쁘다.
+ *
+ * ── 판정 ────────────────────────────────────────────────────────────────
+ *
+ *   · 리스너: 포트만 본다. bind 주소와 무관하게 막는다 — `0.0.0.0:P` 는 `127.0.0.1:P` 를
+ *     함께 차지하므로 주소별로 따지면 틀린다. udp 는 전송이 달라 안 부딪힌다(E12).
+ *   · 백엔드: **루프백 × admin 포트**일 때만. 다른 호스트의 같은 포트는 우리 admin 이
+ *     아니다 — 그것까지 막으면 19999 를 쓰는 남의 서비스를 프록시하지 못한다.
+ */
+export function adminPortConflicts(
+  model: Model,
+  ports: { adminPort: number; streamAdminPort: number },
+): string[] {
+  const admin = new Set([ports.adminPort, ports.streamAdminPort]);
+  const out: string[] = [];
+
+  for (const l of model.listeners) {
+    if (!l.enabled || l.protocol === 'udp') continue;
+    if (admin.has(l.port)) {
+      out.push(
+        `리스너 '${l.key}' 가 admin 포트 ${l.port} 를 쓴다 — `
+        + '활성 세대 마커를 서빙할 수 없어 활성화를 증명할 수 없다',
+      );
+    }
+  }
+
+  for (const b of model.backends) {
+    if (!admin.has(b.port) || !isLoopbackBind(loopbackNameToIp(b.host))) continue;
+    out.push(
+      `백엔드 '${b.key}' 가 admin 표면 ${b.host}:${b.port} 를 겨눈다 — `
+      + '그 표면은 인증이 없다. 라우트가 닿으면 밖에서 밸런서 슬롯을 덮어쓸 수 있다',
+    );
+  }
+  return out;
+}
+
+/** `localhost` 는 IP 가 아니지만 같은 곳이다. 이름만 다르다고 통과시키면 우회가 열린다. */
+const loopbackNameToIp = (host: string): string =>
+  host.toLowerCase() === 'localhost' ? '127.0.0.1' : host;
 
 const viewOf = (r: Row): OperationView => ({
   id: String(r['id']),

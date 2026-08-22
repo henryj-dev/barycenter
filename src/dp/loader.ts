@@ -14,8 +14,6 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 /** 코어가 이해하는 드라이버 ABI. 호환이 깨지면 올린다. */
 export const DRIVER_API_VERSION = 1 as const;
@@ -162,7 +160,25 @@ export async function loadDriver(
     throw new DriverLoadError({ kind: 'integrity_mismatch', name: pin.name });
   }
 
-  const loaded: unknown = await import(pathToFileURL(resolve(pin.path)).href);
+  /**
+   * **검증한 바이트를 그대로 실행한다** (검수 S-09).
+   *
+   * 전에는 해시를 대조한 뒤 **같은 경로를 다시** `import()` 했다. 두 가지가 어긋난다:
+   *
+   *   · 읽기와 import 사이에 파일이 바뀌면 검사를 통과한 바이트와 실행되는 바이트가
+   *     다르다 — 무결성 검사가 있는데 없는 것과 같다.
+   *   · `import()` 는 **URL 로 캐시한다.** 같은 경로를 다른 내용으로 다시 로드하면
+   *     옛 모듈이 그대로 돌아온다. 핀이 바뀌었는데 실행되는 코드는 안 바뀐다.
+   *
+   * `data:` URL 은 내용이 곧 URL 이라 둘 다 닫는다.
+   *
+   * ⚠️ **대가**: 드라이버 안의 상대 `import` 가 안 된다. 그런데 핀은 원래 **엔트리 파일
+   * 하나만** 덮으므로, 상대 import 는 처음부터 핀 밖이었다 — 허용하는 것 자체가 계약의
+   * 구멍이었다. 이제 "드라이버는 자기완결적이어야 한다" 가 계약이다
+   * (`drivers/reference.mjs` 가 이미 그렇다).
+   */
+  const url = `data:text/javascript;base64,${bytes.toString('base64')}`;
+  const loaded: unknown = await import(url);
   if (loaded === null || typeof loaded !== 'object') {
     throw new DriverLoadError({
       kind: 'api_version_mismatch',

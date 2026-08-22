@@ -15,6 +15,7 @@ import { isIP } from 'node:net';
 import { ACME_DICT, render, MEMBERSHIP_DICT, type RenderCapabilities } from '../conf/render.js';
 
 import { applyDiscoveredEndpoints, type DiscoveryIntake } from './discovery.js';
+import { log } from '../obs/log.js';
 import type { Model } from '../model/provisional.js';
 
 /**
@@ -108,10 +109,37 @@ export const encodeSlots = (slots: Slots): string =>
  * Lua `ngx.balancer.set_current_peer` 는 호스트 이름을 거절한다.
  * 슬롯에 넣기 전에 A/AAAA 를 풀어 둔다. 이미 IP 면 그대로다.
  */
-export async function resolveSlots(slots: Slots): Promise<Slots> {
+export async function resolveSlots(
+  slots: Slots,
+  /** 테스트가 갈아 끼운다. 판정이 망 상태에 걸리면 안 된다. */
+  lookupPeer: (hp: string) => Promise<string> = resolvePeer,
+): Promise<Slots> {
   const out: Slots = {};
   for (const [name, peers] of Object.entries(slots)) {
-    out[name] = await Promise.all(peers.map(resolvePeer));
+    /**
+     * **부분 실패는 부분 실패로 다룬다** (검수 B-09).
+     *
+     * 전에는 `Promise.all` 이라 하나만 안 풀려도 **그 평면의 멤버십 갱신 전체가
+     * 실패했다.** 호스트명 백엔드 하나가 잠깐 흔들리면 나머지 전부의 헬스 반영이
+     * 멈추고, 그건 §6.7 이 나눈 두 사건 중 "갱신 실패" 쪽이라 옛 슬롯이 남는다 —
+     * 죽은 백엔드가 계속 트래픽을 받는다.
+     *
+     * 안 풀린 peer 만 뺀다. 전부 안 풀리면 빈 슬롯이고, 그것을 쓸지 말지는
+     * `shouldPushMembership` 이 정한다(S3 의도적 zero-peer 와 S4 갱신 실패의 구분).
+     * 여기서 던지면 그 판단이 아예 안 돈다.
+     */
+    const settled = await Promise.allSettled(peers.map((p) => lookupPeer(p)));
+    const resolved: string[] = [];
+    for (const [i, r] of settled.entries()) {
+      if (r.status === 'fulfilled') {
+        resolved.push(r.value);
+      } else {
+        log.warn('membership.peer_unresolved', {
+          slot: name, peer: peers[i], error: String(r.reason),
+        });
+      }
+    }
+    out[name] = resolved;
   }
   return out;
 }
