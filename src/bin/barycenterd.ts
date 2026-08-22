@@ -24,7 +24,9 @@ import { promisify } from 'node:util';
 import { createApi } from '../api/server.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore } from '../dp/secrets.js';
-import { TokenAuth, parseTokenSpecs, type OidcSettings, type TokenSpec } from '../api/auth.js';
+import {
+  TokenAuth, oidcKeyFrom, parseTokenSpecs, type OidcSettings, type TokenSpec,
+} from '../api/auth.js';
 import type { OidcRpSettings } from '../api/oidc-code.js';
 import { render } from '../conf/render.js';
 import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
@@ -525,9 +527,27 @@ export async function main(): Promise<void> {
 
   const oidcIss = env('BARY_OIDC_ISSUER', '');
   const oidcAud = env('BARY_OIDC_AUD', '');
-  const oidcKey = env('BARY_OIDC_KEY', '');
+  /**
+   * 검증 키 (검수 S-06).
+   *
+   * 전에는 `BARY_OIDC_KEY` 문자열만 있었고, 문자열은 HS256 으로만 검증된다 —
+   * **RS256 경로가 프로덕션에서 도달 불가였다.** 실물 IdP 는 거의 다 RS256 이다.
+   *
+   * 파일 쪽을 따로 두는 이유: PEM 은 여러 줄이라 환경변수에 넣으면 줄바꿈이
+   * 배포 도구마다 다르게 망가진다. 그래도 인라인 PEM 을 막지는 않는다 —
+   * `oidcKeyFrom` 이 접두사로 가른다.
+   */
+  const oidcKeyFile = env('BARY_OIDC_KEY_FILE', '');
+  const oidcKey = oidcKeyFile !== '' ? readFileSync(oidcKeyFile, 'utf8') : env('BARY_OIDC_KEY', '');
+  // 어느 클레임이 역할인지는 **배포가 정한다** (검수 S-07). 안 정하면 `role`.
+  const oidcRoleClaim = env('BARY_OIDC_ROLE_CLAIM', '');
   const oidc: OidcSettings | undefined = oidcIss !== '' && oidcAud !== '' && oidcKey !== ''
-    ? { issuer: oidcIss, audience: oidcAud, key: oidcKey }
+    ? {
+        issuer: oidcIss,
+        audience: oidcAud,
+        key: oidcKeyFrom(oidcKey),
+        ...(oidcRoleClaim === '' ? {} : { roleClaim: oidcRoleClaim }),
+      }
     : undefined;
   const auth = oidc === undefined ? new TokenAuth(loadTokens()) : new TokenAuth(loadTokens(), oidc);
   const oidcAuthz = env('BARY_OIDC_AUTHORIZATION', '');

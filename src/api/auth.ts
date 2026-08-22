@@ -10,7 +10,9 @@
  * 토큰은 **해시로 보관한다.** 설정 파일에 평문을 두면 그 파일이 곧 비밀이 되고, 감사
  * 로그·에러 메시지·코어 덤프로 새는 경로가 늘어난다.
  */
-import { createHash, createHmac, createVerify, timingSafeEqual, type KeyObject } from 'node:crypto';
+import {
+  createHash, createHmac, createPublicKey, createVerify, timingSafeEqual, type KeyObject,
+} from 'node:crypto';
 
 /**
  * v0.1 의 스코프 셋 + v1.0 `admin`.
@@ -137,10 +139,39 @@ export const hashToken = (token: string): string =>
 export type OidcSettings = {
   issuer: string;
   audience: string;
-  /** HS256 비밀 또는 RS256 공개키. */
+  /** HS256 비밀 또는 RS256 공개키. 문자열에서 만들려면 `oidcKeyFrom`. */
   key: string | KeyObject;
+  /**
+   * 어느 클레임이 역할인가. **안 정하면 `role`.**
+   *
+   * 최상위 `role` 은 IdP 마다 뜻이 다르고, 사용자가 프로필로 넣을 수 있는 자리와
+   * 충돌하기 쉽다. 그래서 대부분의 IdP 가 네임스페이스 클레임을 권한다
+   * (`https://example.com/role`). 어느 쪽인지는 배포가 안다.
+   *
+   * **정하면 그 클레임만 본다.** `role` 로 떨어지면 고친 것이 아니라 경로를 하나
+   * 더 늘린 것이 된다 — 사용자가 넣을 수 있는 자리가 그대로 남는다.
+   */
+  roleClaim?: string;
   now?: () => number;
 };
+
+/**
+ * 설정 문자열에서 검증 키를 만든다 (검수 S-06).
+ *
+ * `verifyJwtSig` 는 RS256 을 구현해 뒀는데 `key` 가 `KeyObject` 일 때만 탄다. 그런데
+ * 기동 코드는 환경변수 문자열을 그대로 넣고 있었다 — **문자열이면 RS256 은 무조건
+ * false 다.** 구현은 있고 도달할 수 없었다.
+ *
+ * 그 상태의 OIDC 는 HMAC 비밀을 나눠 갖는 구성에서만 동작하는데, id_token 에 그런
+ * 구성을 내주는 IdP 는 거의 없다. Auth0·Okta·Entra·Google·Keycloak 전부 RS256 이다.
+ *
+ * PEM 인지로 가른다. 접두사를 보고 판별하므로 HS256 비밀을 쓰던 배포는 그대로다 —
+ * `-----BEGIN` 으로 시작하는 HMAC 비밀은 없다.
+ */
+export function oidcKeyFrom(raw: string): string | KeyObject {
+  if (!raw.startsWith('-----BEGIN')) return raw;
+  return createPublicKey(raw);
+}
 
 const b64urlDecode = (s: string): Buffer => {
   const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
@@ -192,11 +223,24 @@ export function principalFromIdToken(token: string, oidc: OidcSettings): Princip
   const audOk = aud === oidc.audience
     || (Array.isArray(aud) && aud.includes(oidc.audience));
   if (!audOk) return undefined;
+  /**
+   * **청중이 여럿이면 `azp` 를 본다** (검수 S-07).
+   *
+   * 전에는 "우리 이름이 배열에 있으면 통과" 였다. 같은 IdP 의 다른 클라이언트에
+   * 발급된 토큰이 우리를 청중에 얹고 있으면 그대로 지난다 — 그 클라이언트가 우리
+   * 컨트롤 플레인을 부를 자격을 얻는다.
+   *
+   * OIDC Core 가 이 경우를 위해 `azp`(authorized party)를 두고, 청중이 여럿이면
+   * 반드시 있어야 한다고 못박는다. 단일 청중에서는 요구하지 않는다 — 요구하면
+   * `azp` 를 안 넣는 멀쩡한 IdP 가 전부 막힌다.
+   */
+  if (Array.isArray(aud) && aud.length > 1 && payload['azp'] !== oidc.audience) return undefined;
   const exp = payload['exp'];
   if (typeof exp !== 'number' || !Number.isFinite(exp) || exp <= now) return undefined;
   const sub = payload['sub'];
   if (typeof sub !== 'string' || sub === '') return undefined;
-  const role = payload['role'];
+  // 정했으면 그 클레임만. 안 정했으면 `role`. 떨어지지 않는다 — 위 주석 참조.
+  const role = payload[oidc.roleClaim ?? 'role'];
   if (!isRole(role)) return undefined;
   return { name: sub, scopes: new Set(scopesOfRole(role)), role };
 }
