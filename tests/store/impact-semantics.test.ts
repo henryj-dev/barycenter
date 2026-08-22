@@ -126,6 +126,44 @@ describe('§5.4 topologyEpochChange — 이 전환이 좌표를 옮기는가', (
   });
 });
 
+describe('§5.4 routeOrderChanges — 엔진이 고르는 순서와 그림자', () => {
+  const ROUTE = (key: string, host: string, priority: number, pathPrefix?: string): PatchOp =>
+    PUT('httpRoute', key, {
+      listener: 'front', hosts: [host], priority,
+      ...(pathPrefix === undefined ? {} : { pathPrefix }),
+      action: { kind: 'proxy', pool: 'web', websocket: false },
+    });
+
+  it('클래스를 가로지르는 우선순위 역전을 경고한다', async () => {
+    await commitAll(two);
+    // 사용자는 wildcard 를 먼저 보게 하려고 priority 를 높였다. **엔진은 안 그런다** —
+    // exact 가 항상 먼저다 (E20.1). §7.5-3 이 "저장은 허용하되 plan 이 경고" 라고 한 자리.
+    const plan = await planOf([
+      ROUTE('r-exact', 'a.test', 10),
+      ROUTE('r-wild', '*.test', 20),
+    ]);
+    const kinds = plan.impact.routeOrderChanges.warnings.map((w) => w.kind);
+    expect(kinds).toContain('priority_inversion');
+  });
+
+  it('순서가 바뀐 라우트를 짚는다', async () => {
+    await commitAll([...two, ROUTE('r-a', 'a.test', 0)]);
+    // 더 구체적인 exact 호스트를 하나 더 넣으면 기존 것의 자리가 밀린다.
+    const plan = await planOf([ROUTE('r-0', '0.test', 0)]);
+    const moved = plan.impact.routeOrderChanges.moved.map((m) => m.key);
+    expect(moved).toContain('r-0');
+    expect(moved).toContain('r-a');
+  });
+
+  it('라우트를 안 건드리면 아무것도 안 싣는다', async () => {
+    await commitAll([...two, ROUTE('r-a', 'a.test', 0)]);
+    const plan = await planOf([
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.9', port: 80, weight: 1 }),
+    ]);
+    expect(plan.impact.routeOrderChanges).toEqual({ moved: [], warnings: [] });
+  });
+});
+
 describe('§5.4 certificateChanges — 무엇이 교체되고 언제 만료되는가', () => {
   const REF = (n: string, v: string): string => `store://${n}@${v.repeat(32)}`;
   const FACTS: Record<string, CertFacts> = {

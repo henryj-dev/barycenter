@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities, type RenderedConfig } from '../conf/render.js';
+import { compileHostRoutes, type CompileWarning, type RouteInput } from '../route/compile.js';
 import { decodeModel } from '../model/decode.js';
 import { certCoversHost } from '../dp/certinfo.js';
 import {
@@ -189,6 +190,21 @@ export type Impact = {
    * 비워 둔다 — 지어내지 않고, 항목을 감추지도 않는다.
    */
   certificateChanges: { key: string; change: MaterialChange; notAfter?: string }[];
+  /**
+   * 엔진이 라우트를 고르는 **순서**가 어떻게 바뀌는가 (§5.4 · §7.5).
+   *
+   * 사용자 `priority` 가 아니라 컴파일된 순서다 — 매치 클래스가 priority 를 이기고
+   * (E20.1), 같은 호스트 안에서는 longest-prefix 가 이긴다(E31). 그래서 "우선순위를
+   * 20 으로 올렸는데 왜 저게 먼저 잡히나" 가 생기고, §7.5-3 이 그것을 *"저장은
+   * 허용하되 plan 이 경고한다"* 로 정했다.
+   *
+   * `warnings` 는 컴파일러가 이미 만들던 값이다. **아무도 안 읽고 있었다** —
+   * `validateModel` 은 `errors` 만 본다. 여기가 그 독자다.
+   */
+  routeOrderChanges: {
+    moved: { listener: string; key: string; from: number | null; to: number | null }[];
+    warnings: { kind: string; listener: string; routes: string[]; message: string }[];
+  };
   socketChanges: { added: string[]; removed: string[] };
   planes: ('http' | 'stream')[];
   confDiff: { before: number; after: number };
@@ -1597,6 +1613,55 @@ function certificateChanges(
   return out;
 }
 
+/**
+ * 리스너 하나 위의 HTTP 라우트를 **엔진이 고르는 순서**로 편다 (§7.5).
+ *
+ * 리스너 단위로 컴파일한다 — nginx 의 `server_name` 선택은 그 소켓 안에서 일어난다.
+ * 렌더러는 호스트별로 나눠 컴파일하지만(그 안에서 location 순서만 정하면 되므로),
+ * 클래스 간 역전은 호스트를 가로질러야 보인다.
+ */
+function routeOrderOf(model: Model): Map<string, { order: string[]; warnings: CompileWarning[] }> {
+  const out = new Map<string, { order: string[]; warnings: CompileWarning[] }>();
+  for (const l of model.listeners) {
+    if (l.protocol !== 'http' && l.protocol !== 'https') continue;
+    const inputs: RouteInput[] = model.httpRoutes
+      .filter((r) => r.listener === l.key)
+      .flatMap((r) => r.hosts.map((host) => ({
+        key: r.key, host, priority: r.priority,
+        ...(r.pathPrefix === undefined ? {} : { pathPrefix: r.pathPrefix }),
+      })));
+    if (inputs.length === 0) continue;
+    const compiled = compileHostRoutes(inputs);
+    // 오류가 있으면 컴파일러가 순서를 안 낸다 — 반쯤 컴파일된 순서는 거짓말이다.
+    // 그 오류는 `validateModel` 이 이미 막으므로 plan 이 여기까지 오지도 않는다.
+    out.set(l.key, { order: compiled.order.map((c) => c.key), warnings: compiled.warnings });
+  }
+  return out;
+}
+
+/** 두 모델의 컴파일된 순서를 견준다. **자리가 바뀐 것만** 싣는다. */
+function routeOrderChanges(before: Model, after: Model): Impact['routeOrderChanges'] {
+  const b = routeOrderOf(before);
+  const a = routeOrderOf(after);
+  const moved: Impact['routeOrderChanges']['moved'] = [];
+  const warnings: Impact['routeOrderChanges']['warnings'] = [];
+
+  for (const listener of [...new Set([...b.keys(), ...a.keys()])].sort()) {
+    const from = b.get(listener)?.order ?? [];
+    const to = a.get(listener)?.order ?? [];
+    for (const key of [...new Set([...from, ...to])].sort()) {
+      const i = from.indexOf(key);
+      const j = to.indexOf(key);
+      if (i === j) continue;
+      moved.push({ listener, key, from: i < 0 ? null : i, to: j < 0 ? null : j });
+    }
+    for (const w of a.get(listener)?.warnings ?? []) {
+      warnings.push({ kind: w.kind, listener, routes: [...w.routes], message: w.message });
+    }
+  }
+  return { moved, warnings };
+}
+
 function impactOf(
   before: { model: Model; conf: string },
   after: { model: Model; rendered: RenderedConfig },
@@ -1652,6 +1717,7 @@ function impactOf(
     affectedListeners: affected,
     sessionImpact: sessionImpactOf(before.model, model, affected, socketsRemoved, requiresReload),
     certificateChanges: certificateChanges(before.model, model, facts),
+    routeOrderChanges: routeOrderChanges(before.model, model),
     socketChanges: {
       added: [...sockets].filter((s) => !beforeSockets.has(s)).sort(),
       removed: socketsRemoved,
