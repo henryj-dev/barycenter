@@ -72,14 +72,42 @@ export async function startDrain(
   );
 }
 
+/**
+ * 드레인을 푼다. 없었으면 `false` (검수 B-04).
+ *
+ * **행을 지운다.** 종료 시각을 적고 남기는 길도 있지만, 이 표는 감사 기록이 아니라
+ * 리듀서가 매번 읽는 **현재 상태**다 — 끝난 것을 남기면 읽는 쪽이 매번 걸러야 하고,
+ * 그 필터를 한 군데서 빠뜨리면 풀린 백엔드가 계속 빠진다. 누가 언제 뺐다 넣었는지는
+ * `audit` 이 든다.
+ */
+export async function endDrain(db: Db, backendKey: string): Promise<boolean> {
+  const r = await db.query('DELETE FROM backend_drain WHERE backend_key=$1', [backendKey]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * 지금 빼야 할 백엔드들.
+ *
+ * **`deadline_at` 을 읽는다** (검수 B-04). 전에는 저장만 하고 아무도 안 봤다 — API 가
+ * `deadline_s` 를 받아 적어 두는데 만료돼도 아무 일이 안 일어났다. 이 저장소가 반복해서
+ * 잡는 *"필드는 있는데 아무도 안 읽는다"* 의 한 판이다.
+ *
+ * 만료된 행을 여기서 지우지는 않는다. 읽기 경로가 쓰면 프로버 틱마다 쓰기가 생기고,
+ * 리더가 아닌 인스턴스도 이 함수를 부른다. 지우는 것은 `endDrain` 과 백엔드 삭제
+ * CASCADE 의 몫이다.
+ */
+const LIVE = `deadline_at IS NULL OR deadline_at > now()`;
+
 export async function drainKeys(db: Db): Promise<Set<string>> {
-  const rows = (await db.query('SELECT backend_key FROM backend_drain')).rows;
+  const rows = (await db.query(
+    `SELECT backend_key FROM backend_drain WHERE ${LIVE}`)).rows;
   return new Set(rows.map((r) => String(r['backend_key'])));
 }
 
 export async function isDraining(db: Db, backendKey: string): Promise<boolean> {
+  // **`drainKeys` 와 같은 조건이어야 한다.** 갈리면 "드레인 중이라는데 트래픽은 간다" 가 된다.
   const r = (await db.query(
-    'SELECT 1 FROM backend_drain WHERE backend_key=$1', [backendKey],
+    `SELECT 1 FROM backend_drain WHERE backend_key=$1 AND (${LIVE})`, [backendKey],
   )).rows[0];
   return r !== undefined;
 }

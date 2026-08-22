@@ -31,7 +31,9 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { backupNow, restoreNow } from '../cli/backup.js';
 
-import { backendDelete, backendDrain, backendDrainStatus, backendPut } from '../cli/backend.js';
+import {
+  backendDelete, backendDrain, backendDrainStatus, backendPut, backendUndrain,
+} from '../cli/backend.js';
 import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete } from '../cli/listener.js';
 import { poolCreate, poolDelete } from '../cli/pool.js';
@@ -108,6 +110,7 @@ const usage = (): never => {
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
   bary backend delete            --name
   bary backend drain             --name [--deadline 초]. 새 트래픽을 끊는다. apply 가 아니다
+  bary backend undrain           --name. 드레인을 푼다. deadline 이 지나면 저절로도 풀린다
   bary backend drain-status      --name. 관측이 없으면 숫자를 안 싣는다
   bary tls-policy create         --name [--min-version 1.2|1.3]. HSTS 안 켬
   bary tls-policy delete         --name
@@ -363,6 +366,15 @@ async function main(): Promise<void> {
         try {
           show(await backendDrain(call, name,
             deadlineRaw === undefined ? undefined : Number(deadlineRaw)));
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
+      if (sub === 'undrain') {
+        const name = flag(argv, '--name') ?? usage();
+        try {
+          show(await backendUndrain(call, name));
         } catch (e) {
           die(e);
         }

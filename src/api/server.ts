@@ -27,7 +27,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.js';
-import { drainStatusOf, isDraining, parsePeerObservation, startDrain } from '../control/drain.js';
+import {
+  drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
+} from '../control/drain.js';
 import { healthRows } from '../control/health.js';
 import { render as renderMetrics } from '../obs/metrics.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
@@ -279,6 +281,32 @@ const ROUTES: Route[] = [
     await startDrain(api.db, key, c.who.name, deadline);
     await api.control.projectHealth();
     json(c.res, 200, drainStatusOf({ backend: key, draining: true }));
+  }),
+
+  /**
+   * 드레인 해제 (검수 B-04).
+   *
+   * **이 경로가 아예 없었다.** 시작만 되고 푸는 길이 없어서, 운영 중에 백엔드를 잠깐
+   * 빼는 것이 DB 를 손으로 고치기 전까지 되돌릴 수 없는 조작이었다.
+   *
+   * `write` 다 — 시작과 같은 권한이다. 빼는 것보다 넣는 것이 더 위험하지도, 덜 위험하지도
+   * 않다(둘 다 트래픽을 옮긴다). 그리고 `apply` 를 요구하면 뺀 사람이 못 되돌린다.
+   */
+  route('DELETE', '/api/v1/backends/:id/drain', 'write', async (c, api) => {
+    const key = c.params['id'] ?? '';
+    const m = await api.store.modelAt((await api.store.head()).revision);
+    if (!m.backends.some((b) => b.key === key)) {
+      json(c.res, 404, { error: 'not_found', message: `백엔드 '${key}' 가 없다` });
+      return;
+    }
+    // **없던 것을 푼 것과 푼 것은 다르다.** 빈 성공으로 답하면 둘이 같아진다.
+    if (!(await endDrain(api.db, key))) {
+      json(c.res, 404, { error: 'not_draining', message: `백엔드 '${key}' 는 드레인 중이 아니다` });
+      return;
+    }
+    await api.control.projectHealth();
+    await api.store.audit(c.who.name, 'backend.undrain', key, undefined, undefined);
+    json(c.res, 200, { backend: key, draining: false });
   }),
 
   route('GET', '/api/v1/backends/:id/drain-status', 'read', async (c, api) => {

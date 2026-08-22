@@ -157,6 +157,15 @@
             "description": "implemented"
           }
         }
+      },
+      "delete": {
+        "operationId": "DELETE:/api/v1/backends/:id/drain",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
       }
     },
     "/api/v1/backends/{id}/drain-status": {

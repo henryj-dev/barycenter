@@ -112,6 +112,10 @@ export async function reset(db: Db): Promise<void> {
                            passthrough_routes, backends, listeners, pools,
                            sni_certificate_bindings, certificates, tls_policies,
                            engine_settings,
+                           -- 운영 상태도 테스트 사이에 안 넘긴다 (013). 백엔드 삭제
+                           -- 트리거가 정상 경로를 덮지만, 픽스처의 TRUNCATE 는 트리거를
+                           -- 안 태운다 — 여기 안 적으면 앞 테스트의 판정이 살아남는다.
+                           backend_drain, backend_health,
                            leadership, config_head, config_revisions
                   RESTART IDENTITY CASCADE`);
   await db.query(`ALTER SEQUENCE config_revision_seq RESTART 1`);
