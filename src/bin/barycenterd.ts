@@ -24,7 +24,7 @@ import { promisify } from 'node:util';
 import { createApi } from '../api/server.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore } from '../dp/secrets.js';
-import { TokenAuth, type OidcSettings, type TokenSpec } from '../api/auth.js';
+import { TokenAuth, parseTokenSpecs, type OidcSettings, type TokenSpec } from '../api/auth.js';
 import type { OidcRpSettings } from '../api/oidc-code.js';
 import { render } from '../conf/render.js';
 import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
@@ -67,11 +67,9 @@ function loadTokens(): TokenSpec[] {
   const raw = process.env['BARY_TOKENS_FILE'] !== undefined
     ? readFileSync(process.env['BARY_TOKENS_FILE'], 'utf8')
     : env('BARY_TOKENS');
-  const parsed: unknown = JSON.parse(raw);
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error('BARY_TOKENS 는 비어 있지 않은 배열이어야 한다');
-  }
-  return parsed as TokenSpec[];
+  // **캐스팅하지 않는다.** `role` 오타 하나가 전권 토큰이 되던 자리다 (검수 S-03) —
+  // 해독은 `parseTokenSpecs` 가 한다. 모델 경계와 같은 규칙이다.
+  return parseTokenSpecs(JSON.parse(raw));
 }
 
 /** http 평면 admin 에 적재하고 되읽는다. */

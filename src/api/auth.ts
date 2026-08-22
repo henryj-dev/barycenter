@@ -25,10 +25,91 @@ export const ALL_SCOPES: readonly Scope[] = ['read', 'write', 'apply', 'admin'];
 /** v1.0 역할. 스코프를 직접 적지 않아도 된다. */
 export type Role = 'auditor' | 'operator' | 'admin';
 
+/**
+ * 역할 → 스코프. **모르는 역할은 던진다.**
+ *
+ * 전에는 `auditor`/`operator` 만 분기하고 **나머지 전부를 admin 으로 떨궜다.** 타입이
+ * `Role` 이니 그래도 된다고 생각했는데, 이 함수는 **설정 파일에서 온 값**도 받는다 —
+ * `BARY_TOKENS` 를 캐스팅으로만 읽고 있었기 때문이다. `"role":"operater"` 오타 하나가
+ * 전권 토큰이 됐고 기동 로그에도 안 보였다 (검수 S-03).
+ *
+ * fail closed 로 뒤집는다. 전권은 **명시적으로 `admin` 이라고 적었을 때만** 나온다.
+ */
 export function scopesOfRole(role: Role): Scope[] {
   if (role === 'auditor') return ['read'];
   if (role === 'operator') return ['read', 'write'];
-  return ['read', 'write', 'apply', 'admin'];
+  if (role === 'admin') return ['read', 'write', 'apply', 'admin'];
+  throw new Error(
+    `아는 역할이 아니다: ${JSON.stringify(role)} — auditor | operator | admin`,
+  );
+}
+
+/**
+ * `BARY_TOKENS` 를 해독한다. **캐스팅하지 않는다.**
+ *
+ * 이 저장소는 모델 경계에 이미 같은 규칙을 세워 뒀다 (`src/model/decode.ts`):
+ * *모르는 값은 거부한다 · 모르는 키도 거부한다 · 강제 변환하지 않는다.* 설정 파일이
+ * 그 규칙 밖에 있을 이유가 없다 — 오히려 **권한을 정하는 값**이라 더 엄해야 한다.
+ *
+ * `scopes: "read"` 를 받아 주면 `new Set("read")` 가 글자 단위로 쪼개져 아무 스코프도
+ * 아닌 것이 되고, 증상은 "토큰은 맞는데 403" 이다.
+ */
+export function parseTokenSpecs(input: unknown): TokenSpec[] {
+  if (!Array.isArray(input)) throw new Error('토큰 명세는 배열이어야 한다');
+  if (input.length === 0) throw new Error('토큰 명세가 비어 있다 — 아무도 못 들어온다');
+
+  return input.map((raw, i): TokenSpec => {
+    const at = `토큰[${i}]`;
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`${at} 는 객체여야 한다`);
+    }
+    const obj = raw as Record<string, unknown>;
+    for (const k of Object.keys(obj)) {
+      if (!['name', 'hash', 'scopes', 'role'].includes(k)) {
+        throw new Error(`${at} 에 모르는 필드 '${k}' — 오타이거나 지원하지 않는 설정이다`);
+      }
+    }
+
+    const name = obj['name'];
+    if (typeof name !== 'string' || name === '') {
+      throw new Error(`${at}.name 은 비어 있지 않은 문자열이어야 한다`);
+    }
+    const hash = obj['hash'];
+    if (typeof hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(hash)) {
+      throw new Error(`${at}.hash 는 'sha256:<64 hex>' 여야 한다 (${name})`);
+    }
+
+    const role = obj['role'];
+    if (role !== undefined && !isRole(role)) {
+      throw new Error(`${at}.role 이 아는 역할이 아니다: ${JSON.stringify(role)} (${name})`);
+    }
+
+    const rawScopes = obj['scopes'];
+    let scopes: Scope[] | undefined;
+    if (rawScopes !== undefined) {
+      if (!Array.isArray(rawScopes)) {
+        throw new Error(`${at}.scopes 는 배열이어야 한다 (${name})`);
+      }
+      for (const s of rawScopes) {
+        if (!(ALL_SCOPES as readonly unknown[]).includes(s)) {
+          throw new Error(`${at}.scopes 에 모르는 스코프: ${JSON.stringify(s)} (${name})`);
+        }
+      }
+      scopes = rawScopes as Scope[];
+    }
+
+    // **아무 권한도 없는 토큰은 실수다.** 조용히 받아 두면 "토큰은 맞는데 403" 을
+    // 디버깅하게 된다.
+    if (role === undefined && (scopes === undefined || scopes.length === 0)) {
+      throw new Error(`${at} 에 scopes 도 role 도 없다 — 이 토큰은 아무것도 못 한다 (${name})`);
+    }
+
+    return {
+      name, hash,
+      ...(scopes === undefined ? {} : { scopes }),
+      ...(role === undefined ? {} : { role }),
+    };
+  });
 }
 
 export type Principal = {
