@@ -152,10 +152,31 @@ jobs:
       # 대신 플래그를 먼저 물고 `unknown shorthand flag: 'f' in -f` 로 죽는다(실측,
       # run 32553768528). 러너 이미지의 전역 상태에 CI 결과가 좌우되지 않도록
       # **버전을 고정해 잡 안에서 깐다** — 로컬 개발 머신과 같은 v5.3.1 이다.
+      #
+      # ⚠️ **레지스트리에서 가져온다. GitHub Releases 가 아니다.**
+      # 처음엔 `docker/setup-compose-action` 을 썼는데 이 클러스터에서
+      # `getaddrinfo EAI_AGAIN raw.githubusercontent.com` 으로 죽었다(실측,
+      # run 32559082503). 같은 러너에서 `npm ci` 와 `docker pull` 은 멀쩡히 된다 —
+      # **이미 도는 것이 확인된 경로**로 가져오는 편이 낫다. `docker/compose-bin` 은
+      # 그 바이너리 하나만 든 scratch 이미지이고, `docker cp` 는 API 스트림이라
+      # dind 경계를 그대로 넘는다.
       - name: Compose 플러그인 준비
-        uses: docker/setup-compose-action@v2
-        with:
-          version: v5.3.1
+        run: |
+          set -euo pipefail
+          if docker compose version >/dev/null 2>&1; then
+            echo "이미 있다: $(docker compose version)"
+            exit 0
+          fi
+          IMAGE=docker.io/docker/compose-bin:v5.3.1
+          DIR="$HOME/.docker/cli-plugins"
+          mkdir -p "$DIR"
+          docker pull -q "$IMAGE"
+          # scratch 이미지라 실행할 것이 없다. 만들기만 하고 파일만 꺼낸다.
+          cid=$(docker create --entrypoint /docker-compose "$IMAGE")
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/docker-compose" "$DIR/docker-compose"
+          chmod +x "$DIR/docker-compose"
+          docker compose version
 
       - run: ./scripts/quickstart.sh --clean
         env:
