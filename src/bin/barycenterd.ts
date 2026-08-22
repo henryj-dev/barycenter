@@ -49,6 +49,7 @@ import { probeEngine } from '../engine/probe.js';
 import { renderCapsOf } from '../engine/render-caps.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
+import { isLoopbackBind } from '../validate/sockets.js';
 
 const run = promisify(execFile);
 
@@ -529,6 +530,22 @@ export async function main(): Promise<void> {
     host, port: Number(port), prefix, adminPort, tokens: auth.size,
     gui: serveRoot ?? false,
   });
+  /**
+   * **루프백 밖에 묶었으면 말한다** (검수 S-05a).
+   *
+   * 이 API 로 개인키 PEM 이 본문에 담겨 올라가고 Bearer 토큰이 매 요청에 실린다.
+   * 그런데 TLS 가 없다. 컨테이너에서는 `0.0.0.0` 이 **필요한** 값이라(포트 퍼블리시가
+   * 루프백 바인드에 닿지 못한다) 막을 수는 없다 — 대신 드러낸다.
+   *
+   * 진짜 답은 서버 TLS 이고 그건 별건이다. 그때까지 이 줄이 자리를 지킨다.
+   */
+  if (!isLoopbackBind(host ?? '')) {
+    log.warn('listen.exposed', {
+      host,
+      why: '제어 API 에 TLS 가 없다 — 개인키와 토큰이 평문으로 지나간다',
+      advice: '앞단에서 TLS 를 종단하거나 루프백에만 퍼블리시하라',
+    });
+  }
 
   const stop = (): void => {
     server.close(() => {

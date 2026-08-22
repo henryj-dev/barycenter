@@ -63,6 +63,24 @@ export function normalizeBind(input: string): Result<BindAddress> {
 }
 
 /**
+ * 이 바인드가 **루프백뿐인가** (검수 S-05a).
+ *
+ * 제어 API 에는 아직 TLS 가 없고, 그 API 로 개인키와 Bearer 토큰이 지나간다. 루프백
+ * 밖에 묶는 것은 정당한 선택일 수 있지만(컨테이너에서는 필요하다) **조용히 일어나면
+ * 안 되는** 선택이다.
+ *
+ * 와일드카드(`0.0.0.0` · `::`)는 루프백을 **포함하지만** 루프백뿐이 아니다 — 거짓이다.
+ * 주소로 해석되지 않는 값도 거짓이다: 모르는 것을 안전하다고 하지 않는다.
+ */
+export function isLoopbackBind(input: string): boolean {
+  const parsed = normalizeBind(input);
+  if (!parsed.ok) return false;
+  const { family, addr, wildcard } = parsed.value;
+  if (wildcard) return false;
+  return family === 'v4' ? addr.startsWith('127.') : addr === '::1';
+}
+
+/**
  * 두 예약이 같은 소켓을 두고 다투는가.
  *
  * **address family 를 넘는 겹침은 없다.** nginx 의 `ipv6only` 기본값은 `on` 이라
