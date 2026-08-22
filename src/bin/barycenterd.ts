@@ -46,6 +46,7 @@ import { log } from '../obs/log.js';
 import { count } from '../obs/metrics.js';
 import { dataplaneCapabilitiesOf } from '../engine/native-dns.js';
 import { probeEngine } from '../engine/probe.js';
+import { renderCapsOf } from '../engine/render-caps.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
 
@@ -128,17 +129,7 @@ function writeBootstrap(prefix: string, adminPort: number, streamAdminPort: numb
     return;
   }
   const probe = probeEngine(env('BARY_ENGINE_BIN', '/usr/local/openresty/bin/openresty'));
-  const caps = probe.ok
-    ? {
-        streamRealip: probe.capabilities.supports.streamRealip,
-        httpLua: probe.capabilities.supports.runtimeMembership.http,
-        streamLua: probe.capabilities.supports.runtimeMembership.stream,
-        // §4.9 — 모듈과 버전을 함께 본다. 그 전 문법(`listen ... http2`)은 리스너
-        // 단위라 지금 규칙(server 별)이 성립하지 않는다.
-        http2: probe.capabilities.supports.http2,
-        sslConfCommand: probe.capabilities.supports.sslConfCommand,
-      }
-    : { streamRealip: false };
+  const caps = renderCapsOf(probe);
 
   // **빈 모델이다.** 아직 아무것도 커밋되지 않았다 — 리스너가 없으니 트래픽 표면도 없고
   // admin 만 선다. 멤버십 dict 는 capability 가 있으면 여기서 이미 선언된다.
@@ -185,15 +176,9 @@ export async function main(): Promise<void> {
   // 조합이 막히지" 에 아무도 답할 수 없다. PROXY 신뢰 경계를 넣은 뒤로 stream 수신이
   // 엔진과 무관하게 막혔던 것이 정확히 그 상태였다.
   const probe = probeEngine(env('BARY_ENGINE_BIN', '/usr/local/openresty/bin/openresty'));
-  const renderCaps = probe.ok
-    ? {
-        streamRealip: probe.capabilities.supports.streamRealip,
-        // **멤버십 평면의 전제**다 (§7.3 · S1). `runtimeMembership` 이 lua 모듈 유무를
-        // 평면별로 이미 접어 준다 — 여기서 다시 계산하면 두 자리가 갈린다.
-        httpLua: probe.capabilities.supports.runtimeMembership.http,
-        streamLua: probe.capabilities.supports.runtimeMembership.stream,
-      }
-    : { streamRealip: false };
+  // **매핑은 `renderCapsOf` 한 자리에만 있다** (검수 B-02). 여기 인라인으로 적었다가
+  // `writeBootstrap` 쪽과 갈렸고, 그 결과가 "엔진이 지원해도 HTTP/2 가 안 켜진다" 였다.
+  const renderCaps = renderCapsOf(probe);
   const nativeDns = probe.ok
     ? dataplaneCapabilitiesOf(probe.capabilities).nativeDns
     : undefined;
@@ -208,8 +193,9 @@ export async function main(): Promise<void> {
   if (probe.ok) {
     log.info('engine.probed', {
       flavor: probe.capabilities.flavor, version: probe.capabilities.version,
-      streamRealip: probe.capabilities.supports.streamRealip,
-      membership: probe.capabilities.supports.runtimeMembership,
+      // **엔진이 무엇을 할 수 있는가가 아니라, 렌더러가 무엇을 받았는가를 찍는다.**
+      // 둘이 갈렸던 것이 B-02 였고, 갈린 쪽을 안 찍고 있어서 아무도 못 봤다.
+      caps: renderCaps,
       nativeDns,
     });
   } else {
