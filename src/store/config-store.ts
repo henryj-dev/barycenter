@@ -901,6 +901,13 @@ export class ConfigStore {
   async rollbackTo(revision: string, by: string, note?: string): Promise<{
     revision: string; activationEpoch: string; rollbackOf: string; planId: string;
   }> {
+    // **모양을 먼저 본다** (검수 B-11). 숫자가 아닌 값을 bigint 컬럼에 그대로 물면
+    // PG 가 `invalid input syntax` 로 거절해 500 이 되고, 아래 `BigInt()` 도 던진다.
+    // 리비전은 10 진 정수다 — 그게 아니면 **없는 것이 아니라 틀린 것**이므로 400 이다.
+    if (!/^\d+$/.test(revision)) {
+      throw new StoreError(400, 'malformed',
+        `리비전은 10진 정수여야 한다: ${JSON.stringify(revision)}`);
+    }
     const out = await this.db.tx(async (c) => {
       const headRow = (await c.query('SELECT revision FROM config_head FOR UPDATE')).rows[0];
       const head = text(headRow ?? {}, 'revision');

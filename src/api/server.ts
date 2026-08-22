@@ -618,7 +618,10 @@ const ROUTES: Route[] = [
   }),
 
   route('GET', '/api/v1/audit', 'read', async (c, api) => {
-    const limit = Math.min(Number(c.url.searchParams.get('limit') ?? '100') || 100, 1000);
+    // **하한이 필요하다** (검수 B-11). `Math.min` 만 걸면 음수가 그대로 내려가고
+    // PG 가 `LIMIT must not be negative` 로 거절해 500 이 된다.
+    const asked = Number(c.url.searchParams.get('limit') ?? '100') || 100;
+    const limit = Math.min(Math.max(Math.floor(asked), 1), 1000);
     const rows = (await api.db.query(
       `SELECT id, at, principal, action, subject, revision FROM audit
         ORDER BY id DESC LIMIT $1`, [limit],
@@ -772,9 +775,19 @@ async function handle(
   }
 
   const params: Record<string, string> = {};
-  hit.r.keys.forEach((k, i) => {
-    params[k] = decodeURIComponent(hit.m?.[i + 1] ?? '');
-  });
+  try {
+    // **해독을 `try` 안으로 넣는다** (검수 B-11). 밖에 있으면 `%` 하나가
+    // `URIError` 로 올라가 **500** 이 된다 — 우리 잘못이 아닌데 우리 잘못이라고 답한다.
+    hit.r.keys.forEach((k, i) => {
+      params[k] = decodeURIComponent(hit.m?.[i + 1] ?? '');
+    });
+  } catch {
+    json(res, 400, {
+      code: 'malformed',
+      message: `경로에 잘못된 퍼센트 인코딩이 있다: ${url.pathname}`,
+    });
+    return;
+  }
 
   try {
     const body = req.method === 'GET' || req.method === 'DELETE'
@@ -792,6 +805,21 @@ async function handle(
     // 자체는 못 없앤다 — 닫는 것은 DP Agent 의 토큰 비교다 (§3.5).
     if (e instanceof NotLeader) {
       json(res, e.status, { code: e.code, message: e.message }, { 'retry-after': '5' });
+      return;
+    }
+    /**
+     * PG `22P02` (invalid_text_representation) — **값이 컬럼 타입이 아니다.**
+     *
+     * `/plans/:id` 같은 자리는 `uuid` 컬럼에 그대로 물으므로, uuid 가 아닌 문자열이
+     * 오면 PG 가 거절한다. 그건 우리 잘못이 아니라 **입력의 구문 오류**다
+     * (§5.1 의 4분할에서 400). 500 으로 답하면 호출자는 재시도하고 운영자는
+     * 서버 로그를 뒤진다 — 정작 고칠 것은 요청에 있는데 (검수 B-11).
+     */
+    if ((e as { code?: string }).code === '22P02') {
+      json(res, 400, {
+        code: 'malformed',
+        message: '경로나 본문의 값이 그 자리의 타입이 아니다',
+      });
       return;
     }
     throw e;
