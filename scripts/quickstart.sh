@@ -73,9 +73,19 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 1
 done
 
+echo "⑦ 판정 — 컨테이너가 비-root 로 도는가 (검수 S-10b)"
+# **여기서 잰다.** 이 이미지는 e2e 스위트가 안 만진다(그쪽은 자기 컨테이너를 세운다).
+# 재는 자리가 없으면 다음 사람이 `USER` 한 줄을 지워도 아무도 모른다.
+uid=$(docker compose -f deploy/docker-compose.yml exec -T dataplane id -u 2>/dev/null | tr -d '\r' || true)
+if [ "$uid" = "0" ] || [ -z "$uid" ]; then
+  echo "  FAIL  데이터 플레인이 uid '$uid' 로 돈다 (0 이거나 못 읽었다)"
+  [ $CLEAN -eq 1 ] && docker compose -f deploy/docker-compose.yml down -v >/dev/null 2>&1
+  exit 1
+fi
+
 if [ "$got" = "hello from A:11" ]; then
   echo ""
-  echo "  ok    Quickstart 가 README 대로 동작한다 — curl → '$got'"
+  echo "  ok    Quickstart 가 README 대로 동작한다 — curl → '$got' · uid=$uid"
   [ $CLEAN -eq 1 ] && docker compose -f deploy/docker-compose.yml down -v >/dev/null 2>&1
 else
   echo ""

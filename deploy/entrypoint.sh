@@ -8,6 +8,22 @@ set -eu
 PREFIX="${BARY_PREFIX:-/prefix}"
 ENGINE=/usr/local/openresty/bin/openresty
 
+# **쓸 수 있는지 먼저 이름 지어 확인한다** (검수 S-10b).
+#
+# 이 이미지는 비-root 로 돈다. compose 의 named volume 은 처음 만들어질 때 이미지의
+# 소유권을 가져가므로 새 배포는 그냥 되지만, **비-root 전환 이전에 만들어진 볼륨은
+# root 소유**다. 그대로 두면 `mkdir` 이 EACCES 로 죽고, 그 메세지는 원인을 안 말한다.
+#
+# 없는 것을 없다고 말하지 못하는 진단은 진단이 아니다 — quickstart 가 배운 그대로다.
+if ! ( mkdir -p "$PREFIX/.wtest" && rmdir "$PREFIX/.wtest" ) 2>/dev/null; then
+  echo "FAIL  $PREFIX 에 쓸 수 없다 — 이 이미지는 uid $(id -u) 로 돈다." >&2
+  echo "      이 볼륨이 비-root 전환 이전에 만들어졌다면 소유권이 root 다. 고치려면:" >&2
+  echo "        docker compose -f deploy/docker-compose.yml down" >&2
+  echo "        docker run --rm -v <볼륨>:/p alpine chown -R 10001:10001 /p" >&2
+  echo "      (새로 만드는 배포라면 볼륨을 지우고 다시 올려도 된다: down -v)" >&2
+  exit 1
+fi
+
 mkdir -p "$PREFIX/logs" "$PREFIX/state" "$PREFIX/generations"
 
 # **부트스트랩 세대를 데몬이 만든다.**
