@@ -43,6 +43,9 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 화면: 영향 · 리스너 · 풀 · 라우트 · 인증서 · 상태 · 산출물 · 기록 · 로그인. Kit
 경로다. SSE 는 fetch 스트림 + `pullSse` 다.
+영향 화면은 §5.4 **아홉 항목**을 읽는다 — reload · 좌표 이동 · 영향받는 리스너 ·
+기존 세션 · 소켓 · 인증서 교체와 만료 · 라우트 순서 경고 · 엔진 경고. 끊기는 것을
+먼저 말하고 영향 없는 프로토콜은 안 싣는다. CLI 도 커밋 앞에서 같은 요약을 낸다.
 산출물은 `GET /api/v1/config/rendered` 다. 기록은 `GET /api/v1/audit` 다.
 폴링하지 않는다.
 
@@ -69,20 +72,21 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 ### 스위트
 
-수치는 2026-08-20 `verify:quick` 과 직전 전체 게이트의 실측이다.
+수치는 2026-08-23 전체 게이트의 실측이다. **문서에 옮겨 적은 값은 늘 낡는다** —
+직전 표는 단위를 510 이라고 적어 뒀는데 실측은 595 였다.
 
 | 스위트 | 명령 | 통과 |
 |---|---|---|
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **510** |
-| conformance | `npm run test:conformance` | **392** |
+| 단위 | `npm test` | **595** |
+| conformance | `npm run test:conformance` | **408** |
 | 골든 | `npm run test:golden` | 44 |
-| 엔진 사실 | `npm run test:engine` | 73 (SKIP 2) |
-| e2e | `npm run test:e2e` | 57 |
+| 엔진 사실 | `npm run test:engine` | 76 (SKIP 2) |
+| e2e | `npm run test:e2e` | 60 |
 | 스파이크 | `spike/*/run.sh` | 91 |
-| 저장소 | `npm run test:store` | 107 |
+| 저장소 | `npm run test:store` | 167 |
 
 스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
 B(구현된 API·DDL) 드리프트를 둘 다 막는다. A 동결 근거는 `SURFACE.txt` 의 3 회차다.
