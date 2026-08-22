@@ -17,6 +17,8 @@ import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities, type RenderedConfig } from '../conf/render.js';
 import { decodeModel } from '../model/decode.js';
+import { certCoversHost } from '../dp/certinfo.js';
+import type { SecretStore } from '../dp/secrets.js';
 import { ModelValidationError } from '../validate/model.js';
 import type {
   Backend,
@@ -703,7 +705,64 @@ export class ConfigStore {
   constructor(
     private readonly db: Db,
     private readonly caps: RenderCapabilities = { streamRealip: false },
+    /**
+     * 인증서 **사실**을 읽는 창구 (검수 B-05). 없으면 SAN 커버리지를 안 본다.
+     *
+     * `SecretStore` 전체가 아니라 `facts` 하나만 받는다 — 저장소는 자료 바이트를 읽을
+     * 이유가 없고, 좁게 받으면 테스트가 개인키 없이 이 경로를 잴 수 있다.
+     */
+    private readonly certFacts?: Pick<SecretStore, 'facts'>,
   ) {}
+
+  /**
+   * **바인딩된 인증서가 그 호스트를 정말 덮는가** (검수 B-05 · S17).
+   *
+   * 검증기의 `sni_binding_missing` 은 *바인딩 패턴*이 호스트를 덮는지만 본다. 그
+   * 바인딩이 가리키는 인증서의 **실제 SAN** 은 아무도 안 봤고, 그래서 `a.test` 를 SAN 이
+   * `b.test` 뿐인 인증서에 묶어도 전부 통과했다 — handshake 에서 커버하지 않는 인증서가
+   * 제시된다.
+   *
+   * ── 왜 `validateModel` 이 아닌가 ──────────────────────────────────
+   *
+   * SAN 은 **모델 밖의 사실**이다(SecretStore 의 바이트에서 온다). `validateModel` 은
+   * 순수 함수이고 그 인자 타입은 공개 표면이라, 거기에 I/O 를 끌어들이면 표면이
+   * 움직이고 순수성도 잃는다.
+   *
+   * ⚠️ **대가**: `render()` 만 쓰는 라이브러리 소비자는 이 검사를 못 받는다. 저장소를
+   * 지나는 모든 경로(plan · commit · rollback · import)는 받는다.
+   *
+   * **모르는 것은 안 막는다.** 자료가 없는 인증서(ACME 발급 전)는 검증기가 따로 막고,
+   * 사실이 없는 자료(v0.6 1단계)는 판단하지 않는다 — §6.7 의 "관측 못 한 것과 실패한
+   * 것은 다르다" 와 같은 규칙이다.
+   */
+  private assertCertificatesCover(model: Model): void {
+    const facts = this.certFacts;
+    if (facts === undefined) return;
+    const certs = new Map(model.certificates.map((c) => [c.key, c]));
+    const problems: string[] = [];
+
+    const check = (certKey: string, hosts: readonly string[], subject: string): void => {
+      const ref = certs.get(certKey)?.materialRef;
+      if (ref === undefined) return;                 // 발급 전 — 검증기의 몫
+      const f = facts.facts(ref);
+      if (f === undefined) return;                   // 사실을 모른다
+      for (const host of hosts) {
+        if (certCoversHost(f, host)) continue;
+        problems.push(
+          `${subject}: 인증서 '${certKey}' 의 SAN 이 '${host}' 를 안 덮는다 `
+          + `(SAN: ${f.domains.join(', ') || '없음'})`,
+        );
+      }
+    };
+
+    for (const b of model.sniBindings) check(b.certificate, b.hosts, `SNI 바인딩 '${b.key}'`);
+
+    if (problems.length > 0) {
+      throw new StoreError(422, 'certificate_does_not_cover',
+        `바인딩된 인증서가 그 호스트를 안 덮는다 — handshake 에서 클라이언트가 거절한다:\n`
+        + problems.map((p) => `  · ${p}`).join('\n'), problems);
+    }
+  }
 
   async head(): Promise<Head> {
     const r = (await this.db.query('SELECT revision FROM config_head')).rows[0];
@@ -855,6 +914,8 @@ export class ConfigStore {
       const beforeConf = safeRender(prior, this.caps);
       for (const op of ops) await applyOp(c, op, baseRevision, by).catch(translate);
       const next = await readModel(c);
+      // **모델 밖의 사실도 여기서 본다** (검수 B-05). 렌더는 SAN 을 모른다.
+      this.assertCertificatesCover(next);
       return { model: next, rendered: renderOrThrow(next, this.caps), before: beforeConf };
     });
 
@@ -986,6 +1047,7 @@ export class ConfigStore {
       // plan 이 통과했다고 지금도 통과하는 것은 아니다 — 그 사이 다른 커밋이 있었으면
       // head 검사가 막지만, 같은 트랜잭션 안의 순서 때문에 달라지는 것이 남는다.
       const model = await readModel(c);
+      this.assertCertificatesCover(model);
       const rendered = renderOrThrow(model, this.caps);
 
       const epoch = text(
@@ -1089,6 +1151,7 @@ export class ConfigStore {
       // 되돌린 결과가 지금도 유효한지 **다시 본다.** 엔진 capability 나 검증 규칙이
       // 그 사이 바뀌었을 수 있다 — 옛 리비전이라고 무조건 통과시키지 않는다.
       const restored = await readModel(c);
+      this.assertCertificatesCover(restored);
       renderOrThrow(restored, this.caps);
 
       const epoch = text(

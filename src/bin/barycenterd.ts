@@ -210,7 +210,22 @@ export async function main(): Promise<void> {
     log.info('driver.loaded', { name: driverBoot.name, nativeDns: driverBoot.capabilities.nativeDns });
   }
 
-  const store = new ConfigStore(db, renderCaps);
+  /**
+   * 인증서 자료 저장소 (§4.8).
+   *
+   * **평문 파일이다.** 보호는 파일 권한과 "메인 DB 가 아니다" 뿐이고 암호화가 아니다 —
+   * KMS·Vault 드라이버는 같은 인터페이스 뒤에 따로 붙는다. 지금 없는 것을 있다고
+   * 적지 않는다.
+   *
+   * `ConfigStore` 보다 먼저 만든다 — 저장소가 SAN 커버리지를 보려면 사실을 읽을 창구가
+   * 있어야 한다 (검수 B-05).
+   */
+  const secretsRoot = env('BARY_SECRETS', `${prefix}/secrets`);
+  const secrets = new FsSecretStore(secretsRoot);
+
+  // **사실 창구를 넘긴다** (검수 B-05). 안 넘기면 바인딩된 인증서가 그 호스트를
+  // 덮는지 아무도 안 본다 — `certCoversHost` 가 구현돼 있는데 호출자가 없었다.
+  const store = new ConfigStore(db, renderCaps, secrets);
 
   /**
    * 멤버십 슬롯을 데이터 플레인에 밀어 넣는다 (§6.5).
@@ -312,16 +327,6 @@ export async function main(): Promise<void> {
     });
   }, Number(env('BARY_ELECTION_INTERVAL_MS', '5000')));
   retry.unref();
-
-  /**
-   * 인증서 자료 저장소 (§4.8).
-   *
-   * **평문 파일이다.** 보호는 파일 권한과 "메인 DB 가 아니다" 뿐이고 암호화가 아니다 —
-   * KMS·Vault 드라이버는 같은 인터페이스 뒤에 따로 붙는다. 지금 없는 것을 있다고
-   * 적지 않는다.
-   */
-  const secretsRoot = env('BARY_SECRETS', `${prefix}/secrets`);
-  const secrets = new FsSecretStore(secretsRoot);
 
   const control = new ControlPlane(db, store, driver, election,
     { prefix, adminPort, streamAdminPort, renderCaps, engine: engineInfo, driver: driverBoot, secrets });
