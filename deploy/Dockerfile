@@ -71,9 +71,11 @@ COPY --from=build /src/dist ./dist
 # 서버 TLS 는 이제 있다 (검수 S-05b) — `BARY_TLS_CERT_FILE` 과 `BARY_TLS_KEY_FILE` 을
 # 주면 https 로 뜬다. 그래도 이 이미지의 기본은 평문이다: 인증서를 이미지에 굽지
 # 않기 때문이다. 넓은 인터페이스로 퍼블리시하려면 TLS 를 먼저 켠다.
+# `BARY_ADMIN_PORT` 는 없어졌다 (검수 S-08b). admin 표면은 이제 `$BARY_PREFIX/run` 의
+# 유닉스 소켓이고, 접근 통제를 OS 가 진다 — 그 표면에는 인증이 없고 `/membership` 은
+# 밸런서 슬롯을 다시 쓰므로, 루프백 TCP 는 hostNetwork 배포에서 보호가 되지 못했다.
 ENV BARY_PREFIX=/prefix \
     BARY_LISTEN=0.0.0.0:8088 \
-    BARY_ADMIN_PORT=19999 \
     BARY_RELOAD_CMD="kill -HUP \$(cat /prefix/logs/nginx.pid)" \
     BARY_CONFIGTEST_CMD="/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t"
 

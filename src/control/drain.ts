@@ -30,11 +30,14 @@ export async function observationPeerOf(host: string, port: number): Promise<str
  * 엔진 admin 에서 peer 관측을 읽는다. 없거나 깨지면 undefined — 숫자를 안 짓는다.
  */
 export async function observePeerFromAdmin(
-  fetchImpl: typeof fetch, adminPort: number, peer: string,
+  fetchImpl: typeof fetch, peer: string,
 ): Promise<unknown> {
   try {
+    // **호스트는 뜻이 없다** (검수 S-08b). 전송을 정하는 것은 `adminFetch` 가 쥔 소켓
+    // 경로이고, 포트 인자는 그래서 사라졌다 — 남겨 두면 "여기를 바꾸면 다른 데로
+    // 간다" 는 거짓을 부르는 쪽에 준다.
     const r = await fetchImpl(
-      `http://127.0.0.1:${adminPort}/membership/inflight?peer=${encodeURIComponent(peer)}`,
+      `http://admin/membership/inflight?peer=${encodeURIComponent(peer)}`,
       { signal: AbortSignal.timeout(2000) },
     );
     if (!r.ok) return undefined;

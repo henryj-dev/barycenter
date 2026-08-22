@@ -219,7 +219,6 @@ beforeAll(async () => {
     '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
     '-e', 'BARY_PREFIX=/prefix',
     '-e', 'BARY_LISTEN=0.0.0.0:8088',
-    '-e', 'BARY_ADMIN_PORT=19999',
     '-e', `BARY_TOKENS=${tokensEnv()}`,
     '-e', 'BARY_RELOAD_CMD=kill -HUP $(cat /prefix/logs/nginx.pid)',
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',

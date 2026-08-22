@@ -14,7 +14,7 @@
  * 원격에 두는 구성은 애초에 설계에 없다.
  */
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { createServer as createHttpsServer } from 'node:https';
 import { connect } from 'node:net';
 import { hostname } from 'node:os';
@@ -30,6 +30,7 @@ import {
 } from '../api/auth.js';
 import type { OidcRpSettings } from '../api/oidc-code.js';
 import { render } from '../conf/render.js';
+import { adminFetch } from '../control/admin-client.js';
 import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
@@ -38,7 +39,7 @@ import { FileDns01 } from '../control/dns01.js';
 import { publishIssued } from '../control/acme-publish.js';
 import { collectSecretRoots, expandVersionRoots } from '../control/secret-roots.js';
 import { sweepSecrets } from '../dp/secret-gc.js';
-import { ControlPlane } from '../control/plane.js';
+import { ControlPlane, defaultStreamSocket } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
 import { bootDrivers, readDriverBootSource } from '../dp/boot.js';
 import { LocalDataplaneDriver } from '../dp/driver.js';
@@ -78,14 +79,15 @@ function loadTokens(): TokenSpec[] {
   return parseTokenSpecs(JSON.parse(raw));
 }
 
-/** http 평면 admin 에 적재하고 되읽는다. */
-async function pushHttp(port: number, epoch: string, body: string): Promise<string> {
-  const write = await fetch(`http://127.0.0.1:${port}/membership?epoch=${encodeURIComponent(epoch)}`, {
+/** http 평면 admin 에 적재하고 되읽는다. **유닉스 소켓이다** (검수 S-08b). */
+async function pushHttp(socket: string, epoch: string, body: string): Promise<string> {
+  const call = adminFetch(socket);
+  const write = await call(`http://admin/membership?epoch=${encodeURIComponent(epoch)}`, {
     method: 'POST', body, signal: AbortSignal.timeout(5000),
   });
   if (!write.ok) throw new Error(`멤버십 적재 실패 (http ${write.status}): ${await write.text()}`);
-  const read = await fetch(
-    `http://127.0.0.1:${port}/membership/read?epoch=${encodeURIComponent(epoch)}`,
+  const read = await call(
+    `http://admin/membership/read?epoch=${encodeURIComponent(epoch)}`,
     { signal: AbortSignal.timeout(5000) });
   return (await read.text()).trim();
 }
@@ -94,10 +96,11 @@ async function pushHttp(port: number, epoch: string, body: string): Promise<stri
  * stream 평면 admin 과 이야기한다. **원시 TCP 다** — stream 에는 HTTP 가 없고, 두 zone 은
  * 서로 안 보이므로(E14 · E25 · §3.4) http admin 으로 대신 쓸 수도 없다.
  */
-function talkStream(port: number, payload: string, timeoutMs = 5000): Promise<string> {
+function talkStream(socket: string, payload: string, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    const s = connect({ host: '127.0.0.1', port });
+    // `net.connect` 는 유닉스 소켓을 그대로 받는다 — http 쪽과 달리 감쌀 것이 없다.
+    const s = connect({ path: socket });
     s.setTimeout(timeoutMs, () => {
       s.destroy();
       reject(new Error(`stream admin 이 ${timeoutMs}ms 안에 안 답했다`));
@@ -109,10 +112,10 @@ function talkStream(port: number, payload: string, timeoutMs = 5000): Promise<st
   });
 }
 
-async function pushStream(port: number, epoch: string, body: string): Promise<string> {
-  const wrote = await talkStream(port, `${epoch} write\n${body}\n\n`);
+async function pushStream(socket: string, epoch: string, body: string): Promise<string> {
+  const wrote = await talkStream(socket, `${epoch} write\n${body}\n\n`);
   if (!wrote.startsWith('staged ')) throw new Error(`stream 멤버십 적재 실패: ${wrote.trim()}`);
-  return (await talkStream(port, `${epoch} read\n`)).trim();
+  return (await talkStream(socket, `${epoch} read\n`)).trim();
 }
 
 /**
@@ -127,7 +130,7 @@ async function pushStream(port: number, epoch: string, body: string): Promise<st
  *
  * 이미 `current` 가 있으면 손대지 않는다. 재기동이 활성 세대를 되돌리면 안 된다.
  */
-function writeBootstrap(prefix: string, adminPort: number, streamAdminPort: number): void {
+function writeBootstrap(prefix: string, adminSocket: string, streamAdminSocket: string): void {
   const link = join(prefix, 'current');
   if (existsSync(link)) {
     log.info('bootstrap.skipped', { reason: 'current 가 이미 있다' });
@@ -149,9 +152,9 @@ function writeBootstrap(prefix: string, adminPort: number, streamAdminPort: numb
       'nginx.conf': rendered.conf,
       // epoch 은 "0" 이다 — 부트스트랩은 어떤 활성화에도 속하지 않는다. 마커가 답하는
       // 세대 이름도 `bootstrap` 이라 어떤 오퍼레이션의 목표와도 다르다(거짓 양성 없음).
-      'admin/marker.conf': httpAdminConf('bootstrap', '0', adminPort),
+      'admin/marker.conf': httpAdminConf('bootstrap', '0', adminSocket),
       ...(caps.streamLua === true
-        ? { 'stream-admin/membership.conf': streamAdminConf('0', streamAdminPort) }
+        ? { 'stream-admin/membership.conf': streamAdminConf('0', streamAdminSocket) }
         : {}),
     },
   });
@@ -161,12 +164,25 @@ function writeBootstrap(prefix: string, adminPort: number, streamAdminPort: numb
 
 export async function main(): Promise<void> {
   const prefix = env('BARY_PREFIX', '/etc/barycenter');
-  const adminPort = Number(env('BARY_ADMIN_PORT', '19999'));
   const [host, port] = env('BARY_LISTEN', '127.0.0.1:8088').split(':');
-  const streamAdminPort = Number(env('BARY_STREAM_ADMIN_PORT', String(adminPort + 1)));
+  /**
+   * **admin 은 유닉스 소켓이다** (검수 S-08b).
+   *
+   * 전에는 루프백 TCP 포트(`BARY_ADMIN_PORT`)였다. 그 표면에는 인증이 없고
+   * `/membership` 은 밸런서 슬롯을 다시 쓴다 — §11.3 이 권장하는 hostNetwork 배포에서는
+   * 같은 호스트의 아무 프로세스나 그걸 할 수 있었다.
+   *
+   * 디렉토리를 먼저 만든다. nginx 는 소켓을 만들 뿐 부모 디렉토리를 안 만든다. 권한은
+   * `0700` 이다 — 접근 통제를 지는 것이 이 디렉토리이기 때문이다(nginx 의 `listen unix:`
+   * 에는 mode 옵션이 없어 소켓 자체의 모드는 정할 수 없다).
+   */
+  const runDir = join(prefix, 'run');
+  mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  const adminSocket = env('BARY_ADMIN_SOCKET', join(runDir, 'admin.sock'));
+  const streamAdminSocket = env('BARY_STREAM_ADMIN_SOCKET', defaultStreamSocket(adminSocket));
 
   if (process.argv.includes('--write-bootstrap')) {
-    writeBootstrap(prefix, adminPort, streamAdminPort);
+    writeBootstrap(prefix, adminSocket, streamAdminSocket);
     return;
   }
 
@@ -243,8 +259,8 @@ export async function main(): Promise<void> {
   ): Promise<void> => {
     const want = encodeSlots(await resolveSlots(slots));
     const got = plane === 'http'
-      ? await pushHttp(adminPort, epoch, want)
-      : await pushStream(streamAdminPort, epoch, want);
+      ? await pushHttp(adminSocket, epoch, want)
+      : await pushStream(streamAdminSocket, epoch, want);
     if (got !== want) {
       throw new Error(
         `멤버십 적재를 되읽었더니 다르다 (${plane}, epoch ${epoch}).\n`
@@ -268,7 +284,7 @@ export async function main(): Promise<void> {
     // §6.3-4 — 세대에 **구워진 리터럴**을 읽는다. 이게 활성화의 양성 신호다.
     probeAccepting: async () => {
       try {
-        const r = await fetch(`http://127.0.0.1:${adminPort}/generation`, {
+        const r = await adminFetch(adminSocket)('http://admin/generation', {
           signal: AbortSignal.timeout(2000),
         });
         return r.ok ? (await r.text()).trim() : undefined;
@@ -333,7 +349,7 @@ export async function main(): Promise<void> {
   retry.unref();
 
   const control = new ControlPlane(db, store, driver, election,
-    { prefix, adminPort, streamAdminPort, renderCaps, engine: engineInfo, driver: driverBoot, secrets });
+    { prefix, adminSocket, streamAdminSocket, renderCaps, engine: engineInfo, driver: driverBoot, secrets });
 
   // **기동 시 멤버십을 되돌려 놓는다** (§6.4). shared dict 는 프로세스 수명이라 엔진이
   // 재시작하면 슬롯이 통째로 빈다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.
@@ -430,7 +446,7 @@ export async function main(): Promise<void> {
   const acmeRunner = new AcmeRunner({
     store: acmeStore,
     secrets,
-    placer: new HttpChallengePlacer(adminPort),
+    placer: new HttpChallengePlacer(adminFetch(adminSocket)),
     ...(dnsDir === '' ? {} : { dnsPlacer: new FileDns01(dnsDir) }),
     renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
   });
@@ -610,7 +626,7 @@ export async function main(): Promise<void> {
     server.listen(Number(port), host, resolve);
   });
   log.info('listening', {
-    host, port: Number(port), prefix, adminPort, tokens: auth.size,
+    host, port: Number(port), prefix, adminSocket, tokens: auth.size,
     gui: serveRoot ?? false,
     // 켰다고 생각했는데 안 켜진 상태를 밖에서 확인할 수 있어야 한다.
     tls: tlsOn ? (tlsClientCa === '' ? 'server' : 'server+client-ca') : false,

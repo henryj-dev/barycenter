@@ -31,7 +31,13 @@ import type { Model } from '../../src/model/provisional.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const PORT = 18701;
-const ADMIN = 18702;
+/**
+ * admin 은 유닉스 소켓이다 (검수 S-08b). 포트가 아니라 경로다.
+ *
+ * 이 테스트가 소켓 경로를 **실물로** 지나는 유일한 자리다 — 실제 nginx 가 `listen unix:`
+ * 를 열고 `curl --unix-socket` 이 거기 붙는다. 단위 테스트는 conf 문자열만 본다.
+ */
+const ADMIN = '/prefix/run/admin.sock';
 
 function dockerAvailable(): boolean {
   try {
@@ -61,6 +67,8 @@ function serve(conf: string, probe: string): string {
   chmodSync(dir, 0o777);
   try {
     mkdirSync(join(dir, 'conf', 'admin'), { recursive: true });
+    // nginx 는 소켓을 만들 뿐 부모 디렉토리는 안 만든다.
+    mkdirSync(join(dir, 'run'), { recursive: true });
     mkdirSync(join(dir, 'logs'), { recursive: true });
     writeFileSync(join(dir, 'conf', 'nginx.conf'), `daemon off;\n${conf}`, 'utf8');
     writeFileSync(join(dir, 'conf', 'admin', 'marker.conf'),
@@ -94,7 +102,7 @@ workers_before=$(grep -c 'start worker process' /prefix/logs/error.log)
 echo "before=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}${ACME_PREFIX}tok1)"
 
 # dict 에 적재 — **설정을 안 바꾼다.**
-echo "staged=$(curl -s --data-binary 'tok1=tok1.thumb' http://127.0.0.1:${ADMIN}/acme)"
+echo "staged=$(curl -s --unix-socket ${ADMIN} --data-binary 'tok1=tok1.thumb' http://admin/acme)"
 
 echo "after=$(curl -s http://127.0.0.1:${PORT}${ACME_PREFIX}tok1)"
 echo "unknown=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}${ACME_PREFIX}nope)"
@@ -104,7 +112,7 @@ echo "empty=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}${A
 echo "default=$(curl -s -H 'Host: brand-new.test' http://127.0.0.1:${PORT}${ACME_PREFIX}tok1)"
 
 # 되읽기 — nginx -t 가 Lua 를 안 보므로(E64) 이 경로가 도는 유일한 증거다.
-echo "readback=$(curl -s http://127.0.0.1:${ADMIN}/acme/read)"
+echo "readback=$(curl -s --unix-socket ${ADMIN} http://admin/acme/read)"
 
 master_after=$(cat /prefix/logs/nginx.pid)
 workers_after=$(grep -c 'start worker process' /prefix/logs/error.log)

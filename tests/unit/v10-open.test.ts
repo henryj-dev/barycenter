@@ -40,11 +40,11 @@ describe('드레인 관측', () => {
       return new Response(JSON.stringify({ inflight: 2, active_sessions: 1 }), {
         status: 200, headers: { 'content-type': 'application/json' },
       });
-    }, 19999, '10.0.0.1:80');
+    }, '10.0.0.1:80');
     expect(hits[0]).toContain('/membership/inflight?peer=10.0.0.1%3A80');
     expect(parsePeerObservation(raw)).toEqual({ inflight: 2, sessions: 1 });
 
-    const miss = await observePeerFromAdmin(async () => new Response('{}', { status: 200 }), 1, 'x:1');
+    const miss = await observePeerFromAdmin(async () => new Response('{}', { status: 200 }), 'x:1');
     expect(parsePeerObservation(miss)).toBeUndefined();
   });
 
@@ -61,9 +61,9 @@ describe('드레인 관측', () => {
       }
       return new Response('{}', { status: 200 });
     };
-    expect(parsePeerObservation(await observePeerFromAdmin(fetchImpl, 19999, 'localhost:80')))
+    expect(parsePeerObservation(await observePeerFromAdmin(fetchImpl, 'localhost:80')))
       .toBeUndefined();
-    const raw = await observePeerFromAdmin(fetchImpl, 19999, ipPeer);
+    const raw = await observePeerFromAdmin(fetchImpl, ipPeer);
     expect(parsePeerObservation(raw)).toEqual({ inflight: 3, sessions: 3 });
     expect(drainStatusOf({
       backend: 'demo', draining: true, ...parsePeerObservation(raw),

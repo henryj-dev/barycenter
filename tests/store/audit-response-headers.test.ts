@@ -59,7 +59,7 @@ beforeAll(async () => {
   const election = new LeaderElection(PG.dsn, 'audit-headers-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   const control = new ControlPlane(db, store, driver, election,
-    { prefix: '/tmp/bary-audit-headers', adminPort: 19999 });
+    { prefix: '/tmp/bary-audit-headers', adminSocket: '/tmp/bary-admin-test.sock' });
   const auth = new TokenAuth([{
     name: 'tester',
     hash: `sha256:${createHash('sha256').update(TOKEN).digest('hex')}`,

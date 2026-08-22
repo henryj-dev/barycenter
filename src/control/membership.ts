@@ -166,18 +166,40 @@ export async function resolvePeer(hp: string): Promise<string> {
  * 못 잡는다.** 그래서 staging 뒤에 **되읽어 대조**한다 — 그게 Lua 경로가 실제로 살아
  * 있다는 유일한 증거다.
  */
-export const httpAdminConf = (generation: string, epoch: string, port: number): string =>
+/**
+ * 소켓 경로를 검사한다 (검수 S-08b · S-11 부류).
+ *
+ * 이 문자열은 그대로 `listen unix:<path>;` 가 된다 — 세미콜론 하나면 디렉티브가 하나
+ * 는다. 만드는 자리는 데몬이지만 **만드는 자리가 하나라는 보장은 없으므로** 쓰는 쪽에서
+ * 막는다. 렌더러가 디렉티브 문자열을 검사하는 것과 같은 규칙이다.
+ *
+ * 절대 경로만 받는다. 상대 경로는 nginx prefix 기준으로 풀려 세대·배포마다 어디에
+ * 생길지 갈리고, 그러면 에이전트가 붙을 자리를 못 찾는다.
+ */
+export function assertAdminSocket(path: string): string {
+  if (!path.startsWith('/') || !/^[A-Za-z0-9/._-]+$/.test(path)) {
+    throw new Error(
+      `admin 소켓 경로가 아니다: ${JSON.stringify(path)} — 절대 경로에 [A-Za-z0-9/._-] 만`,
+    );
+  }
+  return path;
+}
+
+export const httpAdminConf = (generation: string, epoch: string, socket: string): string =>
   `# 세대에 결박된다. 세대마다 리터럴이 다르다 (§6.3-4 · §6.5-1).
 init_worker_by_lua_block { _G.BARY_EPOCH = "${epoch}" }
 
 server {
-    listen 127.0.0.1:${port};
+    listen unix:${assertAdminSocket(socket)};
     default_type text/plain;
 
     location = /generation { return 200 "${generation}"; }
     location = /healthz    { return 200 "ok"; }
 
-    # 멤버십 슬롯 쓰기. **루프백 전용이다** — 관리 표면이지 트래픽 표면이 아니다.
+    # 멤버십 슬롯 쓰기. **유닉스 소켓 전용이다** (검수 S-08b) — 관리 표면이지 트래픽
+    # 표면이 아니다. 인증이 없는 대신 접근 통제를 OS 가 진다: 소켓이 사는 디렉토리가
+    # 에이전트 사용자 소유 0700 이다. 루프백 TCP 였을 때는 hostNetwork 배포에서
+    # 같은 호스트의 아무 프로세스나 슬롯을 다시 쓸 수 있었다.
     location = /membership {
         content_by_lua_block {
             ngx.req.read_body()
@@ -198,7 +220,7 @@ server {
         }
     }
 
-    # ACME http-01 토큰 적재 (§8.2). **루프백 전용.**
+    # ACME http-01 토큰 적재 (§8.2). **유닉스 소켓 전용** (검수 S-08b).
     #
     # 멤버십과 같은 이유로 dict 다 — 토큰을 conf 에 실으면 갱신 한 번에 세대 전환이
     # 한 번 붙고, 그 대가는 실측돼 있다(트래픽 2.6%).
@@ -282,11 +304,11 @@ server {
  * http zone 과 stream zone 은 서로 안 보이므로(E14 · E25 · §3.4) 각 평면이 자기 admin 을
  * 가져야 한다 — 하나로 합칠 수 없다.
  */
-export const streamAdminConf = (epoch: string, port: number): string =>
+export const streamAdminConf = (epoch: string, socket: string): string =>
   `init_worker_by_lua_block { _G.BARY_EPOCH = "${epoch}" }
 
 server {
-    listen 127.0.0.1:${port};
+    listen unix:${assertAdminSocket(socket)};
     content_by_lua_block {
         local sock = assert(ngx.req.socket())
         local d = ngx.shared.${MEMBERSHIP_DICT.stream}

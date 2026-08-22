@@ -87,7 +87,7 @@ beforeAll(async () => {
   // **리더가 돼야 쓰기 스코프가 열린다** — 스탠바이는 비-read 요청에 503 을 준다 (§3.5).
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   const control = new ControlPlane(db, store, driver, election,
-    { prefix: '/tmp/bary-api-test', adminPort: 19999 });
+    { prefix: '/tmp/bary-api-test', adminSocket: '/tmp/bary-admin-test.sock' });
   const hash = (await import('node:crypto')).createHash('sha256').update(TOKEN).digest('hex');
   const auth = new TokenAuth([
     { name: 'tester', hash: `sha256:${hash}`, scopes: ['read', 'write', 'apply'] },

@@ -391,16 +391,20 @@ export async function cleanupPlacedChallenges(
 export class HttpChallengePlacer implements ChallengePlacer {
   readonly type = 'http-01' as const;
 
-  constructor(private readonly adminPort: number) {}
+  /**
+   * **소켓에 붙는 `fetch` 를 받는다** (검수 S-08b). 전에는 포트 번호였다 —
+   * admin 표면이 루프백 TCP 였을 때 이야기다.
+   */
+  constructor(private readonly fetchImpl: typeof fetch) {}
 
   async place(_domain: string, token: string, value: string): Promise<void> {
-    const write = await fetch(`http://127.0.0.1:${this.adminPort}/acme`, {
+    const write = await this.fetchImpl('http://admin/acme', {
       method: 'POST', body: `${token}=${value}`, signal: AbortSignal.timeout(5000),
     });
     if (!write.ok) {
       throw new Error(`챌린지 적재 실패 (http ${write.status}): ${await write.text()}`);
     }
-    const read = await fetch(`http://127.0.0.1:${this.adminPort}/acme/read`,
+    const read = await this.fetchImpl('http://admin/acme/read',
       { signal: AbortSignal.timeout(5000) });
     const body = (await read.text()).trim();
     // **적재됐다고 믿지 않는다.** 200 을 받은 것과 dict 에 들어간 것은 다르다.
@@ -412,7 +416,7 @@ export class HttpChallengePlacer implements ChallengePlacer {
   async remove(_domain: string, token: string): Promise<void> {
     // dict 항목은 TTL 로도 사라지지만(ADR-ACME ①), **명시적으로 지운다** — TTL 에만
     // 기대면 "치웠다" 를 언제 적을지 알 수 없고, 그러면 고아 목록이 안 줄어든다.
-    const r = await fetch(`http://127.0.0.1:${this.adminPort}/acme?remove=${encodeURIComponent(token)}`, {
+    const r = await this.fetchImpl(`http://admin/acme?remove=${encodeURIComponent(token)}`, {
       method: 'POST', body: '', signal: AbortSignal.timeout(5000),
     });
     if (!r.ok) throw new Error(`챌린지 제거 실패 (http ${r.status})`);

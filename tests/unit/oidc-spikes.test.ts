@@ -99,11 +99,11 @@ describe('S3 · S4 멤버십', () => {
   });
 
   it('멤버십 슬롯 set 에 TTL 이 없고 ACME 만 만료가 있다', () => {
-    const http = httpAdminConf('g1', 'e1', 19999);
+    const http = httpAdminConf('g1', 'e1', '/tmp/bary-admin.sock');
     expect(http).toMatch(/d:set\("slot:" \.\. name \.\. ":" \.\. epoch, peers\)/);
     expect(http).not.toMatch(/d:set\("slot:".*peers,/);
     expect(http).toMatch(/d:set\("tok:" \.\. token, value, \d+\)/);
-    const stream = streamAdminConf('e1', 19998);
+    const stream = streamAdminConf('e1', '/tmp/bary-stream-admin.sock');
     expect(stream).toMatch(/d:set\("slot:" \.\. name \.\. ":" \.\. epoch, peers\)/);
     expect(stream).not.toMatch(/d:set\("slot:".*peers,/);
   });

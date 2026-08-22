@@ -13,10 +13,11 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
+import { adminFetch } from './admin-client.js';
 import { type DiscoveryIntake } from './discovery.js';
 import { drainKeys, observationPeerOf, observePeerFromAdmin } from './drain.js';
 import { currentHealth, eligibleCountForPlane, reduceMembership, shouldPushMembership } from './health.js';
-import { httpAdminConf, slotsForEligible, streamAdminConf } from './membership.js';
+import { assertAdminSocket, httpAdminConf, slotsForEligible, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
@@ -28,18 +29,22 @@ import {
   count, fileBytes, measureGenerations, type Gauges, type LabeledGauge,
 } from '../obs/metrics.js';
 import type { Db, Row } from '../store/pg.js';
-import { isLoopbackBind } from '../validate/sockets.js';
 import type { LeaderElection } from './leader.js';
 
 export type ControlPlaneOptions = {
   /** `/etc/barycenter` 에 해당. `generations/` 와 `current` 가 여기 있다. */
   prefix: string;
   /**
-   * 활성 세대 마커를 서빙할 포트 (§6.3-4).
+   * 활성 세대 마커와 멤버십을 서빙할 **유닉스 소켓 경로** (§6.3-4 · 검수 S-08b).
    *
-   * 루프백에만 바인딩한다. 이건 관리 표면이지 트래픽 표면이 아니다.
+   * 전에는 루프백 TCP 포트였다. 그런데 이 표면에는 인증이 없고 `/membership` 은 백엔드
+   * 슬롯을 다시 쓴다 — 루프백은 "밖에서 못 온다" 이지 "아무나 못 쓴다" 가 아니라서,
+   * §11.3 이 권장하는 hostNetwork 배포에서는 같은 호스트의 아무 프로세스나 쓸 수 있었다.
+   *
+   * 소켓이면 접근 통제를 OS 가 진다. 비밀이 없으므로 conf 에는 경로 리터럴만 남고
+   * `render_digest` 의 결정성도 그대로다.
    */
-  adminPort: number;
+  adminSocket: string;
   renderCaps?: RenderCapabilities;
   /** 조회한 엔진 정보. `status()` 가 그대로 드러낸다. */
   engine?: unknown;
@@ -48,8 +53,8 @@ export type ControlPlaneOptions = {
    * 설정 평면을 갈아 끼운 결과가 아니다 — capability 만 드러낸다.
    */
   driver?: unknown;
-  /** stream 평면 admin 포트. http 는 `adminPort` 다. */
-  streamAdminPort?: number;
+  /** stream 평면 admin 소켓. http 는 `adminSocket` 다. */
+  streamAdminSocket?: string;
   /**
    * 남길 세대 수 (§9.1.1 — v0.1 은 GC 원장 대신 **수동 상한**이다).
    *
@@ -90,10 +95,19 @@ const PLANES: Plane[] = ['http', 'stream'];
  * "누가 응답했는가" 를 말하지 못한다. in-flight 요청을 옛 세대 워커가 처리하는 동안
  * 마커는 이미 새 값이었다. 렌더 리터럴이라야 옛 워커가 옛 값을 답한다.
  */
-export const markerConf = (generation: string, port: number): string =>
+/**
+ * stream admin 소켓의 기본 경로.
+ *
+ * 전에는 `adminPort + 1` 이었다. 두 평면은 zone 이 갈려 서로를 못 보므로(E14 · E25 · §3.4)
+ * 소켓도 둘이어야 한다. 이름을 파생시키는 것은 같은 이유다 — 배포가 하나만 정하면 된다.
+ */
+export const defaultStreamSocket = (adminSocket: string): string =>
+  adminSocket.replace(/(\.sock)?$/, '-stream.sock');
+
+export const markerConf = (generation: string, socket: string): string =>
   `# 이 파일은 세대에 결박된다. 세대마다 리터럴이 다르다 (§6.3-4).
 server {
-    listen 127.0.0.1:${port};
+    listen unix:${assertAdminSocket(socket)};
     default_type text/plain;
     location = /generation { return 200 "${generation}"; }
     location = /healthz    { return 200 "ok"; }
@@ -113,7 +127,7 @@ export class ControlPlane {
    */
   async observePeer(host: string, port: number): Promise<unknown> {
     const peer = await observationPeerOf(host, port);
-    return observePeerFromAdmin(fetch, this.opts.adminPort, peer);
+    return observePeerFromAdmin(adminFetch(this.opts.adminSocket), peer);
   }
 
   constructor(
@@ -214,7 +228,8 @@ export class ControlPlane {
     }
 
     const rendered = render(plan.model, this.opts.renderCaps ?? { streamRealip: false });
-    this.assertAdminPortFree(plan.model);
+    // **admin 포트 충돌 검사가 여기 있었다** (S-08a). admin 이 유닉스 소켓으로 옮기면서
+    // 구조적으로 불가능해졌다 — 겨눌 포트가 없다. 검사보다 없는 쪽이 낫다.
 
     // **이름에 epoch 를 넣는다.** 롤백은 옛 내용을 새 epoch 로 굽는다(§3.3, S19) —
     // 리비전만 담으면 같은 내용의 롤백이 옛 디렉토리를 재사용하고, 그러면 세대에 구워진
@@ -233,7 +248,7 @@ export class ControlPlane {
       ? slotsForEligible(
         plan.model, await this.eligible(plan.model), caps, this.discoveryOf(),
       ) : undefined;
-    const streamAdminPort = this.opts.streamAdminPort ?? this.opts.adminPort + 1;
+    const streamAdminSocket = this.opts.streamAdminSocket ?? defaultStreamSocket(this.opts.adminSocket);
 
     /**
      * **멤버십만 바뀌었는가** (§6.4 드리프트 분리 · §6.5).
@@ -266,14 +281,14 @@ export class ControlPlane {
         // 가리키거나 symlink 로 걸면 롤백이 거짓말이 된다.
         ...certFiles.files,
         ...(membership === undefined
-          ? { 'admin/marker.conf': markerConf(generation, this.opts.adminPort) }
+          ? { 'admin/marker.conf': markerConf(generation, this.opts.adminSocket) }
           : {
               'admin/marker.conf': httpAdminConf(generation, plan.activationEpoch,
-                this.opts.adminPort),
+                this.opts.adminSocket),
               ...(caps.streamLua === true
                 ? {
                     'stream-admin/membership.conf':
-                      streamAdminConf(plan.activationEpoch, streamAdminPort),
+                      streamAdminConf(plan.activationEpoch, streamAdminSocket),
                   }
                 : {}),
               'lua/membership.json': JSON.stringify({
@@ -730,25 +745,6 @@ export class ControlPlane {
     return typeof raw === 'function' ? raw() : raw;
   }
 
-  /**
-   * admin 포트가 모델과 부딪히지 않는지 본다.
-   *
-   * **소켓 검증기는 이 포트를 모른다** — 모델 밖에 있기 때문이다. 부딪히면 nginx 가
-   * bind 에 실패하고 HUP 이 조용히 옛 설정을 유지한다(S7 이 실측한 바로 그 실패다).
-   *
-   * 보수적으로 본다: bind 주소와 무관하게 **포트가 같으면** 막는다. `0.0.0.0:PORT` 는
-   * `127.0.0.1:PORT` 를 함께 차지하므로 주소별로 따지면 틀린다.
-   */
-  private assertAdminPortFree(model: Model): void {
-    const conflicts = adminPortConflicts(model, {
-      adminPort: this.opts.adminPort,
-      streamAdminPort: this.opts.streamAdminPort ?? this.opts.adminPort + 1,
-    });
-    if (conflicts.length > 0) {
-      throw new StoreError(409, 'admin_port_conflict', conflicts.join('\n'));
-    }
-  }
-
   private async findOperation(planId: string): Promise<OperationView | undefined> {
     const r = (await this.db.query(
       `SELECT id, plan_id, revision, activation_epoch, generation, phase, detail
@@ -831,56 +827,6 @@ export class ControlPlane {
   }
 }
 
-/**
- * 모델이 admin 표면과 부딪히는 자리들 (검수 S-08a).
- *
- * ── 왜 백엔드도 보는가 ──────────────────────────────────────────────────
- *
- * admin 평면(`/membership` · `/acme`)은 **인증이 없다.** 보호는 "루프백에만 뜬다" 하나뿐인데,
- * 에이전트와 엔진은 **한 컨테이너**에 산다(§3.2 · §11.1 — 규범이 아니라 실측이다).
- * 그러면 풀 하나가 `127.0.0.1:<adminPort>` 를 백엔드로 갖는 순간 **외부 요청이 그 표면에
- * 그대로 닿는다** — 밸런서 슬롯을 덮어쓰거나 ACME 챌린지를 심을 수 있다.
- *
- * 전에는 리스너 포트만 봤다. 리스너는 "우리가 그 포트를 못 연다" 는 문제이고, 백엔드는
- * **"남이 그 포트에 닿는다"** 는 문제다 — 후자가 더 나쁘다.
- *
- * ── 판정 ────────────────────────────────────────────────────────────────
- *
- *   · 리스너: 포트만 본다. bind 주소와 무관하게 막는다 — `0.0.0.0:P` 는 `127.0.0.1:P` 를
- *     함께 차지하므로 주소별로 따지면 틀린다. udp 는 전송이 달라 안 부딪힌다(E12).
- *   · 백엔드: **루프백 × admin 포트**일 때만. 다른 호스트의 같은 포트는 우리 admin 이
- *     아니다 — 그것까지 막으면 19999 를 쓰는 남의 서비스를 프록시하지 못한다.
- */
-export function adminPortConflicts(
-  model: Model,
-  ports: { adminPort: number; streamAdminPort: number },
-): string[] {
-  const admin = new Set([ports.adminPort, ports.streamAdminPort]);
-  const out: string[] = [];
-
-  for (const l of model.listeners) {
-    if (!l.enabled || l.protocol === 'udp') continue;
-    if (admin.has(l.port)) {
-      out.push(
-        `리스너 '${l.key}' 가 admin 포트 ${l.port} 를 쓴다 — `
-        + '활성 세대 마커를 서빙할 수 없어 활성화를 증명할 수 없다',
-      );
-    }
-  }
-
-  for (const b of model.backends) {
-    if (!admin.has(b.port) || !isLoopbackBind(loopbackNameToIp(b.host))) continue;
-    out.push(
-      `백엔드 '${b.key}' 가 admin 표면 ${b.host}:${b.port} 를 겨눈다 — `
-      + '그 표면은 인증이 없다. 라우트가 닿으면 밖에서 밸런서 슬롯을 덮어쓸 수 있다',
-    );
-  }
-  return out;
-}
-
-/** `localhost` 는 IP 가 아니지만 같은 곳이다. 이름만 다르다고 통과시키면 우회가 열린다. */
-const loopbackNameToIp = (host: string): string =>
-  host.toLowerCase() === 'localhost' ? '127.0.0.1' : host;
 
 const viewOf = (r: Row): OperationView => ({
   id: String(r['id']),

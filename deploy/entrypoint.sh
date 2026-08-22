@@ -24,7 +24,11 @@ if ! ( mkdir -p "$PREFIX/.wtest" && rmdir "$PREFIX/.wtest" ) 2>/dev/null; then
   exit 1
 fi
 
-mkdir -p "$PREFIX/logs" "$PREFIX/state" "$PREFIX/generations"
+# `run` 은 admin 유닉스 소켓이 사는 곳이다 (검수 S-08b). nginx 는 소켓을 만들 뿐
+# 부모 디렉토리는 안 만든다. 0700 인 이유는 **접근 통제를 지는 것이 이 디렉토리**라서다 —
+# nginx 의 `listen unix:` 에는 mode 옵션이 없어 소켓 자체의 모드는 정할 수 없다.
+mkdir -p "$PREFIX/logs" "$PREFIX/state" "$PREFIX/generations" "$PREFIX/run"
+chmod 700 "$PREFIX/run"
 
 # **부트스트랩 세대를 데몬이 만든다.**
 #
