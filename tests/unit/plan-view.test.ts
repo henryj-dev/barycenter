@@ -51,6 +51,79 @@ describe('영향 요약', () => {
     expect(view.socketsAdded).toEqual(['tcp://0.0.0.0:999']);
   });
 
+  it('세션 영향과 인증서 교체를 문장으로 접는다', () => {
+    const view = viewOfImpact(
+      { planId: 'p1', revision: '9' },
+      {
+        requiresReload: true,
+        topologyEpochChange: true,
+        affectedListeners: [
+          { key: 'secure', protocol: 'https', bind: '0.0.0.0', port: 443, change: 'changed' },
+        ],
+        sessionImpact: [
+          { protocol: 'https', effect: 'may_reset', why: '소켓이 사라진다 (secure)' },
+          { protocol: 'tcp', effect: 'none', why: '이 프로토콜의 리스너는 안 바뀐다' },
+        ],
+        certificateChanges: [
+          { key: 'site', change: 'replaced', notAfter: '2026-06-01T00:00:00.000Z' },
+          { key: 'old', change: 'removed' },
+        ],
+        socketChanges: { added: [], removed: ['tcp://0.0.0.0:443'] },
+        routeOrderChanges: {
+          moved: [{ listener: 'secure', key: 'r1', from: 1, to: 0 }],
+          warnings: [{
+            kind: 'priority_inversion', listener: 'secure', routes: ['a', 'b'],
+            message: '매치 클래스가 priority 를 이긴다',
+          }],
+        },
+        capabilityWarnings: [{ kind: 'no_http2', message: 'h2 를 못 낸다' }],
+        planes: ['http'],
+      },
+    );
+    // **끊기는 것을 먼저 말한다.** 화면이 접는 순서가 곧 읽는 순서다.
+    expect(view.sessions[0]).toMatch(/https/);
+    expect(view.sessions[0]).toMatch(/끊길/);
+    // 영향 없는 프로토콜은 접어서 안 보여 준다 — 안 읽게 만드는 줄을 늘리지 않는다.
+    expect(view.sessions.some((s) => s.includes('tcp'))).toBe(false);
+    expect(view.certificates).toEqual(['site 교체 — 2026-06-01 만료', 'old 삭제']);
+    expect(view.routeWarnings).toEqual(['매치 클래스가 priority 를 이긴다']);
+    expect(view.capabilityWarnings).toEqual(['h2 를 못 낸다']);
+  });
+
+  it('옛 plan 에 없는 항목은 없는 대로 그린다', () => {
+    // 이 회차 전에 만들어진 plan 은 JSONB 에 새 필드가 없다. 화면이 거기서
+    // 깨지면 **옛 plan 을 적용하려던 사람이 화면을 못 연다.**
+    const view = viewOfImpact(
+      { planId: 'p0', revision: '1' },
+      {
+        requiresReload: false,
+        affectedListeners: [],
+        socketChanges: { added: [], removed: [] },
+        planes: [],
+      },
+    );
+    expect(view.sessions).toEqual([]);
+    expect(view.certificates).toEqual([]);
+    expect(view.routeWarnings).toEqual([]);
+    expect(view.capabilityWarnings).toEqual([]);
+  });
+
+  it('lua 없는 엔진에서는 산출물이 같아도 세대가 선다고 말한다', () => {
+    const view = viewOfImpact(
+      { planId: 'p2', revision: '3' },
+      {
+        requiresReload: false,
+        topologyEpochChange: true,
+        affectedListeners: [],
+        socketChanges: { added: [], removed: [] },
+        planes: ['http'],
+      },
+    );
+    // 전에는 무조건 "세대 전환 없이 반영된다" 였다. 멤버십 평면이 없는 배포에서
+    // 그건 거짓이다 — 같은 변경이 거기서는 세대와 epoch 를 새로 만든다.
+    expect(view.headline).not.toMatch(/세대 전환 없이/);
+  });
+
   it('대기 열이 없으면 고를 것이 없다', () => {
     expect(pickPending([])).toBeUndefined();
     expect(pickPending([{ planId: 'a', revision: '1' }, { planId: 'b', revision: '2' }]))

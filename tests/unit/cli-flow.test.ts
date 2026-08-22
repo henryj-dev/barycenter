@@ -11,6 +11,7 @@ import {
   changesetPlan,
   commitByPlan,
   flag,
+  planSummary,
   unwrap,
 } from '../../src/cli/flow.js';
 import type { Http, HttpResult } from '../../src/cli/flow.js';
@@ -79,6 +80,44 @@ describe('나뉜 단계', () => {
     const { http } = script([{ status: 409, body: { code: 'PLAN_STALE', message: '만료' } }]);
     await expect(changesetPlan(http, 'cs-1')).rejects.toBeInstanceOf(CliRequestError);
     expect(() => unwrap({ status: 404, body: { message: '없다' } }, 'x')).toThrow(CliRequestError);
+  });
+
+  it('plan 요약이 끊기는 세션과 경고를 함께 낸다', () => {
+    // CLI 에도 §5.4 가 보여야 한다 — 경고를 안 내고 커밋까지 밀면 CLI 로 일하는
+    // 사람은 그 사실을 영영 모른다. §1 이 "GUI·API·CLI 가 동일한 능력" 이라고 한 것.
+    const lines = planSummary({
+      requiresReload: true,
+      topologyEpochChange: true,
+      socketChanges: { added: ['tcp://0.0.0.0:443'], removed: [] },
+      planes: ['http'],
+      sessionImpact: [
+        { protocol: 'https', effect: 'may_reset', why: '소켓이 사라진다' },
+        { protocol: 'tcp', effect: 'none', why: '안 바뀐다' },
+      ],
+      certificateChanges: [{ key: 'site', change: 'replaced', notAfter: '2026-06-01T00:00:00.000Z' }],
+      routeOrderChanges: {
+        moved: [],
+        warnings: [{ kind: 'priority_inversion', listener: 'x', routes: ['a'], message: '역전' }],
+      },
+      capabilityWarnings: [{ kind: 'no_http2', message: 'h2 를 못 낸다' }],
+    });
+    const all = lines.join('\n');
+    expect(all).toMatch(/소켓 \+1/);
+    expect(all).toMatch(/https/);
+    expect(all).toMatch(/역전/);
+    expect(all).toMatch(/h2 를 못 낸다/);
+    expect(all).toMatch(/site/);
+    // 영향 없는 프로토콜은 안 싣는다.
+    expect(all).not.toMatch(/tcp — /);
+  });
+
+  it('옛 plan 요약은 없는 항목을 지어내지 않는다', () => {
+    const lines = planSummary({
+      requiresReload: false,
+      socketChanges: { added: [], removed: [] },
+      planes: [],
+    });
+    expect(lines).toHaveLength(1);
   });
 
   it('patch 는 받은 ops 를 그대로 보낸다', async () => {

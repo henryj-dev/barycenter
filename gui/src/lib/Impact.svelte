@@ -32,7 +32,30 @@
       <dt>리스너</dt>
       <dd class="mono">{view.listeners.join(' · ') || '—'}</dd>
     </div>
+    {#if view.sessions.length > 0}
+      <div>
+        <dt>기존 세션</dt>
+        <dd>
+          {#each view.sessions as line (line)}
+            <p class="line">{line}</p>
+          {/each}
+        </dd>
+      </div>
+    {/if}
+    {#if view.certificates.length > 0}
+      <div>
+        <dt>인증서</dt>
+        <dd class="mono">{view.certificates.join(' · ')}</dd>
+      </div>
+    {/if}
   </dl>
+  <!-- 경고는 표 밖에 둔다. 값이 아니라 **읽어야 하는 문장**이다. -->
+  {#each view.routeWarnings as warn (warn)}
+    <p class="warn">라우트 순서 — {warn}</p>
+  {/each}
+  {#each view.capabilityWarnings as warn (warn)}
+    <p class="warn">엔진 — {warn}</p>
+  {/each}
   <button type="button" class="go" disabled={applying} onclick={apply}>
     {applying ? '적용하는 중' : '트래픽에 건다'}
   </button>
@@ -79,6 +102,14 @@
   .mass.join { border-color: var(--moss); color: var(--moss); }
   .mass.leave { border-color: var(--ember); color: var(--ember); text-decoration: line-through; }
   .mass.quiet { color: var(--mute); }
+  .line { margin: 0.15rem 0; font-size: 0.85rem; }
+  .warn {
+    margin: 0.3rem 0;
+    padding-left: 0.6rem;
+    border-left: 2px solid var(--ember);
+    font-size: 0.85rem;
+    color: var(--ember);
+  }
   dl { margin: 0 0 1.25rem; }
   dl > div { margin: 0.35rem 0; }
   dt { font-size: 0.75rem; color: var(--mute); }

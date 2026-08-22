@@ -48,6 +48,7 @@ import {
   changesetNew,
   changesetPatch,
   changesetPlan,
+  planSummary,
   changesetReopen,
   changesetShow,
   commitByPlan,
@@ -598,8 +599,8 @@ async function main(): Promise<void> {
         return;
       }
       const { csId, plan } = await upToPlan(arg ?? usage());
-      console.error(`plan ${plan.id} — 소켓 +${plan.impact.socketChanges.added.length} `
-        + `-${plan.impact.socketChanges.removed.length}, 평면 [${plan.impact.planes.join(',')}]`);
+      // **경고를 커밋 앞에서 낸다.** 뒤에 내면 이미 되돌릴 수 없는 것을 읽게 된다.
+      for (const line of planSummary(plan.impact)) console.error(`plan ${plan.id} — ${line}`);
       const committed = must(
         await call('POST', `/api/v1/changesets/${csId}/commit`, { plan_id: plan.id }),
         'commit',

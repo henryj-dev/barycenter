@@ -35,6 +35,52 @@ export function flag(argv: readonly string[], name: string): string | undefined 
   return v === undefined || v.startsWith('--') ? undefined : v;
 }
 
+/**
+ * plan 이 낸 영향 (§5.4). **전부 선택이다** — 이 회차 전에 만들어진 plan 은
+ * JSONB 에 새 필드가 없고, CLI 가 거기서 깨지면 옛 plan 을 적용할 수 없다.
+ */
+export type PlanImpact = {
+  requiresReload: boolean;
+  topologyEpochChange?: boolean;
+  socketChanges: { added: unknown[]; removed: unknown[] };
+  planes: string[];
+  sessionImpact?: { protocol: string; effect: string; why: string }[];
+  certificateChanges?: { key: string; change: string; notAfter?: string }[];
+  routeOrderChanges?: {
+    warnings: { message: string; [k: string]: unknown }[];
+    [k: string]: unknown;
+  };
+  capabilityWarnings?: { message: string; [k: string]: unknown }[];
+};
+
+/**
+ * plan 을 사람이 읽을 몇 줄로 접는다 (§5.4 · §1 "GUI·API·CLI 가 동일한 능력").
+ *
+ * **경고를 안 내고 커밋까지 밀면 CLI 로 일하는 사람은 그 사실을 영영 모른다.**
+ * GUI 는 영향 화면에서 이걸 보여 주는데 CLI 는 소켓 개수만 찍고 있었다.
+ *
+ * 첫 줄은 언제나 있다. 나머지는 **있을 때만** 나온다 — 매번 나오는 줄은 안 읽게 된다.
+ */
+export function planSummary(impact: PlanImpact): string[] {
+  const lines = [
+    `소켓 +${impact.socketChanges.added.length} -${impact.socketChanges.removed.length}, `
+    + `평면 [${impact.planes.join(',')}]`
+    + (impact.requiresReload ? ', reload' : '')
+    + (impact.topologyEpochChange === true && !impact.requiresReload ? ', 새 세대' : ''),
+  ];
+  for (const s of impact.sessionImpact ?? []) {
+    if (s.effect === 'none') continue;
+    lines.push(`세션 ${s.protocol} — ${s.effect}: ${s.why}`);
+  }
+  for (const c of impact.certificateChanges ?? []) {
+    lines.push(`인증서 ${c.key} ${c.change}`
+      + (c.notAfter === undefined ? '' : ` — ${c.notAfter.slice(0, 10)} 만료`));
+  }
+  for (const w of impact.routeOrderChanges?.warnings ?? []) lines.push(`라우트 — ${w.message}`);
+  for (const w of impact.capabilityWarnings ?? []) lines.push(`엔진 — ${w.message}`);
+  return lines;
+}
+
 export async function changesetNew(http: Http): Promise<{ id: string }> {
   const head = unwrap(await http('GET', '/api/v1/config/head'), 'head') as { revision: string };
   return unwrap(
