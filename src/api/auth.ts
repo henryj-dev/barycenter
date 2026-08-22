@@ -161,6 +161,16 @@ export type OidcSettings = {
    * 안 주면 안 따진다 — nonce 를 안 보낸 시작 흐름을 막으면 안 된다.
    */
   nonce?: string;
+  /**
+   * `kid` → 공개키 (검수 S-06 나머지 · JWKS).
+   *
+   * 주면 **이쪽만 본다.** 모르는 `kid` 를 고정 키(`key`)로 떨어뜨리면, 회전을 켠 배포가
+   * 실제로는 안 켠 상태로 돌면서 옛 키로 서명한 토큰을 계속 받는다.
+   *
+   * 동기다. 이 검증은 요청 경로에 있고, 여기서 다시 당기면 **인증 안 된 요청이 우리
+   * 아웃바운드를 흔드는 손잡이**가 된다. 당기는 것은 타이머의 몫이다.
+   */
+  keys?: (kid: string | undefined) => string | KeyObject | undefined;
   now?: () => number;
 };
 
@@ -217,15 +227,18 @@ export function principalFromIdToken(token: string, oidc: OidcSettings): Princip
   const headerB64 = parts[0] ?? '';
   const payloadB64 = parts[1] ?? '';
   const sigB64 = parts[2] ?? '';
-  let header: { alg?: string };
+  let header: { alg?: string; kid?: string };
   let payload: Record<string, unknown>;
   try {
-    header = JSON.parse(b64urlDecode(headerB64).toString()) as { alg?: string };
+    header = JSON.parse(b64urlDecode(headerB64).toString()) as { alg?: string; kid?: string };
     payload = JSON.parse(b64urlDecode(payloadB64).toString()) as Record<string, unknown>;
   } catch {
     return undefined;
   }
-  if (!verifyJwtSig(header.alg, `${headerB64}.${payloadB64}`, sigB64, oidc.key)) return undefined;
+  // JWKS 를 켰으면 `kid` 로 고른다. 못 고르면 거절 — 고정 키로 안 떨어진다.
+  const key = oidc.keys === undefined ? oidc.key : oidc.keys(header.kid);
+  if (key === undefined) return undefined;
+  if (!verifyJwtSig(header.alg, `${headerB64}.${payloadB64}`, sigB64, key)) return undefined;
   const now = oidc.now?.() ?? Math.floor(Date.now() / 1000);
   if (payload['iss'] !== oidc.issuer) return undefined;
   const aud = payload['aud'];

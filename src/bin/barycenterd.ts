@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { apiHandler, apiTlsOptions, createApi } from '../api/server.js';
+import { JwksCache } from '../api/jwks.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore } from '../dp/secrets.js';
 import {
@@ -567,14 +568,49 @@ export async function main(): Promise<void> {
   const oidcKey = oidcKeyFile !== '' ? readFileSync(oidcKeyFile, 'utf8') : env('BARY_OIDC_KEY', '');
   // 어느 클레임이 역할인지는 **배포가 정한다** (검수 S-07). 안 정하면 `role`.
   const oidcRoleClaim = env('BARY_OIDC_ROLE_CLAIM', '');
-  const oidc: OidcSettings | undefined = oidcIss !== '' && oidcAud !== '' && oidcKey !== ''
-    ? {
-        issuer: oidcIss,
-        audience: oidcAud,
-        key: oidcKeyFrom(oidcKey),
-        ...(oidcRoleClaim === '' ? {} : { roleClaim: oidcRoleClaim }),
-      }
-    : undefined;
+  /**
+   * **JWKS 로 키 회전을 따라간다** (검수 S-06 나머지).
+   *
+   * 안 켜면 지금까지처럼 고정 키다. 켜면 `kid` 로 고르고, 모르는 `kid` 는 거절한다 —
+   * 고정 키로 떨어지면 회전을 켠 배포가 실제로는 안 켠 상태로 돈다.
+   *
+   * **모르는 `kid` 에 다시 안 당긴다.** 이 검증은 Bearer 를 확인하기 *전에* 도는
+   * 자리라, 재조회를 넣으면 아무나 임의 `kid` 로 우리 아웃바운드를 흔들 수 있다.
+   * 당기는 것은 아래 타이머의 몫이다.
+   */
+  const jwksUrl = env('BARY_OIDC_JWKS_URL', '');
+  const jwks = jwksUrl === '' ? undefined : new JwksCache(jwksUrl);
+  let stopJwks = (): void => {};
+  if (jwks !== undefined) {
+    // **기동에서 한 번 기다린다.** 안 기다리면 첫 로그인 몇 개가 빈 캐시를 만나 401 이고,
+    // 그 증상은 "가끔 로그인이 안 된다" 라 원인을 못 찾는다.
+    const first = await jwks.refresh();
+    log.info('oidc.jwks.loaded', { url: jwksUrl, keys: first.keys });
+    if (first.keys === 0) {
+      // 던지지 않는다 — IdP 가 잠깐 죽었다고 컨트롤 플레인이 안 뜨면 그게 더 넓은 장애다.
+      // 다만 조용히 넘어가지도 않는다. 이 상태에서는 OIDC 로 아무도 못 들어온다.
+      log.warn('oidc.jwks.empty', { url: jwksUrl, reason: 'OIDC 로그인이 전부 거절된다' });
+    }
+    const jwksTimer = setInterval(() => {
+      void (async (): Promise<void> => {
+        const out = await jwks.refresh();
+        if (out.changed) log.info('oidc.jwks.rotated', { keys: out.keys });
+      })();
+    }, Number(env('BARY_OIDC_JWKS_INTERVAL_MS', '300000')));
+    jwksTimer.unref?.();
+    stopJwks = (): void => clearInterval(jwksTimer);
+  }
+
+  const oidc: OidcSettings | undefined
+    = oidcIss !== '' && oidcAud !== '' && (oidcKey !== '' || jwks !== undefined)
+      ? {
+          issuer: oidcIss,
+          audience: oidcAud,
+          key: oidcKeyFrom(oidcKey),
+          ...(jwks === undefined ? {} : { keys: (kid: string | undefined) => jwks.keyFor(kid) }),
+          ...(oidcRoleClaim === '' ? {} : { roleClaim: oidcRoleClaim }),
+        }
+      : undefined;
   const auth = oidc === undefined ? new TokenAuth(loadTokens()) : new TokenAuth(loadTokens(), oidc);
   const oidcAuthz = env('BARY_OIDC_AUTHORIZATION', '');
   const oidcToken = env('BARY_OIDC_TOKEN', '');
@@ -666,6 +702,7 @@ export async function main(): Promise<void> {
       stopPublish();
       stopSecretGc();
       stopDbRetention();
+      stopJwks();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은
       // 주인을 가려내는 `/proc` 폴백에 기댄다 — 그 파일을 못 읽는 플랫폼에서는
       // `stillHolding` 이 안전한 쪽(살아 있다)으로 틀려 기동이 막힌다.
