@@ -51,9 +51,31 @@ export type ProbeOptions = {
   failThreshold?: number;
   /** 이만큼 연속 성공해야 `healthy` 로 올린다. */
   riseThreshold?: number;
+  /** 한 번에 찌르는 백엔드 수. 기본 32. */
+  concurrency?: number;
 };
 
-const DEFAULTS = { intervalMs: 2000, timeoutMs: 1000, failThreshold: 2, riseThreshold: 1 };
+const DEFAULTS = {
+  intervalMs: 2000, timeoutMs: 1000, failThreshold: 2, riseThreshold: 1,
+  /**
+   * 한 번에 찌르는 백엔드 수 (검수 B-07 부수).
+   *
+   * 전에는 `Promise.all` 로 **전부 동시에** 찔렀다. 백엔드가 수백 개면 매 틱마다 그만큼의
+   * 연결이 한꺼번에 나가고, 그건 헬스체크가 만드는 부하가 트래픽보다 커지는 자리다.
+   */
+  concurrency: 32,
+};
+
+/** 상한을 두고 나눠 돈다. **순서는 보존한다** — 각 결과가 자기 `seq` 와 짝이어야 한다. */
+export async function inBatches<T, R>(
+  items: readonly T[], limit: number, run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    out.push(...await Promise.all(items.slice(i, i + limit).map(run)));
+  }
+  return out;
+}
 
 /** HTTP 풀이 기본으로 GET 하는 경로. 백엔드가 트래픽 경로와 같은 `/` 를 연다. */
 export const HTTP_PROBE_PATH = '/';
@@ -79,12 +101,21 @@ export function probeTcp(host: string, port: number, timeoutMs: number): Promise
 
 export type HttpProbeOpts = {
   path: string;
-  /** 있으면 본문이 이 문자열이어야 산다. 없으면 비어 있지 않으면 산다. */
+  /** 산 것으로 볼 상태 코드. 없으면 2xx. */
+  expectStatus?: number[];
+  /** 있으면 본문이 이 문자열이어야 산다. 없으면 본문을 안 본다. */
   expectBody?: string;
 };
 
 /**
- * HTTP GET 의 **본문**으로 판정한다. 연결만 열린 서버가 틀린 본문·빈 본문을 주면 죽는다.
+ * HTTP GET 으로 판정한다 — **상태 코드가 먼저다** (검수 B-07).
+ *
+ * 전에는 **본문이 비어 있지 않으면 살았다고 봤다.** 그래서 500·502·503 과 함께 온 에러
+ * 페이지가 전부 `healthy` 였다 — 죽은 백엔드가 계속 트래픽을 받는다. "연결만 열린 죽은
+ * 앱" 을 막으려고 본문을 보게 했는데, **정작 앱이 죽었다고 말하는 신호를 안 봤다.**
+ *
+ * 기본은 2xx 다. 204 처럼 본문이 없는 정상 응답도 산 것이고, 200 에 빈 본문을 주는
+ * 헬스 경로도 산 것이다 — 그 판정은 상태 코드가 한다.
  */
 export function probeHttp(
   host: string, port: number, timeoutMs: number, opts: HttpProbeOpts,
@@ -94,13 +125,22 @@ export function probeHttp(
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => { chunks.push(c); });
       res.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf8');
+        const status = res.statusCode ?? 0;
+        const want = opts.expectStatus;
+        const statusOk = want === undefined ? status >= 200 && status < 300 : want.includes(status);
+        if (!statusOk) {
+          resolve(want === undefined
+            ? `${status} 다 (2xx 가 아니다)`
+            : `${status} 다 (기대: ${want.join(', ')})`);
+          return;
+        }
         const expect = opts.expectBody;
         if (expect !== undefined) {
+          const body = Buffer.concat(chunks).toString('utf8');
           resolve(body === expect ? undefined : (body === '' ? '본문이 비어 있다' : '본문이 기대와 다르다'));
           return;
         }
-        resolve(body === '' ? '본문이 비어 있다' : undefined);
+        resolve(undefined);
       });
     });
     req.on('timeout', () => {
@@ -121,6 +161,28 @@ export function probeBackend(
     return probeHttp(host, port, timeoutMs, httpOpts ?? { path: HTTP_PROBE_PATH });
   }
   return probeTcp(host, port, timeoutMs);
+}
+
+/**
+ * 이 풀의 HTTP 헬스체크 설정 (검수 B-07).
+ *
+ * **`HttpProbeOpts` 는 있는데 `HealthProber` 가 안 넘겼다** — 이 저장소가 반복해서 잡는
+ * *"필드는 있는데 아무도 안 읽는다"* 의 한 판이다. 이 함수가 그 다리다.
+ *
+ * stream 풀(tcp·udp)에는 `undefined` — 거기엔 요청 개념이 없고 프로버는 연결만 본다.
+ *
+ * ⚠️ **지금은 기본값만 준다.** 경로·기대상태·기대본문을 *좁히는* 설정은 `Pool` 을
+ * 넓혀야 하고 그건 A 표면(동결 111 심볼·3 회차)을 움직인다. 저장소가 그 결정을 도구
+ * 수준에서 사람에게 유보했으므로 우회하지 않는다.
+ *
+ * **결함과 설정은 다른 것이다.** 죽은 백엔드가 트래픽을 계속 받는 것은 결함이고 위에서
+ * 고쳤다. 좁히는 손잡이는 기능이고 `origin/audit-w3-surface` 에 있다 — 동결이 풀리면
+ * **이 함수의 본문 한 곳**만 `pool.healthCheck` 를 읽도록 바뀐다.
+ */
+export function healthCheckOf(model: Model, poolKey: string): HttpProbeOpts | undefined {
+  const pool = model.pools.find((p) => p.key === poolKey);
+  if (pool === undefined || pool.protocolClass !== 'http') return undefined;
+  return { path: HTTP_PROBE_PATH };
 }
 
 /**
@@ -179,12 +241,19 @@ export class HealthProber {
     const classOf = new Map(model.pools.map((p) => [p.key, p.protocolClass]));
     const runs = model.backends.map((b) => ({ backend: b, seq: this.#next++ }));
 
-    const results = await Promise.all(runs.map(async ({ backend, seq }) => ({
-      key: backend.key, seq,
-      reason: await probeBackend(
-        classOf.get(backend.pool), backend.host, backend.port, timeoutMs,
-      ),
-    })));
+    /**
+     * **풀의 헬스체크 설정을 넘긴다** (검수 B-07). 전에는 안 넘겨서 옵션 타입이 있어도
+     * 아무도 안 읽는 상태였다. 그리고 **나눠 돈다** — 전부 동시에 찌르면 헬스체크가
+     * 만드는 부하가 트래픽보다 커진다.
+     */
+    const results = await inBatches(runs, this.opts.concurrency ?? DEFAULTS.concurrency,
+      async ({ backend, seq }) => ({
+        key: backend.key, seq,
+        reason: await probeBackend(
+          classOf.get(backend.pool), backend.host, backend.port, timeoutMs,
+          healthCheckOf(model, backend.pool),
+        ),
+      }));
 
     const flipped: HealthFlip[] = [];
     for (const r of results) {

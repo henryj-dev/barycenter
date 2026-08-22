@@ -141,7 +141,7 @@ describe('HTTP 본문 프로브', () => {
     expect(await probeBackend('tcp', '127.0.0.1', tcp, 500)).toBeUndefined();
   });
 
-  it('스위퍼는 HTTP 풀에 본문 프로브를 쓴다 — TCP 만 열린 서버는 죽는다', async () => {
+  it('스위퍼는 HTTP 풀에 HTTP 프로브를 쓴다 — TCP 만 열린 서버는 죽는다', async () => {
     const body = await httpBody('ok');
     const empty = await httpBody('');
     const tcp = await tcpOnly();
@@ -162,7 +162,19 @@ describe('HTTP 본문 프로브', () => {
     });
     const h = await currentHealth(db);
     expect(h.get('ok')).toBe('healthy');
-    expect(h.get('empty')).toBe('unhealthy');
+    /**
+     * ⚠️ **판정 기준이 바뀌었다** (검수 2026-08-22 · B-07).
+     *
+     * 전에는 "본문이 비어 있지 않으면 산다" 였고 이 줄은 `unhealthy` 였다. 그 규칙이
+     * 틀렸다 — **500·502·503 과 함께 온 에러 페이지가 전부 `healthy`** 였고, 죽은
+     * 백엔드가 계속 트래픽을 받았다. 그리고 `200` 에 빈 본문을 주는 헬스 경로(204 포함)는
+     * 정상인데 죽었다고 판정했다.
+     *
+     * 이제 상태 코드가 판정한다. 이 테스트의 **의도**(TCP 만 열린 서버는 죽는다)는
+     * `http-tcp` 가 그대로 지킨다 — 바뀐 것은 빈 본문 하나이고, 그게 이 수정의 내용이다.
+     * 5xx 쪽은 `tests/unit/audit-healthcheck-spec.test.ts` 가 못 박는다.
+     */
+    expect(h.get('empty')).toBe('healthy');
     expect(h.get('http-tcp')).toBe('unhealthy');
     expect(h.get('l4')).toBe('healthy');
   });
