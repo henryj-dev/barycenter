@@ -37,6 +37,7 @@ import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
 import { serveGui } from '../web/serve-gui.js';
 import { can, TokenAuth, type Principal, type Scope } from './auth.js';
+import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import {
   authorizationRequest, exchangeAuthorizationCode, type OidcRpSettings,
@@ -98,7 +99,13 @@ type Route = {
 
 const json = (res: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}): void => {
   const body = JSON.stringify(value, null, 2);
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    // **한 자리에서 붙인다** (검수 S-10). 라우트마다 적으면 새 라우트가 하나 늘 때마다
+    // 빠질 자리가 하나 는다.
+    ...SECURITY_HEADERS,
+    ...headers,
+  });
   res.end(body);
 };
 
