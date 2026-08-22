@@ -1,0 +1,102 @@
+/**
+ * 검수 2026-08-22 · B-07 — **5xx 는 healthy 가 아니다**
+ *
+ * `probeHttp` 는 **본문이 비어 있지 않으면 산 것으로 판정했다.** 그래서 500·502·503 과
+ * 함께 온 에러 페이지가 전부 `healthy` 다 — 죽은 백엔드가 계속 트래픽을 받는다.
+ * "연결만 열린 죽은 앱" 을 막으려고 본문을 보게 했는데, **정작 앱이 죽었다고 말하는
+ * 신호(상태 코드)를 안 봤다.**
+ *
+ * 그리고 경로·기대본문을 정할 자리가 없었다. `HttpProbeOpts` 는 있는데 `HealthProber` 가
+ * 안 넘겼다 — 이 저장소가 반복해서 잡는 *"필드는 있는데 아무도 안 읽는다"* 의 한 판이다.
+ *
+ * ⚠️ **판정 기본값이 바뀐다.** "본문이 비어 있지 않다" → "2xx 다". 200 에 빈 본문을 주던
+ * 백엔드는 이제 healthy 이고, 500 에 에러 페이지를 주던 백엔드는 이제 unhealthy 다.
+ * 후자가 이 수정의 요점이고, 전자는 애초에 상태 코드로 판정했어야 하는 자리다.
+ */
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+import { afterAll, describe, expect, it } from 'vitest';
+
+import { probeBackend, probeHttp } from '../../src/control/health.js';
+import { healthCheckOf } from '../../src/control/health.js';
+import type { Model } from '../../src/model/provisional.js';
+
+const servers: { close(): void }[] = [];
+
+afterAll(() => {
+  for (const s of servers) s.close();
+});
+
+/** 상태 코드와 본문을 정해 주는 서버 하나. */
+async function serve(status: number, body: string): Promise<number> {
+  const s = createServer((_req, res) => {
+    res.writeHead(status, { 'content-type': 'text/plain' });
+    res.end(body);
+  });
+  servers.push(s);
+  await new Promise<void>((r) => { s.listen(0, '127.0.0.1', r); });
+  return (s.address() as AddressInfo).port;
+}
+
+describe('HTTP 헬스 판정 (검수 B-07)', () => {
+  it('5xx 는 healthy 가 아니다', async () => {
+    // 에러 페이지는 본문이 있다. 전에는 그것만 보고 살았다고 했다.
+    const down = await serve(503, '<h1>Service Unavailable</h1>');
+    expect(await probeHttp('127.0.0.1', down, 500, { path: '/' })).toBeDefined();
+
+    const bad = await serve(500, 'internal error');
+    expect(await probeHttp('127.0.0.1', bad, 500, { path: '/' })).toBeDefined();
+
+    // 404 도 아니다 — 헬스 경로가 없다는 뜻이지 앱이 산다는 뜻이 아니다.
+    const missing = await serve(404, 'not found');
+    expect(await probeHttp('127.0.0.1', missing, 500, { path: '/healthz' })).toBeDefined();
+  });
+
+  it('2xx 는 본문이 비어도 healthy 다', async () => {
+    // 204 는 정상 응답이다. 본문 유무로 재던 것이 틀렸다.
+    const empty = await serve(204, '');
+    expect(await probeHttp('127.0.0.1', empty, 500, { path: '/' })).toBeUndefined();
+    const ok = await serve(200, 'ok');
+    expect(await probeHttp('127.0.0.1', ok, 500, { path: '/' })).toBeUndefined();
+  });
+
+  it('기대 상태와 본문을 정할 수 있다', async () => {
+    const teapot = await serve(418, 'brewing');
+    // 기본으로는 죽었다.
+    expect(await probeBackend('http', '127.0.0.1', teapot, 500)).toBeDefined();
+    // 정해 주면 산다.
+    expect(await probeBackend('http', '127.0.0.1', teapot, 500,
+      { path: '/', expectStatus: [418] })).toBeUndefined();
+    // 본문까지 정하면 둘 다 맞아야 한다.
+    expect(await probeBackend('http', '127.0.0.1', teapot, 500,
+      { path: '/', expectStatus: [418], expectBody: 'brewing' })).toBeUndefined();
+    expect(await probeBackend('http', '127.0.0.1', teapot, 500,
+      { path: '/', expectStatus: [418], expectBody: 'other' })).toBeDefined();
+  });
+
+  it('풀의 healthCheck 가 프로버까지 내려간다', async () => {
+    // **여기가 B-07 의 핵심이다.** 옵션 타입은 있었는데 프로버가 안 넘겼다.
+    const model: Model = {
+      listeners: [], httpRoutes: [], passthroughRoutes: [],
+      pools: [
+        {
+          key: 'app', protocolClass: 'http', algorithm: 'round_robin',
+          healthCheck: { path: '/healthz', expectStatus: [200, 204], expectBody: 'up' },
+        },
+        { key: 'plain', protocolClass: 'http', algorithm: 'round_robin' },
+        { key: 'l4', protocolClass: 'tcp', algorithm: 'round_robin' },
+      ],
+      backends: [], certificates: [], tlsPolicies: [], sniBindings: [],
+    };
+
+    expect(healthCheckOf(model, 'app')).toEqual({
+      path: '/healthz', expectStatus: [200, 204], expectBody: 'up',
+    });
+    // 안 정하면 기본값 — 경로 `/`, 2xx.
+    expect(healthCheckOf(model, 'plain')).toEqual({ path: '/' });
+    // stream 풀에는 HTTP 프로브가 없다.
+    expect(healthCheckOf(model, 'l4')).toBeUndefined();
+    expect(healthCheckOf(model, 'nope')).toBeUndefined();
+  });
+});

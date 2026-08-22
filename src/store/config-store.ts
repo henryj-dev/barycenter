@@ -169,7 +169,7 @@ const list = (r: Row, k: string): string[] => (Array.isArray(r[k]) ? (r[k] as st
 
 async function readModel(c: Queryable): Promise<Model> {
   const pools = (await c.query(
-    `SELECT key, protocol_class, algorithm, hash_key, send_proxy_protocol
+    `SELECT key, protocol_class, algorithm, hash_key, send_proxy_protocol, health_check
        FROM pools ORDER BY key`,
   )).rows.map((r): Pool => ({
     key: text(r, 'key'),
@@ -179,6 +179,10 @@ async function readModel(c: Queryable): Promise<Model> {
     ...(maybeText(r, 'send_proxy_protocol') !== undefined
       ? { sendProxyProtocol: 'v1' as const }
       : {}),
+    // 014 (검수 B-07). 없으면 기본 판정 — `GET /` 에 2xx.
+    ...(r['health_check'] === null || r['health_check'] === undefined
+      ? {}
+      : { healthCheck: r['health_check'] as NonNullable<Pool['healthCheck']> }),
   }));
 
   const backends = (await c.query(
@@ -371,13 +375,23 @@ async function readModel(c: Queryable): Promise<Model> {
    * "빈 객체로 정했다" 가 같아지고, 그 구분이 §4.10 의 시간 보호를 켜고 끈다.
    */
   const engineRow = (await c.query(
-    'SELECT worker_shutdown_timeout_s FROM engine_settings WHERE only_one',
+    `SELECT worker_shutdown_timeout_s, membership_dict_kb, acme_dict_kb
+       FROM engine_settings WHERE only_one`,
   )).rows[0];
-  const shutdown = engineRow === undefined
-    ? undefined : maybeText(engineRow, 'worker_shutdown_timeout_s');
+  const engineNum = (col: string): number | undefined => {
+    const raw = engineRow === undefined ? undefined : maybeText(engineRow, col);
+    return raw === undefined ? undefined : Number(raw);
+  };
+  const shutdown = engineNum('worker_shutdown_timeout_s');
+  const membershipKb = engineNum('membership_dict_kb');
+  const acmeKb = engineNum('acme_dict_kb');
   const engine = engineRow === undefined
     ? undefined
-    : { ...(shutdown === undefined ? {} : { workerShutdownTimeoutS: Number(shutdown) }) };
+    : {
+        ...(shutdown === undefined ? {} : { workerShutdownTimeoutS: shutdown }),
+        ...(membershipKb === undefined ? {} : { membershipDictKb: membershipKb }),
+        ...(acmeKb === undefined ? {} : { acmeDictKb: acmeKb }),
+      };
 
   return {
     ...(engine === undefined ? {} : { engine }),
@@ -448,16 +462,18 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
     case 'pool':
       await c.query(
         `INSERT INTO pools (id,key,name,protocol_class,algorithm,hash_key,send_proxy_protocol,
-                            created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$7,$8)
+                            health_check,created_by,updated_by,revision)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$9,$7,$7,$8)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol_class=EXCLUDED.protocol_class,
            algorithm=EXCLUDED.algorithm, hash_key=EXCLUDED.hash_key,
            send_proxy_protocol=EXCLUDED.send_proxy_protocol,
+           health_check=EXCLUDED.health_check,
            version=pools.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, b['protocolClass'], b['algorithm'],
-          b['hashKey'] ?? null, b['sendProxyProtocol'] ?? null, by, revision],
+          b['hashKey'] ?? null, b['sendProxyProtocol'] ?? null, by, revision,
+          b['healthCheck'] === undefined ? null : JSON.stringify(b['healthCheck'])],
       );
       return;
 
@@ -635,12 +651,16 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
     case 'engine':
       // **키가 하나뿐이다.** 해독기가 이미 모양을 봤다(`decodeEngineSettings`).
       await c.query(
-        `INSERT INTO engine_settings (only_one, worker_shutdown_timeout_s, updated_by, revision)
-         VALUES (true,$1,$2,$3)
+        `INSERT INTO engine_settings (only_one, worker_shutdown_timeout_s,
+                                      membership_dict_kb, acme_dict_kb, updated_by, revision)
+         VALUES (true,$1,$4,$5,$2,$3)
          ON CONFLICT (only_one) DO UPDATE SET
            worker_shutdown_timeout_s=EXCLUDED.worker_shutdown_timeout_s,
+           membership_dict_kb=EXCLUDED.membership_dict_kb,
+           acme_dict_kb=EXCLUDED.acme_dict_kb,
            updated_at=now(), updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
-        [b['workerShutdownTimeoutS'] ?? null, by, revision],
+        [b['workerShutdownTimeoutS'] ?? null, by, revision,
+          b['membershipDictKb'] ?? null, b['acmeDictKb'] ?? null],
       );
       return;
 

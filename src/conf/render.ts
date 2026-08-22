@@ -128,6 +128,40 @@ export const ACME_DICT = 'bary_acme';
  */
 export const ACME_PREFIX = '/.well-known/acme-challenge/';
 
+/**
+ * shared dict 기본 크기 (KB) — 지금까지의 하드코딩 값 그대로 (검수 B-12).
+ *
+ * **이건 성능 손잡이가 아니라 절벽이다.** dict 가 차면 nginx 는 LRU 로 밀어내고, 밀려난
+ * 것이 `slot:` 이면 `balancer_by_lua` 가 `ngx.exit(ngx.ERROR)` 를 타 **그 풀의 모든
+ * 요청이 끊긴다.** 백엔드가 늘면 언젠가 닿으므로 `model.engine` 으로 열어 둔다.
+ */
+const DEFAULT_MEMBERSHIP_KB = 1024;
+const DEFAULT_ACME_KB = 64;
+
+/**
+ * nginx 의 크기 표기. KB 단위 정수만 받으므로 문자열이 사용자 입력을 안 지난다.
+ *
+ * **1024 의 배수는 `m` 으로 낸다.** 기능은 같지만 바이트가 다르면 `render_digest` 가
+ * 달라지고, 그러면 **설정을 하나도 안 바꾼 배포가 다음 apply 에서 세대 전환을 한다**
+ * (전환당 트래픽 2.6% — 실측). 손잡이를 여는 것이 그 대가를 물릴 이유가 없다.
+ */
+const dictSize = (kb: number | undefined, fallback: number): string => {
+  const size = kb ?? fallback;
+  return size % 1024 === 0 ? `${size / 1024}m` : `${size}k`;
+};
+
+/**
+ * `in:` 카운터가 놀고 있을 때의 수명 (초) — 검수 B-12.
+ *
+ * peer 별 카운터는 지우는 코드가 없어 **한번 본 peer 는 영원히 dict 를 차지했다.**
+ * 그렇다고 0 이 될 때 지우면 안 된다 — `/membership/inflight` 가 키가 없을 때 `{}` 를
+ * 답하고, 드레인은 그것을 "관측이 없다" 로 읽어 **`quiesced` 판정이 영영 안 난다.**
+ *
+ * 그래서 지우는 대신 **만료를 건다.** 0 이 된 뒤 한 시간은 남으므로 드레인이 정지를
+ * 확인할 시간이 충분하고, 그 뒤에는 저절로 사라진다.
+ */
+const INFLIGHT_IDLE_TTL = 3600;
+
 /** SNI↔Host 불일치 판정을 담는 변수 (§4.6). */
 const SNI_MISMATCH_VAR = 'bary_sni_mismatch';
 
@@ -1023,12 +1057,16 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
             if not peer then return end
             local d = ngx.shared.${MEMBERSHIP_DICT.http}
             local n = d:incr("in:" .. peer, -1)
-            if n and n < 0 then d:set("in:" .. peer, 0) end
+            -- 0 이하면 0 으로 고정하고 **만료를 건다** (검수 B-12). 지우지는 않는다 —
+            -- 키가 없으면 드레인이 "관측 없음" 으로 읽어 quiesced 를 영영 못 판정한다.
+            if not n or n <= 0 then d:set("in:" .. peer, 0, ${INFLIGHT_IDLE_TTL}) end
         `));
-      children.unshift(directive('lua_shared_dict', [lit(MEMBERSHIP_DICT.http), lit('1m')]));
+      children.unshift(directive('lua_shared_dict',
+        [lit(MEMBERSHIP_DICT.http), lit(dictSize(model.engine?.membershipDictKb, DEFAULT_MEMBERSHIP_KB))]));
       // ACME 토큰은 멤버십과 **다른 dict** 다. 같이 쓰면 멤버십 staging 이 토큰을 밀어내고
       // (dict 는 LRU 로 밀어낸다) 그 실패는 "인증서 발급이 가끔 안 된다" 로 보인다.
-      children.unshift(directive('lua_shared_dict', [lit(ACME_DICT), lit('64k')]));
+      children.unshift(directive('lua_shared_dict',
+        [lit(ACME_DICT), lit(dictSize(model.engine?.acmeDictKb, DEFAULT_ACME_KB))]));
     }
     // E7 — 내장 변수가 아니므로 반드시 함께 렌더한다. 그리고 정확히 한 번만.
     if (anyWebsocket) {
@@ -1117,13 +1155,15 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
 
     const children: ConfNode[] = [];
     if (caps.streamLua === true) {
-      children.push(directive('lua_shared_dict', [lit(MEMBERSHIP_DICT.stream), lit('1m')]));
+      children.push(directive('lua_shared_dict',
+        [lit(MEMBERSHIP_DICT.stream), lit(dictSize(model.engine?.membershipDictKb, DEFAULT_MEMBERSHIP_KB))]));
       children.push(lua('log_by_lua_block', `
             local peer = ngx.ctx.bary_peer
             if not peer then return end
             local d = ngx.shared.${MEMBERSHIP_DICT.stream}
             local n = d:incr("in:" .. peer, -1)
-            if n and n < 0 then d:set("in:" .. peer, 0) end
+            -- 검수 B-12 — http 평면과 같은 규칙이다.
+            if not n or n <= 0 then d:set("in:" .. peer, 0, ${INFLIGHT_IDLE_TTL}) end
         `));
       // stream 에도 세대별 admin 조각을 끌어들인다 — epoch 리터럴이 거기 산다.
       children.push(directive('include', [lit('stream-admin/*.conf')]));

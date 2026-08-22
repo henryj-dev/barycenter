@@ -31,6 +31,7 @@ import type {
   PassthroughAction,
   PassthroughRoute,
   Pool,
+  HealthCheck,
   HstsPolicy,
   SniCertificateBinding,
   SniOutcome,
@@ -371,7 +372,8 @@ function decodePool(iss: Issues, v: unknown, path: string): Pool | undefined {
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['key', 'protocolClass', 'algorithm', 'hashKey', 'sendProxyProtocol']);
+  noExtraKeys(iss, v, path,
+    ['key', 'protocolClass', 'algorithm', 'hashKey', 'sendProxyProtocol', 'healthCheck']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
   const protocolClass = required(iss, v, 'protocolClass', path, () =>
     oneOf(iss, v['protocolClass'], `${path}.protocolClass`, PROTOCOL_CLASSES));
@@ -380,11 +382,45 @@ function decodePool(iss: Issues, v: unknown, path: string): Pool | undefined {
   const hashKey = optional(v['hashKey'], () => str(iss, v['hashKey'], `${path}.hashKey`));
   const send = optional(v['sendProxyProtocol'], () =>
     oneOf(iss, v['sendProxyProtocol'], `${path}.sendProxyProtocol`, SEND_PROXY_PROTOCOL));
+  const healthCheck = optional(v['healthCheck'], () =>
+    decodeHealthCheck(iss, v['healthCheck'], `${path}.healthCheck`));
   if (key === undefined || protocolClass === undefined || algorithm === undefined) return undefined;
   return {
     key, protocolClass, algorithm,
     ...(hashKey === undefined ? {} : { hashKey }),
     ...(send === undefined ? {} : { sendProxyProtocol: send }),
+    ...(healthCheck === undefined ? {} : { healthCheck }),
+  };
+}
+
+/**
+ * HTTP 헬스체크 (검수 B-07).
+ *
+ * **`expectStatus` 는 비어 있을 수 없다.** 빈 배열은 "아무 상태도 산 것이 아니다" 가 되어
+ * 그 풀이 영원히 죽는다 — 조용히 통과시키면 원인이 안 보이는 장애가 된다.
+ */
+function decodeHealthCheck(iss: Issues, v: unknown, path: string): HealthCheck | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['path', 'expectStatus', 'expectBody']);
+  const p = optional(v['path'], () => str(iss, v['path'], `${path}.path`));
+  const expectBody = optional(v['expectBody'], () => str(iss, v['expectBody'], `${path}.expectBody`));
+  const expectStatus = optional(v['expectStatus'], () => {
+    const list = arrayOf(iss, v['expectStatus'], `${path}.expectStatus`,
+      (s, at) => int(iss, s, at, 100, 599));
+    if (list.length === 0) {
+      iss.add('out_of_range', `${path}.expectStatus`,
+        '비어 있을 수 없다 — 아무 상태도 산 것이 아니면 그 풀은 영원히 죽는다');
+      return undefined;
+    }
+    return list;
+  });
+  return {
+    ...(p === undefined ? {} : { path: p }),
+    ...(expectStatus === undefined ? {} : { expectStatus }),
+    ...(expectBody === undefined ? {} : { expectBody }),
   };
 }
 
@@ -612,12 +648,23 @@ function decodeEngineSettings(iss: Issues, v: unknown, path: string): EngineSett
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['workerShutdownTimeoutS']);
+  noExtraKeys(iss, v, path,
+    ['workerShutdownTimeoutS', 'membershipDictKb', 'acmeDictKb']);
   // **상한을 둔다.** 하루를 넘기는 값은 "무한" 과 구분이 안 되고, 그럴 거면 안 적는 것이
   // 정직하다.
   const t = optional(v['workerShutdownTimeoutS'], () =>
     int(iss, v['workerShutdownTimeoutS'], `${path}.workerShutdownTimeoutS`, 1, 86_400));
-  return t === undefined ? {} : { workerShutdownTimeoutS: t };
+  // **하한이 있다.** nginx 는 너무 작은 dict 를 아예 거절하고, 그 실패는 apply 시점에
+  // 난다. 상한은 1 GiB — 그보다 큰 값은 오타와 구분이 안 된다 (검수 B-12).
+  const membership = optional(v['membershipDictKb'], () =>
+    int(iss, v['membershipDictKb'], `${path}.membershipDictKb`, 64, 1_048_576));
+  const acme = optional(v['acmeDictKb'], () =>
+    int(iss, v['acmeDictKb'], `${path}.acmeDictKb`, 32, 1_048_576));
+  return {
+    ...(t === undefined ? {} : { workerShutdownTimeoutS: t }),
+    ...(membership === undefined ? {} : { membershipDictKb: membership }),
+    ...(acme === undefined ? {} : { acmeDictKb: acme }),
+  };
 }
 
 /**

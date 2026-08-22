@@ -43,7 +43,16 @@ export class GenerationError extends Error {
       | 'digest_mismatch'
       | 'incomplete'
       /** 세대가 구성하는 평면과 오퍼레이션이 선언한 평면이 다르다 (10차 반례 ②). */
-      | 'plane_mismatch',
+      | 'plane_mismatch'
+      /**
+       * 세대 안의 상대경로가 세대 밖을 가리킨다 (검수 S-01).
+       *
+       * 인증서 경로가 리소스 key 에서 오므로 key 하나로 세대를 벗어날 수 있었다.
+       * 처음엔 일반 `Error` 로 막았다 — 이 유니온이 공개 표면이라 종류를 늘리면 동결
+       * 카운터가 리셋되기 때문이다. 표면 회차에 함께 올린다: 호출자가 이 실패를
+       * `digest_mismatch` 나 `incomplete` 와 **구분해서** 다룰 수 있어야 한다.
+       */
+      | 'path_escape',
     message: string,
   ) {
     super(message);
@@ -82,16 +91,17 @@ const sha256 = (buf: Buffer | string): string =>
  * *이미 저장된* 것은 못 막는다. 그리고 세대 파일 이름이 언젠가 다른 곳에서도 오게 되면
  * 그때 이 방어가 다시 필요해진다 — 값이 아니라 **경계**에 거는 것이 맞다.
  *
- * 일반 `Error` 다. `GenerationError` 의 종류를 늘리면 그 유니온이 공개 표면(`SURFACE.txt`)
- * 이라 동결 카운터가 리셋된다. 이건 세대의 *상태*가 아니라 입력이 틀린 것이므로
- * 종류를 붙일 이유도 약하다.
+ * `GenerationError('path_escape')` 다. 호출자가 이 실패를 `digest_mismatch` 나
+ * `incomplete` 와 구분해서 다룰 수 있어야 한다 — 앞엣것은 "바이트가 다르다" 이고
+ * 이건 "애초에 여기 있으면 안 되는 것" 이다.
  */
 function assertInside(base: string, rel: string): void {
   const target = resolve(base, rel);
   const root = resolve(base);
   const inside = target !== root && relative(root, target).split(sep)[0] !== '..';
   if (!inside) {
-    throw new Error(
+    throw new GenerationError(
+      'path_escape',
       `세대 밖을 가리키는 경로다: ${JSON.stringify(rel)} — 세대는 자기완결적이어야 한다`,
     );
   }

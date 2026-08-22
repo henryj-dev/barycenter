@@ -319,6 +319,29 @@ export type HttpProfile = {
 
 export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash';
 
+/**
+ * HTTP 헬스체크 (검수 B-07).
+ *
+ * 전에는 프로버가 `GET /` 을 치고 **본문이 비어 있지 않으면 살았다고 봤다.** 그래서
+ * 500·502·503 과 함께 온 에러 페이지가 전부 `healthy` 였다 — 죽은 백엔드가 계속 트래픽을
+ * 받는다. "연결만 열린 죽은 앱" 을 막으려고 본문을 보게 했는데, 정작 **앱이 죽었다고
+ * 말하는 신호를 안 봤다.**
+ *
+ * 이 필드가 없으면 `GET /` 에 2xx 다. 그것이 기본이고, 여기서 좁힐 수 있다.
+ *
+ * **간격·임계값은 여기 없다.** 그건 프로버 전체의 리듬이고 지금도 환경변수다 —
+ * 풀마다 다르게 하려면 프로버가 풀별 스케줄을 들어야 하는데, 그건 다른 크기의 일이다.
+ * 없는 것을 있는 척하지 않는다.
+ */
+export type HealthCheck = {
+  /** GET 할 경로. 없으면 `/`. */
+  path?: string;
+  /** 산 것으로 볼 상태 코드. 없으면 2xx. */
+  expectStatus?: number[];
+  /** 본문이 이것과 같아야 한다. 없으면 본문을 안 본다. */
+  expectBody?: string;
+};
+
 export type Pool = {
   key: string;
   protocolClass: ProtocolClass;
@@ -326,6 +349,11 @@ export type Pool = {
   hashKey?: string;
   /** §4.7 — http 는 엔진에 송신 디렉티브 자체가 없고, udp 는 미지원. tcp 만 v1. */
   sendProxyProtocol?: 'v1';
+  /**
+   * HTTP 헬스체크 (검수 B-07). **http 풀에만** — stream 에는 요청 개념이 없고,
+   * 프로버는 연결만 본다.
+   */
+  healthCheck?: HealthCheck;
 };
 
 export type Backend = {
@@ -398,6 +426,27 @@ export type EngineSettings = {
    * **모르는 것을 없애는 대신 유계로 바꾸는 거래**이고, 값은 in-flight 다.
    */
   workerShutdownTimeoutS?: number;
+
+  /**
+   * 멤버십 shared dict 의 크기 (KB). 없으면 1024 (= `1m`) — 지금까지의 하드코딩 값.
+   *
+   * **왜 열어야 하는가** (검수 B-12). 이 dict 에는 epoch 별 슬롯, 라운드로빈 카운터,
+   * 그리고 **peer 별 in-flight 카운터**가 함께 산다. 차면 nginx 는 **LRU 로 밀어낸다** —
+   * 밀려난 것이 `slot:` 이면 `balancer_by_lua` 가 `ngx.exit(ngx.ERROR)` 를 타고
+   * **그 풀의 모든 요청이 끊긴다.**
+   *
+   * 즉 이건 성능 손잡이가 아니라 **절벽**이다. 백엔드가 늘면 언젠가 닿고, 닿는 순간
+   * 조용하지 않게 끊긴다. 크기를 못 바꾸면 그때 할 수 있는 것이 없다.
+   */
+  membershipDictKb?: number;
+
+  /**
+   * ACME 토큰 dict 의 크기 (KB). 없으면 64 — 지금까지의 하드코딩 값.
+   *
+   * 멤버십과 **다른 dict** 인 이유는 S18 이 실측했다: 같이 쓰면 멤버십 staging 이 토큰을
+   * LRU 로 밀어내고, 증상은 "인증서 발급이 가끔 안 된다" 다.
+   */
+  acmeDictKb?: number;
 };
 
 export type Model = {
