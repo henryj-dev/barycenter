@@ -289,7 +289,7 @@ describe('정본 저장소', () => {
     expect(plan.impact.socketChanges.added).toContain('tcp://0.0.0.0:999');
     expect(plan.impact.planes).toContain('http');
     expect(plan.impact.affectedListeners).toEqual([
-      { key: 'front', protocol: 'http', bind: '0.0.0.0', port: 999 },
+      { key: 'front', protocol: 'http', bind: '0.0.0.0', port: 999, change: 'added' },
     ]);
   });
 

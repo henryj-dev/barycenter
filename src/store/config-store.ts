@@ -133,10 +133,20 @@ export type PlanRecord = {
   activationEpoch: string | undefined;
 };
 
-/** §5.4 — plan 이 보여주는 것. v0.1 은 이 부분집합만 낸다. */
+/**
+ * 리스너가 **어떻게** 영향을 받았는가.
+ *
+ * `removed` 는 지금 모델에 없는 것이므로 이전 리비전에서 읽는다 — 그게 빠지면
+ * "리스너를 지웠는데 아무 리스너도 영향받지 않았다" 는 답이 나온다.
+ */
+export type ListenerChange = 'added' | 'removed' | 'changed';
+
+/** §5.4 — plan 이 보여주는 것. */
 export type Impact = {
   requiresReload: boolean;
-  affectedListeners: { key: string; protocol: string; bind: string; port: number }[];
+  affectedListeners: {
+    key: string; protocol: string; bind: string; port: number; change: ListenerChange;
+  }[];
   socketChanges: { added: string[]; removed: string[] };
   planes: ('http' | 'stream')[];
   confDiff: { before: number; after: number };
@@ -912,17 +922,22 @@ export class ConfigStore {
     const baseRevision = text(cs, 'base_revision');
     const ops = cs['patch'] as PatchOp[];
 
-    const { model, rendered, before } = await this.db.dryRun(async (c) => {
+    const { model, rendered, before, priorModel } = await this.db.dryRun(async (c) => {
       const prior = await readModel(c);
       const beforeConf = safeRender(prior, this.caps);
       for (const op of ops) await applyOp(c, op, baseRevision, by).catch(translate);
       const next = await readModel(c);
       // **모델 밖의 사실도 여기서 본다** (검수 B-05). 렌더는 SAN 을 모른다.
       this.assertCertificatesCover(next);
-      return { model: next, rendered: renderOrThrow(next, this.caps), before: beforeConf };
+      return {
+        model: next, rendered: renderOrThrow(next, this.caps),
+        before: beforeConf, priorModel: prior,
+      };
     });
 
-    const impact = impactOf(before?.conf ?? '', rendered, model);
+    // **이전 conf 뿐 아니라 이전 모델도 넘긴다.** 산출물 비교는 "reload 가 필요한가"
+    // 까지만 답한다 — *누가* 영향받는가는 모델을 봐야 나온다 (§5.4).
+    const impact = impactOf({ model: priorModel, conf: before?.conf ?? '' }, { model, rendered });
     const id = randomUUID();
     await this.db.tx(async (c) => {
       await c.query(
@@ -1354,7 +1369,102 @@ function safeRender(model: Model, caps: RenderCapabilities): RenderedConfig | un
 const socketOf = (l: { bind: string; port: number; protocol: string }): string =>
   `${l.protocol === 'udp' ? 'udp' : 'tcp'}://${l.bind}:${l.port}`;
 
-function impactOf(beforeConf: string, rendered: RenderedConfig, model: Model): Impact {
+/**
+ * 키 순서에 안 흔들리는 직렬화.
+ *
+ * 두 리비전의 같은 행이 **같은 값인데 키 순서만 다르면** 그냥 `JSON.stringify` 는
+ * 다르다고 답한다. 모델은 DB 를 지나 오므로 그 순서를 우리가 정하지 않는다 —
+ * "영향받았다" 가 조용히 거짓이 되는 자리라 정규형으로 만든다.
+ */
+function canon(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canon);
+  if (v === null || typeof v !== 'object') return v;
+  const o = v as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(o).sort()) out[k] = canon(o[k]);
+  return out;
+}
+
+const byKey = <T extends { key: string }>(a: T, b: T): number =>
+  (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+
+/**
+ * 리스너 하나가 **무엇에 의존하는가** (§5.4 `affected_listeners`).
+ *
+ * 전에는 이 자리가 `model.listeners.map(...)` 이었다 — 즉 **전부**를 실었다. 이름이
+ * `affectedListeners` 인데 영향과 무관하게 목록을 내면, 백엔드 하나를 옮긴 plan 이
+ * "리스너 열두 개가 영향받는다" 고 말한다. 그러면 사람이 그 줄을 안 읽게 되고,
+ * 정말로 열두 개가 걸리는 날에도 안 읽는다. §2.2-1 이 해자라고 부른 것이 *영향*이지
+ * 목록이 아니다.
+ *
+ * 폐포는 트래픽이 실제로 지나는 길이다: 리스너 → 그 위의 라우트 → 풀 → 백엔드,
+ * https 면 정책·인증서·SNI 바인딩까지. **엔진 전역 설정은 모든 리스너에 걸리므로**
+ * 폐포마다 넣는다 — `worker_shutdown_timeout` 이 바뀌면 전부가 영향이다.
+ */
+function listenerClosure(model: Model, l: Listener): string {
+  const pools = new Set<string>();
+  const certs = new Set<string>();
+  const policies = new Set<string>();
+  const parts: unknown[] = [l];
+
+  const addPool = (p: string | undefined): void => { if (p !== undefined) pools.add(p); };
+
+  if (l.protocol === 'http' || l.protocol === 'https') {
+    const da = l.http?.defaultAction;
+    if (typeof da === 'object') addPool(da.pool);
+    const routes = model.httpRoutes.filter((r) => r.listener === l.key).sort(byKey);
+    parts.push(routes);
+    for (const r of routes) if (r.action.kind === 'proxy') addPool(r.action.pool);
+  }
+  if (l.protocol === 'https') {
+    policies.add(l.tls.policy);
+    certs.add(l.tls.defaultCertificate);
+    const bindings = model.sniBindings.filter((b) => b.listener === l.key).sort(byKey);
+    parts.push(bindings);
+    for (const b of bindings) certs.add(b.certificate);
+  }
+  if (l.protocol === 'tls_passthrough') {
+    const routes = model.passthroughRoutes.filter((r) => r.listener === l.key).sort(byKey);
+    parts.push(routes);
+    for (const r of routes) if (r.action.kind === 'proxy') addPool(r.action.pool);
+    if (typeof l.onUnmatchedSni === 'object') addPool(l.onUnmatchedSni.pool);
+  }
+  if (l.protocol === 'tcp' || l.protocol === 'udp') addPool(l.defaultPool);
+
+  parts.push([...pools].sort().map((k) => model.pools.find((p) => p.key === k) ?? null));
+  parts.push(model.backends.filter((b) => pools.has(b.pool)).sort(byKey));
+  parts.push([...policies].sort().map((k) => model.tlsPolicies.find((p) => p.key === k) ?? null));
+  parts.push([...certs].sort().map((k) => model.certificates.find((c) => c.key === k) ?? null));
+  parts.push(model.engine ?? null);
+  return JSON.stringify(canon(parts));
+}
+
+/** 이전·이후 두 모델에서 **달라진 리스너**만 고른다. */
+function affectedListeners(before: Model, after: Model): Impact['affectedListeners'] {
+  const b = new Map(before.listeners.map((l) => [l.key, l]));
+  const a = new Map(after.listeners.map((l) => [l.key, l]));
+  const out: Impact['affectedListeners'] = [];
+
+  for (const key of [...new Set([...b.keys(), ...a.keys()])].sort()) {
+    const prev = b.get(key);
+    const next = a.get(key);
+    const change: ListenerChange | undefined =
+      prev === undefined ? 'added'
+        : next === undefined ? 'removed'
+          : listenerClosure(before, prev) === listenerClosure(after, next) ? undefined : 'changed';
+    if (change === undefined) continue;
+    const l = next ?? prev!;
+    out.push({ key, protocol: l.protocol, bind: l.bind, port: l.port, change });
+  }
+  return out;
+}
+
+function impactOf(
+  before: { model: Model; conf: string },
+  after: { model: Model; rendered: RenderedConfig },
+): Impact {
+  const { conf: beforeConf } = before;
+  const { model, rendered } = after;
   const sockets = new Set(model.listeners.filter((l) => l.enabled).map(socketOf));
   const beforeSockets = new Set(
     [...beforeConf.matchAll(/listen\s+([^\s;]+)(\s+udp)?/g)].map((m) =>
@@ -1375,9 +1485,7 @@ function impactOf(beforeConf: string, rendered: RenderedConfig, model: Model): I
      * 보수적으로 틀리는 쪽이라 두지만, 사실이므로 적어 둔다.
      */
     requiresReload: beforeConf !== rendered.conf,
-    affectedListeners: model.listeners.map((l) => ({
-      key: l.key, protocol: l.protocol, bind: l.bind, port: l.port,
-    })),
+    affectedListeners: affectedListeners(before.model, model),
     socketChanges: {
       added: [...sockets].filter((s) => !beforeSockets.has(s)).sort(),
       removed: [...beforeSockets].filter((s) => !sockets.has(s)).sort(),
