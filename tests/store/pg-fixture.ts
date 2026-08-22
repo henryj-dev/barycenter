@@ -105,9 +105,13 @@ export async function reset(db: Db): Promise<void> {
   // 행이 테스트 사이에 살아남았고, **읽기 엔드포인트로는 안 보였다**: 그쪽은
   // `config_revisions.model` 스냅샷을 읽는데 그 표는 목록에 있기 때문이다.
   // (`tests/store/api.test.ts` 의 '픽스처' 절이 표에 직접 묻는다.)
+  // **`engine_settings` 도 넣는다** (011). 단일 행 표라 CASCADE 가 안 데려간다 —
+  // 빠뜨리면 앞 테스트의 엔진 설정이 다음 테스트에 살아남고, 그건 픽스처가 만드는
+  // 거짓이다. `certificates`·`tls_policies` 를 이름으로 적어야 했던 것과 같은 이유다.
   await db.query(`TRUNCATE audit, operations, plans, changesets, http_routes,
                            passthrough_routes, backends, listeners, pools,
                            sni_certificate_bindings, certificates, tls_policies,
+                           engine_settings,
                            leadership, config_head, config_revisions
                   RESTART IDENTITY CASCADE`);
   await db.query(`ALTER SEQUENCE config_revision_seq RESTART 1`);

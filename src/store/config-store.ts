@@ -40,7 +40,51 @@ export const RENDERER_VERSION = 'v0.1';
 
 export type ResourceKind =
   | 'pool' | 'backend' | 'listener' | 'httpRoute' | 'passthroughRoute'
-  | 'certificate' | 'tlsPolicy' | 'sniBinding';
+  | 'certificate' | 'tlsPolicy' | 'sniBinding'
+  /**
+   * 전역 엔진 설정. **리소스가 아니다** — key 가 없고 하나뿐이다 (검수 B-01).
+   *
+   * 그래도 같은 patch 통로로 넣는다. 별도 엔드포인트를 만들면 그 경로만 changeset ·
+   * plan · 감사 · 롤백 밖에 살게 되고, §5.3 이 "모든 쓰기는 changeset 을 지난다" 고
+   * 한 이유가 그것이다. key 는 `'engine'` 하나로 고정한다.
+   */
+  | 'engine';
+
+/** `engine` 은 하나뿐이라 key 가 고정이다. */
+export const ENGINE_KEY = 'engine';
+
+/**
+ * 리소스 `key` 의 문법 (검수 S-01).
+ *
+ * 왜 이렇게 좁은가 — **key 가 파일 경로가 되기 때문이다.** 인증서는
+ * `certs/<key>/<version>/privkey.pem` 으로 세대에 들어가고(`certPaths`),
+ * ACME 는 `acme-<key>` 를 SecretStore 이름으로 쓴다. 그래서 `FsSecretStore` 가 이름에
+ * 이미 쓰는 규칙(`^[A-Za-z0-9._-]+$`)과 **같은 문자 집합**으로 맞춘다 — 안 맞추면
+ * "모델에는 저장되는데 ACME 가 그 인증서만 발급 못 하는" 조합이 생긴다.
+ *
+ * 선두를 영숫자로 제한하는 것은 `.`·`..`·`-flag` 를 한 번에 막기 위해서다.
+ * 63 자는 DNS 라벨과 같은 한도다 — 이름이 그보다 길면 읽는 사람이 없다.
+ */
+const KEY_SYNTAX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+
+/**
+ * **쓰기 경계에서만** 문법을 본다.
+ *
+ * ⚠️ `decodeModel` 에 넣으면 안 된다. `modelAt` 이 `config_revisions.model` 스냅샷을
+ * 그 해독기로 읽으므로, 문법을 좁히면 규칙을 벗어난 key 가 든 **옛 리비전이 해독
+ * 불가**가 되고 그 리비전으로 **롤백할 수 없다.** v0.6 이 컬렉션을 더했을 때 옛 리비전
+ * 롤백이 `undefined.map` 으로 죽었고 그래서 `modelAt` 이 캐스팅 대신 해독으로 바뀌었다 —
+ * 해독기를 좁히는 것은 그 수정의 정반대 방향이다.
+ *
+ * 이미 저장된 나쁜 key 는 `materializeGeneration` 이 파일시스템 층에서 막는다.
+ */
+function assertKeySyntax(kind: ResourceKind, key: string): void {
+  if (KEY_SYNTAX.test(key)) return;
+  throw new StoreError(400, 'malformed',
+    `${kind} 의 key 가 문법에 안 맞는다: ${JSON.stringify(key)} — `
+    + '영숫자로 시작하고 영숫자·점·밑줄·하이픈만, 63 자까지다 '
+    + '(key 는 인증서 파일 경로가 된다)');
+}
 
 export type PatchOp =
   | { op: 'put'; kind: ResourceKind; key: string; body: unknown }
@@ -145,7 +189,7 @@ async function readModel(c: Queryable): Promise<Model> {
   }));
 
   const listeners = (await c.query(
-    `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs,
+    `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
             dp.key AS default_pool, hp.key AS http_default_pool, sp.key AS sni_pool,
             tp.key AS tls_policy, tc.key AS tls_default_certificate
@@ -187,6 +231,9 @@ async function readModel(c: Queryable): Promise<Model> {
           policy: text(r, 'tls_policy'),
           defaultCertificate: text(r, 'tls_default_certificate'),
         },
+        // 011 이 더했다. `undefined` 와 `false` 는 다르다 — 전자는 "안 정했다"(기본값
+        // 켬), 후자는 "끄라고 했다" 다. 전에는 둘을 구분할 자리가 아예 없었다 (B-01).
+        ...(r['http2'] === null || r['http2'] === undefined ? {} : { http2: bool(r, 'http2') }),
         ...(action !== undefined ? { http: { defaultAction: action } } : {}),
       };
     }
@@ -271,13 +318,24 @@ async function readModel(c: Queryable): Promise<Model> {
   });
 
   const tlsPolicies = (await c.query(
-    `SELECT key, min_version, max_version FROM tls_policies ORDER BY key`,
+    `SELECT key, min_version, max_version, sni_host_mismatch, cipher_policy, hsts
+       FROM tls_policies ORDER BY key`,
   )).rows.map((r): TlsPolicy => ({
     key: text(r, 'key'),
     minVersion: text(r, 'min_version') as TlsPolicy['minVersion'],
     ...(maybeText(r, 'max_version') !== undefined
       ? { maxVersion: text(r, 'max_version') as TlsPolicy['minVersion'] }
       : {}),
+    // 011 이 더한 셋. **전에는 해독기가 받고 렌더러가 읽는데 그 사이가 없었다** (B-01).
+    ...(maybeText(r, 'sni_host_mismatch') !== undefined
+      ? { sniHostMismatch: text(r, 'sni_host_mismatch') as NonNullable<TlsPolicy['sniHostMismatch']> }
+      : {}),
+    ...(maybeText(r, 'cipher_policy') !== undefined
+      ? { cipherPolicy: text(r, 'cipher_policy') as NonNullable<TlsPolicy['cipherPolicy']> }
+      : {}),
+    ...(r['hsts'] === null || r['hsts'] === undefined
+      ? {}
+      : { hsts: r['hsts'] as NonNullable<TlsPolicy['hsts']> }),
   }));
 
   const sniBindings = (await c.query(
@@ -303,7 +361,21 @@ async function readModel(c: Queryable): Promise<Model> {
     };
   });
 
+  /**
+   * 전역 엔진 설정 (011). **행이 없으면 키 자체가 없다** — `{}` 로 채우면 "안 정했다" 와
+   * "빈 객체로 정했다" 가 같아지고, 그 구분이 §4.10 의 시간 보호를 켜고 끈다.
+   */
+  const engineRow = (await c.query(
+    'SELECT worker_shutdown_timeout_s FROM engine_settings WHERE only_one',
+  )).rows[0];
+  const shutdown = engineRow === undefined
+    ? undefined : maybeText(engineRow, 'worker_shutdown_timeout_s');
+  const engine = engineRow === undefined
+    ? undefined
+    : { ...(shutdown === undefined ? {} : { workerShutdownTimeoutS: Number(shutdown) }) };
+
   return {
+    ...(engine === undefined ? {} : { engine }),
     listeners, httpRoutes, passthroughRoutes, pools, backends,
     certificates, tlsPolicies, sniBindings,
   };
@@ -345,6 +417,14 @@ const obj = (v: unknown): Record<string, unknown> =>
 
 async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string): Promise<void> {
   if (op.op === 'delete') {
+    // `engine` 은 key 로 안 지운다 — 컬럼이 없다. 단일 행을 통째로 비운다.
+    if (op.kind === 'engine') {
+      const r = await c.query('DELETE FROM engine_settings WHERE only_one');
+      if (r.rowCount === 0) {
+        throw new StoreError(409, 'not_found', '엔진 설정이 없다');
+      }
+      return;
+    }
     const table = {
       pool: 'pools', backend: 'backends', listener: 'listeners',
       httpRoute: 'http_routes', passthroughRoute: 'passthrough_routes',
@@ -419,9 +499,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
                                 http_default_reject,on_unmatched_sni_pool,on_unmatched_sni_cls,
                                 on_unmatched_sni_reject,preread_timeout_s,
                                 default_pool_id,default_pool_cls,
-                                tls_policy_id,tls_default_cert_id,created_by,updated_by,revision)
+                                tls_policy_id,tls_default_cert_id,http2,
+                                created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 $18,$19,$20,$20,$21)
+                 $18,$19,$22,$20,$20,$21)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
@@ -437,6 +518,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            default_pool_id=EXCLUDED.default_pool_id, default_pool_cls=EXCLUDED.default_pool_cls,
            tls_policy_id=EXCLUDED.tls_policy_id,
            tls_default_cert_id=EXCLUDED.tls_default_cert_id,
+           http2=EXCLUDED.http2,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
@@ -447,7 +529,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           spool?.[0] ?? null, spool?.[1] ?? null, sni === 'reject' ? true : null,
           protocol === 'tls_passthrough' ? b['prereadTimeoutS'] ?? null : null,
           dpool?.[0] ?? null, dpool?.[1] ?? null,
-          tls?.policy ?? null, tls?.cert ?? null, by, revision],
+          tls?.policy ?? null, tls?.cert ?? null, by, revision,
+          // $22 — **https 에만.** 다른 프로토콜에서는 NULL 로 못 박는다(DB 도 같은
+          // CHECK 을 건다). 안 정한 것과 끄라고 한 것을 구분하려면 boolean|null 이어야 한다.
+          protocol === 'https' ? b['http2'] ?? null : null],
       );
       return;
     }
@@ -525,14 +610,32 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
     case 'tlsPolicy':
       await c.query(
         `INSERT INTO tls_policies (id,key,name,min_version,max_version,
+                                   sni_host_mismatch,cipher_policy,hsts,
                                    created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$5,$6)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$8,$9)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, min_version=EXCLUDED.min_version,
            max_version=EXCLUDED.max_version,
+           sni_host_mismatch=EXCLUDED.sni_host_mismatch,
+           cipher_policy=EXCLUDED.cipher_policy, hsts=EXCLUDED.hsts,
            version=tls_policies.version+1, updated_at=now(),
            updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
-        [op.key, b['name'] ?? op.key, b['minVersion'], b['maxVersion'] ?? null, by, revision],
+        [op.key, b['name'] ?? op.key, b['minVersion'], b['maxVersion'] ?? null,
+          b['sniHostMismatch'] ?? null, b['cipherPolicy'] ?? null,
+          b['hsts'] === undefined ? null : JSON.stringify(b['hsts']),
+          by, revision],
+      );
+      return;
+
+    case 'engine':
+      // **키가 하나뿐이다.** 해독기가 이미 모양을 봤다(`decodeEngineSettings`).
+      await c.query(
+        `INSERT INTO engine_settings (only_one, worker_shutdown_timeout_s, updated_by, revision)
+         VALUES (true,$1,$2,$3)
+         ON CONFLICT (only_one) DO UPDATE SET
+           worker_shutdown_timeout_s=EXCLUDED.worker_shutdown_timeout_s,
+           updated_at=now(), updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
+        [b['workerShutdownTimeoutS'] ?? null, by, revision],
       );
       return;
 
@@ -978,6 +1081,9 @@ export class ConfigStore {
       await c.query(`DELETE FROM pools`);
       await c.query(`DELETE FROM certificates`);
       await c.query(`DELETE FROM tls_policies`);
+      // **엔진 설정도 되돌린다** (011). 안 지우면 engine 이 없던 리비전으로 롤백해도
+      // 옛 값이 그대로 남는다 — 그건 롤백이 아니다.
+      await c.query(`DELETE FROM engine_settings`);
       for (const op of opsOf(model)) await applyOp(c, op, target, by).catch(translate);
 
       // 되돌린 결과가 지금도 유효한지 **다시 본다.** 엔진 capability 나 검증 규칙이
@@ -1064,6 +1170,9 @@ function opsOf(model: Model): PatchOp[] {
   // 참조하므로, 참조되는 쪽이 먼저 와야 한다. 뒤집히면 롤백 재적용이
   // `unknown_reference` 로 죽는다 — 원래 모델은 멀쩡한데 되돌리기만 실패한다.
   return [
+    // 엔진 설정은 아무것도 참조하지 않는다 — 순서는 자유지만 맨 앞에 둔다(만들 때
+    // 먼저, 지울 때 마지막). 없으면 op 자체가 없다.
+    ...(model.engine === undefined ? [] : [put('engine', ENGINE_KEY, model.engine)]),
     ...model.pools.map((p) => put('pool', p.key, p)),
     ...model.backends.map((b) => put('backend', b.key, b)),
     ...model.certificates.map((c) => put('certificate', c.key, c)),
@@ -1077,11 +1186,26 @@ function opsOf(model: Model): PatchOp[] {
 
 /** PATCH 시점의 모양 검사. 여기서 걸리는 것은 **400** 이다 (타입·구문). */
 function shapeCheck(op: PatchOp): void {
+  // **삭제도 본다.** 문법 밖의 key 로는 애초에 만들 수 없으니 지울 것도 없다 —
+  // 그런데 여기를 열어 두면 `DELETE FROM ... WHERE key = '../x'` 가 그대로 나간다.
+  if (op.kind !== 'engine') assertKeySyntax(op.kind, op.key);
   if (op.op === 'delete') return;
   const empty: Model = {
     listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
     certificates: [], tlsPolicies: [], sniBindings: [],
   };
+  // `engine` 은 배열이 아니라 단일 객체다 — 나머지와 감싸는 모양이 다르다.
+  if (op.kind === 'engine') {
+    if (op.key !== ENGINE_KEY) {
+      throw new StoreError(400, 'malformed',
+        `engine 의 key 는 '${ENGINE_KEY}' 하나다 (받은 것: '${op.key}')`);
+    }
+    const decoded = decodeModel({ ...empty, engine: obj(op.body) });
+    if (!decoded.ok) {
+      throw new StoreError(400, 'malformed', 'engine 설정의 모양이 잘못됐다', decoded.issues);
+    }
+    return;
+  }
   const key = {
     pool: 'pools', backend: 'backends', listener: 'listeners',
     httpRoute: 'httpRoutes', passthroughRoute: 'passthroughRoutes',

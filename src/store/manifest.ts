@@ -11,16 +11,26 @@
  * 커밋되고, 두 번째 import 가 같은 결과가 된다는 말을 할 수 없다.
  */
 import type { Model } from '../model/provisional.js';
-import type { PatchOp, ResourceKind } from './config-store.js';
+import { ENGINE_KEY, type PatchOp, type ResourceKind } from './config-store.js';
 
 export const MANIFEST_SCHEMA = '1' as const;
 
+/**
+ * **만드는 순서다.** 참조되는 쪽이 먼저다 — 지울 때는 이 순서를 뒤집는다(§B-03).
+ *
+ * `engine` 은 아무것도 참조하지 않지만 맨 앞에 둔다: 만들 때 먼저, 지울 때 마지막.
+ */
 const KINDS: readonly ResourceKind[] = [
+  'engine',
   'pool', 'backend', 'certificate', 'tlsPolicy', 'listener',
   'httpRoute', 'passthroughRoute', 'sniBinding',
 ];
 
-const BAG: Record<ResourceKind, keyof Model> = {
+/**
+ * 리소스 종류 → 모델의 컬렉션. **`engine` 은 여기 없다** — 배열이 아니라 단일 객체라
+ * `resourcesOf` 가 따로 다룬다.
+ */
+const BAG: Record<Exclude<ResourceKind, 'engine'>, keyof Model> = {
   pool: 'pools',
   backend: 'backends',
   certificate: 'certificates',
@@ -70,6 +80,15 @@ function specOf(row: object): Record<string, unknown> {
 function resourcesOf(model: Model): ManifestResource[] {
   const out: ManifestResource[] = [];
   for (const kind of KINDS) {
+    // **엔진 설정은 컬렉션이 아니다.** 매니페스트에는 key 고정 리소스 하나로 실는다 —
+    // 최상위 필드를 새로 만들면 `parseManifest` 의 "모르는 필드 거부" 를 손봐야 하고,
+    // import 의 차이 계산도 이 자리 하나만 특별해진다.
+    if (kind === 'engine') {
+      if (model.engine !== undefined) {
+        out.push({ kind, key: ENGINE_KEY, spec: { ...model.engine } });
+      }
+      continue;
+    }
     const bag = model[BAG[kind]];
     if (!Array.isArray(bag)) continue;
     for (const row of bag) {
