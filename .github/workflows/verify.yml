@@ -41,6 +41,16 @@ jobs:
     runs-on: arc-mack-erel-barycenter
     # 스파이크 다섯 개가 각각 컨테이너를 세우고 e2e 가 nginx·PG 를 띄운다.
     timeout-minutes: 60
+    # **dind 경계.** ARC 러너에서 도커 데몬은 옆 컨테이너(dind sidecar)다. 따라서
+    # `docker run -v <호스트경로>` 의 왼쪽은 **러너가 아니라 dind 의 파일 시스템**에서
+    # 풀린다 — 러너의 `/tmp` 에 쓴 것을 마운트하면 컨테이너 안은 **빈 디렉터리**다.
+    # 골든·스파이크가 `mkdtemp`/`mktemp -d` 로 만든 prefix 를 nginx 에 물리므로
+    # 그대로 두면 `open() "/prefix/conf/nginx.conf" failed (2)` 로 죽는다(실측,
+    # run 32456859777). `_work` 볼륨은 러너와 dind 가 **같은 경로로** 함께 붙이므로
+    # 임시 뿌리를 그 아래(`runner.temp`)로 옮긴다. `${{ github.workspace }}` 를 쓰면
+    # 재현물 게이트의 `git worktree`/`status` 에 잡히므로 쓰지 않는다.
+    env:
+      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -111,6 +121,9 @@ jobs:
   quickstart:
     runs-on: arc-mack-erel-barycenter
     timeout-minutes: 30
+    # verify 잡과 같은 이유다 — 위 주석 참조.
+    env:
+      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -118,6 +131,18 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+
+      # **Compose 는 러너 이미지에 없다.** ARC 러너(`ghcr.io/actions/actions-runner`)는
+      # dind 모드에서 docker **CLI 만** 얻는다 — compose 도 buildx 도 플러그인이라
+      # 따라오지 않는다. 없는 채로 `docker compose -f ...` 를 부르면 CLI 가 명령 이름
+      # 대신 플래그를 먼저 물고 `unknown shorthand flag: 'f' in -f` 로 죽는다(실측,
+      # run 32553768528). 러너 이미지의 전역 상태에 CI 결과가 좌우되지 않도록
+      # **버전을 고정해 잡 안에서 깐다** — 로컬 개발 머신과 같은 v5.3.1 이다.
+      - name: Compose 플러그인 준비
+        uses: docker/setup-compose-action@v2
+        with:
+          version: v5.3.1
+
       - run: ./scripts/quickstart.sh --clean
       - name: 실패 시 데이터 플레인 로그
         if: failure()

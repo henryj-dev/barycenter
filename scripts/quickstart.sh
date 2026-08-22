@@ -27,6 +27,16 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+# **`docker` 가 있다고 `docker compose` 가 있는 것은 아니다.** compose 는 CLI 에
+# 딸린 플러그인이라 따로 없을 수 있고, 없을 때 docker 는 "그런 명령이 없다" 대신
+# `unknown shorthand flag: 'f' in -f` 라고 답한다 — 플래그를 먼저 물기 때문이다.
+# 위의 `curl` 사례와 같은 부류다: **없는 것을 없다고 말하게 한다.**
+if ! docker compose version >/dev/null 2>&1; then
+  echo "  FAIL  docker compose 플러그인이 없다 (docker CLI 는 있다)"
+  echo "        설치: https://docs.docker.com/compose/install/linux/"
+  exit 1
+fi
+
 export BARY_URL=http://127.0.0.1:8088
 export BARY_TOKEN=dev-token
 
