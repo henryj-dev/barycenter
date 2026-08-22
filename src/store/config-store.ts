@@ -205,6 +205,15 @@ export type Impact = {
     moved: { listener: string; key: string; from: number | null; to: number | null }[];
     warnings: { kind: string; listener: string; routes: string[]; message: string }[];
   };
+  /**
+   * 대상 엔진이 **못 하는 것** (§5.4 `capability_warnings` · §7.6).
+   *
+   * 여기 오는 것은 "막히는 조합" 이 아니다 — 그건 검증기가 422 로 튕긴다. 여기 오는 것은
+   * **조용히 덜 되는 것**이다. §4.9 가 h2 기본값에 대해 *"기본값이 못 걸리는 것은 조용히
+   * 넘어가지만 그건 status 의 capability 로 보인다"* 고 적어 뒀는데, 그 API 는 없다.
+   * plan 이 그 자리다 — 어차피 여기가 "이 변경이 이 엔진에서 어떻게 되는가" 를 답하는 곳이다.
+   */
+  capabilityWarnings: { kind: string; message: string }[];
   socketChanges: { added: string[]; removed: string[] };
   planes: ('http' | 'stream')[];
   confDiff: { before: number; after: number };
@@ -1662,6 +1671,49 @@ function routeOrderChanges(before: Model, after: Model): Impact['routeOrderChang
   return { moved, warnings };
 }
 
+/**
+ * 이 엔진에서 **조용히 덜 되는 것** (§5.4 · §7.6).
+ *
+ * 막히는 조합은 여기 안 온다 — 검증기가 422 로 튕긴다. 모델은 표현할 수 있고 엔진이
+ * 못 해서 렌더가 그냥 안 내는 것들만 모은다. 그런 것은 **켰다는 사실만 남고 아무 일도
+ * 안 일어나기** 때문에, 이 저장소가 반복해서 잡아온 모양이다.
+ */
+function capabilityWarningsOf(model: Model, caps: RenderCapabilities): Impact['capabilityWarnings'] {
+  const out: Impact['capabilityWarnings'] = [];
+
+  if (caps.httpLua !== true && caps.streamLua !== true && model.pools.length > 0) {
+    out.push({
+      kind: 'no_membership_plane',
+      message: '이 엔진에는 lua 가 없다 — 백엔드가 conf 에 렌더되므로 백엔드 하나를 '
+        + '옮겨도 세대 전환과 reload 가 난다 (§7.3). 드레인·헬스 반영도 같은 대가를 진다',
+    });
+  }
+
+  if (caps.http2 !== true) {
+    const https = model.listeners.filter((l) => l.protocol === 'https' && l.enabled);
+    // **기본값이 켜짐이라 여기가 조용하다.** 명시적으로 켠 것은 검증기가 이미 막는다.
+    const implicit = https.filter((l) => l.protocol === 'https' && l.http2 === undefined);
+    if (implicit.length > 0) {
+      out.push({
+        kind: 'no_http2',
+        message: `${implicit.map((l) => l.key).join(', ')} 는 h2 가 기본인데 이 엔진은 `
+          + '`http2 on;` 을 못 낸다 (§4.9 — 모듈 또는 core 1.25.1+ 없음). '
+          + 'ALPN 이 http/1.1 로 떨어진다',
+      });
+    }
+  }
+
+  if (caps.sslConfCommand !== true && model.tlsPolicies.some((p) => p.cipherPolicy !== undefined)) {
+    out.push({
+      kind: 'no_ssl_conf_command',
+      message: '`ssl_conf_command` 가 없다 — TLS1.3 ciphersuite 를 정할 길이 그것뿐이라 '
+        + '(§4.6) 1.3 쪽은 엔진 기본값으로 협상된다. `ssl_ciphers` 는 1.3 에 안 걸린다',
+    });
+  }
+
+  return out;
+}
+
 function impactOf(
   before: { model: Model; conf: string },
   after: { model: Model; rendered: RenderedConfig },
@@ -1718,6 +1770,7 @@ function impactOf(
     sessionImpact: sessionImpactOf(before.model, model, affected, socketsRemoved, requiresReload),
     certificateChanges: certificateChanges(before.model, model, facts),
     routeOrderChanges: routeOrderChanges(before.model, model),
+    capabilityWarnings: capabilityWarningsOf(model, caps),
     socketChanges: {
       added: [...sockets].filter((s) => !beforeSockets.has(s)).sort(),
       removed: socketsRemoved,

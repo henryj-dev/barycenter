@@ -126,6 +126,50 @@ describe('§5.4 topologyEpochChange — 이 전환이 좌표를 옮기는가', (
   });
 });
 
+describe('§5.4 capabilityWarnings — 엔진이 못 하는 것을 조용히 넘기지 않는다', () => {
+  const kinds = (impact: { capabilityWarnings: { kind: string }[] }): string[] =>
+    impact.capabilityWarnings.map((w) => w.kind);
+
+  it('멤버십 평면이 없으면 백엔드 변경이 reload 를 부른다고 말한다', async () => {
+    await commitAll(two);
+    const plan = await planOf([
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.9', port: 80, weight: 1 }),
+    ]);
+    expect(kinds(plan.impact)).toContain('no_membership_plane');
+  });
+
+  it('멤버십 평면이 있으면 그 경고를 안 낸다', async () => {
+    const s = new ConfigStore(db, { streamRealip: false, httpLua: true, streamLua: true });
+    const cs = await s.createChangeset((await s.head()).revision, 't');
+    await s.patchChangeset(cs, two, 't');
+    const plan = await s.plan(cs, 't');
+    expect(kinds(plan.impact)).not.toContain('no_membership_plane');
+  });
+
+  it('h2 를 못 내는 엔진에서 https 리스너가 h1 로 선다고 말한다', async () => {
+    // §4.9 — 명시 `true` 는 검증기가 막지만 **기본값은 조용히 넘어간다.** 설계는 그것이
+    // status 의 capability 로 보인다고 적어 뒀는데 그 API 가 없다. plan 이 그 자리다.
+    const digests = {
+      chainDigest: `sha256:${'a'.repeat(64)}`, keyDigest: `sha256:${'b'.repeat(64)}`,
+    };
+    const s = new ConfigStore(db, { streamRealip: false });
+    const cs = await s.createChangeset((await s.head()).revision, 't');
+    await s.patchChangeset(cs, [
+      PUT('pool', 'web', { protocolClass: 'http', algorithm: 'round_robin' }),
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.1', port: 80, weight: 1 }),
+      PUT('certificate', 'site', { materialRef: `store://site@${'a'.repeat(32)}`, ...digests }),
+      PUT('tlsPolicy', 'pol', { minVersion: '1.2' }),
+      PUT('listener', 'secure', {
+        protocol: 'https', bind: '0.0.0.0', port: 443, enabled: true,
+        tls: { policy: 'pol', defaultCertificate: 'site' },
+        http: { defaultAction: { pool: 'web' } },
+      }),
+    ], 't');
+    const plan = await s.plan(cs, 't');
+    expect(kinds(plan.impact)).toContain('no_http2');
+  });
+});
+
 describe('§5.4 routeOrderChanges — 엔진이 고르는 순서와 그림자', () => {
   const ROUTE = (key: string, host: string, priority: number, pathPrefix?: string): PatchOp =>
     PUT('httpRoute', key, {
