@@ -144,13 +144,32 @@ export function importPatch(current: Model, manifest: Manifest, mode: ImportMode
     }
   }
   if (mode === 'replace') {
-    for (const [id, _spec] of have) {
-      if (want.has(id)) continue;
-      const sep = id.indexOf('\0');
-      const kind = id.slice(0, sep) as ResourceKind;
-      const key = id.slice(sep + 1);
-      ops.push({ op: 'delete', kind, key });
-    }
+    /**
+     * **참조하는 쪽부터 지운다** (검수 B-03).
+     *
+     * `have` 는 `KINDS` 순(풀 → 백엔드 → … → 리스너 → 라우트)으로 채워지는데, 그건
+     * **만들 때의 순서**다. 지울 때는 반대여야 한다 — DDL 이 그렇게 걸려 있다:
+     *
+     *   listeners.default_pool_id → pools     ON DELETE RESTRICT
+     *   http_routes.listener_id   → listeners ON DELETE RESTRICT
+     *   backends.pool_id          → pools     ON DELETE CASCADE
+     *
+     * 그대로 두면 리소스를 지우는 `replace` import 와 `POST /restore` 가 첫 delete 에서
+     * 422 로 죽는다. CASCADE 쪽은 더 조용하다 — 풀을 먼저 지우면 백엔드가 딸려 가고,
+     * 그 다음 백엔드 delete 가 "없다" 로 409 를 낸다.
+     *
+     * `rollbackTo` 는 이미 라우트 → 리스너 → 풀 순서로 지운다. **같은 규칙을 두 자리에
+     * 적는 셈이라, 한쪽이 틀려 있었다.**
+     */
+    const rank = new Map(KINDS.map((k, i) => [k, i]));
+    const doomed = [...have.keys()]
+      .filter((id) => !want.has(id))
+      .map((id) => {
+        const sep = id.indexOf('\0');
+        return { kind: id.slice(0, sep) as ResourceKind, key: id.slice(sep + 1) };
+      })
+      .sort((a, b) => (rank.get(b.kind) ?? 0) - (rank.get(a.kind) ?? 0));
+    for (const { kind, key } of doomed) ops.push({ op: 'delete', kind, key });
   }
   return ops;
 }
