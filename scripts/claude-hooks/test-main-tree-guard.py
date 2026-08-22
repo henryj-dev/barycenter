@@ -29,7 +29,7 @@ WT = os.path.join(tempfile.gettempdir(),
 _saved = open(OWNERS, "rb").read() if os.path.exists(OWNERS) else None
 
 # 레포 안에 **다른 저장소**가 중첩된 상황을 재현하는 픽스처. 여기서 만들고 끝에 지운다.
-# ⚠️ 있는 디렉토리(`target/idp` 같은 sub-checkout)를 골라 쓰면 **그 레포에 그것이 있을 때만**
+# ⚠️ 이미 있는 디렉토리(하위에 체크아웃된 남의 저장소 등)를 골라 쓰면 **그 레포에 그것이 있을 때만**
 #    검사가 성립한다 — 없는 레포에서는 통과 케이스 2건이 조용히 실패한다(이식하며 실측).
 #    검사는 자기가 필요로 하는 모양을 **자기가 세워야** 어느 레포에서도 같은 것을 잰다.
 NESTED = "_guard_probe_foreign"
@@ -82,7 +82,7 @@ CASES = [
     ("워크트리에서 commit",                 "S2", WT,     "Bash", {"command": "git commit -m x"},           "ALLOW"),
     ("워크트리에서 push",                   "S2", WT,     "Bash", {"command": "git push origin HEAD:v1.1"}, "ALLOW"),
     ("git 밖에서는 관여 안 함",              "S2", "/tmp", "Edit", {"file_path": "/tmp/zz.md"},              "ALLOW"),
-    # 레포 안에 중첩된 **남의 저장소**(sub-checkout 등)는 우리 규칙 밖이다. 2026-08-14 에 `cd target/idp && git merge` 가 막혔다 —
+    # 레포 안에 중첩된 **남의 저장소**(sub-checkout 등)는 우리 규칙 밖이다. 2026-08-14 에 `cd <중첩 저장소> && git merge` 가 막혔다 —
     # ① 훅이 받는 cwd 는 세션 cwd(메인)라 `cd` 를 안 읽으면 대상을 틀리게 잡고
     # ② 「git-dir == common-dir」로 판정하면 **어느 저장소든** 메인 트리가 참이 된다.
     ("중첩 저장소로 cd 후 git merge",        "S1", MAIN,   "Bash", {"command": f"cd {FOREIGN}\ngit merge --no-edit upstream/main"}, "ALLOW"),

@@ -15,10 +15,11 @@ metrics 와 풀/백엔드 한 줄 읽기를 연다. 모르는 이름은 안 부�
 전환을 이어받는다. changeset 은 discard·reopen 이 있다. apply 는 아니다.
 websocket 은 HTTP proxy 에서만 켠다. 인증서 패치에 개인키가 없다.
 
-CI Linux 는 OpenSSL 3 출력 · 바인드 마운트 uid 0 · Lua 밸런서의 호스트 이름 거절에서
-깨졌다. 멤버십 슬롯은 넣기 전에 IP 로 푼다. 그 다음 남은 둘은 호스트가 uid 0
-error.log 에 쓰려 한 자리와, source_ip_hash 잔여 상태에서 B12 만 기대한 재시작
-테스트다. 씨앗은 컨테이너 안에서 깔고, 재시작은 멤버십만 :12 로 옮긴 뒤 잰다.
+CI 는 `.github/workflows/verify.yml` 이고 **`scripts/verify.sh` 를 그대로 돌린다** — 자기
+단계 목록을 따로 들지 않는다. 갈라지면 어느 쪽이 계약인지 아무도 모른다.
+
+⚠️ `spike/s12` 가 **간헐적으로** 빨갛다 (크래시 지점 38 개 중 #25 `reload:after`). 단독
+재실행은 통과한다. 닫힌 것이 아니라 열린 검수 항목이다 — `docs/audit-2026-08-22-todo.md`.
 
 ---
 

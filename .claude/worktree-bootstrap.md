@@ -4,7 +4,10 @@
 심링크된다. **실측으로 안 걸린 적이 있으니** 없으면 아래를 손으로 건다.
 
 ```sh
-ls -d node_modules || ln -s /Users/henry/github/mack-erel/barycenter/node_modules node_modules
+# 메인 트리 경로는 워크트리 안에서 git 에게 묻는다 — 사람마다 다르고,
+# 적어 두면 그 사람의 홈 디렉터리 구조가 문서에 박힌다.
+main=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+ls -d node_modules || ln -s "$main/node_modules" node_modules
 ```
 
 의존성이 메인과 어긋나면(package-lock.json 을 건드리는 작업) 심링크 대신 자기 것을 만든다:
