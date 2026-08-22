@@ -47,10 +47,11 @@ jobs:
     # 골든·스파이크가 `mkdtemp`/`mktemp -d` 로 만든 prefix 를 nginx 에 물리므로
     # 그대로 두면 `open() "/prefix/conf/nginx.conf" failed (2)` 로 죽는다(실측,
     # run 32456859777). `_work` 볼륨은 러너와 dind 가 **같은 경로로** 함께 붙이므로
-    # 임시 뿌리를 그 아래(`runner.temp`)로 옮긴다. `${{ github.workspace }}` 를 쓰면
+    # 임시 뿌리를 그 아래(`$RUNNER_TEMP`)로 옮긴다. `github.workspace` 를 쓰면
     # 재현물 게이트의 `git worktree`/`status` 에 잡히므로 쓰지 않는다.
-    env:
-      TMPDIR: ${{ runner.temp }}
+    #
+    # 잡 수준 `env:` 에는 못 쓴다 — `runner` 컨텍스트가 거기서는 안 보인다(워크플로
+    # 파싱 자체가 거부된다, run 32555690440). 도커를 쓰는 스텝에 직접 건다.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,6 +72,8 @@ jobs:
           docker pull docker.io/library/postgres:17-alpine
 
       - run: ./scripts/verify.sh
+        env:
+          TMPDIR: ${{ runner.temp }}   # dind 경계 — 위 주석 참조
 
       # 실패했을 때 남은 컨테이너의 로그를 남긴다. CI 의 실패는 재현이 어려우므로
       # 그때 손에 있는 것을 다 챙긴다.
@@ -121,9 +124,6 @@ jobs:
   quickstart:
     runs-on: arc-mack-erel-barycenter
     timeout-minutes: 30
-    # verify 잡과 같은 이유다 — 위 주석 참조.
-    env:
-      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -144,6 +144,8 @@ jobs:
           version: v5.3.1
 
       - run: ./scripts/quickstart.sh --clean
+        env:
+          TMPDIR: ${{ runner.temp }}   # dind 경계 — verify 잡의 주석 참조
       - name: 실패 시 데이터 플레인 로그
         if: failure()
         run: docker compose -f deploy/docker-compose.yml logs --tail 100 || true
