@@ -1,4 +1,11 @@
 # dependencies
+#
+# **슬래시 없이도 적는다.** 워크트리 부트스트랩은 `node_modules` 를 메인 트리로
+# 심링크하라고 시키는데(`.claude/worktree-bootstrap.md`), `node_modules/` 는 디렉토리만
+# 잡고 **심링크는 안 잡는다.** 그래서 워크트리에서 `git add -A` 하면 심링크가 커밋에
+# 딸려 들어간다 — 실제로 세 커밋에 들어갔고, `scripts/pinned.mjs` 가 부모 트리를 세울
+# 때 그 심링크가 먼저 생겨 `EEXIST` 로 게이트가 죽는다.
+node_modules
 node_modules/
 .pnp.*
 .yarn/*
