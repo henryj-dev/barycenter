@@ -141,6 +141,20 @@ export type PlanRecord = {
  */
 export type ListenerChange = 'added' | 'removed' | 'changed';
 
+/**
+ * 기존 세션이 어떻게 되는가 (§5.4 `session_impact`).
+ *
+ * | | 뜻 |
+ * |---|---|
+ * | `none` | 이 프로토콜은 안 건드린다 |
+ * | `new_only` | 기존 것은 그대로 가고, 새 연결·새 요청부터 바뀐다 |
+ * | `may_reset` | 기존 것이 끊길 수 있다 |
+ *
+ * **`none` 은 "모른다" 가 아니다.** 영향받은 리스너가 그 프로토콜에 하나도 없을
+ * 때만 낸다 — §6.3 이 관측 못 한 것과 나쁜 것을 가른 것과 같은 규칙이다.
+ */
+export type SessionEffect = 'none' | 'new_only' | 'may_reset';
+
 /** §5.4 — plan 이 보여주는 것. */
 export type Impact = {
   requiresReload: boolean;
@@ -160,6 +174,7 @@ export type Impact = {
   affectedListeners: {
     key: string; protocol: string; bind: string; port: number; change: ListenerChange;
   }[];
+  sessionImpact: { protocol: string; effect: SessionEffect; why: string }[];
   socketChanges: { added: string[]; removed: string[] };
   planes: ('http' | 'stream')[];
   confDiff: { before: number; after: number };
@@ -1473,6 +1488,69 @@ function affectedListeners(before: Model, after: Model): Impact['affectedListene
   return out;
 }
 
+/**
+ * 프로토콜별 기존 세션 영향 (§5.4 `session_impact`).
+ *
+ * **재 본 사실 위에만 세운다.** 셋을 쓴다:
+ *
+ *   · 소켓이 사라지면 그 위의 연결·세션은 끊긴다. bind 가 없어지므로 다른 답이 없다.
+ *   · `worker_shutdown_timeout` 이 걸려 있으면 HUP 뒤 in-flight 가 **응답 없이**
+ *     죽는다 — §4.10 실측(`curl exit=52`, 본문 0 바이트). 502 도 부분 응답도 아니라
+ *     클라이언트는 네트워크 장애와 구분하지 못한다.
+ *   · 그 외의 reload 는 기존 것을 기다려 준다. 옛 워커가 in-flight 를 끝내고(P8),
+ *     유휴 keepalive 만 닫힌다. 즉 **새 트래픽부터**다.
+ *
+ * 안 건드린 프로토콜은 `none` 이다. 전부에 같은 값을 실으면 그 줄을 안 읽게 된다 —
+ * `affectedListeners` 가 전부를 싣던 것과 같은 실수다.
+ */
+function sessionImpactOf(
+  before: Model, after: Model,
+  affected: Impact['affectedListeners'],
+  removedSockets: readonly string[],
+  requiresReload: boolean,
+): Impact['sessionImpact'] {
+  const protocols = [...new Set(
+    [...before.listeners, ...after.listeners].map((l) => l.protocol),
+  )].sort();
+  const byKey = new Map([...before.listeners, ...after.listeners].map((l) => [l.key, l]));
+  const removed = new Set(removedSockets);
+  // 상한은 **적용될 모델**의 것이다. 지금 걸려 있어도 이 전환에서 풀면 안 잘린다.
+  const cutoff = after.engine?.workerShutdownTimeoutS;
+
+  return protocols.map((protocol) => {
+    const mine = affected.filter((a) => byKey.get(a.key)?.protocol === protocol);
+    if (mine.length === 0) {
+      return { protocol, effect: 'none' as const, why: '이 프로토콜의 리스너는 안 바뀐다' };
+    }
+    const dropped = mine.filter((a) => {
+      const l = byKey.get(a.key);
+      return l !== undefined && removed.has(socketOf(l));
+    });
+    if (dropped.length > 0) {
+      return {
+        protocol,
+        effect: 'may_reset' as const,
+        why: `소켓이 사라진다 (${dropped.map((d) => d.key).join(', ')}) — 그 위의 연결·세션은 끊긴다`,
+      };
+    }
+    if (requiresReload && cutoff !== undefined) {
+      return {
+        protocol,
+        effect: 'may_reset' as const,
+        why: `reload 가 난다. worker_shutdown_timeout=${cutoff}s 가 걸려 있어 `
+          + '진행 중 요청이 응답 없이 잘릴 수 있다 (§4.10)',
+      };
+    }
+    return {
+      protocol,
+      effect: 'new_only' as const,
+      why: requiresReload
+        ? 'reload 가 나지만 진행 중인 것은 옛 워커가 끝낸다 — 유휴 keepalive 만 닫힌다'
+        : '산출물이 같다 — 멤버십만 바뀌므로 새 연결·새 요청부터다',
+    };
+  });
+}
+
 function impactOf(
   before: { model: Model; conf: string },
   after: { model: Model; rendered: RenderedConfig },
@@ -1491,10 +1569,23 @@ function impactOf(
    * 거짓말한다.
    */
   const membershipPlane = caps.httpLua === true || caps.streamLua === true;
+  /**
+   * **이전 소켓도 모델에서 뽑는다.**
+   *
+   * 전에는 이전 `conf` 를 정규식으로 훑었다. 두 쪽이 다른 자였다 — 와일드카드 bind 는
+   * `listen 999;` 로 렌더되므로(§7.1) conf 쪽은 `tcp://999`, 모델 쪽은
+   * `tcp://0.0.0.0:999` 가 나온다. **절대 안 만난다.** 그래서 리스너를 안 건드린
+   * plan 도 "소켓 둘이 닫히고 둘이 열린다" 고 답했다.
+   *
+   * §5.4 는 이 줄을 *"HUP 실패 위험이 드러나는 자리"* 라고 부른다. 매번 전부가
+   * 열리고 닫히는 것처럼 보이면 그건 신호가 아니라 잡음이고, 정말로 포트가 바뀌는
+   * 날에도 똑같이 보인다. 자를 하나로 맞춘다 — 덤으로 conf 파서가 사라진다.
+   */
   const beforeSockets = new Set(
-    [...beforeConf.matchAll(/listen\s+([^\s;]+)(\s+udp)?/g)].map((m) =>
-      `${m[2] !== undefined ? 'udp' : 'tcp'}://${m[1] ?? ''}`),
+    before.model.listeners.filter((l) => l.enabled).map(socketOf),
   );
+  const affected = affectedListeners(before.model, model);
+  const socketsRemoved = [...beforeSockets].filter((s) => !sockets.has(s)).sort();
   return {
     /**
      * **산출물이 바뀌면 reload 가 필요하다** (§5.4).
@@ -1511,10 +1602,11 @@ function impactOf(
      */
     requiresReload,
     topologyEpochChange: requiresReload || !membershipPlane,
-    affectedListeners: affectedListeners(before.model, model),
+    affectedListeners: affected,
+    sessionImpact: sessionImpactOf(before.model, model, affected, socketsRemoved, requiresReload),
     socketChanges: {
       added: [...sockets].filter((s) => !beforeSockets.has(s)).sort(),
-      removed: [...beforeSockets].filter((s) => !sockets.has(s)).sort(),
+      removed: socketsRemoved,
     },
     planes: rendered.planes,
     confDiff: { before: beforeConf.length, after: rendered.conf.length },

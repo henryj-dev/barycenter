@@ -125,6 +125,57 @@ describe('§5.4 topologyEpochChange — 이 전환이 좌표를 옮기는가', (
   });
 });
 
+describe('§5.4 socketChanges — 두 쪽을 같은 자로 잰다', () => {
+  it('안 움직인 소켓은 안 싣는다', async () => {
+    await commitAll(two);
+    const plan = await planOf([
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.9', port: 80, weight: 1 }),
+    ]);
+    // 리스너를 안 건드렸다. **HUP 실패 위험이 여기서 드러나야 하는데**(§5.4),
+    // 매번 전부가 열리고 닫히는 것처럼 보이면 이 줄은 신호가 아니라 잡음이다.
+    expect(plan.impact.socketChanges).toEqual({ added: [], removed: [] });
+  });
+
+  it('진짜 닫히는 소켓은 싣는다', async () => {
+    await commitAll(two);
+    const plan = await planOf([{ op: 'delete', kind: 'listener', key: 'edge' }]);
+    expect(plan.impact.socketChanges.removed).toEqual(['tcp://0.0.0.0:888']);
+    expect(plan.impact.socketChanges.added).toEqual([]);
+  });
+});
+
+describe('§5.4 sessionImpact — 기존 세션은 어떻게 되는가', () => {
+  const effectOf = (impact: { sessionImpact: { protocol: string; effect: string }[] },
+    protocol: string): string | undefined =>
+    impact.sessionImpact.find((s) => s.protocol === protocol)?.effect;
+
+  it('소켓이 사라지는 프로토콜은 기존 세션이 끊긴다', async () => {
+    await commitAll(two);
+    const plan = await planOf([{ op: 'delete', kind: 'listener', key: 'edge' }]);
+    expect(effectOf(plan.impact, 'tcp')).toBe('may_reset');
+    // http 리스너는 안 건드렸다. **모르는 것과 영향 없는 것을 섞지 않는다.**
+    expect(effectOf(plan.impact, 'http')).toBe('none');
+  });
+
+  it('소켓이 그대로면 새 트래픽부터다', async () => {
+    await commitAll(two);
+    const plan = await planOf([
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.9', port: 80, weight: 1 }),
+    ]);
+    expect(effectOf(plan.impact, 'http')).toBe('new_only');
+  });
+
+  it('worker shutdown timeout 이 걸려 있으면 진행 중 요청이 잘린다', async () => {
+    await commitAll([...two, PUT('engine', 'engine', { workerShutdownTimeoutS: 2 })]);
+    // 소켓은 그대로 두고 라우팅만 바꾼다 — reload 는 나지만 bind 는 안 움직인다.
+    const plan = await planOf([
+      PUT('backend', 'web-1', { pool: 'web', host: '10.0.0.9', port: 80, weight: 1 }),
+    ]);
+    // §4.10 실측: 상한이 걸리면 in-flight 가 **응답 없이** 죽는다 (curl exit=52).
+    expect(effectOf(plan.impact, 'http')).toBe('may_reset');
+  });
+});
+
 describe('§5.4 affectedListeners — 영향과 목록은 다르다', () => {
   it('영향받는 리스너만 싣는다', async () => {
     await commitAll(two);
