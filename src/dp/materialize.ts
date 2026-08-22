@@ -30,7 +30,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 export const MANIFEST_NAME = 'manifest.json';
 export const MANIFEST_SCHEMA = 1;
@@ -69,6 +69,33 @@ export type GenerationManifest = {
 
 const sha256 = (buf: Buffer | string): string =>
   `sha256:${createHash('sha256').update(buf).digest('hex')}`;
+
+/**
+ * 세대 안의 상대경로가 **정말 세대 안인가.**
+ *
+ * 세대의 파일 이름은 모델에서 온다 — 인증서 경로가 `certs/<key>/<version>/...` 이므로
+ * **리소스 key 가 그대로 경로가 된다** (`certPaths`). 그런데 `join` 은 `..` 을 정규화하므로
+ * key 하나로 세대 밖에 파일을 쓸 수 있었다. 검수에서 실행으로 재현했다:
+ * `key='../../../../pwned'` 가 prefix 밖에 개인키를 남겼고 `verifyGeneration` 도 통과했다.
+ *
+ * **문법 검사만으로는 부족하다.** 저장 경계(`shapeCheck`)가 앞으로 들어올 key 를 막아도
+ * *이미 저장된* 것은 못 막는다. 그리고 세대 파일 이름이 언젠가 다른 곳에서도 오게 되면
+ * 그때 이 방어가 다시 필요해진다 — 값이 아니라 **경계**에 거는 것이 맞다.
+ *
+ * 일반 `Error` 다. `GenerationError` 의 종류를 늘리면 그 유니온이 공개 표면(`SURFACE.txt`)
+ * 이라 동결 카운터가 리셋된다. 이건 세대의 *상태*가 아니라 입력이 틀린 것이므로
+ * 종류를 붙일 이유도 약하다.
+ */
+function assertInside(base: string, rel: string): void {
+  const target = resolve(base, rel);
+  const root = resolve(base);
+  const inside = target !== root && relative(root, target).split(sep)[0] !== '..';
+  if (!inside) {
+    throw new Error(
+      `세대 밖을 가리키는 경로다: ${JSON.stringify(rel)} — 세대는 자기완결적이어야 한다`,
+    );
+  }
+}
 
 /**
  * 세대 digest. **파일 목록과 내용을 모두 덮는다.**
@@ -135,6 +162,8 @@ export function materializeGeneration(opts: {
   const modes = opts.modes ?? {};
   const root = join(prefix, 'generations');
   const target = join(root, generation);
+  // **아무것도 만들기 전에 본다.** 뒤에서 걸러도 이미 쓴 파일은 남는다.
+  for (const rel of Object.keys(files)) assertInside(target, rel);
   mkdirSync(root, { recursive: true });
 
   const fileDigests: Record<string, string> = {};
@@ -248,6 +277,9 @@ export function verifyGeneration(
   const dir = join(prefix, 'generations', generation);
   const actual: Record<string, string> = {};
   for (const rel of Object.keys(manifest.files)) {
+    // **digest 검사로는 안 걸린다.** 세대 밖 파일을 읽어 해싱하면 값은 맞아떨어진다 —
+    // manifest 가 무엇을 가리키는지는 내용과 별개의 물음이다.
+    assertInside(dir, rel);
     const path = join(dir, rel);
     if (!existsSync(path)) {
       throw new GenerationError('incomplete', `세대 '${generation}' 에 '${rel}' 이 없다`);
