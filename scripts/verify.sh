@@ -15,23 +15,84 @@ QUICK=0
 
 RESULTS=()
 FAILED=0
+STARTED=$(date +%s)
+
+# **도는 중이라는 것을 말한다.**
+#
+# 원래 이 스크립트는 끝날 때까지 한 글자도 내지 않았다. 자식의 출력을 삼켜서 표
+# 하나로 보여 주는 것이 값이지만, e2e·스파이크는 하나가 십 분을 넘긴다 — 그 동안
+# 화면은 **멎은 것과 구분되지 않는다**. CI 에서는 더 나빴다: 60분 타임아웃에 걸려도
+# 로그는 어느 스위트에서 멎었는지 말하지 않았다.
+#
+# 출력을 흘려 보내는 것으로 고치지 않는다. 그러면 표가 없어진다. 대신 세 가지를 낸다:
+#   (1) 무엇을 지금 시작했는지        — 시작 줄
+#   (2) 아직 살아 있다는 신호         — 심장박동
+#   (3) 끝나는 즉시 판정과 걸린 시간  — 마지막에 몰아 찍지 않는다
+#
+# 터미널이면 점을 한 줄에 이어 찍고 판정으로 그 줄을 덮는다. 파이프·CI 로그면
+# 되감기가 없으므로 줄을 새로 낸다 — 타임스탬프가 붙는 쪽이라 그편이 낫다.
+TTY=0; [ -t 1 ] && TTY=1
+if [ $TTY -eq 1 ]; then BEAT=${BARY_VERIFY_HEARTBEAT:-15}
+else                    BEAT=${BARY_VERIFY_HEARTBEAT:-60}
+fi
+
+heartbeat() {                # heartbeat <label>
+  local label="$1" t=0
+  while true; do
+    # **`sleep` 의 출력을 끊어 둔다.** 심장박동을 kill 해도 그 순간 돌던 `sleep` 은
+    # 고아로 남아 최대 $BEAT 초를 더 산다. 그게 스크립트의 stdout(=CI 스텝의 파이프)을
+    # 물고 있으면 **스텝이 그만큼 안 끝난다** — 배경 프로세스가 파이프를 잡고 있는
+    # 그 함정이다. 시간만 재는 프로세스에 출력은 필요 없다.
+    sleep "$BEAT" >/dev/null 2>&1
+    t=$(( t + BEAT ))
+    if [ $TTY -eq 1 ]; then
+      printf '.'
+    else
+      printf '  ..    %s  —  %s초째 도는 중\n' "$label" "$t"
+    fi
+  done
+}
 
 run() {                      # run <label> <command...>
   local label="$1"; shift
-  local out rc
-  out=$("$@" 2>&1); rc=$?
-  if [ $rc -eq 0 ]; then
-    RESULTS+=("  ok    $label  —  $(summarize "$out")")
+  local out rc hb start elapsed line
+  if [ $TTY -eq 1 ]; then
+    printf '  ..    %s  —  ' "$label"
   else
-    RESULTS+=("  FAIL  $label  —  $(summarize "$out")")
+    printf '  ..    %s  —  시작\n' "$label"
+  fi
+
+  start=$(date +%s)
+  heartbeat "$label" &
+  hb=$!
+  out=$("$@" 2>&1); rc=$?
+  { kill "$hb"; wait "$hb"; } 2>/dev/null
+  elapsed=$(( $(date +%s) - start ))
+
+  if [ $rc -eq 0 ]; then
+    line="  ok    $label  —  $(summarize "$out")  (${elapsed}초)"
+  else
+    line="  FAIL  $label  —  $(summarize "$out")  (${elapsed}초)"
     FAILED=1
+  fi
+  RESULTS+=("$line")
+
+  # 터미널이면 진행 줄을 지우고 그 자리에 판정을 덮는다.
+  [ $TTY -eq 1 ] && printf '\r\033[K'
+  printf '%s\n' "$line"
+
+  if [ $rc -ne 0 ]; then
     printf '\n----- %s -----\n%s\n' "$label" "$(echo "$out" | tail -25)"
   fi
 }
 
 summarize() {
-  echo "$1" | grep -oE 'Tests +[0-9]+ passed \([0-9]+\)|PASS=[0-9]+ +FAIL=[0-9]+( +SKIP=[0-9]+)?' \
-    | tail -1 | tr -s ' ' || echo "완료"
+  # `||` 를 파이프라인에 걸면 안 잡힌다 — 마지막 `tr` 이 0 으로 끝나므로 grep 이
+  # 아무것도 못 찾아도 "완료" 가 안 나오고 **빈 칸**이 남았다. 값을 받아서 본다.
+  local s
+  s=$(echo "$1" | grep -oE 'Tests +[0-9]+ passed \([0-9]+\)|PASS=[0-9]+ +FAIL=[0-9]+( +SKIP=[0-9]+)?' \
+      | tail -1 | tr -s ' ')
+  if [ -n "$s" ]; then echo "$s"; else echo "완료"; fi
 }
 
 echo "═══════════════════════════════════════════════════════════════"
@@ -93,6 +154,7 @@ fi
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 printf '%s\n' "${RESULTS[@]}"
+printf ' 합계 %s초\n' "$(( $(date +%s) - STARTED ))"
 echo "═══════════════════════════════════════════════════════════════"
 
 # 스위트가 통과하는 것과 착수 게이트가 열리는 것은 다르다.
