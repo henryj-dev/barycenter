@@ -95,6 +95,18 @@ export type Impact = {
 
 const PLAN_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * changeset 하나가 담을 수 있는 patch op 수 (검수 B-13).
+ *
+ * 상한이 없으면 반복 PATCH 로 무한히 자라고, `commit` 이 그 전부를 `config_head` 를
+ * 잠근 채 적용한다 — 다른 모든 커밋이 뒤에 선다.
+ *
+ * 1000 은 **한 번에 옮기기에 이미 큰 변경**이라는 뜻이다. 리소스 여덟 종류를 합쳐
+ * 그만큼을 한 changeset 에 담아야 한다면, 그건 나눠서 커밋할 일이다 — plan 의 impact
+ * 도 그 크기에서는 사람이 못 읽는다.
+ */
+export const MAX_CHANGESET_OPS = 1000;
+
 const text = (r: Row, k: string): string => String(r[k]);
 const maybeText = (r: Row, k: string): string | undefined =>
   r[k] === null || r[k] === undefined ? undefined : String(r[k]);
@@ -681,16 +693,37 @@ export class ConfigStore {
   /** 변경 누적. **`open` 일 때만**. sealed 이후의 PATCH 는 409 (§5.2). */
   async patchChangeset(id: string, ops: PatchOp[], by: string): Promise<void> {
     for (const op of ops) shapeCheck(op);
+    /**
+     * **누적에 상한을 건다** (검수 B-13).
+     *
+     * 한 요청은 `maxBodyBytes` 로 막히지만 **같은 changeset 에 반복 PATCH 하는 총량**
+     * 에는 상한이 없었다. 그리고 `commit` 이 그 전부를 `config_head` 를 `FOR UPDATE` 로
+     * 잠근 채 순차로 적용한다 — 누적된 changeset 하나가 다른 모든 커밋을 뒤에 세운다.
+     *
+     * 검사를 **같은 UPDATE 안에서** 한다. 읽고 나서 쓰면 그 사이에 다른 PATCH 가
+     * 끼어들어 상한을 넘길 수 있다.
+     */
     const r = await this.db.query(
       `UPDATE changesets SET patch = patch || $2::jsonb
-        WHERE id = $1 AND state = 'open' RETURNING id`,
-      [id, JSON.stringify(ops)],
+        WHERE id = $1 AND state = 'open'
+          AND jsonb_array_length(patch) + $3 <= $4
+        RETURNING id`,
+      [id, JSON.stringify(ops), ops.length, MAX_CHANGESET_OPS],
     );
     if (r.rowCount === 0) {
-      const cur = (await this.db.query('SELECT state FROM changesets WHERE id=$1', [id])).rows[0];
+      const cur = (await this.db.query(
+        'SELECT state, jsonb_array_length(patch) AS n FROM changesets WHERE id=$1', [id],
+      )).rows[0];
       if (cur === undefined) throw new StoreError(404, 'unknown_changeset', `changeset ${id} 이 없다`);
-      throw new StoreError(409, 'changeset_not_open',
-        `changeset 이 '${text(cur, 'state')}' 다 — 열려 있을 때만 고칠 수 있다. reopen 하라`);
+      const state = text(cur, 'state');
+      if (state !== 'open') {
+        throw new StoreError(409, 'changeset_not_open',
+          `changeset 이 '${state}' 다 — 열려 있을 때만 고칠 수 있다. reopen 하라`);
+      }
+      // 열려 있는데 못 넣었다면 상한이다. **부분 적용은 없다** — 받거나 안 받거나다.
+      throw new StoreError(409, 'changeset_too_large',
+        `changeset 하나에 담을 수 있는 것은 ${MAX_CHANGESET_OPS} 개다 `
+        + `(지금 ${num(cur, 'n')} 개 + 보낸 ${ops.length} 개). 나눠서 커밋하라`);
     }
     await this.audit(by, 'changeset.patch', id, undefined, ops);
   }
