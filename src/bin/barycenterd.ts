@@ -271,8 +271,12 @@ export async function main(): Promise<void> {
     }),
   });
 
+  // **핸들을 들고 있는다.** 종료할 때 놓아야 다음 기동이 즉시 열린다 (검수 B-16) —
+  // 안 놓으면 죽은 주인을 가려내는 `/proc` 폴백에 기대게 되고, 그 파일을 못 읽는
+  // 플랫폼에서는 "살아 있는 쪽으로" 틀려 pid 재사용 때 기동이 막힌다.
+  const agentStore = FileStore.open(`${prefix}/state/agent.json`);
   const driver = LocalDataplaneDriver.create({
-    store: FileStore.open(`${prefix}/state/agent.json`),
+    store: agentStore,
     effects,
   });
 
@@ -534,6 +538,15 @@ export async function main(): Promise<void> {
       acmeRunner.stop();
       stopPublish();
       stopSecretGc();
+      // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은
+      // 주인을 가려내는 `/proc` 폴백에 기댄다 — 그 파일을 못 읽는 플랫폼에서는
+      // `stillHolding` 이 안전한 쪽(살아 있다)으로 틀려 기동이 막힌다.
+      // 던지더라도 종료는 계속한다. 나가는 길에 못 적는 것이 나가지 못하는 것보다 낫다.
+      try {
+        agentStore.release();
+      } catch (e) {
+        log.warn('agent_store.release_failed', { error: String(e) });
+      }
       void election.release()
         .then(() => db.close())
         .then(() => process.exit(0));
