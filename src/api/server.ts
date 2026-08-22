@@ -21,7 +21,11 @@
  * 표현된다. 쓸 데 없는 코드를 미리 배선해 두지 않는다. v0.4 CLI/GUI 가 단일 리소스
  * 편집을 낼 때 함께 들어온다.
  */
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import {
+  createServer, type IncomingMessage, type RequestListener, type Server,
+  type ServerResponse,
+} from 'node:http';
+import type { SecureContextOptions } from 'node:tls';
 import { createHash, randomBytes } from 'node:crypto';
 
 import type { ControlPlane } from '../control/plane.js';
@@ -687,15 +691,75 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
   }
 }
 
-export function createApi(api: ApiOptions): Server {
+/**
+ * 요청 리스너. **서버와 떼어 놓는다** (검수 S-05b).
+ *
+ * 전에는 `createApi` 가 `http.Server` 를 만들어 돌려주기만 해서 https 로 세울 자리가
+ * 없었다. 그러면 TLS 를 켜려고 라우팅을 한 벌 더 쓰게 되고, 두 벌은 갈라진다 —
+ * `renderCapsOf` 를 한 자리로 모은 이유(B-02)와 같은 종류의 사고다.
+ */
+export function apiHandler(api: ApiOptions): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
-  return createServer((req, res) => {
+  return (req, res) => {
     void handle(req, res, api, max).catch((e) => {
       // 여기까지 온 것은 핸들러 밖의 실패다. 조용히 끊지 않는다.
       if (!res.headersSent) json(res, 500, { code: 'internal', message: String(e) });
       else res.end();
     });
-  });
+  };
+}
+
+export type ApiTlsInput = {
+  cert: string;
+  key: string;
+  /**
+   * 주면 클라이언트 인증서를 **요구하고 검증한다.**
+   *
+   * ⚠️ 이것은 **망 관문**이지 신원이 아니다. 누구인지는 여전히 Bearer 토큰이 답한다.
+   * 인증서를 역할에 매핑하는 것은 별개의 결정이고, 섞으면 권한의 진실이 둘이 된다.
+   */
+  clientCa?: string;
+};
+
+export type ApiTlsOptions = SecureContextOptions & {
+  requestCert?: boolean;
+  rejectUnauthorized?: boolean;
+};
+
+/**
+ * 제어 API 의 TLS 옵션을 조립한다 (검수 S-05b).
+ *
+ * 이 API 는 인증서 **개인키를 본문으로 받고** Bearer 토큰을 헤더로 받는데 평문으로
+ * 흘렀다. W0-a 가 기본 바인드를 루프백으로 내려 급성 노출은 닫았지만, 그건 "밖에서 못
+ * 붙는다" 이지 "안에서 안 샌다" 가 아니다 — 사이드카와 호스트 네트워크를 공유하는
+ * 이웃은 여전히 평문을 본다.
+ *
+ * 켜는 것은 선택이다(끄면 지금과 같다). 다만 **반만 켜지지는 않는다.**
+ */
+export function apiTlsOptions(input: ApiTlsInput): ApiTlsOptions {
+  // 환경변수를 하나만 넣은 배포가 조용히 평문으로 뜨면 안 된다. 그 침묵이
+  // "TLS 켰다" 는 믿음과 평문 소켓을 동시에 만든다.
+  if (input.cert === '') throw new Error('TLS 를 켜려면 cert 가 있어야 한다');
+  if (input.key === '') throw new Error('TLS 를 켜려면 key 가 있어야 한다');
+  return {
+    cert: input.cert,
+    key: input.key,
+    // 렌더러 쪽 TLS 정책(W0-4)과 같은 기준이다. 제어 평면이 데이터 평면보다 느슨할
+    // 이유가 없다.
+    minVersion: 'TLSv1.2',
+    // **기본으로 요구하지 않는다.** 서버 TLS 와 mTLS 는 다른 결정이고, 하나를 켠다고
+    // 다른 하나가 따라오면 켜는 순간 모든 클라이언트가 막힌다.
+    //
+    // 요구할 때는 검증까지 한다. `requestCert` 만 켜고 `rejectUnauthorized` 를
+    // 빠뜨리면 아무 인증서나 통과한다 — 켰다는 착각만 주고 아무것도 안 막는다.
+    ...(input.clientCa === undefined
+      ? {}
+      : { ca: input.clientCa, requestCert: true, rejectUnauthorized: true }),
+  };
+}
+
+export function createApi(api: ApiOptions): Server {
+  return createServer(apiHandler(api));
 }
 
 async function handle(

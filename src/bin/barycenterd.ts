@@ -15,13 +15,14 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { createServer as createHttpsServer } from 'node:https';
 import { connect } from 'node:net';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { createApi } from '../api/server.js';
+import { apiHandler, apiTlsOptions, createApi } from '../api/server.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore } from '../dp/secrets.js';
 import {
@@ -576,17 +577,43 @@ export async function main(): Promise<void> {
   }
   const serveRoot = existsSync(guiRoot) ? guiRoot : undefined;
 
-  const server = createApi({
+  const apiOpts = {
     db, store, control, auth, election, secrets, events,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
     ...(oidcRp === undefined ? {} : { oidcRp }),
-  });
+  };
+
+  /**
+   * **제어 API 서버 TLS** (검수 S-05b).
+   *
+   * 이 API 로 개인키 PEM 이 본문에 담겨 올라가고 Bearer 토큰이 매 요청에 실린다.
+   * 아래 S-05a 경고가 *"진짜 답은 서버 TLS 이고 그건 별건이다"* 라고 적어 둔 자리다.
+   *
+   * 선택이다 — 안 켜면 지금과 같다. 다만 반만 켜지지는 않는다(`apiTlsOptions` 가 던진다).
+   * 클라이언트 CA 는 **망 관문**까지만 연다. 누구인지는 여전히 토큰이 답한다.
+   */
+  const tlsCert = env('BARY_TLS_CERT_FILE', '');
+  const tlsKey = env('BARY_TLS_KEY_FILE', '');
+  const tlsClientCa = env('BARY_TLS_CLIENT_CA_FILE', '');
+  const tlsOn = tlsCert !== '' || tlsKey !== '';
+  const server = tlsOn
+    ? createHttpsServer(
+        apiTlsOptions({
+          cert: tlsCert === '' ? '' : readFileSync(tlsCert, 'utf8'),
+          key: tlsKey === '' ? '' : readFileSync(tlsKey, 'utf8'),
+          ...(tlsClientCa === '' ? {} : { clientCa: readFileSync(tlsClientCa, 'utf8') }),
+        }),
+        apiHandler(apiOpts),
+      )
+    : createApi(apiOpts);
   await new Promise<void>((resolve) => {
     server.listen(Number(port), host, resolve);
   });
   log.info('listening', {
     host, port: Number(port), prefix, adminPort, tokens: auth.size,
     gui: serveRoot ?? false,
+    // 켰다고 생각했는데 안 켜진 상태를 밖에서 확인할 수 있어야 한다.
+    tls: tlsOn ? (tlsClientCa === '' ? 'server' : 'server+client-ca') : false,
   });
   /**
    * **루프백 밖에 묶었으면 말한다** (검수 S-05a).
@@ -597,7 +624,7 @@ export async function main(): Promise<void> {
    *
    * 진짜 답은 서버 TLS 이고 그건 별건이다. 그때까지 이 줄이 자리를 지킨다.
    */
-  if (!isLoopbackBind(host ?? '')) {
+  if (!tlsOn && !isLoopbackBind(host ?? '')) {
     log.warn('listen.exposed', {
       host,
       why: '제어 API 에 TLS 가 없다 — 개인키와 토큰이 평문으로 지나간다',
