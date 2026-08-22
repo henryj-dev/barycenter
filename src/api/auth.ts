@@ -152,6 +152,15 @@ export type OidcSettings = {
    * 더 늘린 것이 된다 — 사용자가 넣을 수 있는 자리가 그대로 남는다.
    */
   roleClaim?: string;
+  /**
+   * 이 로그인 시도에 묶는 값 (OIDC Core 3.1.2.1 · 검수 S-06 나머지).
+   *
+   * 주면 `id_token` 이 **같은 값을 담고 있어야** 한다. 없으면 다른 데서 얻은 멀쩡한
+   * 토큰 하나가 어느 세션에나 들어맞는다.
+   *
+   * 안 주면 안 따진다 — nonce 를 안 보낸 시작 흐름을 막으면 안 된다.
+   */
+  nonce?: string;
   now?: () => number;
 };
 
@@ -239,6 +248,9 @@ export function principalFromIdToken(token: string, oidc: OidcSettings): Princip
   if (typeof exp !== 'number' || !Number.isFinite(exp) || exp <= now) return undefined;
   const sub = payload['sub'];
   if (typeof sub !== 'string' || sub === '') return undefined;
+  // **기대하면 반드시 있어야 한다.** 토큰에 nonce 가 없을 때 통과시키면, 검사를 켠
+  // 배포가 nonce 를 안 돌려주는 IdP 앞에서 조용히 검사 없는 상태로 돌아간다.
+  if (oidc.nonce !== undefined && payload['nonce'] !== oidc.nonce) return undefined;
   // 정했으면 그 클레임만. 안 정했으면 `role`. 떨어지지 않는다 — 위 주석 참조.
   const role = payload[oidc.roleClaim ?? 'role'];
   if (!isRole(role)) return undefined;

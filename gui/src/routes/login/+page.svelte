@@ -6,6 +6,10 @@
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const stateKey = 'bary.oidc.state';
+  // PKCE 검증자와 nonce 도 같은 자리에 산다 (검수 S-06 나머지). 서버는 상태를 안
+  // 가지므로 시작과 교환 사이를 잇는 것은 이 세 값뿐이다.
+  const verifierKey = 'bary.oidc.verifier';
+  const nonceKey = 'bary.oidc.nonce';
 
   let startError = $state<string | undefined>();
   let starting = $state(false);
@@ -20,12 +24,17 @@
         startError = r.status === 404 ? 'OIDC 가 설정되지 않았다' : `authorize ${r.status}`;
         return;
       }
-      const body = (await r.json()) as { url?: unknown; state?: unknown };
-      if (typeof body.url !== 'string' || typeof body.state !== 'string') {
+      const body = (await r.json()) as {
+        url?: unknown; state?: unknown; nonce?: unknown; code_verifier?: unknown;
+      };
+      if (typeof body.url !== 'string' || typeof body.state !== 'string'
+        || typeof body.code_verifier !== 'string' || typeof body.nonce !== 'string') {
         startError = 'authorize 응답이 아니다';
         return;
       }
       sessionStorage.setItem(stateKey, body.state);
+      sessionStorage.setItem(verifierKey, body.code_verifier);
+      sessionStorage.setItem(nonceKey, body.nonce);
       window.location.assign(body.url);
     } catch (e) {
       startError = e instanceof Error ? e.message : String(e);
@@ -36,9 +45,18 @@
 
   const exchange = async (code: string, state: string): Promise<void> => {
     const want = sessionStorage.getItem(stateKey);
+    const verifier = sessionStorage.getItem(verifierKey);
+    const nonce = sessionStorage.getItem(nonceKey);
+    // **한 번 쓰고 지운다.** 남겨 두면 다음 콜백이 옛 검증자로 교환을 시도한다.
     sessionStorage.removeItem(stateKey);
+    sessionStorage.removeItem(verifierKey);
+    sessionStorage.removeItem(nonceKey);
     if (want === null || want !== state) {
       startError = 'state 가 맞지 않는다';
+      return;
+    }
+    if (verifier === null) {
+      startError = '이 브라우저에서 시작한 로그인이 아니다';
       return;
     }
     exchanging = true;
@@ -46,7 +64,9 @@
       const r = await fetch('/api/v1/oidc/token', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({
+          code, code_verifier: verifier, ...(nonce === null ? {} : { nonce }),
+        }),
       });
       const body = (await r.json()) as { id_token?: unknown; message?: unknown };
       if (!r.ok || typeof body.id_token !== 'string') {

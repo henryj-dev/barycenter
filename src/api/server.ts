@@ -46,7 +46,8 @@ import { can, TokenAuth, type Principal, type Scope } from './auth.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import {
-  authorizationRequest, exchangeAuthorizationCode, type OidcRpSettings,
+  authorizationRequest, exchangeAuthorizationCode, pkceChallenge, pkceVerifier,
+  type OidcRpSettings,
 } from './oidc-code.js';
 
 export type ApiOptions = {
@@ -781,8 +782,21 @@ async function handle(
       json(res, 404, { code: 'oidc_not_configured', message: 'Authorization Code 가 설정되지 않았다' });
       return;
     }
+    /**
+     * **PKCE 와 nonce 를 여기서 만든다** (검수 S-06 나머지).
+     *
+     * 셋 다 클라이언트가 보관했다가 되보낸다. `state` 를 이미 그렇게 다루고 있었다 —
+     * 이 RP 는 상태를 안 가지므로 시작과 교환이 다른 노드에 닿아도 된다.
+     */
     const state = randomBytes(16).toString('hex');
-    json(res, 200, { url: authorizationRequest(rp, { state }).toString(), state });
+    const nonce = randomBytes(16).toString('hex');
+    const codeVerifier = pkceVerifier();
+    json(res, 200, {
+      url: authorizationRequest(rp, {
+        state, nonce, codeChallenge: pkceChallenge(codeVerifier),
+      }).toString(),
+      state, nonce, code_verifier: codeVerifier,
+    });
     return;
   }
   if (req.method === 'POST' && url.pathname === '/api/v1/oidc/token') {
@@ -801,14 +815,34 @@ async function handle(
       }
       throw e;
     }
-    const code = raw !== null && typeof raw === 'object'
-      ? (raw as Record<string, unknown>)['code']
-      : undefined;
+    const obj = raw !== null && typeof raw === 'object'
+      ? (raw as Record<string, unknown>)
+      : {};
+    const code = obj['code'];
     if (typeof code !== 'string' || code === '') {
       json(res, 400, { code: 'malformed', message: 'code 가 필요하다' });
       return;
     }
-    const exchanged = await exchangeAuthorizationCode(rp, code, api.oidcFetch ?? fetch);
+    /**
+     * **검증자를 요구한다.** 선택으로 두면 가로챈 자가 그냥 빼고 내면 되므로 PKCE 가
+     * 아무것도 안 막는다 — 다운그레이드가 공격자의 선택이 된다. 시작 응답이 항상
+     * 검증자를 주므로, 못 보내는 클라이언트는 시작 흐름을 안 지난 클라이언트다.
+     */
+    const codeVerifier = obj['code_verifier'];
+    if (typeof codeVerifier !== 'string' || codeVerifier === '') {
+      json(res, 400, {
+        code: 'malformed',
+        message: 'code_verifier 가 필요하다 — authorization-request 가 준 값을 되보낸다',
+      });
+      return;
+    }
+    // nonce 는 선택이다. 안 보낸 클라이언트를 막을 이유는 없다 — 시작 때 nonce 를
+    // 실었으면 IdP 가 되돌려 주고, 그때만 검사가 뜻을 갖는다.
+    const nonce = obj['nonce'];
+    const exchanged = await exchangeAuthorizationCode(rp, code, api.oidcFetch ?? fetch, {
+      codeVerifier,
+      ...(typeof nonce === 'string' && nonce !== '' ? { nonce } : {}),
+    });
     if (exchanged === undefined) {
       json(res, 401, { code: 'unauthenticated', message: 'ID Token 이 거절됐다' });
       return;
