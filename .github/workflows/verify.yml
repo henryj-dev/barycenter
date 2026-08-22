@@ -35,17 +35,54 @@ concurrency:
 jobs:
   # 빠른 신호. 도커 없이 도는 것만 먼저 돌려서 오타 하나에 20 분을 쓰지 않게 한다.
   # **이건 게이트가 아니다** — 아래 `verify` 가 게이트다.
+  #
+  # **재현물 핀 검사가 여기 얹혀 있다.** 원래 `pinned` 라는 제 잡이었는데, run 하나가
+  # 요구하는 잡이 넷이면 ARC 풀이 그만큼을 동시에 못 준다. 2026-08-22 실측:
+  # run 32557242379 에서 러너를 잡은 것은 `verify` 하나뿐이었고 47초짜리 핀 검사가
+  # **20분을 기다리다 다음 push 에 취소됐다.** 게이트가 늦는 것이 아니라 아예 안 돈다.
+  # 둘 다 도커가 필요 없고 합쳐도 10분이 안 되므로 한 잡에 둔다.
+  #
+  # 합치면서 잃는 것은 체크 두 칸이 하나가 되는 것뿐이다 — 스텝은 그대로 둘이라
+  # 어느 쪽이 깨졌는지는 로그에서 바로 보이고, 핀 검사는 `!cancelled()` 로 걸어
+  # **앞의 --quick 이 빨개져도 반드시 돈다**. 안 그러면 한쪽 실패가 다른 쪽 신호를
+  # 가린다.
   quick:
     runs-on: arc-mack-erel-barycenter
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # **재현물 게이트가 부모 트리를 세운다.** 얕은 클론이면 `worktree add` 가
+          # 그 커밋을 못 찾는다. 저장소가 작으니 통째로 받는다.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: npm
       - run: npm ci
       - run: ./scripts/verify.sh --quick
+
+      # **재현물 핀 검사는 푸시된 커밋 전부**를 본다.
+      #
+      # `verify.sh` 안에서도 돌지만 거기서는 직전 커밋 하나만 본다(로컬 작업 흐름에 맞춘
+      # 기본값이다). CI 는 여러 커밋이 한 번에 오므로 범위를 준다 — 가운데 커밋만 재현물
+      # 없이 `src/` 를 고쳐도 통과하던 자리를 여기서 막는다.
+      - name: 재현물 핀 검사 (푸시된 커밋 전부)
+        if: ${{ !cancelled() }}
+        run: |
+          # PR 이면 병합 기준점, 푸시면 이전 위치. 새 브랜치의 첫 푸시는 `before` 가
+          # 0 이므로 기본 브랜치를 기준으로 삼는다.
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.before }}" ] \
+            && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="$(git rev-parse origin/${{ github.event.repository.default_branch }} 2>/dev/null || git rev-parse HEAD~1)"
+          fi
+          echo "기준: $BASE"
+          node scripts/pinned.mjs "$BASE"
 
   verify:
     runs-on: arc-mack-erel-barycenter
@@ -95,39 +132,6 @@ jobs:
             echo "───── $c ─────"
             docker logs --tail 50 "$c" 2>&1 || true
           done
-
-  # **재현물 게이트는 푸시된 커밋 전부**를 본다.
-  #
-  # `verify.sh` 안에서도 돌지만 거기서는 직전 커밋 하나만 본다(로컬 작업 흐름에 맞춘
-  # 기본값이다). CI 는 여러 커밋이 한 번에 오므로 범위를 준다 — 가운데 커밋만 재현물
-  # 없이 `src/` 를 고쳐도 통과하던 자리를 여기서 막는다.
-  pinned:
-    runs-on: arc-mack-erel-barycenter
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-      - run: npm ci
-      - name: 재현물 핀 검사 (푸시된 커밋 전부)
-        run: |
-          # PR 이면 병합 기준점, 푸시면 이전 위치. 새 브랜치의 첫 푸시는 `before` 가
-          # 0 이므로 기본 브랜치를 기준으로 삼는다.
-          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-          elif [ -n "${{ github.event.before }}" ] \
-            && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] \
-            && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="$(git rev-parse origin/${{ github.event.repository.default_branch }} 2>/dev/null || git rev-parse HEAD~1)"
-          fi
-          echo "기준: $BASE"
-          node scripts/pinned.mjs "$BASE"
 
   # **문서에 적힌 절차가 정말 도는가.** 문서를 읽어서는 알 수 없고, 손으로 확인하는 한
   # 반드시 썩는다.
