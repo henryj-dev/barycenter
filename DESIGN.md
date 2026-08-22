@@ -1042,17 +1042,27 @@ planned ──commit──→ committed ──apply──→ operation_bound ─
 
 ### 5.4 impact — plan 이 보여주는 것
 
+> **아홉 항목 전부 구현됐다 (2026-08-23).** `src/store/config-store.ts` 의 `impactOf`
+> 다. 그 전에는 다섯만 냈고 코드에 *"v0.1 은 이 부분집합만 낸다"* 고 적혀 있었다.
+> 화면은 `src/web/impact-view.ts`, CLI 는 `planSummary` 가 같은 값을 읽는다.
+
 | 항목 | 내용 |
 |---|---|
 | `requires_reload` | 멤버십만 바뀌면 아니오 |
-| `topology_epoch_change` | epoch 가 바뀌는가 (§3.3 — 멤버십 전면 재전송 유발) |
-| `affected_listeners` | 영향받는 리스너와 프로토콜 |
-| `session_impact` | 프로토콜별 기존 세션 영향 (`none`/`new_only`/`may_reset`) |
-| `socket_changes` | 새로 bind / 해제되는 소켓 — **HUP 실패 위험이 여기서 드러난다** |
-| `certificate_changes` | 교체되는 인증서와 만료일 |
-| `route_order_changes` | 컴파일된 매칭 순서 변화, 그림자 라우트 (§7.5) |
-| `capability_warnings` | 대상 엔진 빌드가 지원하지 않는 조합 |
+| `topology_epoch_change` | epoch 가 바뀌는가 (§3.3 — 멤버십 전면 재전송 유발). **`requires_reload` 와 같은 값이 아니다** — 멤버십 평면이 없는 엔진은 산출물이 같아도 세대를 새로 세운다 (§7.3) |
+| `affected_listeners` | 영향받는 리스너와 프로토콜. **폐포로 판정한다** — 리스너 → 라우트 → 풀 → 백엔드, https 면 정책·인증서·SNI 바인딩까지. 지워진 리스너는 이전 리비전에서 읽는다 |
+| `session_impact` | 프로토콜별 기존 세션 영향 (`none`/`new_only`/`may_reset`). 소켓이 사라지거나 `worker_shutdown_timeout` 이 걸려 있으면 `may_reset` (§4.10 실측) |
+| `socket_changes` | 새로 bind / 해제되는 소켓 — **HUP 실패 위험이 여기서 드러난다.** 양쪽 다 **모델**에서 뽑는다 (아래 ⚠️) |
+| `certificate_changes` | 교체되는 인증서와 만료일. 판정 기준은 `material_ref` 이고 만료는 **자료**에서 읽는다 (§8.1). 모르면 비운다 |
+| `route_order_changes` | 컴파일된 매칭 순서 변화, 그림자 라우트 (§7.5). 컴파일러가 이미 만들던 경고의 **첫 독자**다 — `validateModel` 은 `errors` 만 본다 |
+| `capability_warnings` | 대상 엔진 빌드가 **조용히 덜 하는 것.** 막히는 조합은 여기 안 온다(검증기가 422). h2 기본값·멤버십 평면 부재·`ssl_conf_command` 부재 |
 | `conf_diff` | 참고용 |
+
+> ⚠️ **`socket_changes` 는 한동안 거짓이었다.** 이전 소켓은 이전 `conf` 를 정규식으로
+> 훑고 지금 소켓은 모델에서 뽑았는데, 와일드카드 bind 는 `listen 999;` 로 렌더되므로
+> (§7.1) 한쪽은 `tcp://999`, 다른 쪽은 `tcp://0.0.0.0:999` 다 — **절대 안 만난다.**
+> 리스너를 안 건드린 plan 도 "소켓 둘이 닫히고 둘이 열린다" 고 답했다. 두 쪽 다
+> 모델에서 뽑는 것으로 고쳤다. 산출물을 파싱해 사실을 되찾으려 하면 이 모양이 된다.
 
 ### 5.5 export / import
 
@@ -1755,6 +1765,9 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
    (§5.4 `route_order_changes`).
 3. 클래스를 가로지르는 우선순위 역전은 **저장은 허용하되 plan 에서 경고**한다. 조용히
    거부하지도, 조용히 다르게 동작하지도 않는다.
+   → **구현됨 (2026-08-23)** — `Impact.routeOrderChanges`. 그 전까지 `compileHostRoutes`
+   가 이 경고를 만들어 돌려주는데 **읽는 데가 없었다** (`validateModel` 은 `errors` 만
+   꺼낸다). 계산되고 버려지는 경고는 없는 것과 같다.
 4. **`strict_priority` 모드는 옵트인**이고 S10 통과가 전제다. 이 모드는 충돌 그래프의
    연결 요소 전체(정확일치 포함)를 anchored 정규식으로 내려 등장 순서로 정렬한다.
    비용: 순차 평가로 인한 CPU/p99 증가. 라우트 수 상한과 벤치 기준을 함께 정의한다.
@@ -2638,6 +2651,9 @@ capability 패키지이지 apply 구현이 아니다.
   + `pullSse` 다.
 - 열린 화면: Plan·Impact · Listeners · Pools · Routes · Certificates · Status · Rendered · Audit · Login.
   Plan·Impact 는 `plan.impact` 를 문장으로 접는다. diff 가 아니다.
+  §5.4 아홉 항목을 전부 읽는다 — 기존 세션·인증서 교체·라우트 순서 경고·엔진
+  경고. **끊기는 것을 먼저** 말하고 영향 없는 프로토콜은 안 싣는다. 옛 plan 에
+  없는 항목은 없는 대로 그린다 — 거기서 깨지면 옛 plan 을 적용할 수 없다.
   Listeners 는 `GET /api/v1/listeners`(head 모델) 다. 커밋됐지만 미적용이면
   그 목록은 이미 미래이고, 엔진에 남은 소켓은 impact 의 `removed` 로만 보인다.
   소켓 충돌은 검증기가 막는다 — 화면이 다시 재지 않는다.
@@ -2680,7 +2696,7 @@ capability 패키지이지 apply 구현이 아니다.
 |---|---|
 | Listeners — head 포트, HTTP·TCP·UDP·HTTPS·패스스루 put/delete | 열림. HTTPS 는 자료 있는 인증서 + 정책. 패스스루는 tls 없음 |
 | Pools & Backends — SSE 헬스, 풀+첫 백엔드, hash+hashKey, source_ip_hash, 백엔드 put/delete | 열림. 드레인 숫자 없음 (S2) |
-| Plan/Impact — diff 가 아니라 **영향**. apply 는 여기만 | 열림 |
+| Plan/Impact — diff 가 아니라 **영향**. §5.4 아홉 항목. apply 는 여기만 | 열림 |
 | Routes — 엔진 순서, HTTP 호스트 proxy/redirect/reject put/delete, 패스스루 SNI proxy/reject put/delete | 열림. websocket 은 프록시에서만 |
 | Certificates — 만료는 자료. 자료 put. SNI 바인딩 put/delete | 열림. 주문 GET 없음 |
 | Status — SSE 스냅샷 4-way | 열림. nativeDns 선택형 없음 |
