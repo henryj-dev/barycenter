@@ -40,7 +40,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
-| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status. **리스너 옵션 플래그**(`--rate`·`--header`·`--max-body`·타임아웃) | — |
+| CLI | `bary-dp-agent`(원격 DP 창구). `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status. **리스너 옵션 플래그**(`--rate`·`--header`·`--max-body`·타임아웃) | — |
 | GUI | Kit 경로(로그인 포함). 폴링하지 않는다. **리스너 옵션 폼**·**왜 트래픽을 안 받나**·패스스루 두 폴백(`on_no_sni` 포함) | 아래 §2 |
 
 ### GUI
@@ -84,13 +84,13 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **743** |
-| conformance | `npm run test:conformance` | **424** |
+| 단위 | `npm test` | **786** |
+| conformance | `npm run test:conformance` | **441** |
 | 골든 | `npm run test:golden` | 62 |
 | 엔진 사실 | `npm run test:engine` | 76 (SKIP 1) |
 | e2e | `npm run test:e2e` | 60 |
 | 스파이크 | `spike/*/run.sh` | 100 |
-| 저장소 | `npm run test:store` | 189 |
+| 저장소 | `npm run test:store` | 207 |
 
 스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
 B(구현된 API·DDL) 드리프트를 둘 다 막는다.
