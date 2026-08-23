@@ -19,11 +19,17 @@ updates:
       day: monday
       time: '09:00'
       timezone: Asia/Seoul
-    # **한 묶음으로 온다.** 패치 하나에 PR 하나면 매주 열 개가 열리고, 열 개가 열리면
-    # 아무도 안 본다. 묶으면 게이트도 한 번만 돈다.
+    # **마이너·패치만 한 묶음으로 온다.** 패치 하나에 PR 하나면 매주 열 개가 열리고,
+    # 열 개가 열리면 아무도 안 본다. 묶으면 게이트도 한 번만 돈다.
+    #
+    # ⚠️ **메이저는 묶음에서 뺀다.** 처음엔 `patterns: ['*']` 만 적었더니 첫 PR 이
+    # typescript 5 → 7 과 vitest 2 → 4 를 **패치들과 같이** 들고 왔다(#2). 그러면
+    # 게이트가 빨개져도 무엇 때문인지 모르고, 초록이어도 무엇을 승인한 것인지 모른다.
+    # 메이저는 각자 와야 하나씩 판단할 수 있다.
     groups:
       npm:
         patterns: ['*']
+        update-types: [minor, patch]
     open-pull-requests-limit: 3
     commit-message:
       prefix: 'chore(deps)'
@@ -39,6 +45,7 @@ updates:
     groups:
       gui:
         patterns: ['*']
+        update-types: [minor, patch]
     open-pull-requests-limit: 3
     commit-message:
       prefix: 'chore(deps)'
@@ -61,7 +68,7 @@ updates:
 
   # 베이스 이미지. `openresty:alpine` 같은 부동 태그는 dependabot 이 할 말이 없지만
   # (움직이는 것은 태그가 아니라 그 뒤의 내용이다 — 그건 `nightly` 가 잡는다),
-  # `node:24-alpine` 이 25 로 갈 자리는 여기가 알려 준다.
+  # node 의 패치가 밀린 자리는 여기가 알려 준다.
   - package-ecosystem: docker
     directory: /deploy
     schedule:
@@ -69,6 +76,20 @@ updates:
       day: monday
       time: '09:00'
       timezone: Asia/Seoul
+    # **데이터 플레인은 Active LTS 만 탄다.** 첫 실행에서 node 24 → 26 을 제안받았는데
+    # (#1), 26 은 2026-05-05 에 나와서 **2026-10-28 에야 LTS 가 된다** — 그 전까지는
+    # Current 다. 24 는 2025-10-28 부터 Active LTS 이고 2028-04-30 까지 산다.
+    # 릴리스 일정은 nodejs/Release 의 schedule.json 에서 확인한 값이다.
+    #
+    # 메이저를 자동으로 받지 않는 이유는 버전이 무서워서가 아니라 **두 군데를 같이
+    # 올려야 하기 때문**이다. 이미지만 26 이 되면 CI(`.nvmrc` = 24)와 배포가 갈라진다.
+    # 그 갈라짐 자체는 `scripts/node-pin.mjs` 가 게이트에서 막지만, 여기서 아예 제안이
+    # 안 오게 해 두면 매주 같은 PR 을 닫는 일이 없다.
+    #
+    # → 26 이 LTS 가 되면 이 줄을 지우거나, `.nvmrc` 와 Dockerfile 을 같이 올린다.
+    ignore:
+      - dependency-name: library/node
+        update-types: ['version-update:semver-major']
     open-pull-requests-limit: 2
     commit-message:
       prefix: 'chore(deps)'
