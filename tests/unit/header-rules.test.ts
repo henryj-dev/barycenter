@@ -37,6 +37,25 @@ import type { Model } from '../../src/model/provisional.js';
 
 const ON = { streamRealip: false, httpLua: true, streamLua: true };
 
+/**
+ * **라우트가 없는 리스너.** 기본 액션만 쓰는, 가장 흔한 모양이다.
+ *
+ * 이 픽스처가 없어서 구멍을 오래 못 봤다 — 요청 헤더가 라우트 location 에만 나가고
+ * 기본 액션 location 에는 안 나갔다. 응답 헤더는 server 레벨이라 나갔으므로
+ * **절반만 동작하는** 상태였고, 그건 "설정했는데 안 걸린다" 중에서도 알아채기 어렵다.
+ */
+const noRoutes = (headers?: unknown): Model => ({
+  listeners: [{
+    key: 'web', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true,
+    http: { defaultAction: { pool: 'app' }, ...(headers === undefined ? {} : { headers }) },
+  }] as Model['listeners'],
+  httpRoutes: [],
+  passthroughRoutes: [],
+  pools: [{ key: 'app', protocolClass: 'http', algorithm: 'round_robin' }],
+  backends: [{ key: 'a', pool: 'app', host: '10.0.0.1', port: 80, weight: 1 }],
+  certificates: [], tlsPolicies: [], sniBindings: [],
+} as unknown as Model);
+
 const base = (headers?: unknown): Model => ({
   listeners: [{
     key: 'web', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true,
@@ -61,11 +80,20 @@ describe('헤더 조작 (제안 #7)', () => {
   });
 
   it('요청 헤더는 **location** 에 나온다 — server 에 내면 기존 셋에 지워진다', () => {
-    const conf = render(base({ request: [{ name: 'X-Tenant', value: 'acme' }] }), ON).conf;
-    expect(conf).toContain('proxy_set_header X-Tenant acme;');
-    // 기존 셋과 같은 블록이어야 한다. 위치를 바이트로 잰다.
+    const full = render(base({ request: [{ name: 'X-Tenant', value: 'acme' }] }), ON).conf;
+    expect(full).toContain('proxy_set_header X-Tenant acme;');
+    /**
+     * **라우트 블록 안에서 잰다.**
+     *
+     * 2026-08-24 에 기본 액션 location 에도 요청 헤더를 내기 시작했다(라우트 없는
+     * 리스너에서 안 걸리던 구멍이다). 그래서 `indexOf`(첫 등장)로 재면 기본 블록의
+     * 것이 잡히고 자리가 뒤집힌다 — 이 검사가 재려는 것은 **라우트 location 안의
+     * 순서**이므로 그 블록으로 좁힌다.
+     */
+    const conf = full.slice(full.indexOf('server_name a.test'));
     const mine = conf.indexOf('proxy_set_header X-Tenant');
     const built = conf.indexOf('proxy_set_header X-Forwarded-For');
+    expect(mine, '라우트 블록에 요청 헤더가 없다').toBeGreaterThan(-1);
     expect(mine).toBeGreaterThan(built);
     // 사이에 블록 경계가 없어야 같은 location 이다.
     expect(conf.slice(built, mine)).not.toContain('}');
@@ -152,5 +180,39 @@ describe('헤더 조작 (제안 #7)', () => {
       });
       expect(r.ok, JSON.stringify(r.ok ? [] : r.issues)).toBe(true);
     });
+  });
+});
+
+describe('라우트가 없는 리스너 — 기본 액션만 쓰는 모양 (2026-08-24)', () => {
+  /**
+   * **구멍이었다.** 요청 헤더가 라우트 location 에만 나가서, 라우트 없이 기본 액션만
+   * 쓰는 리스너에서는 `--header req:...` 가 저장은 되는데 안 걸렸다.
+   */
+  it('요청 헤더가 기본 액션 location 에도 나간다', () => {
+    const conf = render(noRoutes({ request: [{ name: 'X-Tenant', value: 'acme' }] }), ON).conf;
+    expect(conf, '기본 액션에 요청 헤더가 안 나간다').toContain('proxy_set_header X-Tenant acme;');
+  });
+
+  /**
+   * **`Host` 뒤에 온다.** `proxy_set_header` 는 상속이 아니라 대체다 — 사용자가 `Host`
+   * 를 직접 정했으면 그것이 이겨야 하고, 그러려면 우리 기본값보다 뒤여야 한다.
+   */
+  it('사용자 Host 가 우리 기본값을 이긴다', () => {
+    const conf = render(noRoutes({ request: [{ name: 'Host', value: 'backend.internal' }] }), ON).conf;
+    const ours = conf.indexOf('proxy_set_header Host $host;');
+    const theirs = conf.indexOf('proxy_set_header Host backend.internal;');
+    expect(theirs, '사용자 Host 가 안 나간다').toBeGreaterThan(-1);
+    expect(theirs, '사용자 Host 가 우리 기본값보다 앞이라 덮인다').toBeGreaterThan(ours);
+  });
+
+  it('응답 헤더는 그대로 server 레벨이다', () => {
+    const conf = render(noRoutes({ response: [{ name: 'X-Served-By', value: 'bary' }] }), ON).conf;
+    expect(conf).toContain('add_header X-Served-By bary always;');
+  });
+
+  it('안 정하면 아무것도 안 낸다', () => {
+    const conf = render(noRoutes(), ON).conf;
+    expect(conf).not.toContain('X-Tenant');
+    expect(conf).not.toContain('add_header X-');
   });
 });

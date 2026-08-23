@@ -1042,6 +1042,19 @@ function defaultServerBlock(
             ]),
             ...upstreamTlsNodes(defaultPoolTls, defaultCerts),
             directive('proxy_set_header', [lit('Host'), variable('host')]),
+            /**
+             * **요청 헤더는 여기도 나가야 한다** (제안 #7, 2026-08-24).
+             *
+             * 라우트 location 에만 내고 있었다. 그래서 라우트 없이 기본 액션만 쓰는
+             * 리스너 — 가장 흔한 모양이다 — 에서는 `--header req:...` 가 **저장은
+             * 되는데 안 걸렸다.** 응답 헤더는 server 레벨이라 나갔으므로 절반만
+             * 동작하는, 알아채기 어려운 종류였다.
+             *
+             * `proxy_set_header` 는 상속이 아니라 **대체**다. 그래서 이 자리에 내면
+             * 위의 `Host` 를 덮지 않도록 **뒤에** 와야 한다 — 사용자가 `Host` 를 직접
+             * 정했다면 그것이 이기는 것이 맞다.
+             */
+            ...requestHeaderNodes(listener.http?.headers?.request),
           ]),
         ]
       // **`location /` 안에 넣는다. server 레벨 `return` 이 아니다.**
