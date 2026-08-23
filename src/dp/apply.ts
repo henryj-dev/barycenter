@@ -305,10 +305,33 @@ export class ApplyRunner {
 
   /** 관측 실패는 "모른다" 지 "실패" 가 아니다 — 상태기계가 재시도로 판정한다. */
   private async observe(): Promise<ActivationEvidence | undefined> {
+    const o = await this.observeRead();
+    return o.read ? o.evidence : undefined;
+  }
+
+  /**
+   * **관측이 됐는지와 무엇을 봤는지를 갈라서 돌려준다** (▲ 잔여물, 2026-08-23).
+   *
+   * `observe()` 는 둘을 `undefined` 하나로 접는다. 그래서 *"세계를 읽었는데 옛 세대였다"*
+   * 와 *"세계를 아예 못 읽었다"* 가 구분되지 않았고, 상한에 닿으면 러너가 양쪽 모두에
+   * **"활성화가 관측되지 않았다"** 라고 적었다 — 뒤쪽에서 그건 거짓이다. 우리는 활성화를
+   * 관측하지 *못한* 것이지, 활성화가 *안 일어난* 것을 관측한 게 아니다.
+   *
+   * 그 거짓이 실제로 값을 치렀다: `spike/s12` 의 간헐 빨강에서 러너는 `failed` 라고
+   * 말했는데 `link` 와 `served` 는 이미 목표 세대였다. **세계는 수렴해 있었다.**
+   * 종단 기록이 세계에 대해 거짓을 주장하면, 그걸 읽는 운영자와 복구 경로가 둘 다
+   * 틀린 곳을 본다.
+   *
+   * 관측 실패는 `budget()` 의 예산 초과이거나 admin 소켓 타임아웃이다. 둘 다 **읽기**의
+   * 실패이지 세계의 상태가 아니다.
+   */
+  private async observeRead(): Promise<
+    { read: true; evidence: ActivationEvidence | undefined } | { read: false }
+  > {
     try {
-      return await this.budget('observeActivation', () => this.effects.observeActivation());
+      return { read: true, evidence: await this.budget('observeActivation', () => this.effects.observeActivation()) };
     } catch {
-      return undefined;
+      return { read: false };
     }
   }
 
@@ -613,24 +636,47 @@ export class ApplyRunner {
         }
         case 'reload_intent': {
           // 신호를 보냈는지 모른다 → **먼저 관측한다.** 이미 반영됐으면 재전송하지 않는다.
-          const seen = await this.observe();
-          if (provesActivation(seen, gen)) {
+          const read = await this.observeRead();
+          const seen = read.read ? read.evidence : undefined;
+          if (read.read && provesActivation(seen, gen)) {
             await ignoreConflict(
               this.write(next(j, { phase: 'reload_observed', ...(seen ? { evidence: seen } : {}) })),
             );
             break;
           }
-          if (j.reloadAttempts >= RELOAD_ATTEMPT_LIMIT) {
+          /**
+           * **세계를 못 읽었으면 다시 안 보낸다** (▲ 잔여물, 2026-08-23).
+           *
+           * 재전송은 *"세계를 읽었더니 아직 옛 세대다"* 에 대한 답이다. 읽기 자체가
+           * 실패한 것에 그걸로 답하는 것은 **읽기 실패에 쓰기로 답하는 것**이고, 남는
+           * 것은 쌓인 워커 세대뿐이다 (§6.4 admission control). 정작 세계는 이미 수렴해
+           * 있을 수 있고 — S12 에서 실제로 그랬다.
+           *
+           * 다만 **아직 한 번도 안 보냈으면 보낸다.** HUP 은 행동이고 관측은 확인이다.
+           * 확인이 안 된다고 행동을 안 하면 admin 소켓이 한 번 딸꾹일 때마다 전환이
+           * 통째로 멈춘다. 확인이 안 되는 상태에서 **반복**하지 않을 뿐이다.
+           */
+          const blind = !read.read;
+          if (j.reloadAttempts >= RELOAD_ATTEMPT_LIMIT || (blind && j.reloadAttempts > 0)) {
             // 상한을 넘었다. 무한 재전송은 워커 세대만 쌓는다 (§6.4 admission control).
             // **실패도 종단이다.** 전 평면의 슬롯을 반납한다.
             //
             // **사유를 남긴다.** 여기만 사유 없이 닫고 있었고, 그래서 `{"phase":"failed"}`
             // 만 돌아왔다 — 실제로 이 자리에서 두 번 진단이 막혔다. 관측한 증거도 함께
             // 싣는다: 무엇을 보고 활성화가 아니라고 판정했는지가 진단의 전부다.
-            await this.failAll(j,
-              `reload 를 ${RELOAD_ATTEMPT_LIMIT} 번 보냈는데 활성화가 관측되지 않았다`
-              + ` (기대 세대 ${gen}, 관측 ${JSON.stringify(seen ?? null)})`
-              + ' — 엔진의 error log 를 본다');
+            //
+            // ⚠️ **두 사유는 다른 주장이다.** 위쪽은 세계에 대한 주장이고(읽었고, 답이
+            // 목표가 아니었다), 아래쪽은 **주장을 안 하는 것**이다(못 읽었다). 둘을 같은
+            // 문장으로 닫으면 종단 기록이 거짓을 담고, 다음 사람은 엔진 로그를 뒤지다가
+            // 정작 죽은 것이 admin 경로였다는 것을 못 본다.
+            await this.failAll(j, blind
+              ? `reload 를 보낸 뒤 활성화 관측 자체가 실패했다 — **세계의 상태를 모른다**`
+                + ` (기대 세대 ${gen}). 활성화가 안 일어났다는 뜻이 아니다:`
+                + ' 세대가 이미 넘어가 있을 수 있다.'
+                + ' admin 소켓·관측 예산을 먼저 보고, `current` 링크와 서빙 세대를 직접 확인한다'
+              : `reload 를 ${RELOAD_ATTEMPT_LIMIT} 번 보냈는데 활성화가 관측되지 않았다`
+                + ` (기대 세대 ${gen}, 관측 ${JSON.stringify(seen ?? null)})`
+                + ' — 엔진의 error log 를 본다');
             break;
           }
           // **이 쓰기를 이긴 러너만 HUP 을 보낸다** (6차 반례 ③). 진 쪽은 다시 읽는다.
