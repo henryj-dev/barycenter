@@ -38,6 +38,7 @@ import type {
   HeaderRules,
   HttpProfile,
   ProxyLimits,
+  RateLimit,
 } from '../model/provisional.js';
 import type { Db, Queryable, Row } from './pg.js';
 import {
@@ -279,7 +280,7 @@ async function readModel(c: Queryable): Promise<Model> {
 
   const listeners = (await c.query(
     `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2,
-            l.proxy_limits, l.header_rules,
+            l.proxy_limits, l.header_rules, l.rate_limit,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
             dp.key AS default_pool, hp.key AS http_default_pool, sp.key AS sni_pool,
             tp.key AS tls_policy, tc.key AS tls_default_certificate
@@ -317,12 +318,16 @@ async function readModel(c: Queryable): Promise<Model> {
       const limits = raw === null || raw === undefined ? undefined : raw as ProxyLimits;
       const rawH = r['header_rules'];
       const headers = rawH === null || rawH === undefined ? undefined : rawH as HeaderRules;
-      if (action === undefined && limits === undefined && headers === undefined) return {};
+      const rawR = r['rate_limit'];
+      const rateLimit = rawR === null || rawR === undefined ? undefined : rawR as RateLimit;
+      if (action === undefined && limits === undefined
+        && headers === undefined && rateLimit === undefined) return {};
       return {
         http: {
           ...(action === undefined ? {} : { defaultAction: action }),
           ...(limits === undefined ? {} : { limits }),
           ...(headers === undefined ? {} : { headers }),
+          ...(rateLimit === undefined ? {} : { rateLimit }),
         },
       };
     };
@@ -616,9 +621,9 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
                                 on_unmatched_sni_reject,preread_timeout_s,
                                 default_pool_id,default_pool_cls,
                                 tls_policy_id,tls_default_cert_id,http2,proxy_limits,header_rules,
-                                created_by,updated_by,revision)
+                                rate_limit,created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 $18,$19,$22,$23,$24,$20,$20,$21)
+                 $18,$19,$22,$23,$24,$25,$20,$20,$21)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
@@ -637,6 +642,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            http2=EXCLUDED.http2,
            proxy_limits=EXCLUDED.proxy_limits,
            header_rules=EXCLUDED.header_rules,
+           rate_limit=EXCLUDED.rate_limit,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
@@ -657,7 +663,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
             ? (obj(b['http'])['limits'] ?? null) : null,
           // $24 — 같은 규칙 (제안 #7). stream 에는 `add_header` 도 `proxy_set_header` 도 없다.
           protocol === 'http' || protocol === 'https'
-            ? (obj(b['http'])['headers'] ?? null) : null],
+            ? (obj(b['http'])['headers'] ?? null) : null,
+          // $25 — 같은 규칙 (제안 #6). stream 에는 `limit_req` 가 없다.
+          protocol === 'http' || protocol === 'https'
+            ? (obj(b['http'])['rateLimit'] ?? null) : null],
       );
       return;
     }

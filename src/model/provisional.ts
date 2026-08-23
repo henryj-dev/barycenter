@@ -340,6 +340,56 @@ export type HttpProfile = {
    * 표현해야 하고, 그건 nginx 의 대체 규칙을 모델에 통째로 들이는 일이다.
    */
   headers?: HeaderRules;
+  /**
+   * 레이트리밋과 커넥션 제한 (제안 #6). 없으면 아무 제한도 안 낸다.
+   *
+   * zone **선언**은 `http` 블록에만 있을 수 있고 **적용**은 server 다. 이름은 리스너
+   * 키에서 판다 — 별도 리소스로 만들면 "이 zone 을 누가 쓰나" 가 모델에 또 하나의
+   * 참조 그래프가 되는데, 쓰는 쪽이 리스너 하나뿐이라 그 대가에 비해 얻는 것이 없다.
+   */
+  rateLimit?: RateLimit;
+};
+
+/**
+ * 레이트리밋·커넥션 제한.
+ *
+ * **키는 `$binary_remote_addr` 고정이다.** 사용자가 고르게 하면 nginx 변수 표면이
+ * 통째로 열리고(§4.9 가 화이트리스트로 좁혀 둔 그것), 얻는 것은 "누구를 세는가" 의
+ * 변형뿐이다. realip 뒤라 PROXY protocol 을 쓰는 배포에서도 진짜 클라이언트를 센다.
+ *
+ * **`burst`·`nodelay` 만 적을 수는 없다.** 무엇의 burst 인지가 없다 — 저장은 되는데
+ * 렌더가 못 하는 조합을 만들지 않는다.
+ */
+export type RateLimit = {
+  /**
+   * ⚠️ **`return` 으로 끝나는 라우트에는 안 걸린다** (실측, 2026-08-23).
+   *
+   * nginx 의 단계 순서다: `return` 은 **rewrite**, `limit_req` 는 **preaccess** 인데
+   * rewrite 가 앞이다. 그래서 redirect·reject 라우트는 레이트리밋이 돌기 전에 끝난다.
+   * 이 저장소가 같은 함정에 두 번 물렸다(`if` 의 단계, ACME 예약 라우트).
+   *
+   * 고치려면 `return` 을 content 단계로 옮겨야 하고 그건 redirect 한 줄의 대가로는
+   * 너무 크다. **사실로 적어 둔다** — `tests/golden/rate-limit.test.ts` 가 못 박는다.
+   */
+  /** 초당 요청 수 (`rate=Nr/s`). */
+  requestsPerSecond?: number;
+  /** 순간적으로 넘길 수 있는 양 (`burst=`). `requestsPerSecond` 가 있어야 한다. */
+  burst?: number;
+  /**
+   * burst 를 **지연 없이** 통과시킨다 (`nodelay`).
+   *
+   * 기본값을 우리가 안 고른다 — 켜고 끄는 차이가 백엔드가 받는 부하의 *모양*을 바꾼다.
+   */
+  nodelay?: boolean;
+  /** 클라이언트당 동시 연결 상한 (`limit_conn`). 자기 zone 을 쓴다. */
+  maxConnections?: number;
+  /**
+   * zone 크기 (KB). 없으면 10m.
+   *
+   * 차면 nginx 가 **503 을 낸다** — 상태를 못 들고 있으면 통과시키는 게 아니라 막는다.
+   * 클라이언트가 많은 배포에서 이 값이 실제로 물린다.
+   */
+  zoneKb?: number;
 };
 
 /** 한 줄. `value` 는 §4.9 의 변수 화이트리스트를 지난다. */

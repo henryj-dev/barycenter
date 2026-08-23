@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 112 심볼 · sha256:69e7c72f32fa4f266ac5dd140d90c059b96dad865ed41f3bc011261c459acefd
+# 116 심볼 · sha256:3a3482d56a6b5bad0b02c3b05570f58468bae40ecff5cc65181af7df4076f1b0
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -231,6 +231,16 @@ export type GenerationManifest = {
     digest: string;
     planes: ('http' | 'stream')[];
 };
+── HeaderRule
+export type HeaderRule = {
+    name: string;
+    value: string;
+};
+── HeaderRules
+export type HeaderRules = {
+    request?: HeaderRule[];
+    response?: HeaderRule[];
+};
 ── HealthCheck
 export type HealthCheck = {
     path?: string;
@@ -267,6 +277,9 @@ export type HttpProfile = {
     defaultAction?: 'reject' | {
         pool: string;
     };
+    limits?: ProxyLimits;
+    headers?: HeaderRules;
+    rateLimit?: RateLimit;
 };
 ── HttpRoute
 export type HttpRoute = {
@@ -344,7 +357,7 @@ export type ModelIssue = {
     message: string;
 };
 ── ModelIssueCode
-export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_hsts' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range';
+export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_hsts' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range' | 'invalid_value' | 'duplicate';
 ── ModelValidationError
 export declare class ModelValidationError extends Error {
     readonly issues: ModelIssue[];
@@ -444,6 +457,13 @@ export type PreflightResult = {
 };
 ── ProtocolClass
 export type ProtocolClass = 'http' | 'tcp' | 'udp';
+── ProxyLimits
+export type ProxyLimits = {
+    connectTimeoutMs?: number;
+    readTimeoutMs?: number;
+    sendTimeoutMs?: number;
+    clientMaxBodyBytes?: number;
+};
 ── PublishRecord
 export type PublishRecord = {
     generation: string;
@@ -462,6 +482,14 @@ export type PublishedState = {
     kind: 'inconsistent';
     generation: string | undefined;
     record?: PublishRecord;
+};
+── RateLimit
+export type RateLimit = {
+    requestsPerSecond?: number;
+    burst?: number;
+    nodelay?: boolean;
+    maxConnections?: number;
+    zoneKb?: number;
 };
 ── RawListener
 export type RawListener = ListenerBase & {

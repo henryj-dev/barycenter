@@ -30,6 +30,7 @@ import type {
   HeaderRules,
   HttpProfile,
   ProxyLimits,
+  RateLimit,
   HttpRoute,
   Listener,
   Model,
@@ -191,14 +192,63 @@ function decodeHttpProfile(iss: Issues, v: unknown, path: string): HttpProfile |
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['defaultAction', 'limits', 'headers']);
+  noExtraKeys(iss, v, path, ['defaultAction', 'limits', 'headers', 'rateLimit']);
   const action = optional(v['defaultAction'], () => decodeSniOutcome(iss, v['defaultAction'], `${path}.defaultAction`));
   const limits = optional(v['limits'], () => decodeProxyLimits(iss, v['limits'], `${path}.limits`));
   const headers = optional(v['headers'], () => decodeHeaderRules(iss, v['headers'], `${path}.headers`));
+  const rateLimit = optional(v['rateLimit'], () => decodeRateLimit(iss, v['rateLimit'], `${path}.rateLimit`));
   return {
     ...(action === undefined ? {} : { defaultAction: action }),
     ...(limits === undefined ? {} : { limits }),
     ...(headers === undefined ? {} : { headers }),
+    ...(rateLimit === undefined ? {} : { rateLimit }),
+  };
+}
+
+/**
+ * 레이트리밋 (제안 #6).
+ *
+ * **저장은 되는데 렌더가 못 하는 조합을 만들지 않는다.** `burst`·`nodelay` 는
+ * `limit_req` 의 인자라 zone 이 없으면 쓸 데가 없고, 빈 객체는 "안 적음" 과 같다.
+ * 둘 다 여기서 막는다 — 안 막으면 저장은 성공하고 아무 일도 안 일어난다.
+ */
+function decodeRateLimit(iss: Issues, v: unknown, path: string): RateLimit | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['requestsPerSecond', 'burst', 'nodelay', 'maxConnections', 'zoneKb']);
+  const rps = optional(v['requestsPerSecond'],
+    () => int(iss, v['requestsPerSecond'], `${path}.requestsPerSecond`, 1, 1_000_000));
+  const burst = optional(v['burst'], () => int(iss, v['burst'], `${path}.burst`, 1, 1_000_000));
+  const conns = optional(v['maxConnections'],
+    () => int(iss, v['maxConnections'], `${path}.maxConnections`, 1, 1_000_000));
+  // nginx 는 너무 작은 zone 을 거절한다. 하한을 주고, 상한은 터무니없는 값만 거른다.
+  const zoneKb = optional(v['zoneKb'], () => int(iss, v['zoneKb'], `${path}.zoneKb`, 16, 1_048_576));
+  const nodelay = optional(v['nodelay'], () => {
+    if (typeof v['nodelay'] !== 'boolean') {
+      iss.add('invalid_type', `${path}.nodelay`, `불리언이어야 한다 (받은 것: ${typeName(v['nodelay'])})`);
+      return undefined;
+    }
+    return v['nodelay'];
+  });
+
+  if (rps === undefined && (burst !== undefined || nodelay !== undefined)) {
+    iss.add('invalid_value', path,
+      'burst·nodelay 는 requestsPerSecond 가 있어야 한다 — 무엇의 burst 인지가 없다');
+    return undefined;
+  }
+  if (rps === undefined && conns === undefined) {
+    iss.add('invalid_value', path,
+      'requestsPerSecond 나 maxConnections 중 하나는 있어야 한다 — 아무것도 안 할 거면 안 적는 것과 같다');
+    return undefined;
+  }
+  return {
+    ...(rps === undefined ? {} : { requestsPerSecond: rps }),
+    ...(burst === undefined ? {} : { burst }),
+    ...(nodelay === undefined ? {} : { nodelay }),
+    ...(conns === undefined ? {} : { maxConnections: conns }),
+    ...(zoneKb === undefined ? {} : { zoneKb }),
   };
 }
 

@@ -41,6 +41,7 @@ import type {
   HeaderRule,
   PassthroughRoute,
   ProxyLimits,
+  RateLimit,
   Certificate,
   CipherPolicyRef,
   HstsPolicy,
@@ -461,6 +462,7 @@ function httpServerBlocks(
         ...realipNodes(listener),
         ...proxyLimitNodes(listener.http?.limits),
         ...responseHeaderNodes(listener.http?.headers?.response),
+        ...rateLimitNodes(listener.key, listener.http?.rateLimit),
         ...(acme ? [acmeChallengeLocation()] : []),
         ...locations,
       ]),
@@ -547,6 +549,64 @@ function responseHeaderNodes(rules: readonly HeaderRule[] | undefined): ConfNode
 function requestHeaderNodes(rules: readonly HeaderRule[] | undefined): ConfNode[] {
   if (rules === undefined) return [];
   return rules.map((h) => directive('proxy_set_header', [lit(h.name), lit(h.value)]));
+}
+
+/**
+ * zone 이름 (제안 #6). **리스너 키에서 판다.**
+ *
+ * `ident` 가 nginx 식별자로 만든다 — 리스너 키는 `web-edge.1` 처럼 nginx 가 못 받는
+ * 문자를 담을 수 있고, 그대로 쓰면 기동이 깨진다.
+ */
+const reqZoneName = (listenerKey: string): string => `bary_req_${ident(listenerKey)}`;
+const connZoneName = (listenerKey: string): string => `bary_conn_${ident(listenerKey)}`;
+
+/** zone 크기. 없으면 10m — nginx 가 흔히 쓰는 값이다. */
+const zoneSize = (kb: number | undefined): string =>
+  kb === undefined ? '10m' : (kb % 1024 === 0 ? `${kb / 1024}m` : `${kb}k`);
+
+/**
+ * zone **선언** — `http` 블록에만 놓을 수 있다 (제안 #6).
+ *
+ * 키는 `$binary_remote_addr` 고정이다. 사용자가 고르게 하면 nginx 변수 표면이 통째로
+ * 열리고, 얻는 것은 "누구를 세는가" 의 변형뿐이다. realip 뒤라 PROXY protocol 을 쓰는
+ * 배포에서도 진짜 클라이언트를 센다.
+ */
+function rateLimitZoneNodes(listenerKey: string, rl: RateLimit | undefined): ConfNode[] {
+  if (rl === undefined) return [];
+  const out: ConfNode[] = [];
+  const size = zoneSize(rl.zoneKb);
+  if (rl.requestsPerSecond !== undefined) {
+    out.push(directive('limit_req_zone', [
+      variable('binary_remote_addr'),
+      lit(`zone=${reqZoneName(listenerKey)}:${size}`),
+      lit(`rate=${rl.requestsPerSecond}r/s`),
+    ]));
+  }
+  if (rl.maxConnections !== undefined) {
+    // **req 와 conn 은 다른 zone 타입이다.** 하나를 둘이 나눠 쓸 수 없다.
+    out.push(directive('limit_conn_zone', [
+      variable('binary_remote_addr'),
+      lit(`zone=${connZoneName(listenerKey)}:${size}`),
+    ]));
+  }
+  return out;
+}
+
+/** zone **적용** — server 레벨. */
+function rateLimitNodes(listenerKey: string, rl: RateLimit | undefined): ConfNode[] {
+  if (rl === undefined) return [];
+  const out: ConfNode[] = [];
+  if (rl.requestsPerSecond !== undefined) {
+    const args = [lit(`zone=${reqZoneName(listenerKey)}`)];
+    if (rl.burst !== undefined) args.push(lit(`burst=${rl.burst}`));
+    // **기본값을 우리가 안 고른다** — `nodelay` 는 백엔드가 받는 부하의 *모양*을 바꾼다.
+    if (rl.nodelay === true) args.push(lit('nodelay'));
+    out.push(directive('limit_req', args));
+  }
+  if (rl.maxConnections !== undefined) {
+    out.push(directive('limit_conn', [lit(connZoneName(listenerKey)), num(rl.maxConnections)]));
+  }
+  return out;
 }
 
 /** 라우트 액션 하나를 location 본문으로. */
@@ -921,6 +981,7 @@ function defaultServerBlock(
     // 운영자는 "적었는데 어떤 요청에는 안 먹는다" 를 겪는다.
     ...proxyLimitNodes(listener.http?.limits),
     ...responseHeaderNodes(listener.http?.headers?.response),
+    ...rateLimitNodes(listener.key, listener.http?.rateLimit),
     ...(acme ? [acmeChallengeLocation()] : []),
     ...body,
   ]);
@@ -1143,7 +1204,18 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
       }
     }
 
-    const children: ConfNode[] = [adminInclude];
+    /**
+     * **zone 선언은 http 블록에만 있을 수 있다** (제안 #6).
+     *
+     * 그리고 **적용보다 앞이어야 한다** — nginx 는 모르는 zone 을 참조하면 기동을
+     * 거부한다. `children` 은 뒤에서 `unshift` 로 더 앞에 붙는 것들이 있으므로
+     * 여기서는 맨 앞이 아니라 `adminInclude` 옆이면 충분하다: server 블록은
+     * 이 배열보다 **뒤**에 붙는다.
+     */
+    const children: ConfNode[] = [
+      ...httpListeners.flatMap((l) => rateLimitZoneNodes(l.key, l.http?.rateLimit)),
+      adminInclude,
+    ];
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).
     if (caps.httpLua === true) {
       children.unshift(lua('log_by_lua_block', `
