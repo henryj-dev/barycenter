@@ -1,0 +1,71 @@
+name: Bug report
+description: Something behaves differently from what DESIGN.md or the README says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Not for security issues.** Those go through
+        [private vulnerability reporting](https://github.com/henryj-dev/barycenter/security/advisories/new)
+        — see [SECURITY.md](../blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, what you got, and which document told you to expect it (a DESIGN.md section, a README line).
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: |
+        The smallest sequence that shows it. A changeset JSON, the `bary` commands, or a failing test is ideal —
+        this project treats a reproduction as the thing that makes a report fixable and *keeps* it fixed.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: rendered
+    attributes:
+      label: Rendered configuration or output, if relevant
+      description: The generated `nginx.conf`, the API response, the daemon log — whichever shows the difference.
+      render: text
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: "`git rev-parse --short HEAD` — there are no releases yet, so the commit is the version."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running it
+      options:
+        - deploy/docker-compose.yml (the quickstart)
+        - Daemon on the host, nginx/OpenResty elsewhere
+        - Tests only
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: engine
+    attributes:
+      label: Engine
+      description: "`nginx -v` output, or the image tag — e.g. `openresty/openresty:alpine`. Say if you do not know."
+
+  - type: textarea
+    id: gate
+    attributes:
+      label: What the gate says
+      description: |
+        If you ran it: `npm run verify` or `npm run verify:quick`, and the summary table it printed.
+        Not required — but it separates "broken here" from "broken everywhere" faster than anything else.
+      render: text

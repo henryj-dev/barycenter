@@ -1,0 +1,73 @@
+# CodeQL — 코드가 아니라 **패턴**을 본다
+#
+# `verify.sh` 는 이 제품이 약속한 행동을 잰다. 그건 "우리가 생각한 것" 의 범위를 못
+# 벗어난다 — 테스트는 저자가 상상한 교차만 본다(`scripts/mutate.mjs` 의 머리말이 같은
+# 말을 한다). CodeQL 은 반대쪽에서 온다: 우리가 무엇을 의도했는지 모르는 채로, 알려진
+# 결함 모양(주입·경로 탈출·프로토타입 오염 따위)이 이 트리에 있는지만 본다.
+#
+# **`actions` 도 같이 훑는다.** 워크플로 자체가 공격면이다 — 공개 저장소의 러너는 밖에서
+# 온 코드를 실행하고, `${{ }}` 가 `run:` 본문에 박히면 그게 곧 셸 코드가 된다. 사람이
+# 리뷰로 잡는 축이지만, 사람은 반드시 놓친다.
+#
+# **결과는 Security 탭에 쌓인다.** 잡의 초록/빨강이 아니다 — 여기서 잡히는 것은 대개
+# "고쳐야 하지만 지금 머지를 막을 것은 아닌" 부류라, 게이트로 만들면 무시하는 법을
+# 익히게 된다. `verify.sh` 만 게이트다.
+
+name: codeql
+
+on:
+  # **브랜치 전부가 아니라 main 과 PR 만 본다.** 경고는 브랜치별로 쌓이므로 워크트리
+  # 브랜치까지 훑으면 같은 경고가 브랜치 수만큼 생기고, 지우는 데 더 든다.
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # 코드가 안 변해도 **질의 묶음은 변한다.** 새 규칙이 추가되면 어제까지 조용하던
+  # 자리가 오늘 잡힌다 — 그래서 주기적으로 다시 본다.
+  schedule:
+    - cron: '17 3 * * 1'   # 매주 월요일 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # 경고를 Security 탭에 올리는 데 필요한 유일한 쓰기 권한이다.
+      security-events: write
+      # CodeQL 이 워크플로 정의를 읽어야 `actions` 질의를 돌린다.
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: CodeQL 초기화
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          languages: ${{ matrix.language }}
+          # **빌드하지 않는다.** 이 저장소는 타입 제거로 소스를 그대로 돌리고
+          # (`src/index.ts` 가 곧 진입점이다) `dist/` 는 컨테이너용 산출물일 뿐이다 —
+          # 분석해야 할 것은 `src/` 의 원문이지 번들이 아니다.
+          build-mode: none
+          # 기본 묶음에 `security-extended` 를 얹는다. 초안 단계에서 오탐을 몇 개 더
+          # 보는 값보다, 아직 굳지 않은 표면에서 놓치는 값이 크다.
+          queries: security-extended
+
+      - name: 분석
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          category: /language:${{ matrix.language }}

@@ -1,0 +1,50 @@
+name: Design question or proposal
+description: The model should do something it does not do, or DESIGN.md is unclear, or you think it is wrong.
+labels: [design]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        In this repository **the design is the contract** — behaviour changes start in
+        [`DESIGN.md`](../blob/main/DESIGN.md), not in `src/`. So this template is the front
+        door for anything shaped like "it should also be able to…" or "why does it insist
+        on…". It is in Korean; quoting the section number is enough, you do not have to
+        translate it.
+
+  - type: textarea
+    id: situation
+    attributes:
+      label: The situation you are in
+      description: What you are trying to do with nginx, and where the current model gets in the way. Concrete beats abstract.
+    validations:
+      required: true
+
+  - type: input
+    id: section
+    attributes:
+      label: Which part of DESIGN.md this touches
+      description: "Section number if you found it (e.g. §4.5), or say you could not find one — that is itself useful."
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you think it should be
+      description: |
+        A shape, not necessarily an implementation. If it affects the API surface or the DDL, say so —
+        those are frozen *with* the implementation (§9.1.1) and changing them is a different size of decision.
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: What it would cost, as far as you can tell
+      description: |
+        What breaks, what has to be measured against a real engine, what nginx cannot actually do.
+        The README's "Known limitations of the nginx data plane" is where several of these already live.
+
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: Before opening
+      options:
+        - label: I checked STATUS.md — this is not simply "not implemented yet"
+        - label: I searched existing issues

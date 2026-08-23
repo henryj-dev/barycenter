@@ -1,0 +1,16 @@
+# 빈 이슈를 막지 않는다. 템플릿 둘이 덮지 못하는 것 — 문서의 어긋남, 질문, 이 저장소가
+# 아직 이름 붙이지 못한 것 — 이 반드시 있고, 그걸 막으면 그 사람은 그냥 안 적는다.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/henryj-dev/barycenter/security/advisories/new
+    about: Do not open a public issue. Report privately here — see SECURITY.md.
+
+  - name: What is true right now
+    url: https://github.com/henryj-dev/barycenter/blob/main/STATUS.md
+    about: Before reporting "X does not work", check whether X is claimed to work yet.
+
+  - name: How to contribute
+    url: https://github.com/henryj-dev/barycenter/blob/main/CONTRIBUTING.md
+    about: The gate, the Pinned-by rule, and what CI will run on your pull request.

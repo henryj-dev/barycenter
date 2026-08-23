@@ -1,0 +1,111 @@
+# 야간 — **코드가 안 변해도 판정은 변한다**
+#
+# push 게이트는 "이 커밋이 약속을 지키는가" 만 답한다. 그 답이 뒤집히는 경로가 둘 더
+# 있고, 둘 다 커밋 없이 온다.
+#
+#   ① **부동 태그가 움직인다.** `openresty/openresty:alpine`, `postgres:17-alpine`,
+#      `node:24-alpine` 은 이름이 같은 채로 내용이 바뀐다. 이 저장소의 판정은 상당
+#      부분이 *실제 nginx 가 무엇을 하는가*(`tests/engine` 의 엔진 사실, 스파이크)이므로,
+#      엔진이 바뀌면 우리 코드가 그대로여도 사실이 달라진다. 그때 빨개지는 자리가
+#      **다음 사람의 무관한 커밋**이면 원인을 그 커밋에서 찾게 된다.
+#   ② **아직 안 재 본 행동이 남아 있다.** 뮤테이션 스윕은 테스트가 놓친 자리를 찍는다.
+#      게이트에 넣기에는 너무 길고(수십 분), 판정도 사람이 봐야 한다.
+#
+# **여기서 빨간 것은 머지를 막지 않는다.** 막을 수도 없다 — 여기 실패는 대개 이 저장소
+# 밖에서 온다. 대신 원인이 코드가 아니라는 것을 **날짜로 갈라 보여 준다.**
+#
+# ⚠️ 예약 워크플로는 저장소가 60일간 조용하면 GitHub 이 자동으로 끈다. 오래 쉬었다
+#    돌아왔으면 Actions 탭에서 다시 켜야 한다.
+
+name: nightly
+
+on:
+  schedule:
+    - cron: '0 18 * * *'   # 18:00 UTC = 03:00 KST — 하루 작업이 시작되기 전에 판정이 있다
+  workflow_dispatch:
+    inputs:
+      mutants:
+        description: '뮤턴트 개수 (기본 30)'
+        required: false
+        default: '30'
+
+permissions:
+  contents: read
+
+concurrency:
+  # 앞엣것을 취소하지 않는다. 야간은 하루 한 번이고, 취소하면 그날의 판정이 없어진다.
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  # **어제 초록이던 것이 오늘도 초록인가.** 커밋은 그대로, 이미지만 새로 받는다.
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # **매번 새로 받는다.** 러너에 어제 것이 남아 있으면 그걸 쓰고, 그러면 이 잡이
+      # 재려던 바로 그것을 못 잰다. 받은 다이제스트를 함께 남긴다 — 빨개진 날
+      # 어제와 무엇이 다른지 볼 곳은 여기뿐이다.
+      - name: 엔진·DB 이미지 (새로 받는다)
+        run: |
+          docker pull docker.io/openresty/openresty:alpine
+          docker pull docker.io/library/postgres:17-alpine
+          docker image inspect --format '{{index .RepoDigests 0}}' docker.io/openresty/openresty:alpine
+          docker image inspect --format '{{index .RepoDigests 0}}' docker.io/library/postgres:17-alpine
+
+      - run: ./scripts/verify.sh
+
+      - name: 실패 시 컨테이너 상태
+        if: failure()
+        run: |
+          docker ps -a
+          for c in $(docker ps -aq); do
+            echo "───── $c ─────"
+            docker logs --tail 50 "$c" 2>&1 || true
+          done
+
+  # **테스트가 안 보고 있는 자리를 찍는다.** 살아남은 뮤턴트가 곧 검사되지 않은 행동이다.
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 스윕은 트리를 복사해서 돌고 이력을 안 본다 — 얕게 받아도 된다.
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # **씨앗을 매일 돌린다.** `mutate.mjs` 의 기본 씨앗은 고정이라 매일 똑같은 30 개를
+      # 본다 — 그러면 둘째 날부터는 아무것도 새로 알려 주지 않는다. run 번호를 씨앗으로
+      # 주면 표본이 돌아가며 시간이 갈수록 넓은 면을 덮는다. 특정 표본을 재현해야 하면
+      # 로그 첫 줄에 찍힌 씨앗을 `--seed` 로 그대로 준다.
+      - name: 뮤테이션 스윕
+        env:
+          MUTANTS: ${{ inputs.mutants || '30' }}
+          SEED: ${{ github.run_number }}
+        run: node scripts/mutate.mjs --limit "$MUTANTS" --seed "$SEED"
+
+      # **스윕은 실패로 끝나지 않는다** — 판정을 사람이 하기 때문이다. 그러니 결과가
+      # 로그 스크롤 안에서만 살면 아무도 안 본다. 파일로 떨어뜨려 둔다.
+      - name: 스윕 기록 보관
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-sweep-${{ github.run_number }}
+          path: .omc/mutation-sweep.log
+          if-no-files-found: warn
+          retention-days: 30

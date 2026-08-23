@@ -17,11 +17,27 @@
 name: verify
 
 on:
+  # 브랜치 전부를 본다. 이 저장소의 작업 흐름은 워크트리 브랜치를 origin 에 밀고
+  # 거기서 판정을 받는 것이라, `main` 만 보면 판정이 항상 한 발 늦는다.
+  #
+  # **`dependabot/**` 만 뺀다.** 밖에서 온 기여는 포크에서 오므로 여기에 push 이벤트를
+  # 만들지 않지만, dependabot 은 **이 저장소 안에** 가지를 만들고 그 가지로 PR 을 연다 —
+  # 그러면 같은 커밋에 대해 push 와 pull_request 가 각각 전체 스위트를 돌린다(도커까지
+  # 두 번 선다). 이 규칙을 넣기 전 첫 dependabot PR 에서 실제로 그랬다.
+  # 검사를 잃는 것은 아니다: 그 가지의 판정은 `pull_request` 쪽에서 그대로 난다.
   push:
-    branches: ['**']
+    branches:
+      - '**'
+      - '!dependabot/**'
   pull_request:
   # 손으로도 돌릴 수 있게 둔다. 릴리스 전 확인용.
   workflow_dispatch:
+
+# **토큰은 읽기만 준다.** 공개 저장소에서 이 워크플로는 포크가 보낸 코드를 체크아웃해
+# 도커까지 띄운다. 이 안의 어떤 단계도 저장소에 쓸 일이 없으므로, 쓰기 권한은 있으면
+# 새어 나갈 수 있는 것일 뿐 쓸모가 없다. 잡이 더 필요하면 그 잡에서만 올린다.
+permissions:
+  contents: read
 
 # 같은 브랜치에 새 푸시가 오면 **앞엣것을 취소한다 — main 도 포함한다.**
 #
@@ -52,14 +68,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      # **액션은 커밋 SHA 로 박는다.** `@v7` 은 태그이고 태그는 움직인다 — 남의 저장소가
+      # 같은 이름 뒤의 코드를 바꾸면 우리 러너가 그걸 그대로 실행한다. 이 저장소는 자기
+      # 산출물에 대해서는 이미 재현물 핀을 강제하면서 남의 코드는 이름으로 부르고 있었다.
+      # 뒤의 주석은 사람이 읽을 버전이고, dependabot 이 SHA 와 함께 갱신한다.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # **재현물 게이트가 부모 트리를 세운다.** 얕은 클론이면 `worktree add` 가
           # 그 커밋을 못 찾는다. 저장소가 작으니 통째로 받는다.
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          # 체크아웃이 남기는 자격증명을 `.git/config` 에 두지 않는다. 이 잡의 git 은
+          # 전부 로컬 객체만 읽는다(핀 검사의 `worktree add` 포함) — 네트워크로 나갈
+          # 일이 없는데 토큰을 트리에 두면 포크가 보낸 코드가 집을 수 있는 것만 남는다.
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '24'
+          # 버전은 `.nvmrc` 한 군데에 있다. 워크플로 넷이 잡 여섯을 들고 있는데
+          # 숫자를 각자 들면 올릴 때 하나가 남는다 — 이 저장소가 문서에서 이미 겪은
+          # 그 병이다. (`deploy/Dockerfile` 의 `node:24-alpine` 은 아직 별개다.)
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: ./scripts/verify.sh --quick
@@ -71,17 +98,25 @@ jobs:
       # 없이 `src/` 를 고쳐도 통과하던 자리를 여기서 막는다.
       - name: 재현물 핀 검사 (푸시된 커밋 전부)
         if: ${{ !cancelled() }}
+        # **`${{ }}` 를 `run:` 본문에 박지 않는다.** 그 자리는 셸이 스크립트를 보기 전에
+        # 통째로 치환되므로, 값에 따옴표나 `$(...)` 가 섞이면 그대로 셸 코드가 된다.
+        # 여기 오는 셋은 SHA 와 브랜치명이라 지금은 안전하지만 — **안전한 것은 값이지
+        # 자리가 아니다.** 공개 저장소에서 이 자리는 포크가 고른 값도 받는다.
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # PR 이면 병합 기준점, 푸시면 이전 위치. 새 브랜치의 첫 푸시는 `before` 가
           # 0 이므로 기본 브랜치를 기준으로 삼는다.
-          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-          elif [ -n "${{ github.event.before }}" ] \
-            && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ] \
-            && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
-            BASE="${{ github.event.before }}"
+          if [ -n "$PR_BASE" ]; then
+            BASE="$PR_BASE"
+          elif [ -n "$PUSH_BEFORE" ] \
+            && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            BASE="$PUSH_BEFORE"
           else
-            BASE="$(git rev-parse origin/${{ github.event.repository.default_branch }} 2>/dev/null || git rev-parse HEAD~1)"
+            BASE="$(git rev-parse "origin/$DEFAULT_BRANCH" 2>/dev/null || git rev-parse HEAD~1)"
           fi
           echo "기준: $BASE"
           node scripts/pinned.mjs "$BASE"
@@ -91,14 +126,15 @@ jobs:
     # 스파이크 다섯 개가 각각 컨테이너를 세우고 e2e 가 nginx·PG 를 띄운다.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # **재현물 게이트가 부모 트리를 세운다.** 얕은 클론이면 `worktree add` 가
           # 그 커밋을 못 찾는다. 저장소가 작으니 통째로 받는다.
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '24'
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
 
@@ -128,10 +164,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '24'
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
 
