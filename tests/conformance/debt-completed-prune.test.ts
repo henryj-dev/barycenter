@@ -146,9 +146,21 @@ describe('방패가 사라진 뒤 — 측정한 것만 적는다', () => {
       .then(() => 'ok' as const)
       .catch((e: unknown) => (e instanceof DpRejection ? e.kind : 'other'));
 
-    // 캐시가 있었으면 `cached: true` 로 성공을 답했다. 잘린 뒤에는 `terminal` 이다 —
-    // **둘 다 참이다.** 그 전환은 실제로 끝났다. 거짓 성공만 아니면 된다.
-    expect(late, '잘린 기록 자리에서 새 전환이 시작됐다 — 되살아났다').toBe('terminal');
+    /**
+     * 캐시가 있었으면 `cached: true` 로 성공을 답했다. 잘린 뒤에는 **거절**이다 —
+     * 그 전환은 실제로 끝났으므로 둘 다 참이고, **거짓 성공만 아니면 된다.**
+     *
+     * ⚠️ **어느 문이 막는지는 2026-08-24 에 바뀌었다.** 그 전에는 `terminal` 원장이
+     * 막았다. 이제 원장도 잘리므로(추월된 좌표만) `not_staged` 가 막는다 — 슬롯이
+     * 없으니 commit 할 자리가 없다.
+     *
+     * **문이 바뀐 것이지 열린 것이 아니다.** 이 검사가 지키는 것은 "되살아나지
+     * 않는다" 이고 그건 그대로다. 그래서 종류를 못 박는 대신 **성공이 아님**을
+     * 못 박고, 어느 문이었는지는 함께 낸다.
+     */
+    expect(late, '잘린 기록 자리에서 새 전환이 시작됐다 — 되살아났다').not.toBe('ok');
+    expect(['terminal', 'not_staged', 'coordinate_mismatch'], `막은 문: ${late}`)
+      .toContain(late);
   });
 });
 

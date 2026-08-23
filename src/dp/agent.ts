@@ -224,6 +224,17 @@ export type AgentState = {
   /** 끝난 전환. 지연된 RPC 가 되살리지 못하게 막는다. */
   terminal: Record<string, TerminalKind>;
   /**
+   * 원장 항목의 **좌표** — `terminal` 키에는 epoch 이 없다 (35차 스케치).
+   *
+   * 가지치기가 *"목표 epoch 이 좌표에 추월됐는가"* 를 물으려면 그 epoch 을 알아야 하는데
+   * 키가 `operationId:transitionId:token:plane` 이라 없다. 키 포맷을 바꾸면 옛 상태를
+   * 통째로 못 읽으므로 **값 옆에 따로 적는다** — `completed` 의 `transition` 과 같은 모양이다.
+   *
+   * **없는 항목은 안 자른다.** 업그레이드 전에 쌓인 기록은 좌표를 모르고, 모르는 것을
+   * 자르면 운영자가 포기한 전환이 되살아난다. 이 표가 비관으로 기우는 자리다.
+   */
+  terminalAt?: Record<string, { plane: Plane; epoch: string }>;
+  /**
    * `plane:activationEpoch` → 그 좌표로 옮긴 근거 (§6.3).
    *
    * **왜 옮겼는지 답할 수 없으면 옮기지 말았어야 한다.** 사후에 "이 세대가 왜 활성으로
@@ -931,10 +942,26 @@ export function assertInvariants(before: AgentState | undefined, next: AgentStat
   // 없기 때문이다. 즉 이 불변식은 지금 코드의 버그를 잡는 게 아니라, **앞으로 이 기록들을
   // 지우기 시작하는 변경**을 막는다. 근거 기록 자체가 되는지는 `evidenceFor` 를 보는
   // 테스트 셋이 지킨다(그건 뮤테이션으로 잡힌다).
+  //
+  // **"지워지지 않는다" 에서 "부활 가능한 판정은 지워지지 않는다" 로 좁혔다**
+  // (35차 스케치, 2026-08-24). 아래 근거 절이 이미 같은 모양으로 좁혀져 있다.
+  //
+  // 원래 절은 이 표를 **무한히 자라게** 했다 — `terminal` 은 전환마다 평면 수만큼
+  // 늘고 지우는 코드가 하나도 없었다. 그런데 이 표는 감사 기록이 아니라 **부활 방지
+  // 장치**라, 자르는 규칙 없이 그냥 열면 운영자가 포기한 전환이 되살아난다.
+  //
+  // 규칙은 `terminalPrunable` 한 자리에 있고 **가지치기와 이 불변식이 그것을 함께
+  // 쓴다.** 둘로 두면 가지치기가 자른 것을 불변식이 위반으로 읽거나 그 반대가 되고,
+  // 그 어긋남은 이 표에서 정확히 최악의 방향이다.
+  const liveNext = liveTransitionKeys(next);
   for (const [key, was] of Object.entries(before.terminal)) {
     const now = next.terminal[key];
     if (now === undefined) {
-      throw new InvariantViolation('I7 판정은 지워지지 않는다', `종단 기록 ${key} 가 사라졌다`);
+      if (terminalPrunable(before.terminalAt?.[key], next, key, liveNext)) continue;
+      throw new InvariantViolation(
+        'I7 판정은 지워지지 않는다',
+        `종단 기록 ${key} 가 사라졌다 — 아직 부활 가능한 좌표다`,
+      );
     }
     if (now !== was) {
       throw new InvariantViolation(
@@ -2020,7 +2047,11 @@ function finish(s: AgentState, op: OperationTuple, how: TerminalKind): void {
   if (ownsSlot(s, op)) {
     delete s.reservations[op.plane][op.target.activationEpoch];
   }
-  s.terminal[transitionKey(op)] = how;
+  const k = transitionKey(op);
+  s.terminal[k] = how;
+  // 가지치기가 읽을 좌표. **여기서만 쓴다** — 다른 자리에서 `terminal` 을 직접 찍으면
+  // 좌표가 없어 영영 안 잘린다(그 방향은 안전하다).
+  (s.terminalAt ??= {})[k] = { plane: op.plane, epoch: op.target.activationEpoch };
 }
 
 /** 리더 검사까지 포함한 종단 처리. `abort` / `fail` 이 쓴다. */
@@ -2142,12 +2173,20 @@ const EVIDENCE_RETENTION = 64;
  * 다만 **"자를 규칙이 없다" 는 과장이었다** (35차 검수). 규칙의 얼개는 있다 —
  * **목표 epoch 이 좌표에 추월된 항목은 구조적으로 부활 불가**다: 재획득은
  * `epoch_not_monotonic`/`coordinate_mismatch` 에, commit 은 `not_staged` 에 막힌다.
- * 걸리는 것은 지금 `terminal` **키에 epoch 이 없다**는 것이고(값에 적어야 한다 —
- * `completed` 의 `transition` 과 같은 모양), I7 첫 절도 같이 좁혀야 하며, 서 있는
- * epoch 의 `activated` 와 후보가 참조하는 것은 보존해야 한다.
  *
- * **설계 스케치이고 프로토타입은 안 했다.** 재현 경로 없이 넣지 않는다 — 이 표를
- * 잘못 자르면 운영자가 포기한 전환이 되살아난다. 다음 회차의 일로 남긴다.
+ * ✅ **그 스케치를 구현했다** (2026-08-24) — `pruneTerminal`. 걸림돌 셋을 다 넘었다:
+ *
+ *   · 키에 epoch 이 없다 → `terminalAt` 에 **값으로** 적는다. 키 포맷을 바꾸면 옛
+ *     상태를 통째로 못 읽는다
+ *   · I7 첫 절 → 근거 절과 **같은 모양으로** 좁혔다. 판정식(`terminalPrunable`)을
+ *     가지치기와 불변식이 함께 쓴다 — 둘로 두면 한쪽이 자른 것을 다른 쪽이 위반으로
+ *     읽고, 그 어긋남은 이 표에서 최악의 방향이다
+ *   · 보존 대상 → 좌표를 모르는 항목 · 서 있는 epoch 이거나 그 앞 · 예약이 살아 있는
+ *     자리 · 진행 중인 전환과 저널·게시가 가리키는 것. 넷 다 "모르면 남긴다" 다
+ *
+ * 실측: 전환 60 회에 원장 항목 10 개 미만(전에는 60). `tests/conformance/terminal-prune`
+ * 이 자르는 검사보다 **안 자르는 검사를 더 많이** 든다 — 이 표에서 틀리는 방향은
+ * 하나뿐이어야 한다.
  */
 function pruneEvidence(s: AgentState): void {
   const keys = Object.keys(s.activationEvidence);
@@ -2159,8 +2198,94 @@ function pruneEvidence(s: AgentState): void {
   for (const k of drop) delete s.activationEvidence[k];
 }
 
+/**
+ * `terminal` 원장을 자른다 — **추월된 것만** (35차 스케치, 2026-08-24).
+ *
+ * 이 표는 감사 기록이 아니라 **부활 방지 장치**다. `admit` 이 지연 도착한 RPC 를
+ * `aborted`/`failed` 로 거부하는 근거이고, 잘못 자르면 운영자가 포기한 전환이 되살아난다.
+ * 그래서 오래 "자를 규칙이 없다" 로 뒀는데, 35차가 규칙의 얼개를 적었고 여기서 닫는다.
+ *
+ * ── 규칙: 목표 epoch 이 좌표에 **추월**되면 구조적으로 부활 불가다
+ *
+ * 코드에서 확인했다 — 세 문이 각각 막는다:
+ *
+ *   재획득  `reserve` 가 `BigInt(target) <= BigInt(current)` 를 `epoch_not_monotonic`
+ *           으로 막는다. 뒤로 가는 예약은 애초에 안 선다.
+ *   commit  슬롯이 없으면 `not_staged`, 있어도 `sameCoordinate` 가 어긋나
+ *           `coordinate_mismatch` 다.
+ *   승격    베이스라인 승격은 `at.activationEpoch !== epoch` 이면 먼저 걸러내므로
+ *           **서 있는 epoch 의 기록만** 읽는다 — 추월된 것은 애초에 안 본다.
+ *
+ * ── 그래도 남기는 넷
+ *
+ *   · 좌표를 모르는 항목 (`terminalAt` 에 없다 = 업그레이드 전 기록)
+ *   · **서 있는 epoch 이거나 그 앞**의 항목 — 추월되지 않았다
+ *   · 그 (plane, epoch) 에 **예약이 살아 있는** 항목 — fence 스윕이 그 위에 `aborted` 를
+ *     덮어 찍을 수 있고, 원장이 비어 있으면 그 덮어쓰기를 막을 것이 없다
+ *   · 지금 진행 중인 전환 · 저널이 가리키는 전환 · 마지막 게시/활성화가 가리키는 전환
+ *
+ * 넷 다 "모르면 남긴다" 쪽이다. 이 표에서 틀리는 방향은 하나뿐이어야 한다.
+ */
+/** 이 상태에서 **아직 살아 있는** 전환 키들. 평면을 모르는 기록은 양쪽 다 넣는다. */
+function liveTransitionKeys(s: AgentState): Set<string> {
+  const live = new Set<string>();
+  const addBoth = (r: {
+    operationId: string; transitionId: string; leaderToken: string;
+  } | undefined): void => {
+    if (r === undefined) return;
+    for (const plane of ['http', 'stream'] as const) {
+      live.add(transitionKey({ ...r, plane }));
+    }
+  };
+  addBoth(s.activeOperation);
+  addBoth(s.journal?.op);
+  addBoth(s.lastActivated);
+  addBoth(s.lastPublishIntent);
+  addBoth(s.pendingActivation);
+  for (const plane of ['http', 'stream'] as const) {
+    for (const slot of Object.values(s.reservations[plane] ?? {})) {
+      live.add(transitionKey(slot.op));
+    }
+  }
+  return live;
+}
+
+/**
+ * 이 종단 기록을 **자를 수 있는가.**
+ *
+ * `pruneTerminal` 과 I7 이 **같은 식을 쓴다.** 둘로 두면 가지치기가 자른 것을 불변식이
+ * 위반으로 읽거나(그 반대도) 하고, 그 어긋남은 이 표에서 정확히 최악의 방향이다.
+ */
+function terminalPrunable(
+  meta: { plane: Plane; epoch: string } | undefined,
+  s: AgentState,
+  key: string,
+  live: ReadonlySet<string>,
+): boolean {
+  if (meta === undefined) return false;              // 좌표를 모른다 — 안 자른다
+  const standing = s.planes[meta.plane]?.activationEpoch;
+  if (standing === undefined) return false;
+  // **엄격히 작아야** 자른다. 같으면 서 있는 좌표라 베이스라인 승격이 읽는다.
+  if (BigInt(meta.epoch) >= BigInt(standing)) return false;
+  if (s.reservations[meta.plane]?.[meta.epoch] !== undefined) return false;
+  return !live.has(key);
+}
+
+function pruneTerminal(s: AgentState): void {
+  const at = s.terminalAt;
+  if (at === undefined) return;
+  const live = liveTransitionKeys(s);
+  for (const [k, meta] of Object.entries(at)) {
+    if (s.terminal[k] === undefined) { delete at[k]; continue; }   // 이미 없다
+    if (!terminalPrunable(meta, s, k, live)) continue;
+    delete s.terminal[k];
+    delete at[k];
+  }
+}
+
 function prune(s: AgentState): void {
   pruneEvidence(s);
+  pruneTerminal(s);
   const keys = Object.keys(s.completed);
   if (keys.length === 0) return;
   // ⚠️ **구버전 항목의 1 회성 창** (34차 검수). `transition` 필드가 없는 항목은 키
