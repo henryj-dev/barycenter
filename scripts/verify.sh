@@ -82,7 +82,19 @@ run() {                      # run <label> <command...>
   printf '%s\n' "$line"
 
   if [ $rc -ne 0 ]; then
-    printf '\n----- %s -----\n%s\n' "$label" "$(echo "$out" | tail -25)"
+    # **꼬리 25 줄로는 모자란다.** 스파이크는 실패한 회차의 진단을 **인라인**으로 찍고
+    # 요약을 맨 뒤에 찍는다 — 꼬리만 보면 요약만 남고 원인은 잘린다. S12 가 게이트
+    # 안에서만 떨어질 때 정확히 그래서 "왜" 를 못 봤다.
+    #
+    # 실패 표식(`FAIL `·`bad `·`Error`·`error.log`)이 있는 줄과 그 뒤 몇 줄을 함께 낸다.
+    # 아무것도 안 걸리면 예전처럼 꼬리를 낸다 — 못 찾는 것보다 낫다.
+    local marked
+    marked=$(echo "$out" | grep -nE '^\s*(FAIL|bad|✗)|Error|error\.log|복구 로그|후속 로그' | head -20)
+    if [ -n "$marked" ]; then
+      printf '\n----- %s (표식 줄) -----\n%s\n' "$label" "$(echo "$out" \
+        | grep -E -A 6 '^\s*(FAIL|bad|✗)|Error|error\.log|복구 로그|후속 로그' | head -80)"
+    fi
+    printf '\n----- %s (꼬리) -----\n%s\n' "$label" "$(echo "$out" | tail -25)"
   fi
 }
 
