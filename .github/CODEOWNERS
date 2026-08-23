@@ -1,0 +1,13 @@
+# 이 저장소는 한 사람이 관리한다. 소유자 목록이 곧 리뷰 요청 경로다.
+#
+# ⚠️ CODEOWNERS 는 **파일이 있다고 강제되지 않는다.** 리뷰를 실제로 요구하려면
+#    기본 브랜치 보호 규칙에서 "Require review from Code Owners" 를 켜야 한다.
+#    여기 파일만 두면 리뷰어가 자동으로 붙는 것까지가 전부다.
+
+* @mack-erel
+
+# 게이트와 훅은 이 저장소의 판정 근거 자체다. 나머지와 같은 무게로 지나가면 안 된다.
+/.github/          @mack-erel
+/scripts/          @mack-erel
+/DESIGN.md         @mack-erel
+/TESTS.md          @mack-erel
