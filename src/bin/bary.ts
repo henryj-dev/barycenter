@@ -120,6 +120,12 @@ const usage = (): never => {
                                    --rate 10r/s  --burst 20  --nodelay  --max-conn 100
   bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|least_conn|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
+                                 백엔드로 TLS 를 쓰려면 (§4.3):
+                                   --upstream-tls         켠다 (http 는 proxy_pass https://, tcp 는 proxy_ssl on)
+                                   --upstream-sni <이름>  안 주면 업스트림 주소가 SNI 가 된다
+                                   --upstream-ca <인증서> 신뢰 번들로 쓸 인증서 키
+                                   --upstream-verify      --upstream-ca 가 있어야 한다
+                                 udp 와 패스스루가 가리키는 풀에는 못 켠다
   bary pool delete               --name
   bary route create              --name --listener --host|--sni --pool|--to|--reject [--status] [--path-prefix] [--websocket]. apply 는 아니다
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
@@ -320,12 +326,28 @@ async function main(): Promise<void> {
       const host = flag(argv, '--host') ?? usage();
       const portRaw = flag(argv, '--port') ?? usage();
       const algorithm = flag(argv, '--algorithm');
+      /**
+       * 백엔드로 가는 TLS (§4.3). **`--upstream-verify` 는 `--upstream-ca` 가 있어야
+       * 한다** — 신뢰 번들 없이는 검증이 안 걸린다. `upstreamTlsField` 가 그 짝을
+       * 강제하고, 여기서 또 판정하면 GUI 와 갈린다.
+       */
+      const upstreamTls = has(argv, '--upstream-tls')
+        ? {
+          enabled: true,
+          ...(flag(argv, '--upstream-sni') === undefined
+            ? {} : { sni: flag(argv, '--upstream-sni')! }),
+          ...(has(argv, '--upstream-verify') ? { verify: true } : {}),
+          ...(flag(argv, '--upstream-ca') === undefined
+            ? {} : { caBundle: flag(argv, '--upstream-ca')! }),
+        }
+        : undefined;
       const hashKey = flag(argv, '--hash-key');
       try {
         const out = await poolCreate(call, {
           name, protocolClass, backend, host, port: Number(portRaw),
           ...(algorithm === undefined ? {} : { algorithm }),
           ...(hashKey === undefined ? {} : { hashKey }),
+          ...(upstreamTls === undefined ? {} : { upstreamTls }),
         });
         console.error(`pool ${name} committed r${out.revision}`);
         show(out);

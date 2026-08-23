@@ -522,6 +522,46 @@ export type Pool = {
    * 프로버는 연결만 본다.
    */
   healthCheck?: HealthCheck;
+  /**
+   * **백엔드로 가는 TLS** (§4.3, 2026-08-24).
+   *
+   * `http`·`tcp` 풀에만. udp 는 엔진이 안 하고, **패스스루 라우트가 가리키는 풀에도
+   * 금지**다 — 클라이언트 TLS 바이트를 다시 TLS 로 감싸면 TLS-over-TLS 가 된다.
+   * 검증기가 둘 다 막는다.
+   */
+  upstreamTls?: UpstreamTls;
+};
+
+/**
+ * 업스트림 TLS.
+ *
+ * ── `verify` 를 켜려면 `caBundle` 이 있어야 한다
+ *
+ * nginx 의 `proxy_ssl_verify on` 은 `proxy_ssl_trusted_certificate` 없이는 **아무것도
+ * 검증하지 못한다** — 신뢰 저장소가 비어 있어 전부 실패하거나(stream) 시스템 기본을
+ * 쓰는데 그 내용이 이미지마다 다르다. "켰다" 와 "걸린다" 가 갈리는 자리라 검증기가
+ * 짝을 강제한다.
+ *
+ * ── 왜 `caBundle` 이 인증서 키인가
+ *
+ * 자료는 이미 `Certificate` 가 나른다 — `materialRef` 로 SecretStore 를 가리키고,
+ * 세대 materializer 가 `certs/<key>/<version>/fullchain.pem` 으로 굽는다(S8 이 그
+ * 결박을 실측했다). 번들만을 위한 두 번째 자료 경로를 만들면 롤백 결박도 두 벌이 된다.
+ *
+ * ── `sni` 를 왜 따로 받나
+ *
+ * `proxy_ssl_name` 을 안 주면 nginx 는 **업스트림 주소**를 SNI 로 쓴다. 멤버십 평면에서
+ * 그 주소는 IP 라서(슬롯이 `host:port` 다) 백엔드가 이름으로 인증서를 고를 수 없다.
+ */
+export type UpstreamTls = {
+  /** 켜면 `proxy_pass https://` (http) · `proxy_ssl on` (stream) 이 된다. */
+  enabled: boolean;
+  /** `proxy_ssl_name`. 없으면 업스트림 주소가 쓰인다. */
+  sni?: string;
+  /** `proxy_ssl_verify`. 켜려면 `caBundle` 이 있어야 한다 — 검증기가 막는다. */
+  verify?: boolean;
+  /** 신뢰 번들로 쓸 `Certificate.key`. 그 자료의 `fullchain.pem` 을 가리킨다. */
+  caBundle?: string;
 };
 
 export type Backend = {

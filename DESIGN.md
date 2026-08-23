@@ -727,13 +727,32 @@ type TlsPassthroughRoute = ResourceMeta & {
 | `health` | object | §4.3.1 — **프로브 대상과 데이터 경로를 분리한다** |
 | `passive` | object? | `max_fails`, `fail_timeout_s` — ❌ **안 넣기로 했다** (2026-08-23). 아래 |
 | `send_proxy_protocol` | enum | §4.7. **http 는 `none` 고정** |
-| `upstream_tls` | object? | `http`/`tcp` 만. `enabled`, `sni`, `ca_bundle_ref`, `client_cert_ref`, `verify` |
+| `upstream_tls` | object? | ✅ **구현됨** (2026-08-24). `http`/`tcp` 만. `enabled` · `sni` · `verify` · `caBundle`. 아래 |
 | `dns` | object? | `resolver_ref`, `valid_s`, `resolve_mode` — **`on_nxdomain`/`on_timeout` 없음** (S14: 엔진이 선택지를 안 준다. 표는 `DataplaneCapabilities.nativeDns`) |
-| `sticky` | object? | HTTP: 쿠키 / L4: `source_ip_hash` |
+| `sticky` | object? | ❌ **안 넣는다** (2026-08-24). 둘 다 이미 표현된다 — 아래 |
 
-> **위 표 중 v0 코드에 없는 것** (2026-08-23 실사): `passive`, `upstream_tls`, `dns`,
-> `sticky`. `Pool` 타입에는 `key` · `protocolClass` · `algorithm` · `hashKey` ·
-> `sendProxyProtocol` · `healthCheck` 만 있다.
+> **이 표는 2026-08-24 에 코드와 맞았다.** 그 전에는 넷이 표에만 있었고, 각각 이렇게
+> 닫혔다: `upstream_tls` **구현** · `passive`·`sticky` **안 넣기로 결정** · `dns` 는
+> 이미 결정돼 있던 것(§7.3).
+>
+> **`upstream_tls` 를 넣으면서 지킨 것 넷** (`tests/unit/upstream-tls.test.ts`):
+>
+>   ① **스킴으로 켠다.** http 는 `proxy_pass https://`, stream 은 `proxy_ssl on`.
+>      `proxy_ssl_*` 만 내고 스킴을 안 바꾸면 평문으로 나가고 그 지시어들은 아무 일도
+>      안 한다 — 조용히 안 걸리는 설정이다.
+>   ② **`verify` 는 `caBundle` 없이 못 켠다.** `proxy_ssl_verify on` 은
+>      `proxy_ssl_trusted_certificate` 없이는 아무것도 검증하지 못한다. 검증기가 짝을
+>      강제한다.
+>   ③ **패스스루가 가리키는 풀에는 금지** — TLS-over-TLS 가 된다.
+>   ④ **udp 금지** — 엔진이 안 한다.
+>
+> `client_cert_ref` 는 **안 넣었다.** 업스트림에 클라이언트 인증서를 제시하는 것은
+> 개인키를 하나 더 나르는 일이고, 그 자료 경로·롤백 결박·권한을 인증서와 같은 수준으로
+> 다시 세워야 한다. 지금 없는 것을 있다고 적지 않는다.
+>
+> 신뢰 번들은 **`Certificate` 를 가리킨다.** 자료는 이미 그것이 나르고(`materialRef` →
+> SecretStore) 세대 materializer 가 `certs/<key>/<version>/fullchain.pem` 으로 굽는다
+> (S8 이 그 결박을 실측했다). 번들만을 위한 두 번째 경로를 만들면 롤백 결박도 두 벌이 된다.
 >
 > 이 표는 오래 **목표**를 적어 두고 구현 상태를 안 적었다. 그러면 다음 사람이 표를
 > 계약으로 읽고, 없는 필드를 API 로 보내다 `unknown_field` 를 맞는다.
@@ -754,7 +773,24 @@ type TlsPassthroughRoute = ResourceMeta & {
 > `tests/conformance/passive-has-no-place.test.ts` 가 ①과 ②를 계약으로 지킨다 —
 > 자리표시가 하나라는 것과, 밸런서가 쓰는 dict 키가 `slot:`·`in:`·`rr:` 셋뿐이라는 것.
 >
-> 나머지 셋(`upstream_tls`·`dns`·`sticky`)은 v1 후보이지 축소 결정이 아니다 —
+> **`dns` 도 결정된 것이다** — §7.3 이 근거를 적어 뒀고 해독기가 이미 `unknown_field`
+> 로 거절한다: *"모델에 선택형을 두고 조용히 무시하는 길을 만들지 않는다."* 엔진이
+> `on_nxdomain`/`on_timeout` 에 선택지를 안 주기 때문이고, 그 사실은
+> `DataplaneCapabilities.nativeDns` 로 표면화돼 있다. 풀별 `resolver`/`valid` 는
+> `BackendDiscovery`(v0.7)에 딸린 일이다.
+>
+> **`sticky` 도 결정했다** (2026-08-24) — **안 넣는다.** 표가 말하는 둘이 이미 있다:
+>
+>   L4    `algorithm: 'source_ip_hash'` — 표가 가리키는 그것이다
+>   HTTP  `algorithm: 'hash'` + `hashKey: 'cookie(sid)'` → `$cookie_sid` 로 고른다
+>
+> 그러면 `sticky` 는 둘 중 하나가 되는데 **둘 다 이 저장소가 거부하는 모양이다**:
+> ① 같은 것의 두 번째 이름 — "이 풀이 어떻게 고르는가" 의 진실이 둘이 되고,
+> `algorithm` 과 어긋날 때 어느 쪽이 이기는지 물어야 한다. ② 쿠키를 **발급**하겠다는
+> 약속 — `sticky cookie` 는 상용 모듈이고 OSS 는 **앱이 이미 심어 둔** 쿠키로 고르는
+> 것까지다. `tests/conformance/sticky-already-there.test.ts` 가 둘을 다 지킨다.
+>
+> **그래서 남는 것은 `upstream_tls` 하나**다. 그건 v1 후보이지 축소 결정이 아니다 —
 > 결정이었다면 §12.0 이나 §15 에 근거가 있어야 한다.
 
 **`least_conn` 은 S6 에서 열렸다** (2026-08-23). 그 전까지는 이렇게 적혀 있었다:
@@ -813,7 +849,7 @@ v1 은 `health.type` 을 `protocol_class` 에 묶었는데, **TCP/UDP 서비스�
 | `tls_passthrough` 라우트가 참조하는 풀 → `upstream_tls` 금지 | 클라이언트 TLS 바이트를 다시 TLS 로 감싸면 TLS-over-TLS 가 된다 |
 | `hash_key` 화이트리스트 | http: `remote_addr`/`request_uri`/`header(n)`/`cookie(n)` · stream: `remote_addr` 만 |
 | `algorithm ∈ {hash, source_ip_hash}` → `is_backup` 백엔드 금지 | 해시 링과 backup 의미가 충돌 |
-| `sticky.kind=cookie` → `protocol_class=http` | |
+| ~~`sticky.kind=cookie` → `protocol_class=http`~~ | `sticky` 를 안 넣기로 해서 없는 제약이다. 같은 뜻은 `hash_key` 화이트리스트가 이미 진다 (`cookie(n)` 은 http 에만) |
 | 리스너 protocol ↔ 풀 `protocol_class` | 복합 FK. `http/https`→`http`, `tcp/tls_passthrough`→`tcp`, `udp`→`udp` |
 
 > `source_ip_hash` 라는 중립 이름을 쓰는 이유: stream 서브시스템에는 `ip_hash` 디렉티브가

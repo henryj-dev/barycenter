@@ -34,7 +34,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 | 층 | 있는 것 | 없는 것 |
 |---|---|---|
-| 모델 | 리스너(프록시 한계값·헤더 규칙·레이트리밋·`on_no_sni`·`strictPriority` 포함)·풀(헬스체크 정의·`least_conn`)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, WAF, `on_nxdomain`/`on_timeout`, **그리고 §4.3·§4.3.1·§4.4 의 아래 필드들** |
+| 모델 | 리스너(프록시 한계값·헤더 규칙·레이트리밋·`on_no_sni`·`strictPriority` 포함)·풀(헬스체크 정의·`least_conn`·`upstreamTls`)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, WAF, `on_nxdomain`/`on_timeout`, **그리고 §4.3·§4.3.1·§4.4 의 아래 필드들** |
 | 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백. 관측 실패와 부정 관측을 가른다 | — |
 | 동결 | B(구현된 OpenAPI · DDL). **A 는 이 회차에 풀렸다** — W3 설정 셋을 들이려고. 근거가 `SURFACE.txt` 머리에 남는다 | 미구현 계약 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
@@ -146,7 +146,7 @@ A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이�
 
 | 자리 | 없는 필드 |
 |---|---|
-| `Pool` (§4.3) | `upstream_tls` · `dns` · `sticky`. **`passive` 는 안 넣기로 했다** — 이 평면의 upstream 은 `server` 가 자리표시 하나뿐이라 peer 별로 셀 대상이 없고, Lua 로 다시 만들면 멤버십의 주인이 둘이 된다 |
+| `Pool` (§4.3) | ~~비었다~~ — `upstream_tls` 는 **구현됐다**(2026-08-24). **`passive`·`sticky` 는 안 넣기로 했다** — `sticky` 가 말하는 둘(L4 소스IP·HTTP 쿠키)은 `algorithm`·`hashKey` 로 이미 표현되고, 쿠키 **발급**은 상용 모듈이다. `passive` 는 — 이 평면의 upstream 은 `server` 가 자리표시 하나뿐이라 peer 별로 셀 대상이 없고, Lua 로 다시 만들면 멤버십의 주인이 둘이 된다. **`dns` 도 결정된 것이다** — 엔진이 선택지를 안 줘서 해독기가 `unknown_field` 로 거절한다 (§7.3) |
 | 헬스 프로브 (§4.3.1) | `probe.mode`·`protocol`·`port`·`host_override`·`udp`. `interval`·`timeout`·`rise`·`fall` 은 **데몬 전체에 하나씩** 이지 풀별이 아니다 |
 | `Backend` (§4.4) | `max_conns` · `admin_state` · `drain.deadline_s` · `is_backup` |
 

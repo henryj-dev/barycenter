@@ -491,6 +491,74 @@ export function validateModel(
     }
   }
 
+  /**
+   * ── 업스트림 TLS (§4.3) ────────────────────────────────────────────────
+   *
+   * 네 규칙이다. **넷 다 "설정했는데 안 걸린다" 를 막는 것**이고, 그건 이 저장소가
+   * 반복해서 겨눠 온 실패다.
+   */
+  {
+    const certKeys = new Set(model.certificates.map((c) => c.key));
+    // 패스스루 라우트가 가리키는 풀 — TLS-over-TLS 가 되는 자리다.
+    const passthroughPools = new Set(
+      model.passthroughRoutes
+        .filter((r) => r.action.kind === 'proxy')
+        .map((r) => (r.action as { pool: string }).pool),
+    );
+    for (const p of model.pools) {
+      const t = p.upstreamTls;
+      if (t === undefined) continue;
+      if (p.protocolClass === 'udp') {
+        issues.push({
+          code: 'option_not_supported',
+          subjects: [p.key],
+          message: `풀 '${p.key}' 는 udp 인데 upstream_tls 를 켰다 — 엔진이 안 한다 (§4.3)`,
+        });
+      }
+      if (t.enabled && passthroughPools.has(p.key)) {
+        issues.push({
+          code: 'option_not_supported',
+          subjects: [p.key],
+          message:
+            `풀 '${p.key}' 는 tls_passthrough 라우트가 가리키는데 upstream_tls 를 켰다 — ` +
+            `클라이언트 TLS 바이트를 다시 TLS 로 감싸면 TLS-over-TLS 가 된다 (§4.3)`,
+        });
+      }
+      /**
+       * **`verify` 는 번들 없이 못 켠다.** `proxy_ssl_verify on` 은
+       * `proxy_ssl_trusted_certificate` 가 없으면 아무것도 검증하지 못한다 —
+       * "켰다" 와 "걸린다" 가 갈리는 자리다.
+       */
+      if (t.verify === true && t.caBundle === undefined) {
+        issues.push({
+          code: 'option_not_supported',
+          subjects: [p.key],
+          message:
+            `풀 '${p.key}' 가 upstream_tls.verify 를 켰는데 caBundle 이 없다 — ` +
+            `신뢰 번들 없이는 검증이 걸리지 않는다 (§4.3)`,
+        });
+      }
+      if (t.caBundle !== undefined && !certKeys.has(t.caBundle)) {
+        issues.push({
+          code: 'unknown_tls_reference',
+          subjects: [p.key],
+          message: `풀 '${p.key}' 의 upstream_tls.caBundle '${t.caBundle}' 이 없는 인증서다`,
+        });
+      }
+      // 자료 없는 인증서는 렌더가 낼 파일이 없다 — 리스너 결박과 같은 규칙이다.
+      const bundle = model.certificates.find((c) => c.key === t.caBundle);
+      if (bundle !== undefined && bundle.materialRef === undefined) {
+        issues.push({
+          code: 'unknown_tls_reference',
+          subjects: [p.key],
+          message:
+            `풀 '${p.key}' 의 upstream_tls.caBundle '${t.caBundle}' 에 자료가 없다 — ` +
+            `발급 전 인증서는 신뢰 번들로 쓸 수 없다`,
+        });
+      }
+    }
+  }
+
   // ── TLS (§4.6, S16·S17) ─────────────────────────────────────────────────
   //
   // 렌더러는 여기서 막힌 것들에 대해 **터진다.** 조용히 default 인증서를 물리면

@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 116 심볼 · sha256:60409f7bbce0d9f33e54e591878719edfe5f6c9109104669889eed1a361df032
+# 117 심볼 · sha256:14d37a5f313b80b664fdcece66583939612edde910fa4e37cf1d576c022302a2
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -450,6 +450,7 @@ export type Pool = {
     hashKey?: string;
     sendProxyProtocol?: 'v1';
     healthCheck?: HealthCheck;
+    upstreamTls?: UpstreamTls;
 };
 ── PreflightResult
 export type PreflightResult = {
@@ -628,6 +629,13 @@ export type UdpListener = ListenerBase & {
 };
 ── UdpPreset
 export type UdpPreset = 'dns' | 'wireguard' | 'game_generic' | 'custom';
+── UpstreamTls
+export type UpstreamTls = {
+    enabled: boolean;
+    sni?: string;
+    verify?: boolean;
+    caBundle?: string;
+};
 ── ValidationCapabilities
 export type ValidationCapabilities = {
     streamRealip: boolean;

@@ -250,7 +250,8 @@ const list = (r: Row, k: string): string[] => (Array.isArray(r[k]) ? (r[k] as st
 
 async function readModel(c: Queryable): Promise<Model> {
   const pools = (await c.query(
-    `SELECT key, protocol_class, algorithm, hash_key, send_proxy_protocol, health_check
+    `SELECT key, protocol_class, algorithm, hash_key, send_proxy_protocol, health_check,
+            upstream_tls
        FROM pools ORDER BY key`,
   )).rows.map((r): Pool => ({
     key: text(r, 'key'),
@@ -264,6 +265,10 @@ async function readModel(c: Queryable): Promise<Model> {
     ...(r['health_check'] === null || r['health_check'] === undefined
       ? {}
       : { healthCheck: r['health_check'] as NonNullable<Pool['healthCheck']> }),
+    // 022 (§4.3). 없으면 평문이다 — 안 정한 것과 끈 것을 구분할 필요가 없다.
+    ...(r['upstream_tls'] === null || r['upstream_tls'] === undefined
+      ? {}
+      : { upstreamTls: r['upstream_tls'] as NonNullable<Pool['upstreamTls']> }),
   }));
 
   const backends = (await c.query(
@@ -576,18 +581,21 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
     case 'pool':
       await c.query(
         `INSERT INTO pools (id,key,name,protocol_class,algorithm,hash_key,send_proxy_protocol,
-                            health_check,created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$9,$7,$7,$8)
+                            health_check,upstream_tls,created_by,updated_by,revision)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$9,$10,$7,$7,$8)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol_class=EXCLUDED.protocol_class,
            algorithm=EXCLUDED.algorithm, hash_key=EXCLUDED.hash_key,
            send_proxy_protocol=EXCLUDED.send_proxy_protocol,
            health_check=EXCLUDED.health_check,
+           upstream_tls=EXCLUDED.upstream_tls,
            version=pools.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, b['protocolClass'], b['algorithm'],
           b['hashKey'] ?? null, b['sendProxyProtocol'] ?? null, by, revision,
-          b['healthCheck'] === undefined ? null : JSON.stringify(b['healthCheck'])],
+          b['healthCheck'] === undefined ? null : JSON.stringify(b['healthCheck']),
+          // $10 — §4.3. udp 는 DB 도 같은 CHECK 을 건다.
+          b['upstreamTls'] === undefined ? null : JSON.stringify(b['upstreamTls'])],
       );
       return;
 

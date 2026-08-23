@@ -9,7 +9,7 @@ import { parseHashKey } from '../validate/strings.js';
 import {
   deletePatch,
   putHashPoolWithBackendPatch, putPoolWithBackendPatch, putSourceIpHashPoolWithBackendPatch,
-  type ProtocolClass,
+  type ProtocolClass, type UpstreamTlsInput,
 } from '../web/edit.js';
 
 import { changesetNew, changesetPatch, changesetPlan, commitByPlan, commitPatch, type Http } from './flow.js';
@@ -22,6 +22,8 @@ export type PoolCreateInput = {
   backend: string;
   host: string;
   port: number;
+  /** 백엔드로 가는 TLS (§4.3). 안 주면 평문이다. */
+  upstreamTls?: UpstreamTlsInput;
 };
 
 const protocolClass = (v: string): ProtocolClass | undefined =>
@@ -43,6 +45,7 @@ export function poolCreatePatch(
       backend: input.backend,
       host: input.host,
       port: input.port,
+      ...(input.upstreamTls === undefined ? {} : { upstreamTls: input.upstreamTls }),
     });
   }
   if (algorithm === 'hash') {
@@ -57,6 +60,7 @@ export function poolCreatePatch(
       backend: input.backend,
       host: input.host,
       port: input.port,
+      ...(input.upstreamTls === undefined ? {} : { upstreamTls: input.upstreamTls }),
     });
   }
   if (algorithm === 'least_conn') {
@@ -68,6 +72,7 @@ export function poolCreatePatch(
       backend: input.backend,
       host: input.host,
       port: input.port,
+      ...(input.upstreamTls === undefined ? {} : { upstreamTls: input.upstreamTls }),
     });
   }
   if (algorithm === 'source_ip_hash') {
@@ -77,6 +82,7 @@ export function poolCreatePatch(
       backend: input.backend,
       host: input.host,
       port: input.port,
+      ...(input.upstreamTls === undefined ? {} : { upstreamTls: input.upstreamTls }),
     });
   }
   return undefined;

@@ -43,6 +43,7 @@ import type {
   SniOutcome,
   TlsPolicy,
   TlsVersion,
+  UpstreamTls,
 } from './provisional.js';
 import { validateModel, type ModelIssue, type ValidationCapabilities } from '../validate/model.js';
 
@@ -554,7 +555,8 @@ function decodePool(iss: Issues, v: unknown, path: string): Pool | undefined {
     return undefined;
   }
   noExtraKeys(iss, v, path,
-    ['key', 'protocolClass', 'algorithm', 'hashKey', 'sendProxyProtocol', 'healthCheck']);
+    ['key', 'protocolClass', 'algorithm', 'hashKey', 'sendProxyProtocol', 'healthCheck',
+      'upstreamTls']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
   const protocolClass = required(iss, v, 'protocolClass', path, () =>
     oneOf(iss, v['protocolClass'], `${path}.protocolClass`, PROTOCOL_CLASSES));
@@ -565,12 +567,41 @@ function decodePool(iss: Issues, v: unknown, path: string): Pool | undefined {
     oneOf(iss, v['sendProxyProtocol'], `${path}.sendProxyProtocol`, SEND_PROXY_PROTOCOL));
   const healthCheck = optional(v['healthCheck'], () =>
     decodeHealthCheck(iss, v['healthCheck'], `${path}.healthCheck`));
+  const upstreamTls = optional(v['upstreamTls'], () =>
+    decodeUpstreamTls(iss, v['upstreamTls'], `${path}.upstreamTls`));
   if (key === undefined || protocolClass === undefined || algorithm === undefined) return undefined;
   return {
     key, protocolClass, algorithm,
     ...(hashKey === undefined ? {} : { hashKey }),
     ...(send === undefined ? {} : { sendProxyProtocol: send }),
     ...(healthCheck === undefined ? {} : { healthCheck }),
+    ...(upstreamTls === undefined ? {} : { upstreamTls }),
+  };
+}
+
+/**
+ * 업스트림 TLS (§4.3).
+ *
+ * `enabled` 는 **필수다.** 없으면 `{sni: 'x'}` 같은 것이 통과하는데, 그건 "켜라는 건가
+ * 아닌가" 가 안 정해진 값이다 — 이 저장소가 `acceptProxyProtocol` 에서 내린 것과 같은
+ * 판단이다(신뢰 경계 없는 켬을 **표현 불가**로 만든다).
+ */
+function decodeUpstreamTls(iss: Issues, v: unknown, path: string): UpstreamTls | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['enabled', 'sni', 'verify', 'caBundle']);
+  const enabled = required(iss, v, 'enabled', path, () => bool(iss, v['enabled'], `${path}.enabled`));
+  const sni = optional(v['sni'], () => str(iss, v['sni'], `${path}.sni`));
+  const verify = optional(v['verify'], () => bool(iss, v['verify'], `${path}.verify`));
+  const caBundle = optional(v['caBundle'], () => str(iss, v['caBundle'], `${path}.caBundle`));
+  if (enabled === undefined) return undefined;
+  return {
+    enabled,
+    ...(sni === undefined ? {} : { sni }),
+    ...(verify === undefined ? {} : { verify }),
+    ...(caBundle === undefined ? {} : { caBundle }),
   };
 }
 

@@ -570,18 +570,60 @@ export type ProtocolClass = 'http' | 'tcp' | 'udp';
  */
 export type KeylessAlgorithm = 'round_robin' | 'least_conn';
 
+/**
+ * 업스트림 TLS 입력 (§4.3).
+ *
+ * **`verify` 는 `caBundle` 없이 못 켠다** — 검증기가 막지만 여기서도 막는다. 폼이
+ * 저장 못 하는 patch 를 만들지 않는 것이 이 파일의 규칙이다(`listenerOptionFields` 가
+ * `burst` 에 대해 하는 것과 같다).
+ */
+export type UpstreamTlsInput = {
+  enabled: boolean;
+  sni?: string;
+  verify?: boolean;
+  caBundle?: string;
+};
+
+export function upstreamTlsField(t: UpstreamTlsInput | undefined): {
+  upstreamTls?: UpstreamTlsInput;
+} {
+  if (t === undefined || !t.enabled) return {};
+  if (t.verify === true && (t.caBundle === undefined || t.caBundle === '')) {
+    throw new Error('upstreamTls.verify 는 caBundle 이 있어야 한다 — 번들 없이는 검증이 안 걸린다');
+  }
+  const sni = t.sni?.trim();
+  const caBundle = t.caBundle?.trim();
+  return {
+    upstreamTls: {
+      enabled: true,
+      ...(sni === undefined || sni === '' ? {} : { sni }),
+      ...(t.verify === true ? { verify: true } : {}),
+      ...(caBundle === undefined || caBundle === '' ? {} : { caBundle }),
+    },
+  };
+}
+
 export type PutPoolOp = {
   op: 'put';
   kind: 'pool';
   key: string;
-  body: { protocolClass: ProtocolClass; algorithm: KeylessAlgorithm };
+  body: {
+    protocolClass: ProtocolClass;
+    algorithm: KeylessAlgorithm;
+    upstreamTls?: UpstreamTlsInput;
+  };
 };
 
 export type PutHashPoolOp = {
   op: 'put';
   kind: 'pool';
   key: string;
-  body: { protocolClass: ProtocolClass; algorithm: 'hash'; hashKey: string };
+  body: {
+    protocolClass: ProtocolClass;
+    algorithm: 'hash';
+    hashKey: string;
+    upstreamTls?: UpstreamTlsInput;
+  };
 };
 
 /**
@@ -596,6 +638,8 @@ export function putPoolWithBackendPatch(input: {
   port: number;
   /** 없으면 `round_robin`. 옛 호출부가 안 바뀌게 기본을 준다. */
   algorithm?: KeylessAlgorithm;
+  /** 백엔드로 가는 TLS (§4.3). 안 주면 평문이다. */
+  upstreamTls?: UpstreamTlsInput;
 }): [PutPoolOp, ...PutBackendOp[]] {
   if (input.pool === '') throw new Error('풀 키가 비어 있다');
   if (input.protocolClass !== 'http' && input.protocolClass !== 'tcp' && input.protocolClass !== 'udp') {
@@ -609,7 +653,11 @@ export function putPoolWithBackendPatch(input: {
       op: 'put',
       kind: 'pool',
       key: input.pool,
-      body: { protocolClass: input.protocolClass, algorithm: input.algorithm ?? 'round_robin' },
+      body: {
+        protocolClass: input.protocolClass,
+        algorithm: input.algorithm ?? 'round_robin',
+        ...upstreamTlsField(input.upstreamTls),
+      },
     },
     ...backends,
   ];
@@ -626,6 +674,7 @@ export function putHashPoolWithBackendPatch(input: {
   backend: string;
   host: string;
   port: number;
+  upstreamTls?: UpstreamTlsInput;
 }): [PutHashPoolOp, ...PutBackendOp[]] {
   if (input.pool === '') throw new Error('풀 키가 비어 있다');
   if (input.protocolClass !== 'http' && input.protocolClass !== 'tcp' && input.protocolClass !== 'udp') {
@@ -643,7 +692,10 @@ export function putHashPoolWithBackendPatch(input: {
       op: 'put',
       kind: 'pool',
       key: input.pool,
-      body: { protocolClass: input.protocolClass, algorithm: 'hash', hashKey },
+      body: {
+        protocolClass: input.protocolClass, algorithm: 'hash', hashKey,
+        ...upstreamTlsField(input.upstreamTls),
+      },
     },
     ...backends,
   ];
@@ -653,7 +705,11 @@ export type PutSourceIpHashPoolOp = {
   op: 'put';
   kind: 'pool';
   key: string;
-  body: { protocolClass: ProtocolClass; algorithm: 'source_ip_hash' };
+  body: {
+    protocolClass: ProtocolClass;
+    algorithm: 'source_ip_hash';
+    upstreamTls?: UpstreamTlsInput;
+  };
 };
 
 /**
@@ -666,6 +722,7 @@ export function putSourceIpHashPoolWithBackendPatch(input: {
   backend: string;
   host: string;
   port: number;
+  upstreamTls?: UpstreamTlsInput;
 }): [PutSourceIpHashPoolOp, ...PutBackendOp[]] {
   if (input.pool === '') throw new Error('풀 키가 비어 있다');
   if (input.protocolClass !== 'http' && input.protocolClass !== 'tcp' && input.protocolClass !== 'udp') {
@@ -679,7 +736,10 @@ export function putSourceIpHashPoolWithBackendPatch(input: {
       op: 'put',
       kind: 'pool',
       key: input.pool,
-      body: { protocolClass: input.protocolClass, algorithm: 'source_ip_hash' },
+      body: {
+        protocolClass: input.protocolClass, algorithm: 'source_ip_hash',
+        ...upstreamTlsField(input.upstreamTls),
+      },
     },
     ...backends,
   ];

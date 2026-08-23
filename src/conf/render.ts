@@ -53,6 +53,7 @@ import type {
   TlsPolicy,
   TlsVersion,
   UdpPreset,
+  UpstreamTls,
 } from '../model/provisional.js';
 
 export type RenderedConfig = {
@@ -446,6 +447,8 @@ function httpServerBlocks(
   poolsWithBackends: Set<string>,
   tls: TlsContext | undefined,
   acme: boolean,
+  pools: Map<string, Pool>,
+  certs: Map<string, Certificate>,
 ): ConfNode[] {
   // (호스트, 라우트) 쌍으로 펼친다.
   const byHost = new Map<string, HttpRoute[]>();
@@ -500,7 +503,9 @@ function httpServerBlocks(
 
     const locations: ConfNode[] = [];
     for (const r of ordered) {
-      const body = locationBody(r, poolsWithBackends, listener.http?.headers?.request);
+      const body = locationBody(
+        r, poolsWithBackends, listener.http?.headers?.request, pools, certs,
+      );
       if (body.length > 0) locations.push(block('location', [lit(r.pathPrefix ?? '/')], body));
     }
     if (locations.length === 0) continue;
@@ -695,12 +700,18 @@ function rateLimitNodes(listenerKey: string, rl: RateLimit | undefined): ConfNod
 /** 라우트 액션 하나를 location 본문으로. */
 function locationBody(
   r: HttpRoute, poolsWithBackends: Set<string>, requestHeaders?: readonly HeaderRule[],
+  pools?: Map<string, Pool>, certs?: Map<string, Certificate>,
 ): ConfNode[] {
   const body: ConfNode[] = [];
   switch (r.action.kind) {
     case 'proxy': {
       if (!poolsWithBackends.has(r.action.pool)) return [];
-      body.push(directive('proxy_pass', [lit(`http://${upstreamName(r.action.pool)}`)]));
+      // 업스트림 TLS 는 **스킴으로** 켠다 (§4.3). `proxy_ssl_*` 만 내고 스킴을 안 바꾸면
+      // 평문으로 나가고 그 지시어들은 아무 일도 안 한다 — 조용히 안 걸리는 설정이다.
+      const ut = pools?.get(r.action.pool)?.upstreamTls;
+      const scheme = ut?.enabled === true ? 'https' : 'http';
+      body.push(directive('proxy_pass', [lit(`${scheme}://${upstreamName(r.action.pool)}`)]));
+      body.push(...upstreamTlsNodes(ut, certs ?? new Map()));
       body.push(directive('proxy_set_header', [lit('Host'), variable('host')]));
       body.push(
         directive('proxy_set_header', [lit('X-Forwarded-For'), variable('proxy_add_x_forwarded_for')]),
@@ -1016,13 +1027,20 @@ function defaultServerBlock(
   poolsWithBackends: Set<string>,
   tls: TlsContext | undefined,
   acme: boolean,
+  pools: Map<string, Pool>,
+  certs: Map<string, Certificate>,
 ): ConfNode {
   const action = listener.http?.defaultAction ?? 'reject';
+  const defaultPoolTls = action === 'reject' ? undefined : pools.get(action.pool)?.upstreamTls;
+  const defaultCerts = certs;
   const body: ConfNode[] =
     action !== 'reject' && poolsWithBackends.has(action.pool)
       ? [
           block('location', [lit('/')], [
-            directive('proxy_pass', [lit(`http://${upstreamName(action.pool)}`)]),
+            directive('proxy_pass', [
+              lit(`${defaultPoolTls?.enabled === true ? 'https' : 'http'}://${upstreamName(action.pool)}`),
+            ]),
+            ...upstreamTlsNodes(defaultPoolTls, defaultCerts),
             directive('proxy_set_header', [lit('Host'), variable('host')]),
           ]),
         ]
@@ -1071,6 +1089,37 @@ function defaultServerBlock(
 }
 
 // ───────────────────────────────────────────────────────────── stream ───────
+
+/**
+ * 업스트림 TLS 지시어 (§4.3).
+ *
+ * **`proxy_ssl_name` 을 꼭 낸다** — 안 주면 nginx 가 업스트림 **주소**를 SNI 로 쓴다.
+ * 멤버십 평면에서 그 주소는 IP 라서(슬롯이 `host:port` 다) 백엔드가 이름으로 인증서를
+ * 고를 수 없다. 모델이 `sni` 를 안 줬으면 이 줄도 안 낸다 — 우리가 값을 지어내면
+ * 사용자가 안 정한 것이 설정이 된다.
+ *
+ * **`verify` 는 번들 없이 안 낸다.** 검증기가 이미 막지만, 렌더가 혼자 서야 한다 —
+ * `proxy_ssl_verify on` 을 번들 없이 내면 "켰다" 와 "걸린다" 가 갈린다.
+ *
+ * http 와 stream 이 **같은 지시어 이름**을 쓴다(`ngx_http_proxy` · `ngx_stream_proxy`).
+ * 다른 것은 켜는 방법뿐이다 — http 는 `proxy_pass https://`, stream 은 `proxy_ssl on`.
+ */
+function upstreamTlsNodes(
+  tls: UpstreamTls | undefined, certs: Map<string, Certificate>,
+): ConfNode[] {
+  if (tls === undefined || !tls.enabled) return [];
+  const out: ConfNode[] = [];
+  if (tls.sni !== undefined) out.push(directive('proxy_ssl_name', [lit(tls.sni)]));
+  const bundle = tls.caBundle === undefined ? undefined : certs.get(tls.caBundle);
+  if (bundle?.materialRef !== undefined) {
+    out.push(directive('proxy_ssl_trusted_certificate',
+      [lit(certPaths(bundle.key, parseRef(bundle.materialRef).version).chain)]));
+  }
+  if (tls.verify === true && bundle?.materialRef !== undefined) {
+    out.push(directive('proxy_ssl_verify', [lit('on')]));
+  }
+  return out;
+}
 
 /** SNI 결과를 map 값으로 바꾼다. reject 는 빈 값 → proxy_pass 가 실패하고 연결이 끊긴다. */
 function outcomeValue(outcome: SniOutcome | undefined, poolsWithBackends: Set<string>): ConfValue {
@@ -1160,7 +1209,10 @@ function passthroughNodes(
   return [...noSniNodes, sniMap, server];
 }
 
-function streamServerBlock(listener: TcpListener | UdpListener, pool: Pool | undefined): ConfNode {
+function streamServerBlock(
+  listener: TcpListener | UdpListener, pool: Pool | undefined,
+  certs: Map<string, Certificate> = new Map(),
+): ConfNode {
   const children: ConfNode[] = [];
   const isUdp = listener.protocol === 'udp';
   const preset = isUdp ? UDP_PRESETS[listener.udp?.preset ?? 'custom'] : undefined;
@@ -1184,6 +1236,16 @@ function streamServerBlock(listener: TcpListener | UdpListener, pool: Pool | und
     // §4.7 — stock nginx 는 업스트림으로 v1 만 보낸다. 버전 선택 디렉티브가 없다.
     children.push(directive('proxy_protocol', [lit('on')]));
   }
+  /**
+   * 업스트림 TLS (§4.3). **stream 은 스킴이 없어서 `proxy_ssl on` 으로 켠다** —
+   * http 는 `proxy_pass https://` 다. 지시어 이름은 같지만 켜는 방법이 다르다.
+   *
+   * udp 는 검증기가 막는다. 여기서도 안 내는 이유는 렌더가 혼자 서야 하기 때문이다.
+   */
+  if (pool?.upstreamTls?.enabled === true && listener.protocol !== 'udp') {
+    children.push(directive('proxy_ssl', [lit('on')]));
+    children.push(...upstreamTlsNodes(pool.upstreamTls, certs));
+  }
   return block('server', [], children);
 }
 
@@ -1205,6 +1267,9 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
   if (issues.length > 0) throw new ModelValidationError(issues);
 
   const pools = new Map(model.pools.map((p) => [p.key, p]));
+  // **http 블록 밖에 둔다.** 업스트림 TLS 의 신뢰 번들을 stream 쪽도 쓴다 (§4.3) —
+  // 안에 두면 tcp 리스너가 같은 인증서를 못 본다.
+  const certs = new Map(model.certificates.map((c) => [c.key, c]));
   const backendsByPool = new Map<string, Backend[]>();
   for (const b of model.backends) {
     const list = backendsByPool.get(b.pool);
@@ -1352,7 +1417,6 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
         : upstreamBlock(pools.get(poolKey)!, backendsByPool.get(poolKey) ?? [], 'remote_addr'));
     }
     const policies = new Map(model.tlsPolicies.map((t) => [t.key, t]));
-    const certs = new Map(model.certificates.map((c) => [c.key, c]));
     // **map 은 http 블록에 하나만.** 리스너마다 내면 이름이 겹쳐 nginx 가 거절한다.
     const anyMismatchGuard = httpListeners.some((l) =>
       l.protocol === 'https'
@@ -1382,9 +1446,11 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
       // ACME 예약 라우트는 **Lua 가 있어야** 낸다. 없으면 토큰을 conf 에 실어야 하고,
       // 그건 갱신마다 세대 전환이다 (§8.2 · ADR-ACME).
       const acme = caps.httpLua === true;
-      children.push(defaultServerBlock(l, poolsWithBackends, tls, acme));
+      children.push(defaultServerBlock(l, poolsWithBackends, tls, acme, pools, certs));
       children.push(
-        ...httpServerBlocks(l, routesByListener.get(l.key) ?? [], poolsWithBackends, tls, acme),
+        ...httpServerBlocks(
+          l, routesByListener.get(l.key) ?? [], poolsWithBackends, tls, acme, pools, certs,
+        ),
       );
     }
     top.push(block('http', [], children));
@@ -1450,7 +1516,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
       if (l.protocol === 'tls_passthrough') {
         children.push(...passthroughNodes(l, ptByListener.get(l.key) ?? [], poolsWithBackends));
       } else if (poolsWithBackends.has(l.defaultPool)) {
-        children.push(streamServerBlock(l, pools.get(l.defaultPool)));
+        children.push(streamServerBlock(l, pools.get(l.defaultPool), certs));
       }
     }
     if (children.length > 0) top.push(block('stream', [], children));
