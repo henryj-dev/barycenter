@@ -61,7 +61,15 @@ export function verdictOf({ threw, text }) {
   //    그런데 이건 재현물이 **수정 없이는 아예 못 선다**는 뜻이고, 게이트가 겨누는
   //    "고쳐도 안 고쳐도 초록" 의 정반대다. `src/` 를 못 읽은 것만 이렇게 센다 —
   //    `tests/` 안의 오타는 표식 문제이므로 아래 ③ 으로 떨어진다.
-  if (threw && /Failed to load url [^\n]*\/src\//.test(text)) return 'red';
+  //
+  //    ⚠️ **vitest 는 같은 상황을 두 문구로 낸다.** 처음엔 `Failed to load url` 하나만
+  //    알고 있었는데, 새 모듈을 import 한 재현물이 부모 트리에서 이렇게 떨어졌다:
+  //
+  //        Error: Cannot find module '../../src/dp/agent-server.js' imported from …
+  //
+  //    그러면 ② 를 못 지나 ③ 으로 떨어지고 게이트가 "표식이 틀렸다" 로 **오차단**한다.
+  //    같은 사실에 문구가 둘이면 하나만 아는 것은 아는 것이 아니다.
+  if (threw && /(Failed to load url|Cannot find module ')[^\n]*\/src\//.test(text)) return 'red';
 
   // ③ 고른 테스트가 0 건. **`no tests` 를 함께 본다** — `-t` 가 아무것도 안 고르면
   //    vitest 는 이 문구를 찍고 **성공으로** 끝낸다. 옛 가드는 `Tests +0 …` 만 봐서

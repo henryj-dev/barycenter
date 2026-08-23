@@ -41,6 +41,7 @@ import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js'
 import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
+import { socketRows } from '../web/sockets-view.js';
 import { serveGui } from '../web/serve-gui.js';
 import {
   can, principalFromClientCert, TokenAuth,
@@ -242,6 +243,17 @@ const ROUTES: Route[] = [
 
   route('GET', '/api/v1/listeners', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).listeners);
+  }),
+  /**
+   * 이 설정이 **점유하는 소켓 전부** (§4.5 · §11.3).
+   *
+   * §11.3 이 어느 배포를 고르든(hostNetwork·hostPort·LoadBalancer) 운영자에게 같은 것
+   * 하나가 필요하다 — "이 설정이 어느 (전송, 주소, 포트) 를 잡는가". 리스너 목록만
+   * 주면 프로토콜→전송 변환을 밖에서 다시 구현해야 하고, 그러면 §4.5 의 규칙이 두 벌이
+   * 된다. 리스너 하나가 소켓 **여럿**일 수 있다(S20 — quic 은 UDP 도 잡는다).
+   */
+  route('GET', '/api/v1/sockets', 'read', async (c, api) => {
+    json(c.res, 200, socketRows(await api.store.modelAt((await api.store.head()).revision)));
   }),
   route('GET', '/api/v1/pools', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).pools);

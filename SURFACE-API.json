@@ -93,6 +93,17 @@
         }
       }
     },
+    "/api/v1/sockets": {
+      "get": {
+        "operationId": "GET:/api/v1/sockets",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/pools": {
       "get": {
         "operationId": "GET:/api/v1/pools",

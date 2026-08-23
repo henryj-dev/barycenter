@@ -13,6 +13,8 @@ const LISTS = new Set([
   'certificates',
   'tls-policies',
   'sni-bindings',
+  // 이 설정이 점유하는 (전송, 주소, 포트) 전부 — 배포가 열어야 할 것 (§11.3).
+  'sockets',
 ]);
 
 export function getPath(what: string): string | undefined {
