@@ -1,5 +1,18 @@
 /**
- * DB 보존 — 자라기만 하던 두 테이블에 상한을 준다 (검수 B-08 · 제안#10).
+ * DB 보존 — 자라기만 하던 표들에 상한을 준다 (검수 B-08 · 제안#10).
+ *
+ * 여섯 표를 본다. **다섯은 안 정하면 안 지운다** — `health_events` 만 기본값이 있다.
+ *
+ *   `health_events`     30일 기본. 프로덕션에서 아무도 안 읽는다
+ *   `audit`             옵트인. 감사 추적의 보존 기간은 우리가 정할 것이 아니다
+ *   `plans`             옵트인. 만료된 것만 — 커밋된 것은 롤백 수단이다
+ *   `changesets`        옵트인. 버려진 것만
+ *   `operations`        옵트인. 종단한 것만, 그리고 head 것은 빼고 (멱등 판정)
+ *   `config_revisions`  옵트인. 사슬이라 **가장 오래된 접두사**만
+ *
+ * `terminal` 원장(`dp/agent.ts`)은 **여기 없다.** 그건 감사 기록이 아니라 부활 방지
+ * 장치라 지우면 운영자가 포기한 전환이 되살아난다 — 그 파일의 `prune` 머리말이 근거와
+ * 아직 안 한 설계 스케치를 함께 적어 뒀다.
  *
  * 세대는 상한이 있었고(`dp/retention.ts`), 시크릿은 뒤늦게 얻었고(`dp/secret-gc.ts`),
  * DB 는 없었다. `health_events` 와 `audit` 은 **삽입만 있고 지우는 코드가 없다.**
@@ -20,6 +33,10 @@
  * 남기는 쪽으로 틀린다. `secret-gc.ts` 가 개인키에 대해 세운 것과 같은 원칙이다.
  */
 import type { Db } from './pg.js';
+import { TERMINAL_PHASES } from '../dp/operation.js';
+
+/** SQL 배열로 넘길 종단 상태 이름들. 목록을 두 벌 두면 반드시 갈라진다. */
+const TERMINAL_PHASE_NAMES: string[] = [...TERMINAL_PHASES];
 
 /** 아무도 안 읽는 로그의 기본 상한. 디버깅에 쓸 만큼은 남기고 무한 성장만 막는다. */
 export const DEFAULT_HEALTH_EVENT_DAYS = 30;
@@ -53,6 +70,37 @@ export type DbRetentionOptions = {
    * 커밋된 plan 이 매달려 있다(FK CASCADE 라 함께 사라진다).
    */
   changesetDays?: number;
+  /**
+   * 종단한 오퍼레이션을 며칠 뒤 지우나. **안 정하면 안 지운다.**
+   *
+   * 종단(`activated`·`partial_exhausted`·`failed`·`superseded`·`no_operation`)만 본다.
+   * 비종단 행은 **복구가 이어받을 것**이라 나이와 무관하게 남긴다 — §6.2 의 저널이
+   * "무엇을 하던 중이었는지" 를 아는 유일한 자리다.
+   *
+   * FK 방향이 `operations → plans` 라 지워도 고아가 안 생긴다. 잃는 것은 apply 이력이고,
+   * 그건 `audit` 에도 남는다(`action='apply'`).
+   */
+  operationDays?: number;
+  /**
+   * 옛 리비전을 며칠 뒤 지우나. **안 정하면 안 지운다.**
+   *
+   * ── 왜 이것만 모양이 다른가
+   *
+   * `config_revisions` 는 `parent` 로 이어진 **사슬**이다. 가운데를 지우면 자식의
+   * `parent` 가 허공을 가리키고 FK 가 막는다. 그러니 지울 수 있는 것은 **가장 오래된
+   * 접두사**뿐이고, 지운 뒤 새 최고참의 `parent` 를 NULL 로 만들어야 한다 — 그게
+   * "여기서 이력이 끊긴다" 는 뜻이다.
+   *
+   * 접두사는 다음 중 **하나라도 걸리면 거기서 멈춘다**:
+   *   · head 다 (`config_head`)
+   *   · plan 이 `target_revision` 으로 가리킨다 — 롤백 수단이다
+   *   · operation 이 가리킨다
+   *   · 살아남는 리비전이 `rollback_of` 로 가리킨다 — 그 롤백의 출처가 사라진다
+   *
+   * 그래서 실제 배포에서 이 값이 지우는 양은 **대개 0** 이다. 그것이 맞는 동작이다 —
+   * 상한을 준다는 것과 이력을 버린다는 것은 다르다.
+   */
+  revisionDays?: number;
   maxPerSweep?: number;
 };
 
@@ -61,6 +109,8 @@ export type DbRetentionResult = {
   audit: number;
   plans: number;
   changesets: number;
+  operations: number;
+  revisions: number;
 };
 
 /**
@@ -123,6 +173,12 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
   const changesetDays = opts.changesetDays === undefined
     ? undefined
     : checkDays('changesets', opts.changesetDays);
+  const operationDays = opts.operationDays === undefined
+    ? undefined
+    : checkDays('operations', opts.operationDays);
+  const revisionDays = opts.revisionDays === undefined
+    ? undefined
+    : checkDays('config_revisions', opts.revisionDays);
 
   const healthEvents = await prune(opts.db, 'health_events', 'seq', healthDays, limit);
   const audit = auditDays === undefined
@@ -160,5 +216,119 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
     [String(changesetDays), String(limit)],
   )).rowCount ?? 0;
 
-  return { healthEvents, audit, plans, changesets };
+  /**
+   * **종단한 오퍼레이션만.** 비종단은 복구가 이어받을 것이라 나이와 무관하게 남긴다.
+   *
+   * `updated_at` 으로 잰다 — `created_at` 으로 재면 오래 걸린 전환이 끝나자마자 지워질
+   * 수 있다. 보존 기간은 "끝난 뒤로 얼마나" 다.
+   *
+   * ⚠️ **head 리비전의 것은 안 지운다.** `ControlPlane.apply()` 가 멱등을 이 표로
+   * 판정한다 — `findOperation(planId)` 가 있으면 그대로 돌려준다. head 의 오퍼레이션을
+   * 지우면 같은 plan 에 apply 를 다시 부를 수 있고, 그러면 이미 끝난 전환이 새
+   * 오퍼레이션으로 되살아난다. 다른 리비전의 것은 `PLAN_STALE` 이 먼저 막는다.
+   */
+  const operations = operationDays === undefined ? 0 : (await opts.db.query(
+    `DELETE FROM operations WHERE ctid IN (
+       SELECT ctid FROM operations o
+       WHERE o.phase = ANY($1::text[])
+         AND o.updated_at < now() - make_interval(days => $2::int)
+         AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = o.revision)
+       ORDER BY o.updated_at LIMIT $3::int)`,
+    [TERMINAL_PHASE_NAMES, String(operationDays), String(limit)],
+  )).rowCount ?? 0;
+
+  const revisions = revisionDays === undefined
+    ? 0
+    : await pruneRevisionPrefix(opts.db, revisionDays, limit);
+
+  return { healthEvents, audit, plans, changesets, operations, revisions };
+}
+
+/**
+ * `config_revisions` 의 **가장 오래된 접두사**를 지운다.
+ *
+ * 사슬이라 가운데를 못 지운다(§ 위 `revisionDays` 주석). 오름차순으로 훑다가 붙잡힌
+ * 것이 나오면 **거기서 멈춘다** — 그 뒤를 건너뛰고 더 지우면 사슬에 구멍이 난다.
+ *
+ * 마지막에 새 최고참의 `parent` 를 NULL 로 만든다. 안 하면 FK 가 막고, 막히는 것을
+ * 무시하려고 FK 를 지우면 허공을 가리키는 리비전이 남는다 — 그건 지운 것보다 나쁘다.
+ */
+/**
+ * 리비전을 붙잡는 자리 **전부**를 조건에 넣는다.
+ *
+ * 001 의 `REFERENCES config_revisions` 는 여섯 자리다:
+ *   `config_revisions.parent` · `rollback_of`   — 자기 참조. 아래에서 사슬로 다룬다
+ *   `changesets.base_revision` · `committed_revision`
+ *   `plans.target_revision`
+ *   `operations.revision`
+ * 그리고 `config_head.revision`.
+ *
+ * **처음에 changeset 둘을 빠뜨렸고 FK 가 실물 PG 에서 잡았다.** 조건을 기억으로 세면
+ * 반드시 빠진다 — 스키마의 참조 목록을 그대로 옮겨 적는다.
+ */
+async function pruneRevisionPrefix(
+  db: Pick<Db, 'query'>, days: number, limit: number,
+): Promise<number> {
+  const rows = (await db.query(
+    `SELECT r.revision::text AS revision
+       FROM config_revisions r
+      WHERE r.created_at < now() - make_interval(days => $1::int)
+        AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = r.revision)
+        AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.target_revision = r.revision)
+        AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.revision = r.revision)
+        -- changeset 도 리비전을 붙잡는다 (base_revision · committed_revision 둘 다).
+        -- 처음에 이 둘을 빠뜨렸고 FK 가 실물 PG 에서 잡았다.
+        AND NOT EXISTS (SELECT 1 FROM changesets c
+                         WHERE c.base_revision = r.revision
+                            OR c.committed_revision = r.revision)
+      ORDER BY r.revision
+      LIMIT $2::int`,
+    [String(days), String(limit)],
+  )).rows.map((x) => String(x['revision']));
+  if (rows.length === 0) return 0;
+
+  /**
+   * **접두사가 끊기면 거기서 멈춘다.** 위 질의는 조건에 걸린 리비전을 그냥 빼고 주므로
+   * 결과가 연속이 아닐 수 있다 — 그대로 지우면 사슬 가운데가 사라진다. 가장 오래된
+   * 것부터 **연속인 만큼만** 취한다.
+   */
+  const oldest = (await db.query(
+    'SELECT min(revision)::text AS m FROM config_revisions',
+  )).rows[0];
+  const first = oldest === undefined || oldest['m'] === null ? undefined : String(oldest['m']);
+  if (first === undefined || rows[0] !== first) return 0;
+
+  const prefix: string[] = [];
+  let expect = BigInt(first);
+  for (const r of rows) {
+    if (BigInt(r) !== expect) break;
+    prefix.push(r);
+    expect += 1n;
+  }
+  if (prefix.length === 0) return 0;
+
+  // 살아남는 쪽이 `rollback_of` 로 접두사를 가리키면 그 롤백의 출처가 사라진다.
+  const cut = prefix[prefix.length - 1]!;
+  const held = (await db.query(
+    `SELECT min(rollback_of)::text AS m FROM config_revisions
+      WHERE rollback_of IS NOT NULL AND rollback_of <= $1::bigint
+        AND revision > $1::bigint`,
+    [cut],
+  )).rows[0];
+  const heldFrom = held === undefined || held['m'] === null ? undefined : String(held['m']);
+  const finalPrefix = heldFrom === undefined
+    ? prefix
+    : prefix.filter((r) => BigInt(r) < BigInt(heldFrom));
+  if (finalPrefix.length === 0) return 0;
+
+  // 새 최고참의 `parent` 를 끊는다 — **지우기 전에** 해야 FK 가 안 막는다.
+  await db.query(
+    `UPDATE config_revisions SET parent = NULL
+      WHERE parent = ANY($1::bigint[]) AND revision <> ALL($1::bigint[])`,
+    [finalPrefix],
+  );
+  return (await db.query(
+    'DELETE FROM config_revisions WHERE revision = ANY($1::bigint[])',
+    [finalPrefix],
+  )).rowCount ?? 0;
 }

@@ -17,10 +17,14 @@
  *   `changesets` `discarded`             → 지운다. plans 가 CASCADE 로 따라간다
  *   `changesets` `open`·`sealed`         → **안 지운다.** 누가 편집 중이다
  *   `changesets` `committed`             → **안 지운다.** 커밋된 plan 이 매달려 있다
- *   `config_revisions`                   → **안 건드린다.** 롤백과 시크릿 GC root 다
- *   `terminal` 원장                      → **안 건드린다.** 부활 방지 장치다 (B-15)
+ *   `config_revisions`                   → 이 회차 뒤로는 **옵트인 접두사 삭제**가 있다.
+ *                                          `db-retention-rest.test.ts` 를 본다
+ *   `terminal` 원장                      → **안 건드린다.** 부활 방지 장치다.
+ *                                          `dp/agent.ts` 의 `prune` 머리말이 근거다
  *
- * 마지막 둘은 W4-1 이 이미 근거를 적어 뒀고, 이 회차에 뒤집을 이유가 없다.
+ * `config_revisions` 는 W4-1 이 "안 건드린다" 로 적어 뒀는데, 그 뒤 회차가 **사슬을
+ * 안 깨는 규칙**을 찾아 옵트인으로 열었다 — 켜도 대개 아무것도 안 지운다. `terminal` 은
+ * 그대로다: 지우면 운영자가 포기한 전환이 되살아난다.
  *
  *   npm run test:store     (도커 필요)
  */

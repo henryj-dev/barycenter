@@ -405,9 +405,16 @@ export async function main(): Promise<void> {
    * **리더만.** 여러 노드가 동시에 밀면 서로의 잠금을 기다리기만 한다.
    */
   const auditDaysRaw = env('BARY_AUDIT_RETENTION_DAYS', '');
-  // 제안 #10 의 남은 절반. **셋 다 빈 값이면 안 지운다** — 같은 이유다.
+  // 제안 #10 의 남은 절반. **전부 빈 값이면 안 지운다** — 같은 이유다.
   const planDaysRaw = env('BARY_PLAN_RETENTION_DAYS', '');
   const changesetDaysRaw = env('BARY_CHANGESET_RETENTION_DAYS', '');
+  // 종단한 apply 이력. 비종단 행은 나이와 무관하게 남는다 — 복구가 이어받을 것이다.
+  const operationDaysRaw = env('BARY_OPERATION_RETENTION_DAYS', '');
+  /**
+   * 옛 리비전. **켜도 대개 아무것도 안 지운다** — 사슬이라 붙잡힌 것이 나오면 거기서
+   * 멈추고, 롤백 수단인 plan 이 가리키는 리비전은 붙잡힌 것에 든다. 그게 맞는 동작이다.
+   */
+  const revisionDaysRaw = env('BARY_REVISION_RETENTION_DAYS', '');
   const dbRetention = {
     healthEventDays: Number(env('BARY_HEALTH_EVENT_RETENTION_DAYS', String(DEFAULT_HEALTH_EVENT_DAYS))),
     // 빈 값은 **무한 보존**이다. 감사 추적의 보존 기간은 우리가 정할 것이 아니라
@@ -415,6 +422,8 @@ export async function main(): Promise<void> {
     ...(auditDaysRaw === '' ? {} : { auditDays: Number(auditDaysRaw) }),
     ...(planDaysRaw === '' ? {} : { planDays: Number(planDaysRaw) }),
     ...(changesetDaysRaw === '' ? {} : { changesetDays: Number(changesetDaysRaw) }),
+    ...(operationDaysRaw === '' ? {} : { operationDays: Number(operationDaysRaw) }),
+    ...(revisionDaysRaw === '' ? {} : { revisionDays: Number(revisionDaysRaw) }),
   };
   const dbRetentionTimer = setInterval(() => {
     void (async (): Promise<void> => {

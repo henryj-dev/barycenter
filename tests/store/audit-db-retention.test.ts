@@ -122,8 +122,11 @@ maybe('DB 보존 (검수 B-08 · 제안#10)', () => {
   it('안 지울 것이 없으면 조용하다', async () => {
     await insertEvent(1, 1);
     const out = await sweepDatabase({ db });
-    // 제안 #10 의 남은 절반이 `plans`·`changesets` 를 더했다. 둘 다 안 정하면 0 이다.
-    expect(out).toEqual({ healthEvents: 0, audit: 0, plans: 0, changesets: 0 });
+    // 제안 #10 이 `plans`·`changesets` 를, 그 다음 회차가 `operations`·`config_revisions`
+    // 를 더했다. **다섯 다 안 정하면 0 이다** — 기본값이 있는 것은 `health_events` 뿐이다.
+    expect(out).toEqual({
+      healthEvents: 0, audit: 0, plans: 0, changesets: 0, operations: 0, revisions: 0,
+    });
   });
 
   it('나이는 사용자 문자열이 아니다 — 정수만 지난다', async () => {
