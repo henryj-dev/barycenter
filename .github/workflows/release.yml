@@ -1,0 +1,133 @@
+# 릴리스 — **태그가 곧 선언이다**
+#
+# 태그를 밀면 여기서 세 가지가 일어난다: 게이트를 처음부터 다시 돌리고, 받으면 그대로
+# 도는 묶음을 만들고, 그 묶음이 **이 저장소의 이 커밋에서 나왔다는 증명**을 붙인다.
+#
+# **게이트를 다시 돌리는 것이 낭비로 보일 수 있다** — 그 커밋은 브랜치에 밀릴 때 이미
+# `verify` 를 통과했다. 다시 도는 이유는 두 가지다. ① 태그는 아무 커밋에나 붙일 수
+# 있다(밀린 적 없는 커밋에도). ② 릴리스는 되돌리기가 가장 비싼 행위다 — 여기서만
+# 게이트를 아끼는 것은 아낄 자리를 잘못 고른 것이다.
+#
+# 단계 목록을 여기 다시 적지 않는다. `verify` 워크플로와 마찬가지로 **`verify.sh` 를
+# 그대로 부른다** — "전부" 의 정의는 그 스크립트 한 군데에 있다.
+#
+# ⚠️ **아직 한 번도 안 돌았다.** `package.json` 이 `0.0.0` / `private: true` 이고
+#    (§9.1.1 대로 API·DB 가 안 얼었다) 태그가 없다. 첫 태그를 밀기 전에
+#    **버전 줄부터 맞춰야 한다** — 아래 `버전 확인` 이 어긋나면 그 자리에서 막는다.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  # 게이트. 여기가 빨가면 아래는 시작조차 안 한다.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # **태그와 `package.json` 이 다른 것을 말하면 릴리스가 거짓말을 한다.**
+      # 받은 사람은 태그를 믿고, 설치한 사람은 버전 줄을 믿는다 — 둘이 갈리면
+      # 어느 쪽이 진실인지 아무도 모른다. 여기서 막는 편이 싸다.
+      - name: 버전 확인 (태그 == package.json)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          PKG="$(node -p 'require("./package.json").version')"
+          echo "태그 $TAG · package.json $PKG"
+          if [ "$TAG" != "v$PKG" ]; then
+            echo "::error::태그($TAG)와 package.json($PKG)이 다르다. 버전 줄을 먼저 맞춰라."
+            exit 1
+          fi
+
+      - name: 엔진·DB 이미지 준비
+        run: |
+          docker pull docker.io/openresty/openresty:alpine
+          docker pull docker.io/library/postgres:17-alpine
+
+      - run: ./scripts/verify.sh
+
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # 릴리스를 만들고 파일을 붙인다.
+      contents: write
+      # 산출물의 출처 증명(build provenance)에 서명한다.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      # **`npm pack` 을 쓰지 않는다.** `package.json` 의 `files` 는 `dist`·`drivers`·문서만
+      # 싣는데, 데몬은 `gui/build` 가 없으면 **조용히 화면 없이 뜬다**(`serveRoot`).
+      # npm 규약을 따르는 묶음을 만들면 받는 사람이 그 사실을 모른 채 반쪽을 받는다.
+      # 이 저장소는 npm 에 올리지 않으므로(`private: true`), 묶음의 기준은 npm 규약이
+      # 아니라 **"이걸 풀면 도는가"** 다. 그래서 도는 데 필요한 것을 전부 넣는다.
+      - name: 묶음 만들기
+        id: pack
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          NAME="barycenter-$TAG"
+          mkdir -p "out/$NAME"
+          cp -r dist drivers gui/build package.json package-lock.json \
+                README.md DESIGN.md STATUS.md LICENSE "out/$NAME/"
+          # `gui/build` 는 데몬이 찾는 자리에 그대로 있어야 한다.
+          mkdir -p "out/$NAME/gui"
+          mv "out/$NAME/build" "out/$NAME/gui/build"
+          tar -C out -czf "$NAME.tar.gz" "$NAME"
+          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          cat "$NAME.tar.gz.sha256"
+          echo "tarball=$NAME.tar.gz" >> "$GITHUB_OUTPUT"
+
+      # **이 파일이 이 저장소의 이 커밋에서, 이 워크플로로 나왔다**는 증명을 붙인다.
+      # 없으면 릴리스 페이지의 파일은 "누군가 올린 바이너리" 와 구분되지 않는다.
+      # 받은 쪽은 `gh attestation verify <파일> --repo <이 저장소>` 로 확인한다.
+      - name: 출처 증명
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.pack.outputs.tarball }}
+
+      # **초안이 아니라 프리릴리스로 낸다.** README 가 "it runs, and it is a draft" 라고
+      # 적고 §9.1.1 이 API·DB 가 안 얼었다고 못 박은 동안, 1.0 미만이나 `-rc` 류 태그를
+      # 정식 릴리스로 내면 그 문장과 릴리스 페이지가 서로 다른 말을 한다.
+      - name: 릴리스
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          case "$TAG" in
+            v0.*|*-*) set -- --prerelease ;;
+            *)        set -- ;;
+          esac
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            "$@" \
+            "$TARBALL" "$TARBALL.sha256"
