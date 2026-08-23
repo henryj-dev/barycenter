@@ -108,9 +108,10 @@ B(구현된 API·DDL) 드리프트를 둘 다 막는다.
 가까운 GUI 구멍 — 모델에 있는 쓰기 알고리즘은 폼이 있다. 풀은 뺀다. 미완 전환은
 상태 화면에서 recover 한다. `least_conn` 은 모델에 없다.
 
-주문 GET · dns-01 place/cleanup · 드레인 시작은 있다. 드레인 숫자는 엔진
-admin `/membership/inflight` 가 주면 싣고, 없으면 안 싣는다 (`no_new_traffic`).
-HTTP 풀은 GET 본문으로 판정한다. 인증서·TLS 정책은 뺀다. BackendDiscovery 는
+주문 GET · dns-01 place/cleanup · 드레인 시작은 있다. 드레인 숫자는 엔진 admin 이
+주면 싣고, 없으면 안 싣는다 (`no_new_traffic`). **두 평면 다 창구가 있다** — http 는
+`/membership/inflight`, stream 은 admin 의 `inflight` 동사다. 아직 inflight 와 세션이
+한 카운터라 둘로 안 갈린다. HTTP 풀은 상태 코드로 판정하고 풀별로 좁힐 수 있다. 인증서·TLS 정책은 뺀다. BackendDiscovery 는
 멤버십이 발견한 엔드포인트를 받는다. 역할은 auditor · operator · admin 이다.
 백업은 `GET /backup`, 복구는 `POST /restore` (`admin`). SPOF 런북은
 `docs/runbook-spof.md` 다. RTO/RPO 는 ADR-SPOF 가 v1 운영 정책으로 확정한다
@@ -163,7 +164,9 @@ block 등급 S8 · S11 · S12 는 열려 지나갔다. S13 은 원장을 안 짓
 | `validate/` | 참조 · 소켓 · 프로토콜 · 엔진 제약 |
 | `conf/` | AST → `nginx.conf` |
 | `route/compile.ts` | 호스트 라우트 최종 순서 |
-| `control/health.ts` | HTTP 본문 프로브 · TCP 프로브. 드레인 숫자를 안 만든다 |
+| `control/health.ts` | HTTP 상태코드 프로브(풀별 `healthCheck` 로 좁힌다) · TCP 프로브 |
+| `control/drain.ts` | 드레인 수명과 관측. 엔진이 안 주면 **숫자를 안 만든다** |
+| `control/admin-client.ts` | admin 소켓 — http 는 `fetch`, stream 은 `adminTalk` |
 | `control/discovery.ts` | 발견한 엔드포인트 → 멤버십 슬롯. 표면 아님 |
 | `control/acme-*.ts` | 주문 원장 · 틱 러너 · 게시 |
 | `engine/probe.ts` | `nginx -V` 를 실제로 묻는다 |
