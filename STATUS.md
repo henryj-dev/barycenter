@@ -84,9 +84,9 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **794** |
-| conformance | `npm run test:conformance` | **433** |
-| 골든 | `npm run test:golden` | 62 |
+| 단위 | `npm test` | **812** |
+| conformance | `npm run test:conformance` | **449** |
+| 골든 | `npm run test:golden` | 65 |
 | 엔진 사실 | `npm run test:engine` | 76 (SKIP 1) |
 | e2e | `npm run test:e2e` | 60 |
 | 스파이크 | `spike/*/run.sh` | 100 |
