@@ -42,7 +42,8 @@
   },
   "bin": {
     "barycenterd": "./dist/bin/barycenterd.js",
-    "bary": "./dist/bin/bary.js"
+    "bary": "./dist/bin/bary.js",
+    "bary-dp-agent": "./dist/bin/bary-dp-agent.js"
   },
   "main": "./dist/index.js",
   "files": [

@@ -31,7 +31,7 @@ import {
 import type { OidcRpSettings } from '../api/oidc-code.js';
 import { render } from '../conf/render.js';
 import { adminFetch, adminTalk, clearStaleSockets } from '../control/admin-client.js';
-import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
+import { httpAdminConf, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
@@ -42,8 +42,9 @@ import { sweepSecrets } from '../dp/secret-gc.js';
 import { ControlPlane, defaultStreamSocket } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
 import { bootDrivers, readDriverBootSource } from '../dp/boot.js';
-import { LocalDataplaneDriver } from '../dp/driver.js';
-import { FsEffects } from '../dp/effects-fs.js';
+import { LocalDataplaneDriver, type DataplaneDriver } from '../dp/driver.js';
+import { RemoteDataplaneDriver } from '../dp/remote.js';
+import { bootEffects } from '../dp/effects-boot.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { FileStore } from '../dp/store-fs.js';
 import { log } from '../obs/log.js';
@@ -244,73 +245,49 @@ export async function main(): Promise<void> {
   const store = new ConfigStore(db, renderCaps, secrets);
 
   /**
-   * 멤버십 슬롯을 데이터 플레인에 밀어 넣는다 (§6.5).
-   *
-   * **쓰고 나서 되읽어 대조한다.** `nginx -t` 는 Lua 를 하나도 검증하지 않으므로(E64)
-   * admin 조각이 깨져 있어도 게시 전 검사와 활성화 판정을 그대로 통과한다. 되읽기가
-   * 그 경로가 살아 있다는 유일한 증거다.
+   * DP 쪽 부작용. **`bary-dp-agent` 와 같은 팩토리를 쓴다** — 둘이 각자 만들면
+   * 한쪽만 고치는 날이 오고, 그 차이는 "원격 배포에서만 reload 가 안 걸린다" 처럼
+   * 나중에 드러난다.
    */
-  const pushMembership = async (
-    plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>,
-  ): Promise<void> => {
-    const want = encodeSlots(await resolveSlots(slots));
-    const got = plane === 'http'
-      ? await pushHttp(adminSocket, epoch, want)
-      : await pushStream(streamAdminSocket, epoch, want);
-    if (got !== want) {
-      throw new Error(
-        `멤버십 적재를 되읽었더니 다르다 (${plane}, epoch ${epoch}).\n`
-        + `  보낸 것: ${JSON.stringify(want)}\n  읽은 것: ${JSON.stringify(got)}`);
-    }
-  };
-
-  const effects = new FsEffects({
-    prefix,
-    pushMembership,
-    reload: async () => {
-      // **실패는 진짜 실패다.** 여기서 삼키면 활성화 판정이 타임아웃까지 늘어진다.
-      const cmd = process.env['BARY_RELOAD_CMD'];
-      if (cmd !== undefined) {
-        await run('/bin/sh', ['-c', cmd]);
-        return;
-      }
-      const pid = readFileSync(`${prefix}/logs/nginx.pid`, 'utf8').trim();
-      process.kill(Number(pid), 'SIGHUP');
-    },
-    // §6.3-4 — 세대에 **구워진 리터럴**을 읽는다. 이게 활성화의 양성 신호다.
-    probeAccepting: async () => {
-      try {
-        const r = await adminFetch(adminSocket)('http://admin/generation', {
-          signal: AbortSignal.timeout(2000),
-        });
-        return r.ok ? (await r.text()).trim() : undefined;
-      } catch {
-        return undefined;
-      }
-    },
-    // 게시 전 `nginx -t`. 없으면 manifest 대조만 하고 넘어간다 — 못 본 것과 실패한 것은
-    // 다르므로 막지는 않되, 그만큼 늦게 발견한다.
-    ...(process.env['BARY_CONFIGTEST_CMD'] === undefined ? {} : {
-      configTest: async (generation: string): Promise<boolean> => {
-        try {
-          await run('/bin/sh', ['-c',
-            (process.env['BARY_CONFIGTEST_CMD'] ?? '').replace(/\{generation\}/g, generation)]);
-          return true;
-        } catch {
-          return false;
-        }
-      },
-    }),
-  });
+  const effects = bootEffects({ prefix, adminSocket, streamAdminSocket });
 
   // **핸들을 들고 있는다.** 종료할 때 놓아야 다음 기동이 즉시 열린다 (검수 B-16) —
   // 안 놓으면 죽은 주인을 가려내는 `/proc` 폴백에 기대게 되고, 그 파일을 못 읽는
   // 플랫폼에서는 "살아 있는 쪽으로" 틀려 pid 재사용 때 기동이 막힌다.
   const agentStore = FileStore.open(`${prefix}/state/agent.json`);
-  const driver = LocalDataplaneDriver.create({
-    store: agentStore,
-    effects,
-  });
+  /**
+   * **드라이버를 고른다** (§3.1 · §11.1).
+   *
+   * 기본은 로컬이다 — 지금 배포에서 CP 와 에이전트는 한 프로세스이고, 그 사이에는
+   * 전송이 없다. `BARY_DP_REMOTE_URL` 을 주면 원격으로 간다.
+   *
+   * ⚠️ **가르는 것은 CP↔에이전트뿐이다.** §11.1 이 실측한 *"에이전트와 nginx 는 같은
+   * 파일시스템을 봐야 한다"* 는 그대로다 — 원격으로 가면 에이전트가 **저쪽 호스트에서**
+   * `createDpAgentServer` 로 서고, nginx 는 그 옆에 있다. 이쪽에는 nginx 가 없다.
+   *
+   * 넷을 다 주거나 하나도 안 준다. 셋만 주면 "인증서를 깜빡했다" 가 조용히 평문이나
+   * 검증 없음이 되는데, 이 모듈은 그 길을 아예 안 낸다.
+   */
+  const remoteUrl = env('BARY_DP_REMOTE_URL', '');
+  const remoteCert = env('BARY_DP_REMOTE_CERT_FILE', '');
+  const remoteKey = env('BARY_DP_REMOTE_KEY_FILE', '');
+  const remoteCa = env('BARY_DP_REMOTE_CA_FILE', '');
+  const remoteBits = [remoteUrl, remoteCert, remoteKey, remoteCa].filter((x) => x !== '');
+  if (remoteBits.length !== 0 && remoteBits.length !== 4) {
+    throw new Error(
+      'BARY_DP_REMOTE_* 는 넷을 다 주거나 하나도 안 준다 — '
+      + 'URL·CERT_FILE·KEY_FILE·CA_FILE. 일부만 주면 조용히 검증 없는 연결이 된다',
+    );
+  }
+  const driver: DataplaneDriver = remoteUrl === ''
+    ? LocalDataplaneDriver.create({ store: agentStore, effects })
+    : new RemoteDataplaneDriver({
+      baseUrl: remoteUrl,
+      clientCertFile: remoteCert,
+      clientKeyFile: remoteKey,
+      caFile: remoteCa,
+    });
+  if (remoteUrl !== '') log.info('driver.remote', { baseUrl: remoteUrl });
 
   // ── 리더 선출 (§3.5) ────────────────────────────────────────────────
   //
