@@ -85,15 +85,22 @@ restore()  { rm -rf $P; cp -a /tmp/s12/base $P; }
 # 그대로 두면 뒤쪽 회차의 "복구가 gen-2 로 수렴했다" 가 **앞 회차 덕일 수 있다.** 이번
 # 복구가 한 일이 아니라. `S12.metric`(지표 검증)이 정상 경로에서도 reload 0 회를 보고해서
 # 알았다 — 엔진이 이미 gen-2 라 러너가 reload 를 건너뛴 것이었다.
+# **상한이 4 초였다** (2026-08-24). 게이트 부하 아래에서 `#6` 이 그것을 넘겨 회차가
+# 통째로 빨개졌다 — 엔진이 못 돌아간 것이 아니라 **덜 기다린 것**이다.
+#
+# 이 회차에 같은 부류를 세 번째로 만난다: S14 의 긴 연결(고정 `sleep 2`), S12 의 후속
+# 봉투(못 박은 좌표), 그리고 여기. 전부 **한가한 기계에서 맞춰 둔 예산**이었다.
+# 상태를 기다리는 것은 맞고, 상한만 부하에 맞춘다 — 못 돌아가면 여전히 실패한다.
 reset_engine() {
   ln -sfn generations/gen-1 $P/current
   kill -HUP "$(cat $P/logs/nginx.pid)" 2>/dev/null
   n=0
-  while [ "$n" -lt 40 ]; do
-    [ "$(curl -s --max-time 1 http://127.0.0.1:19990/generation)" = "gen-1" ] && return 0
-    n=$((n+1)); sleep 0.1
+  while [ "$n" -lt 100 ]; do
+    # curl 자체의 상한도 1 초였다. 부하가 걸리면 그 한 번이 먼저 죽어 루프가 헛돈다.
+    [ "$(curl -s --max-time 3 http://127.0.0.1:19990/generation)" = "gen-1" ] && return 0
+    n=$((n+1)); sleep 0.2
   done
-  echo "  ⚠ 엔진을 gen-1 로 못 되돌렸다 — 이 회차 판정은 믿을 수 없다"
+  echo "  ⚠ 엔진을 gen-1 로 못 되돌렸다 (20초) — 이 회차 판정은 믿을 수 없다"
   return 1
 }
 snapshot
@@ -163,7 +170,7 @@ while [ "$i" -lt "$TOTAL" ]; do
   SERVED=""
   w=0
   while [ "$w" -lt 30 ]; do
-    SERVED=$(curl -s --max-time 1 http://127.0.0.1:19990/generation)
+    SERVED=$(curl -s --max-time 3 http://127.0.0.1:19990/generation)
     [ "$SERVED" = "gen-2" ] && break
     w=$((w+1)); sleep 0.1
   done
@@ -231,7 +238,7 @@ while [ "$i" -lt "$TOTAL" ]; do
   NEXT_SERVED=""
   w=0
   while [ "$w" -lt 30 ]; do
-    NEXT_SERVED=$(curl -s --max-time 1 http://127.0.0.1:19990/generation)
+    NEXT_SERVED=$(curl -s --max-time 3 http://127.0.0.1:19990/generation)
     [ "$NEXT_SERVED" = "gen-3" ] && break
     w=$((w+1)); sleep 0.1
   done
