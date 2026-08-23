@@ -107,6 +107,13 @@ run "표면 (계약 고정)     " node scripts/surface.mjs --check
 # 호출자가 0 개인 방어가 넷 있었고, 그 셋은 "막는다" 고 주석에 적혀 있었다.
 run "도달성 (배선 검사)   " node scripts/reachable.mjs
 
+# **node 핀이 한 벌인가.** `.nvmrc`(CI 가 읽는다)와 `deploy/Dockerfile`(배포 이미지가
+# 박는다)이 같은 메이저를 말해야 한다. 사본이 둘인 것은 못 줄인다 — `FROM` 은 파일을
+# 못 읽는다 — 그래서 갈라지는 것만 막는다. `.nvmrc` 를 만든 그날 dependabot 이
+# Dockerfile 만 26 으로 올리는 PR 을 열었다(#1). 이 검사가 없었으면 CI 는 24, 배포는
+# 26 인 상태가 조용히 초록이었을 것이다.
+run "node 핀 (한 벌인가)  " node scripts/node-pin.mjs
+
 # **재현물 게이트** (48차 처방 B). 39·40차에 규칙을 산문으로 세웠는데 46차에 또 어겼다 —
 # 규칙이 산문이라 안 지켜진다. 기본은 직전 커밋을 본다.
 [ $QUICK -eq 0 ] && run "재현물 (핀 검사)     " node scripts/pinned.mjs HEAD~1
