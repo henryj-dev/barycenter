@@ -725,7 +725,7 @@ type TlsPassthroughRoute = ResourceMeta & {
 | `algorithm` | enum | `round_robin` \| `source_ip_hash` \| `hash` \| `least_conn` (S6 로 열렸다) |
 | `hash_key` | enum+params? | **자유 문자열 금지** (§ 4.9). 클래스별 화이트리스트 |
 | `health` | object | §4.3.1 — **프로브 대상과 데이터 경로를 분리한다** |
-| `passive` | object? | `max_fails`, `fail_timeout_s` |
+| `passive` | object? | `max_fails`, `fail_timeout_s` — ❌ **안 넣기로 했다** (2026-08-23). 아래 |
 | `send_proxy_protocol` | enum | §4.7. **http 는 `none` 고정** |
 | `upstream_tls` | object? | `http`/`tcp` 만. `enabled`, `sni`, `ca_bundle_ref`, `client_cert_ref`, `verify` |
 | `dns` | object? | `resolver_ref`, `valid_s`, `resolve_mode` — **`on_nxdomain`/`on_timeout` 없음** (S14: 엔진이 선택지를 안 준다. 표는 `DataplaneCapabilities.nativeDns`) |
@@ -736,8 +736,26 @@ type TlsPassthroughRoute = ResourceMeta & {
 > `sendProxyProtocol` · `healthCheck` 만 있다.
 >
 > 이 표는 오래 **목표**를 적어 두고 구현 상태를 안 적었다. 그러면 다음 사람이 표를
-> 계약으로 읽고, 없는 필드를 API 로 보내다 `unknown_field` 를 맞는다. 넷 다 v1 후보이지
-> 축소 결정이 아니다 — 결정이었다면 §12.0 이나 §15 에 근거가 있어야 한다.
+> 계약으로 읽고, 없는 필드를 API 로 보내다 `unknown_field` 를 맞는다.
+>
+> **`passive` 는 그중 하나가 아니다 — 안 넣기로 결정했다** (S15.5 를 재다 걸렸다):
+>
+>   ① **멤버십 평면에서는 셀 대상이 없다.** `max_fails` 는 nginx 가 upstream 의
+>      `server` 줄마다 세는데, 이 평면의 upstream 에는 `server` 가 **자리표시
+>      하나뿐**(`0.0.0.1:1`)이다. 진짜 peer 는 `balancer_by_lua` 가 매 연결마다 dict
+>      에서 골라 꽂는다. 그러면 백엔드 열 개의 실패가 한 통에 섞이고, 그 통이 차면
+>      **전부** 빠진다.
+>   ② **Lua 로 다시 만들면 멤버십의 주인이 둘이 된다.** `in:` 처럼 `fail:` 을 두면
+>      "이 백엔드가 풀에 있는가" 를 정하는 곳이 능동 프로브와 수동 카운터 **둘**이
+>      된다. §6.6 이 리듀서를 하나로 둔 이유가 그것이다.
+>   ③ 정적 경로(멤버십 평면이 꺼진 엔진)에서는 정상 동작하지만, **그 경로만을 위해**
+>      모델 필드를 만들면 정본 배포에서 아무도 안 읽는 필드가 된다.
+>
+> `tests/conformance/passive-has-no-place.test.ts` 가 ①과 ②를 계약으로 지킨다 —
+> 자리표시가 하나라는 것과, 밸런서가 쓰는 dict 키가 `slot:`·`in:`·`rr:` 셋뿐이라는 것.
+>
+> 나머지 셋(`upstream_tls`·`dns`·`sticky`)은 v1 후보이지 축소 결정이 아니다 —
+> 결정이었다면 §12.0 이나 §15 에 근거가 있어야 한다.
 
 **`least_conn` 은 S6 에서 열렸다** (2026-08-23). 그 전까지는 이렇게 적혀 있었다:
 

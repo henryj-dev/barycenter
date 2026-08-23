@@ -145,7 +145,7 @@ A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이�
 
 | 자리 | 없는 필드 |
 |---|---|
-| `Pool` (§4.3) | `passive`(max_fails·fail_timeout) · `upstream_tls` · `dns` · `sticky` |
+| `Pool` (§4.3) | `upstream_tls` · `dns` · `sticky`. **`passive` 는 안 넣기로 했다** — 이 평면의 upstream 은 `server` 가 자리표시 하나뿐이라 peer 별로 셀 대상이 없고, Lua 로 다시 만들면 멤버십의 주인이 둘이 된다 |
 | 헬스 프로브 (§4.3.1) | `probe.mode`·`protocol`·`port`·`host_override`·`udp`. `interval`·`timeout`·`rise`·`fall` 은 **데몬 전체에 하나씩** 이지 풀별이 아니다 |
 | `Backend` (§4.4) | `max_conns` · `admin_state` · `drain.deadline_s` · `is_backup` |
 
