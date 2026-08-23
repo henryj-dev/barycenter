@@ -504,6 +504,10 @@ W1-2 의 CHECK 이 기존 행에 걸리면 마이그레이션이 실패한다. *
 >
 > **결정이 나면**: `git merge audit-w3-surface` → `node scripts/surface.mjs --write`
 > (카운터 3 → 0) → `npm run verify`. 그 한 번이면 끝난다.
+>
+> ⚠️ **이 처방은 틀렸다** (2026-08-23 실측). `--write` 는 동결 상태를 하드 차단하고
+> 해제 플래그가 **없었다** — 돌려 보면 그대로 거부한다. 실제 순서는
+> `--unfreeze "<근거>"` → `--write` 이고, 그 `--unfreeze` 를 이 회차에 만들었다.
 
 ### 브랜치에 든 것
 
@@ -526,15 +530,15 @@ typecheck · 도달성 · 훅 · unit 541 · conformance 409 · 모델 13.
 기능**이라 손대지 않았다. 같은 동결 해제를 쓰므로, 열기로 했다면 같은 회차에 함께 넣는
 편이 리셋을 한 번으로 줄인다.
 
-- [ ] `node scripts/surface.mjs --check` 로 현재 카운터 확인 후 결정
-- [ ] ☐ W3-1 · B-07 백엔드별 헬스체크 정의 (`Pool.healthCheck`) `[L]`
+- [x] `node scripts/surface.mjs --check` 로 현재 카운터 확인 후 결정 — 풀었다 (112 심볼 · 0 회차)
+- [x] ☑ W3-1 · B-07 백엔드별 헬스체크 정의 (`Pool.healthCheck`) `[L]`
       — 재현물 `tests/store/audit-healthcheck-spec.test.ts` `-t "5xx 는 healthy 가 아니다"`
       — 프로브 동시성 상한과 DB 갱신 묶기도 여기서
-- [ ] ☐ W3-2 · S-01c 경로 이탈에 타입 있는 종류 (`GenerationError['kind']`) `[XS]`
+- [x] ☑ W3-2 · S-01c 경로 이탈에 타입 있는 종류 (`GenerationError['kind']`) `[XS]`
       — W0-1 의 일반 `Error` 를 `'path_escape'` 로 승격
 - [ ] ☐ W3-3 · 제안6 레이트리밋·커넥션 제한 `[L]`
 - [ ] ☐ W3-4 · 제안7·8 헤더 조작 · 타임아웃/버퍼 프로필 `[L]`
-- [ ] ☐ B-12 dict 크기 설정화 + `in:` 카운터 정리 `[M]`
+- [x] ☑ B-12 dict 크기 설정화 + `in:` 카운터 정리 `[M]`
 - [ ] ☐ 제안#9 운영 상태 조회 API `[M]` (표면 A 는 안 움직인다 — 라우트만. B 재생성)
 - [ ] 회차 마지막에 **한 번만** — `node scripts/surface.mjs --write`
 - [ ] `npm run verify --freeze-gate` 가 이 회차 동안 빨간 것은 정상이다
