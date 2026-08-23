@@ -59,6 +59,26 @@ Out of scope:
   demonstrate an actual consequence. Suggest those as issues instead — they may well be right,
   they are just not advisories.
 
+## Known dependency advisories
+
+`npm audit` is not silent. Here is what it reports and why it stands, so that the next person
+does not re-derive it — or, worse, "fix" it by downgrading.
+
+**Runtime dependencies: none.** The shipped daemon depends on `pg` alone (DESIGN.md §11.2 kept
+it that way on purpose). `npm audit --omit=dev` reports zero.
+
+**GUI build: three low, unfixed upstream.** `@sveltejs/kit` pulls `cookie@0.6.0`, and the
+advisory covers `cookie <0.7.0`. The latest published kit (2.70.3, the version we are on) still
+does; `npm audit fix --force` "resolves" it by proposing kit **0.0.30**, which is a downgrade of
+two major versions and not a fix. Two things make this acceptable rather than merely tolerated:
+
+- The GUI is built with `adapter-static`. There is **no server runtime in the artifact** — the
+  cookie parser is not shipped. `gui/build` contains only the static bundle.
+- The daemon serves that bundle from its own origin and does its own auth (Bearer / OIDC). It
+  does not hand cookie parsing to kit.
+
+If kit ships a release that moves off `cookie <0.7.0`, take it. Do not take the downgrade.
+
 ## Disclosure
 
 Coordinated. Once there is a fix, or a decision that there will not be one, the advisory is
