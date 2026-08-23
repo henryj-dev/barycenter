@@ -9,7 +9,7 @@
  *   2) 그래도 남는 것은 직렬화가 인용·이스케이프한다 (ast.ts)
  * 한 겹만으로는 부족하다 — 1 은 실수로 넓어질 수 있고, 2 는 값이 아닌 위치엔 못 쓴다.
  */
-import { isIP } from 'node:net';
+import { ipVersion } from './ip.js';
 
 import { err, ok, type Result } from './result.js';
 import type { ProtocolClass } from '../model/provisional.js';
@@ -178,7 +178,7 @@ export function validateHeaderValue(input: string): Result<string> {
  * 그때 보이는 것은 "설정이 이상하다" 이지 "백엔드 주소가 호스트가 아니다" 가 아니다.
  */
 export function validateBackendHost(input: string): Result<string> {
-  if (isIP(input) !== 0) return ok(input);
+  if (ipVersion(input) !== 0) return ok(input);
   const normalized = normalizeHost(input);
   if (!normalized.ok) {
     return err('invalid_host', `백엔드 주소가 IP 도 호스트 이름도 아니다: ${JSON.stringify(input)}`);

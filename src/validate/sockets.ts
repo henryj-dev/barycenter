@@ -10,7 +10,7 @@
  * PostgreSQL 의 일반 CHECK 는 다른 행을 참조할 수 없으므로(§4.0), 이 판정은 커밋 트랜잭션
  * 안에서 advisory lock 과 함께 도는 검증기의 몫이다.
  */
-import { isIP } from 'node:net';
+import { ipVersion } from './ip.js';
 import { err, ok, type Result } from './result.js';
 import type { ListenerProtocol } from '../model/provisional.js';
 
@@ -45,7 +45,7 @@ export function normalizeBind(input: string): Result<BindAddress> {
   const mapped = V4_MAPPED.exec(input);
   const candidate = mapped ? mapped[1]! : input;
 
-  const version = isIP(candidate);
+  const version = ipVersion(candidate);
   if (version === 4) {
     return ok({ family: 'v4', addr: candidate, wildcard: candidate === '0.0.0.0' });
   }
