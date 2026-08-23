@@ -22,7 +22,9 @@
     withdrawPolicy: (key: string) => void;
     insert: (key: string, bind: string, port: number, pool: string, opts: ListenerOptionFlags) => void;
     insertTcp: (key: string, bind: string, port: number, pool: string) => void;
-    insertPassthrough: (key: string, bind: string, port: number, pool?: string) => void;
+    insertPassthrough: (
+      key: string, bind: string, port: number, pool?: string, noSniPool?: string,
+    ) => void;
     insertUdp: (key: string, bind: string, port: number, pool: string, preset: UdpPreset) => void;
     insertPolicy: (key: string, minVersion: TlsVersion) => void;
     insertHttps: (

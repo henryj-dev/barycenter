@@ -444,7 +444,7 @@ export function createDesk() {
 
   const insertPassthroughListener = async (
     key: string,
-    body: { bind: string; port: number; pool?: string },
+    body: { bind: string; port: number; pool?: string; noSniPool?: string },
   ): Promise<boolean> => {
     editing = true;
     error = undefined;

@@ -41,7 +41,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
 | CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status. **리스너 옵션 플래그**(`--rate`·`--header`·`--max-body`·타임아웃) | — |
-| GUI | Kit 경로(로그인 포함). 폴링하지 않는다. **리스너 옵션 폼**과 **왜 트래픽을 안 받나** | 아래 §2 |
+| GUI | Kit 경로(로그인 포함). 폴링하지 않는다. **리스너 옵션 폼**·**왜 트래픽을 안 받나**·패스스루 두 폴백(`on_no_sni` 포함) | 아래 §2 |
 
 ### GUI
 

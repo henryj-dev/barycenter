@@ -21,11 +21,13 @@
   insertTcp={(key, bind, port, pool) => {
     void desk.insertTcpListener(key, { bind, port, pool }).then(after);
   }}
-  insertPassthrough={(key, bind, port, pool) => {
-    void desk.insertPassthroughListener(
-      key,
-      pool === undefined ? { bind, port } : { bind, port, pool },
-    ).then(after);
+  insertPassthrough={(key, bind, port, pool, noSniPool) => {
+    void desk.insertPassthroughListener(key, {
+      bind,
+      port,
+      ...(pool === undefined ? {} : { pool }),
+      ...(noSniPool === undefined ? {} : { noSniPool }),
+    }).then(after);
   }}
   insertUdp={(key, bind, port, pool, preset) => {
     void desk.insertUdpListener(key, { bind, port, pool, preset }).then(after);

@@ -169,4 +169,24 @@ describe('S9 — on_no_sni 승격', () => {
     })!;
     expect(JSON.stringify(patch)).not.toContain('onNoSni');
   });
+
+  /**
+   * GUI 도 같은 빌더를 지난다 (`putPassthroughListenerPatch`). 화면이 두 폴백을 **따로**
+   * 낼 수 있어야 §12.1 의 *"GUI 는 맨 뒤로 미루지 않는다"* 가 이 기능에도 성립한다.
+   */
+  it('두 폴백을 서로 다른 풀로 낼 수 있다 — 화면이 칸을 둘 두는 이유다', () => {
+    const [op] = putPassthroughListenerPatch('pt', {
+      bind: '0.0.0.0', port: 8443, pool: 'unmatched', noSniPool: 'nosni',
+    });
+    expect(op!.body.onUnmatchedSni).toEqual({ pool: 'unmatched' });
+    expect(op!.body.onNoSni).toEqual({ pool: 'nosni' });
+  });
+
+  it('한쪽만 골라도 된다 — 다른 쪽은 끊는다', () => {
+    const [only] = putPassthroughListenerPatch('pt', {
+      bind: '0.0.0.0', port: 8443, noSniPool: 'nosni',
+    });
+    expect(only!.body.onUnmatchedSni).toBeUndefined();
+    expect(only!.body.onNoSni).toEqual({ pool: 'nosni' });
+  });
 });
