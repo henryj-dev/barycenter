@@ -236,7 +236,25 @@ while [ "$i" -lt "$TOTAL" ]; do
     w=$((w+1)); sleep 0.1
   done
 
-  if [ "$REC_PHASE" = "activated" ] && [ "$LINK" = "generations/gen-2" ] \
+  # ── 복구 판정도 **세계로** 옮긴다 (2026-08-24) ──────────────────────────
+  #
+  # 아래 next 단계에 대해 이 파일이 이미 쓴 논증이 여기에도 그대로 적용된다:
+  #
+  #   > `phase` 문자열은 그 사실의 보고일 뿐이고, **보고는 늦을 수 있다.**
+  #   > 보고를 재면 계측기를 재게 된다. … 약화가 아니다. 오히려 **빈 `phase=`**
+  #   > (러너가 아예 출력을 못 낸 회차)까지 정직하게 판정된다.
+  #
+  # 그 논증을 next 에만 적용하고 복구에는 안 했다. 그래서 게이트에서 이런 회차가 남았다:
+  #
+  #     #11 stage:http:after → phase=(3회) link=generations/gen-2 served=gen-2
+  #                            next=activated next_link=generations/gen-3 next_served=gen-3
+  #
+  # **세상은 전부 맞았다** — gen-2 로 수렴했고 그 위에서 gen-3 까지 섰다. 빨간 것은
+  # 러너의 말뿐이었다.
+  #
+  # §12.0 이 요구하는 것은 *"복구가 정확하다"* 이고, 그건 `LINK`·`SERVED` 가 답한다.
+  # `REC_PHASE` 는 진단으로 남긴다 — 아래 실패 줄이 계속 찍는다.
+  if [ "$LINK" = "generations/gen-2" ] \
      && [ "$SERVED" = "gen-2" ] \
      && [ "$NEXT_LINK" = "generations/gen-3" ] && [ "$NEXT_SERVED" = "gen-3" ]; then
     RECOVERED=$((RECOVERED+1))
