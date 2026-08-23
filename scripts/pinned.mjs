@@ -23,6 +23,8 @@
  * 그건 원래 검수로만 잡히는 축이고, 카운터와 분리한 현행 구조가 맞다 — 48차 판정이다.
  */
 import { execFileSync } from 'node:child_process';
+
+import { markerArgv, verdictOf } from './pinned-lib.mjs';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,8 +132,9 @@ function checkMarks(sha, parent, marks, short) {
       console.log(`건너뜀 ${short} — ${mark}`);
       continue;
     }
-    const m = /^(\S+)(?:\s+-t\s+"(.+)")?$/.exec(mark);
-    const argv = m === null ? [mark] : [m[1], ...(m[2] === undefined ? [] : ['-t', m[2]])];
+    // **판정과 표식 해석은 `pinned-lib.mjs` 가 진다** — 그쪽만 순수 함수라 잴 수 있다.
+    // 여기 안에 두면 게이트를 재는 테스트를 못 쓰고, 실제로 못 써서 구멍 둘을 오래 안고 있었다.
+    const { argv } = markerArgv(mark);
 
     // **부모 트리 전체**를 별도 worktree 에 세우고, 지금의 테스트만 얹는다.
     // 파일 삭제·추가도 그대로 반영된다 — `checkout -- src/` 가 못 하던 것이다.
@@ -146,27 +149,30 @@ function checkMarks(sha, parent, marks, short) {
       // 대상(`src/`)은 부모 것을 그대로 둔다.
       execFileSync('git', ['checkout', sha, '--', 'tests/', 'vitest.config.ts'],
         { cwd: w.tree, stdio: 'pipe' });
-      let red = false;
+      let threw = false;
+      let text = '';
       try {
-        const out = execFileSync('npx', ['vitest', 'run', ...argv], {
+        text = execFileSync('npx', ['vitest', 'run', ...argv], {
           cwd: w.tree, encoding: 'utf8',
         });
-        if (/No test files found|Tests +0 passed/.test(out)) {
-          console.error(`FAIL  ${short} ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
-          ok = false;
-          continue;
-        }
       } catch (e) {
-        const text = `${e.stdout ?? ''}${e.stderr ?? ''}`;
-        if (/No test files found|Tests +0 (passed|failed)/.test(text)) {
-          console.error(`FAIL  ${short} ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
-          ok = false;
-          continue;
-        }
-        red = true;
+        threw = true;
+        text = `${e.stdout ?? ''}${e.stderr ?? ''}`;
       }
-      if (red) {
+      const verdict = verdictOf({ threw, text });
+      if (verdict === 'red') {
         console.log(`ok    ${short} ${mark} — 수정 전에 빨갛다`);
+      } else if (verdict === 'empty') {
+        console.error(`FAIL  ${short} ${mark} — 고른 테스트가 0 건이다. 표식이 틀렸다.`);
+        ok = false;
+      } else if (verdict === 'crashed') {
+        // **던진 것을 전부 빨강으로 세면 안 된다.** 러너가 기동에서 죽으면 테스트가
+        // 한 건도 안 돈 것이고, 그걸 "수정 전에 빨갛다" 로 세는 것은 통과 신호를
+        // 위조하는 것이다. 게이트가 자기 실패를 성공으로 읽으면 없느니만 못하다.
+        console.error(
+          `FAIL  ${short} ${mark} — **러너가 기동에서 죽었다. 아무 테스트도 안 돌았다.**\n`
+          + `${text.split('\n').slice(0, 6).join('\n')}`);
+        ok = false;
       } else {
         console.error(`FAIL  ${short} ${mark} — **수정 전에도 초록이다. 아무것도 안 지킨다.**`);
         ok = false;
