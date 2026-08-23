@@ -457,12 +457,11 @@ if start_ng "$P"; then
   else
     bad E26.1 "비-TLS 구분 실패: '$r_plain'"
   fi
-  if command -v openssl >/dev/null 2>&1; then
-    r_nosni=$(timeout 6 openssl s_client -connect 127.0.0.1:19260 -noservername 2>/dev/null </dev/null | grep -c TLS_NO_SNI)
-    [ "${r_nosni:-0}" -ge 0 ] && skip E26.2 "TLS-no-SNI 경로는 백엔드가 평문 HTTP 라 완결 검증 불가 — S9 에서 TLS 백엔드로 재실행"
-  else
-    skip E26.2 "openssl 바이너리 없음 — S9 에서 실행"
-  fi
+  # E26.2 는 **S9 가 가져갔다** (2026-08-23). 여기서는 백엔드가 평문 HTTP 라
+  # TLS-no-SNI 경로를 완결 검증할 수 없었다. `spike/s9` 가 백엔드를 stream-lua 로
+  # 바꿔 그 제약을 없앴고 — 클라이언트가 TLS 를 말할 필요가 사라진다 —
+  # `tests/golden/on-no-sni.test.ts` 가 우리 렌더로 같은 것을 다시 잰다.
+  # 스킵을 남겨 두면 "아직 못 쟀다" 로 계속 읽힌다.
   stop_ng "$P"
 else
   bad E26 "기동 실패"
