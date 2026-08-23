@@ -13,18 +13,8 @@
  * 백엔드는 이제 healthy 이고, 500 에 에러 페이지를 주던 백엔드는 이제 unhealthy 다.
  * 후자가 이 수정의 요점이고, 전자는 애초에 상태 코드로 판정했어야 하는 자리다.
  *
- * ── 여기서 내는 것과 안 내는 것
- *
- * 원래 이 수정은 `Pool.healthCheck` 로 **경로·기대상태·기대본문을 좁히는 설정**까지
- * 함께였는데, 그건 `Model` 을 넓히므로 **A 표면이 움직인다**(동결 111 심볼·3 회차).
- * 저장소가 그 결정을 도구 수준에서 사람에게 유보했으므로 우회하지 않는다.
- *
- * **결함과 설정은 다른 것이다.** 죽은 백엔드가 트래픽을 계속 받는 것은 결함이고, 그것을
- * 좁히는 손잡이는 기능이다. 결함은 표면을 안 건드리고 고칠 수 있으므로 지금 고친다 —
- * `HealthProber`·`probeHttp`·`HttpProbeOpts` 는 전부 표면 밖이다.
- *
- * 설정 쪽은 `origin/audit-w3-surface` 에 그대로 있다. 동결이 풀리면 `healthCheckOf` 의
- * **본문 한 곳**만 `pool.healthCheck` 를 읽도록 바뀐다 — 다리는 여기서 이미 놓았다.
+ * 좁히는 설정(`Pool.healthCheck`)은 `Model` 을 넓히므로 A 표면을 움직인다. 이 회차에
+ * 사람이 동결 해제를 결정해 함께 들어왔다 — 결함(위)과 손잡이(아래)를 같은 파일에서 잰다.
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -87,25 +77,27 @@ describe('HTTP 헬스 판정 (검수 B-07)', () => {
       { path: '/', expectStatus: [418], expectBody: 'other' })).toBeDefined();
   });
 
-  it('프로버가 옵션을 실제로 넘긴다 — 다리가 놓였다', () => {
-    /**
-     * **`HttpProbeOpts` 는 있는데 `HealthProber` 가 안 넘겼다.** 이 저장소가 반복해서
-     * 잡는 *"필드는 있는데 아무도 안 읽는다"* 의 한 판이다. `healthCheckOf` 가 그 다리다.
-     *
-     * 지금은 http 풀에 기본값을 준다. 좁히는 설정(`Pool.healthCheck`)은 `Model` 을
-     * 넓혀야 해서 표면 동결 뒤에 있고, 풀리면 **이 함수의 본문 한 곳**만 바뀐다.
-     */
+  it('풀의 healthCheck 가 프로버까지 내려간다', async () => {
+    // **여기가 B-07 의 핵심이다.** 옵션 타입은 있었는데 프로버가 안 넘겼다.
     const model: Model = {
       listeners: [], httpRoutes: [], passthroughRoutes: [],
       pools: [
-        { key: 'app', protocolClass: 'http', algorithm: 'round_robin' },
+        {
+          key: 'app', protocolClass: 'http', algorithm: 'round_robin',
+          healthCheck: { path: '/healthz', expectStatus: [200, 204], expectBody: 'up' },
+        },
+        { key: 'plain', protocolClass: 'http', algorithm: 'round_robin' },
         { key: 'l4', protocolClass: 'tcp', algorithm: 'round_robin' },
       ],
       backends: [], certificates: [], tlsPolicies: [], sniBindings: [],
     };
 
-    expect(healthCheckOf(model, 'app')).toEqual({ path: '/' });
-    // stream 풀에는 HTTP 프로브가 없다 — 거기엔 요청 개념이 없고 프로버는 연결만 본다.
+    expect(healthCheckOf(model, 'app')).toEqual({
+      path: '/healthz', expectStatus: [200, 204], expectBody: 'up',
+    });
+    // 안 정하면 기본값 — 경로 `/`, 2xx.
+    expect(healthCheckOf(model, 'plain')).toEqual({ path: '/' });
+    // stream 풀에는 HTTP 프로브가 없다.
     expect(healthCheckOf(model, 'l4')).toBeUndefined();
     expect(healthCheckOf(model, 'nope')).toBeUndefined();
   });

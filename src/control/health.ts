@@ -171,18 +171,17 @@ export function probeBackend(
  *
  * stream 풀(tcp·udp)에는 `undefined` — 거기엔 요청 개념이 없고 프로버는 연결만 본다.
  *
- * ⚠️ **지금은 기본값만 준다.** 경로·기대상태·기대본문을 *좁히는* 설정은 `Pool` 을
- * 넓혀야 하고 그건 A 표면(동결 111 심볼·3 회차)을 움직인다. 저장소가 그 결정을 도구
- * 수준에서 사람에게 유보했으므로 우회하지 않는다.
- *
- * **결함과 설정은 다른 것이다.** 죽은 백엔드가 트래픽을 계속 받는 것은 결함이고 위에서
- * 고쳤다. 좁히는 손잡이는 기능이고 `origin/audit-w3-surface` 에 있다 — 동결이 풀리면
- * **이 함수의 본문 한 곳**만 `pool.healthCheck` 를 읽도록 바뀐다.
+ * 안 적으면 `GET /` + 2xx 다. 좁히는 것은 옵트인이고, **안 좁힌 배포의 판정이 안 바뀐다.**
  */
 export function healthCheckOf(model: Model, poolKey: string): HttpProbeOpts | undefined {
   const pool = model.pools.find((p) => p.key === poolKey);
   if (pool === undefined || pool.protocolClass !== 'http') return undefined;
-  return { path: HTTP_PROBE_PATH };
+  const spec = pool.healthCheck;
+  return {
+    path: spec?.path ?? HTTP_PROBE_PATH,
+    ...(spec?.expectStatus === undefined ? {} : { expectStatus: spec.expectStatus }),
+    ...(spec?.expectBody === undefined ? {} : { expectBody: spec.expectBody }),
+  };
 }
 
 /**

@@ -14,7 +14,7 @@
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
 import { compileHostRoutes, type RouteInput } from '../route/compile.js';
 import { ACME_PREFIX } from '../conf/render.js';
-import { coversHost, parseHashKey, parseHostPattern } from './strings.js';
+import { coversHost, parseHashKey, parseHostPattern, validatePathPrefix } from './strings.js';
 import type {
   RawListener, RawModel, ProtocolClass, SniCertificateBinding,
 } from '../model/provisional.js';
@@ -171,6 +171,33 @@ export function validateModel(
           `PROXY 송신은 tcp 에만 있다 (§4.7)`,
       });
     }
+    /**
+     * **HTTP 헬스체크는 http 풀에만** (검수 B-07). stream 에는 요청 개념이 없어 프로버가
+     * 연결만 보므로, 여기 적힌 경로·상태·본문은 **아무도 안 읽는다** — 표현 가능하면
+     * 언젠가 들어오고, 들어오면 조용히 무시된다.
+     */
+    if (pool.healthCheck !== undefined && pool.protocolClass !== 'http') {
+      issues.push({
+        code: 'option_not_supported',
+        subjects: [pool.key],
+        message:
+          `풀 '${pool.key}' 는 ${pool.protocolClass} 인데 healthCheck 가 있다. ` +
+          `HTTP 헬스체크는 http 풀에만 있다 — stream 프로버는 연결만 본다`,
+      });
+    }
+    // 경로는 `location` 이 아니라 요청 경로지만, 같은 문법으로 좁힌다 — 절대 경로여야 한다.
+    const probePath = pool.healthCheck?.path;
+    if (probePath !== undefined) {
+      const parsed = validatePathPrefix(probePath);
+      if (!parsed.ok) {
+        issues.push({
+          code: 'option_not_supported',
+          subjects: [pool.key],
+          message: `풀 '${pool.key}' 의 healthCheck.path: ${parsed.message}`,
+        });
+      }
+    }
+
     if (pool.algorithm !== 'hash') continue;
     const parsed = parseHashKey(pool.protocolClass, pool.hashKey ?? 'remote_addr');
     if (!parsed.ok) {
