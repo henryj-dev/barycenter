@@ -1,0 +1,20 @@
+# 이미지 빌드 컨텍스트에서 뺄 것.
+#
+# **호스트의 `node_modules` 가 이미지에 들어가면 안 된다.** 네이티브 바이너리가 호스트
+# 플랫폼(darwin 등)으로 빌드돼 있어 컨테이너에서 안 돈다 — 이미지는 자기 것을 `npm ci`
+# 로 받는다. `gui/` 를 COPY 하기 시작하면서 실제 위험이 됐다.
+# **`**/` 가 필요하다.** 맨 `node_modules` 는 최상위만 잡는다 — `gui/node_modules` 가
+# 그대로 들어가 호스트(darwin) esbuild 바이너리가 이미지에서 돌지 않았다:
+#   Cannot start service: Host version "0.25.12" does not match binary version "0.21.5"
+**/node_modules
+**/.svelte-kit
+dist
+gui/build
+
+# 워크트리·상태·산출물 — 이미지와 무관하다.
+.claude/worktrees
+.omc
+.git
+generations
+coverage
+*.log

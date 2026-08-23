@@ -133,7 +133,11 @@ else
     # **e2e 는 `dist/` 를 돌린다.** 컨테이너 안에서 소스를 직접 못 돌리기 때문이다 —
     # Node 의 타입 제거는 `./x.js` 스펙파이어를 `./x.ts` 로 바꿔 주지 않는다. 여기서
     # 빌드를 안 하면 **옛 산출물로 재고도 초록**이 나온다.
-    run "build (dist)          " ./scripts/build.sh
+    #
+    # **화면도 여기서 선다.** 전에는 게이트 어디에도 `vite build` 가 없어서, 브라우저
+    # 번들이 안 서는 상태로 한동안 초록이었다 — `gui/build` 가 없으면 데몬이 조용히
+    # GUI 없이 뜨므로 그 사실이 어디에도 안 드러난다.
+    run "build (dist·gui)      " ./scripts/build.sh
     run "store (실물 PG)      " npm run test:store --silent
     run "golden (nginx -t)    " npm run test:golden --silent
     run "e2e (실제 nginx)      " npm run test:e2e --silent

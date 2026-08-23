@@ -27,6 +27,10 @@ RUN npm ci
 COPY tsconfig.json tsconfig.build.json ./
 COPY scripts ./scripts
 COPY src ./src
+# **화면도 이미지에 들어간다.** 전에는 `gui/` 를 아예 안 복사했다 — 즉 이 이미지로
+# 뜬 배포에는 GUI 가 없었고, 데몬은 `gui/build` 가 없으면 조용히 API 만 연다.
+# 제품 명제가 GUI 인데(§2) 그게 산출물에서 빠져 있었다.
+COPY gui ./gui
 RUN ./scripts/build.sh
 
 FROM docker.io/openresty/openresty:alpine
@@ -55,6 +59,8 @@ COPY package.json ./
 # **런타임 의존성만.** `pg` 하나다 (§11.2).
 COPY --from=deps /src/node_modules ./node_modules
 COPY --from=build /src/dist ./dist
+# `barycenterd` 는 `dist/bin` 기준 `../../gui/build` 를 본다 → `/app/gui/build`.
+COPY --from=build /src/gui/build ./gui/build
 
 # `/prefix` 가 §7.2 의 `/etc/barycenter` 다. **볼륨으로 빼지 말 것** — 세대와 `current`
 # 링크는 에이전트가 이 컨테이너 안에서만 다뤄야 한다.
