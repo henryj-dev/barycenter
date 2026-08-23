@@ -16,6 +16,18 @@
  *   node scripts/surface.mjs --round    검수 한 회차가 표면을 안 건드리고 지나갔다
  *   node scripts/surface.mjs --freeze   3 회차 이상이면 A 표면을 동결한다
  *   node scripts/surface.mjs --freeze-check  동결 상태와 현재 표면을 대조한다
+ *   node scripts/surface.mjs --unfreeze "<근거>"  동결을 푼다 — 근거가 파일에 남는다
+ *
+ * **`--unfreeze` 는 왜 따로인가.** 원래 여기엔 해제 경로가 아예 없었고, 그건 의도였다 —
+ * 동결을 푸는 것은 계측기가 낼 수 있는 판단이 아니라 사람이 지는 결정이다. 그런데 없는
+ * 것과 못 하는 것은 다르다: 결정이 실제로 나자 `SURFACE.txt` 를 손으로 고치는 것 말고는
+ * 길이 없었고, 그 파일 머리에는 *"손으로 고치지 않는다"* 가 적혀 있다. **막다른 길은
+ * 규칙을 지키는 게 아니라 규칙을 어기게 만든다.**
+ *
+ * 그래서 길을 내되 **싸지 않게** 낸다. `--write` 는 동결 상태에서 여전히 하드 차단이다 —
+ * 계약을 옮기다가 실수로 동결까지 함께 풀리는 일이 없어야 하므로 해제는 **별도의 행위**다.
+ * 그리고 근거 문자열을 **요구한다**: 근거 없는 해제는 다음 사람이 "왜 풀렸지" 를 물을 때
+ * 답이 없고, 답이 없으면 이 게이트가 쌓아 온 것이 조용히 사라진다. 근거는 파일에 남는다.
  *
  * 주석은 뺀다. 문서를 고쳤다고 계약이 움직인 것은 아니다.
  *
@@ -199,16 +211,23 @@ try {
     const freeze = exactlyOne(/^# A 동결: (선언|미선언) \(선언 기준 (\d+) 회차\)$/);
     if (rounds === undefined || claimed === undefined || freeze === undefined
       || Number(freeze[2]) !== FREEZE_ROUNDS) return undefined;
+    // 해제 근거는 **선택**이다 — 동결된 적 없는 기준에는 없는 것이 정상이고,
+    // 없다고 파일을 못 읽는 것으로 치면 첫 `--write` 가 막힌다.
+    const released = exactlyOne(/^# 해제 근거: (.+)$/)?.[1];
     return {
       body: raw.slice(at + MARK.length), rounds: Number(rounds), frozen: freeze[1] === '선언',
+      released,
       claimedSymbols: claimed === null ? undefined : Number(claimed[1]), claimedDigest: claimed?.[2],
     };
   };
-  const stamp = (rounds, frozen = false) =>
+  const stamp = (rounds, frozen = false, released = undefined) =>
     `# barycenter v0.1 공개 표면\n`
     + `# ${symbols} 심볼 · ${digest}\n`
     + `# 동결 카운터: ${rounds} 회차 (표면이 안 움직인 검수 회차 수)\n`
     + `# A 동결: ${frozen ? '선언' : '미선언'} (선언 기준 ${FREEZE_ROUNDS} 회차)\n`
+    // **지난 해제를 지우지 않는다.** 다시 동결해도 남는다 — "한 번 풀린 적 있다" 는
+    // 다음 사람이 이 숫자를 얼마나 믿을지 정할 때 쓰는 사실이다.
+    + (released === undefined ? '' : `# 해제 근거: ${released}\n`)
     + `#\n`
     + `# 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.\n`
     + `# 13차 검수가 준 동결 기준: 여러 적대적 회차 동안 이 파일이 변하지 않을 것.\n`
@@ -218,13 +237,57 @@ try {
   const baselineMatches = previous !== undefined && previous.body === body
     && previous.claimedSymbols === symbols && previous.claimedDigest === digest;
 
-  if (mode === '--write') {
-    // 계약을 옮겼다. 카운터는 0 부터 다시 센다.
-    if (previous?.frozen === true) {
-      console.error('A 표면은 이미 동결됐다 — 해제·버전 전환 결정 없이 기준을 옮길 수 없다');
+  if (mode === '--unfreeze') {
+    /**
+     * **동결을 푼다 — 사람의 결정을 기록으로 남긴다.**
+     *
+     * 기준 자체는 안 옮긴다. 푸는 것과 옮기는 것은 다른 일이고, 한 번에 하면 "무엇을
+     * 결정했는가" 가 두 개가 된다. 풀고 나서 `--write` 로 옮긴다.
+     */
+    if (previous === undefined) {
+      console.error('SURFACE.txt 가 없다 — 풀 동결이 없다');
       process.exit(1);
     }
-    writeFileSync(BASELINE, stamp(0));
+    if (!previous.frozen) {
+      console.error('A 표면은 동결돼 있지 않다 — 풀 것이 없다');
+      process.exit(1);
+    }
+    const why = (process.argv[3] ?? '').trim();
+    if (why === '') {
+      console.error(
+        '해제에는 근거가 필요하다 — `node scripts/surface.mjs --unfreeze "<근거>"`\n'
+        + '\n'
+        + '  근거 없는 해제는 다음 사람이 "왜 풀렸지" 를 물을 때 답이 없다.\n'
+        + '  이 파일이 쌓아 온 회차 수는 그 답이 있을 때만 뜻이 있다.',
+      );
+      process.exit(1);
+    }
+    // **기준 본문은 손대지 않는다.** 지금 트리의 표면이 기준과 다를 수 있고(그래서 푸는
+    // 것이다), 여기서 함께 옮기면 해제와 계약 변경이 한 줄에 섞인다. 머리만 고친다.
+    const raw = readFileSync(BASELINE, 'utf8');
+    const at = raw.indexOf(MARK);
+    const head = raw.slice(0, at)
+      .replace(/^# A 동결: 선언 .*$/m, `# A 동결: 미선언 (선언 기준 ${FREEZE_ROUNDS} 회차)`)
+      .replace(/^# 동결 카운터: \d+ /m, '# 동결 카운터: 0 ');
+    const withWhy = /^# 해제 근거: /m.test(head)
+      ? head.replace(/^# 해제 근거: .*$/m, `# 해제 근거: ${why}`)
+      : head.replace(/^# A 동결: .*$/m, (l) => `${l}\n# 해제 근거: ${why}`);
+    writeFileSync(BASELINE, withWhy + raw.slice(at));
+    console.log(
+      `A 동결을 풀었다 — 카운터 ${previous.rounds} → 0 · 근거: ${why}\n`
+      + '기준을 옮기려면 이어서 `node scripts/surface.mjs --write` 를 돌린다.',
+    );
+  } else if (mode === '--write') {
+    // 계약을 옮겼다. 카운터는 0 부터 다시 센다.
+    if (previous?.frozen === true) {
+      console.error(
+        'A 표면은 이미 동결됐다 — 해제·버전 전환 결정 없이 기준을 옮길 수 없다\n'
+        + '\n'
+        + '  결정이 났다면: node scripts/surface.mjs --unfreeze "<근거>"',
+      );
+      process.exit(1);
+    }
+    writeFileSync(BASELINE, stamp(0, false, previous?.released));
     console.log(`SURFACE.txt 를 갱신했다 — ${symbols} 심볼 · ${digest} · 동결 카운터 0 으로 되돌림`);
   } else if (mode === '--round') {
     // 검수 한 회차가 표면을 안 건드리고 지나갔다.
@@ -232,7 +295,7 @@ try {
       console.error('표면이 움직인 상태다 — 먼저 --check 로 확인한다');
       process.exit(1);
     }
-    writeFileSync(BASELINE, stamp(previous.rounds + 1, previous.frozen));
+    writeFileSync(BASELINE, stamp(previous.rounds + 1, previous.frozen, previous.released));
     console.log(`동결 카운터: ${previous.rounds} → ${previous.rounds + 1} 회차`);
   } else if (mode === '--freeze') {
     if (!baselineMatches) {
@@ -243,7 +306,7 @@ try {
       console.error(`동결 카운터 ${previous.rounds} 회차 — 선언 기준 ${FREEZE_ROUNDS} 회차에 못 미친다`);
       process.exit(1);
     }
-    writeFileSync(BASELINE, stamp(previous.rounds, true));
+    writeFileSync(BASELINE, stamp(previous.rounds, true, previous.released));
     console.log(`A 타입·DP ABI 동결 선언 — ${symbols} 심볼 · ${digest} · ${previous.rounds} 회차`);
   } else if (mode === '--freeze-check') {
     if (!baselineMatches || !previous.frozen || previous.rounds < FREEZE_ROUNDS) {

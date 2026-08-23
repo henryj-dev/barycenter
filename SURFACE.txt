@@ -1,7 +1,8 @@
 # barycenter v0.1 공개 표면
-# 111 심볼 · sha256:6457ff3fecc4fe33162e2c0c12bfbee700a38ab14aa623167374395c385f2f3b
-# 동결 카운터: 3 회차 (표면이 안 움직인 검수 회차 수)
-# A 동결: 선언 (선언 기준 3 회차)
+# 112 심볼 · sha256:69e7c72f32fa4f266ac5dd140d90c059b96dad865ed41f3bc011261c459acefd
+# 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
+# A 동결: 미선언 (선언 기준 3 회차)
+# 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
 # 13차 검수가 준 동결 기준: 여러 적대적 회차 동안 이 파일이 변하지 않을 것.
@@ -184,6 +185,8 @@ export interface Effects {
 ── EngineSettings
 export type EngineSettings = {
     workerShutdownTimeoutS?: number;
+    membershipDictKb?: number;
+    acmeDictKb?: number;
 };
 ── FileStore
 export declare class FileStore implements DurableStore {
@@ -217,8 +220,8 @@ export type FsEffectsOptions = {
 };
 ── GenerationError
 export declare class GenerationError extends Error {
-    readonly kind: 'generation_conflict' | 'manifest_missing' | 'digest_mismatch' | 'incomplete' | 'plane_mismatch';
-    constructor(kind: 'generation_conflict' | 'manifest_missing' | 'digest_mismatch' | 'incomplete' | 'plane_mismatch', message: string);
+    readonly kind: 'generation_conflict' | 'manifest_missing' | 'digest_mismatch' | 'incomplete' | 'plane_mismatch' | 'path_escape';
+    constructor(kind: 'generation_conflict' | 'manifest_missing' | 'digest_mismatch' | 'incomplete' | 'plane_mismatch' | 'path_escape', message: string);
 }
 ── GenerationManifest
 export type GenerationManifest = {
@@ -227,6 +230,12 @@ export type GenerationManifest = {
     files: Record<string, string>;
     digest: string;
     planes: ('http' | 'stream')[];
+};
+── HealthCheck
+export type HealthCheck = {
+    path?: string;
+    expectStatus?: number[];
+    expectBody?: string;
 };
 ── HstsPolicy
 export type HstsPolicy = {
@@ -425,6 +434,7 @@ export type Pool = {
     algorithm: Algorithm;
     hashKey?: string;
     sendProxyProtocol?: 'v1';
+    healthCheck?: HealthCheck;
 };
 ── PreflightResult
 export type PreflightResult = {
