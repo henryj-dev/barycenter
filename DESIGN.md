@@ -2863,7 +2863,7 @@ k8s 네이티브 배포는 별도 과제.
 | S12 ✅ | 크래시 저널 | §6.2 표의 모든 지점(durable write·외부 side-effect 직전/직후)에서 복구 정확. **최종 세대가 정확하고 중복 cycle 이 상한 이내** (exactly-once 는 요구하지 않는다 — §6.2) | 설계 재작업 (block) |
 | S13 ✅ | 마커·워커 레지스트리·GC | 옛 워커 잔존 중 오삭제 0회 + §8.4 GC 각 단계 크래시에서 **누수·이중감소 0회** + GC root 누락 0회 | GC 보수화 |
 | S14 ~ | **대안 B 실증** | HTTP/TCP/UDP × A/AAAA/SRV × TTL/NXDOMAIN/timeout, 기존 세션 거동 | 폴백 자체가 없음 → 요구 재조정 |
-| S15 | 밸런서 품질 | RR 공정성 편차 < 5%, hash 재매핑률, 재시도·failure penalty 동작, CPU/p99 오버헤드 < 10% | 알고리즘 축소 |
+| S15 ~ | 밸런서 품질 | **넷 중 셋 통과 (2026-08-23).** RR 편차 ~0%(<5%) · hash 분포 최대 10.1% · **재매핑률 75~94%**(consistent 이상값 5.9~25%) · 고르는 비용 rr 0.48ns·hash 23.1ns. 넷째(재시도·failure penalty)는 `passive` 가 모델에 없어 **잴 대상이 없다** | 알고리즘 축소 |
 | S16 ✅ | SNI 별 TLS policy 렌더 | 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 | `override` 제거 |
 | S17 ✅ | TLS 인증서 선택 렌더 | exact / 1라벨 와일드카드 / `default_server` 조합에서 SAN 미커버 인증서 제시 0회 | v0 은 exact host 만 |
 | S18 ✅ | ACME 상태기계 | 오더·챌린지·재시도·고아 TXT 정리 (v0.6 전) | ACME 범위 축소 |

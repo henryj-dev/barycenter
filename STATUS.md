@@ -89,7 +89,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 골든 | `npm run test:golden` | 62 |
 | 엔진 사실 | `npm run test:engine` | 76 (SKIP 1) |
 | e2e | `npm run test:e2e` | 60 |
-| 스파이크 | `spike/*/run.sh` | 96 |
+| 스파이크 | `spike/*/run.sh` | 100 |
 | 저장소 | `npm run test:store` | 189 |
 
 스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
@@ -130,7 +130,8 @@ A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이�
 | | 판정 |
 |---|---|
 | ~~S2 세션 수~~ | **닫혔다.** 가를 것이 없다 — stream 은 연결당 한 번이라 정의상 같고, http 는 upstream `keepalive` 를 안 내므로 요청 하나가 연결 하나다. 그 **전제**를 계약 테스트로 지킨다 |
-| S3 · S4 · S15 | 기능이 아니라 **측정**이다. 축소 형태가 이미 구현돼 있다 |
+| S15 밸런서 품질 | **넷 중 셋을 쟀다.** RR 편차 ~0% · hash 분포 최대 10.1% · **재매핑률 75~94%**(consistent 이상값 5.9~25%) · 고르는 비용 23ns. 넷째는 `passive` 가 모델에 없어 잴 대상이 없다 |
+| S3 · S4 | 기능이 아니라 **측정**이다. 축소 형태가 이미 구현돼 있다 |
 | ~~S9 SNI 3분기~~ | **열렸다.** 셋이 갈린다 — no-SNI 는 `$ssl_preread_protocol` 이 차고, malformed 는 비-TLS 와 한 통이고, timeout 은 연결이 끊긴다. `on_no_sni` 가 설정 가능해졌다 |
 | S10 `strict_priority` | 충돌 그래프를 anchored 정규식으로 내리고 500 라우트 p99 <5% 가 전제다 — 별도 회차 |
 | S14 native DNS | 남은 1/8 은 **SRV** 다. nginx OSS `resolver` 가 안 한다(상용 모듈) |
