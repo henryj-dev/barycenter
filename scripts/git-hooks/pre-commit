@@ -41,11 +41,21 @@ import sys
 RESCUE = "claude-main-tree-rescue"
 RESCUE_TTL = 1800
 
-# 하네스가 툴 서브프로세스에 심는 변수만. 설치/설정 변수는 넣지 않는다.
+# 하네스가 툴 서브프로세스에 심는 변수만. 설치/설정 변수는 넣지 않는다
+# (`CLAUDE_CONFIG_DIR`·`GROK_HOME` 은 *설치*이지 「이번 커밋의 주체」가 아니다).
+#
+# 🔴 2026-08-23: 이 목록의 Claude 쪽 세 이름 중 **실재하는 것이 하나도 없었다.**
+#    `CLAUDE_CODE`·`CLAUDE_SESSION_ID` 는 아예 없는 이름이고(진짜는 `CLAUDECODE`·
+#    `CLAUDE_CODE_SESSION_ID`), `CLAUDE_PROJECT_DIR` 은 **훅 프로세스에만** 실린다 —
+#    Bash 툴로 도는 `git commit` 의 환경에는 없다. 즉 이 층은 Claude 에이전트를
+#    **한 번도 막은 적이 없다.** 검사가 초록이었던 것은 검사도 같은 (틀린) 목록을
+#    읽어 그 이름들만 비웠기 때문이다 — 목록이 현실과 갈라지면 그 방식은 공허해진다.
+#    그래서 아래 `test-pre-commit.py` 에 **살아 있는 환경**을 재는 검사를 넣었다.
 AGENT_ENV = (
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDE_PROJECT_DIR",
-    "CLAUDE_CODE",
-    "CLAUDE_SESSION_ID",
     "GROK_AGENT",
     "GROK_SESSION_ID",
     "CODEX_THREAD_ID",

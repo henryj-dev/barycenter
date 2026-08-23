@@ -224,6 +224,23 @@ try:
     rc, out = touch_and_commit(main4, "y.txt", extra_env=agent())
     check("변이본은 feature 브랜치를 놓친다(기준 검사가 공허하지 않음)",
           "HEAD:design/feature-y" not in out)
+
+    # ⑭ 🔴 **살아 있는 환경**을 잰다 — 목록이 현실과 갈라지는 것을 잡는 유일한 검사.
+    #    위의 모든 케이스는 `AGENT_ENV` 를 훅에서 읽어 그 이름들을 심고/비운다. 그래서
+    #    **목록이 통째로 틀려도 전부 초록이다** — 2026-08-23 에 실제로 그랬다(Claude 쪽
+    #    세 이름이 모두 실재하지 않아 이 층이 Claude 를 한 번도 못 막았는데 검사는 0 건).
+    #    지금 이 검사가 하네스 안에서 돌고 있다면, 훅도 그것을 에이전트로 봐야 한다.
+    #    사람 셸에서는 잴 것이 없으므로 건너뛴다(그 사실을 말한다).
+    HARNESS_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID",
+                       "CODEX_SANDBOX", "CURSOR_AGENT", "GROK_AGENT", "GROK_SESSION_ID")
+    live = [k for k in HARNESS_MARKERS if os.environ.get(k)]
+    if live:
+        seen = [k for k in AGENT_ENV if os.environ.get(k)]
+        check(f"살아 있는 하네스 환경을 훅이 에이전트로 본다 (실측 {live} → 목록 적중 {seen})",
+              bool(seen))
+    else:
+        print("  건너뜀  살아 있는 하네스 표식이 없다 — 사람 셸로 보인다")
+
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
