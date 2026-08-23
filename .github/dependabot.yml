@@ -1,0 +1,74 @@
+# dependabot — **핀은 박아 두면 썩는다**
+#
+# 이 저장소는 세 군데에서 남의 코드를 이름이나 SHA 로 박아 쓴다: npm 잠금 파일,
+# 워크플로의 액션 SHA, `deploy/Dockerfile` 의 베이스 이미지. 박는 것은 재현을 위해서지
+# **낡은 채로 두기 위해서가 아니다** — 핀만 있고 갱신 경로가 없으면 그건 "고정" 이 아니라
+# "방치" 다. 여기가 그 갱신 경로다.
+#
+# **PR 로 온다. 게이트를 그대로 통과해야 머지된다.** dependabot 의 PR 은 `src/` 를 안
+# 건드리므로 재현물 핀 검사(`scripts/pinned.mjs`)는 조용히 지나가고, 실제 판정은
+# `verify.sh` 가 한다 — 의존성이 무엇을 깨뜨리는지는 테스트가 말한다.
+
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Seoul
+    # **한 묶음으로 온다.** 패치 하나에 PR 하나면 매주 열 개가 열리고, 열 개가 열리면
+    # 아무도 안 본다. 묶으면 게이트도 한 번만 돈다.
+    groups:
+      npm:
+        patterns: ['*']
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'chore(deps)'
+
+  # 화면은 자기 잠금 파일을 따로 든다(`scripts/build.sh` 가 `gui/` 에서 `npm ci`).
+  - package-ecosystem: npm
+    directory: /gui
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Seoul
+    groups:
+      gui:
+        patterns: ['*']
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'chore(deps)'
+
+  # **액션 SHA 를 갱신하면서 뒤의 `# vX.Y.Z` 주석도 같이 고친다.** 그래서 SHA 로
+  # 박아도 사람이 읽을 버전이 남는다.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Seoul
+    groups:
+      actions:
+        patterns: ['*']
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'ci(deps)'
+
+  # 베이스 이미지. `openresty:alpine` 같은 부동 태그는 dependabot 이 할 말이 없지만
+  # (움직이는 것은 태그가 아니라 그 뒤의 내용이다 — 그건 `nightly` 가 잡는다),
+  # `node:24-alpine` 이 25 로 갈 자리는 여기가 알려 준다.
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: 'chore(deps)'
