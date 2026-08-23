@@ -137,6 +137,17 @@
         }
       }
     },
+    "/api/v1/backends/status": {
+      "get": {
+        "operationId": "GET:/api/v1/backends/status",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/backends/{id}/status": {
       "get": {
         "operationId": "GET:/api/v1/backends/:id/status",

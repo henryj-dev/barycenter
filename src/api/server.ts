@@ -257,6 +257,19 @@ const ROUTES: Route[] = [
    * **아직 재보지 못한 것과 없는 것을 구분한다.** 모델에 있으면 200 이고, 관측이 없으면
    * `unknown` 이다 — §6.6 이 그 둘을 다르게 다루는 것과 같은 이유다. 모르는 키만 404 다.
    */
+  /**
+   * **왜 이 백엔드가 트래픽을 안 받나** — 한 번에 (제안 #9).
+   *
+   * 헬스(`/backends/{id}/status`)·드레인(`/backends/{id}/drain-status`)·슬롯 소속을
+   * 따로 물어 머리로 합치던 것을 모은다. 셋째는 지금까지 물을 창구조차 없었다.
+   *
+   * `/backends/{id}/status` 는 남긴다 — 한 줄만 보려는 소비자(CLI `get`)가 있고,
+   * 이 목록은 백엔드가 많은 배포에서 응답이 커진다.
+   */
+  route('GET', '/api/v1/backends/status', 'read', async (c, api) => {
+    json(c.res, 200, await api.control.backendStatus());
+  }),
+
   route('GET', '/api/v1/backends/:id/status', 'read', async (c, api) => {
     const m = await api.store.modelAt((await api.store.head()).revision);
     const key = c.params['id'] ?? '';

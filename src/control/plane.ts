@@ -16,8 +16,9 @@ import { render, type RenderCapabilities } from '../conf/render.js';
 import { adminFetch, adminTalk } from './admin-client.js';
 import { type DiscoveryIntake } from './discovery.js';
 import { drainKeys, observationPeerOf, observePeerFromAdmin, observeStreamPeer } from './drain.js';
-import { currentHealth, eligibleCountForPlane, reduceMembership, shouldPushMembership } from './health.js';
-import { assertAdminSocket, httpAdminConf, slotsForEligible, streamAdminConf } from './membership.js';
+import { backendStatusRows, type BackendStatusRow } from './backend-status.js';
+import { currentHealth, eligibleCountForPlane, healthRows, reduceMembership, shouldPushMembership } from './health.js';
+import { assertAdminSocket, httpAdminConf, routedPools, slotsForEligible, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
@@ -746,6 +747,34 @@ export class ControlPlane {
   }
 
   // ── 내부 ───────────────────────────────────────────────────────────────
+
+  /**
+   * **왜 이 백엔드가 트래픽을 안 받나** — 한 번에 답한다 (제안 #9).
+   *
+   * 헬스·드레인·슬롯 소속을 따로 물어 머리로 합치던 것을 한 자리로 모은다. 셋째(슬롯
+   * 소속)는 지금까지 물을 창구조차 없었다 — 풀이 어디에도 안 걸리면 렌더에 upstream 이
+   * 없고, 그러면 헬스가 초록이어도 트래픽이 0 이다.
+   *
+   * **리듀서의 입력을 그대로 쓴다.** 엔진에게 되묻지 않는 이유는 `backend-status.ts` 에
+   * 적어 뒀다 — 되묻는 것은 우리가 방금 쓴 값을 다시 읽는 것이고, 갱신 실패는 §6.7 의
+   * 다른 사건이다.
+   */
+  async backendStatus(): Promise<BackendStatusRow[]> {
+    const caps = this.opts.renderCaps ?? { streamRealip: false };
+    const head = await this.store.head();
+    const model = await this.store.modelAt(head.revision);
+    const rows = await healthRows(this.db);
+    return backendStatusRows({
+      model,
+      health: new Map(rows.map((r) => [r.backendKey, r.state])),
+      detail: new Map(rows.map((r) => [r.backendKey, {
+        observedAt: r.observedAt,
+        ...(r.detail === undefined ? {} : { detail: r.detail }),
+      }])),
+      draining: await drainKeys(this.db),
+      routedPools: routedPools(model, caps),
+    });
+  }
 
   private async eligible(model: Model): Promise<Model> {
     return reduceMembership(model, await currentHealth(this.db), await drainKeys(this.db));

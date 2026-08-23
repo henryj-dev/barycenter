@@ -94,10 +94,29 @@ export function slotsForEligible(
  * 자리가 둘**이 되고 단사성 보정(다이제스트 접미)이 붙는 순간 갈린다.
  * 산출물에서 읽는 편이 한 자리를 유지한다.
  */
-function upstreamNameIn(conf: string, poolKey: string): string | undefined {
+export function upstreamNameIn(conf: string, poolKey: string): string | undefined {
   const ident = poolKey.replace(/[^A-Za-z0-9_]/g, '_');
   const re = new RegExp(`^\\s*upstream (pool_${ident}(?:_[0-9a-f]+)?) \\{`, 'm');
   return re.exec(conf)?.[1];
+}
+
+/**
+ * **렌더에 upstream 이 생기는 풀들** (제안 #9).
+ *
+ * 어떤 리스너·라우트에도 안 걸린 풀은 렌더에 안 나오고, 그러면 슬롯이 아예 없다 —
+ * 백엔드가 멀쩡하고 헬스가 초록이어도 트래픽이 0 이다. `slotsOf` 가 `continue` 로
+ * 조용히 건너뛰던 그 경우이고, 밖에서는 안 보였다.
+ *
+ * **`slotsOf` 와 같은 판정을 쓴다.** 여기서 "걸렸는가" 를 따로 구현하면 두 자리가
+ * 갈리고, 그때 이 API 는 슬롯에 없는 것을 있다고 말한다.
+ */
+export function routedPools(model: Model, caps: RenderCapabilities): Set<string> {
+  const conf = render(model, caps).conf;
+  const out = new Set<string>();
+  for (const pool of model.pools) {
+    if (upstreamNameIn(conf, pool.key) !== undefined) out.add(pool.key);
+  }
+  return out;
 }
 
 /** 슬롯을 admin 이 받는 줄 모양으로. `이름=peer,peer` 한 줄씩. */

@@ -19,6 +19,8 @@ export function getPath(what: string): string | undefined {
   if (what === '') return undefined;
   if (what === 'model' || what === 'rendered') return `/api/v1/config/${what}`;
   if (what === 'health' || what === 'health/backends') return '/api/v1/health/backends';
+  // 왜 이 백엔드가 트래픽을 안 받나 — 한 번에 (제안 #9).
+  if (what === 'backends/status') return '/api/v1/backends/status';
   if (LISTS.has(what)) return `/api/v1/${what}`;
   if (what === 'metrics') return '/metrics';
   const pool = /^pools\/([^/]+)\/backends$/.exec(what);
