@@ -309,9 +309,63 @@ export class TokenAuth {
     return principalFromIdToken(token, this.#oidc);
   }
 
+  /**
+   * 이름으로 principal 을 찾는다 (mTLS 신원 매핑, S-05b).
+   *
+   * **역할표는 여전히 한 자리다.** 인증서는 "이 사람이 그 이름이 맞는가" 만 답하고,
+   * 그 이름이 여기 있어야 principal 이 된다 — 인증서가 역할을 들고 오면 CA 를 쥔
+   * 사람이 곧 admin 을 발급할 수 있고, 그게 W4-2 가 피한 것이다.
+   */
+  byName(name: string): Principal | undefined {
+    for (const p of this.#byHash.values()) {
+      if (p.name === name) return p;
+    }
+    return undefined;
+  }
+
   get size(): number {
     return this.#byHash.size;
   }
 }
 
 export const can = (p: Principal, scope: Scope): boolean => p.scopes.has(scope);
+
+/**
+ * 클라이언트 인증서 → principal (S-05b 의 남은 절반, 2026-08-23).
+ *
+ * W4-2 는 mTLS 를 **망 관문까지만** 열고 신원 매핑은 일부러 안 했다:
+ *
+ * > 클라이언트 인증서를 **신원**으로 쓰는 것은 역할 매핑 설계가 필요하고 섞으면
+ * > 권한의 진실이 둘이 된다.
+ *
+ * 그 걱정이 옳았고, 여기서 푸는 방법은 **진실을 하나로 유지하는 것**이다:
+ *
+ *     인증서 CN → 토큰 표의 `name` → 그 토큰의 role·scopes
+ *
+ * 인증서는 이름만 말한다. 역할은 안 들고 온다 — `OU=admin` 이라고 적혀 있어도 무시한다.
+ *
+ * ── 두 가지를 반드시 지킨다
+ *
+ * ① **TLS 층이 이미 검증한 것만 본다.** `rejectUnauthorized` 가 켜져 있어야
+ *    `getPeerCertificate()` 의 CN 이 뜻을 갖는다 — 안 그러면 아무나 적어 낸다.
+ *    `apiTlsOptions` 는 `clientCa` 가 있을 때 둘을 함께 켠다.
+ * ② **CN 만 본다.** `O`·`OU` 를 fallback 으로 읽으면 "어느 필드가 신원인가" 가
+ *    인증서마다 달라지고, 그 모호함은 발급 정책이 느슨한 CA 에서 곧 사고가 된다.
+ */
+export type PeerCertificate = {
+  subject?: Record<string, string> | undefined;
+  /** TLS 층이 체인을 검증했는가. */
+  authorized: boolean;
+};
+
+export function principalFromClientCert(
+  cert: PeerCertificate | undefined,
+  auth: TokenAuth,
+): Principal | undefined {
+  if (cert === undefined || !cert.authorized) return undefined;
+  const cn = cert.subject?.['CN'];
+  if (typeof cn !== 'string') return undefined;
+  const name = cn.trim();
+  if (name === '') return undefined;
+  return auth.byName(name);
+}

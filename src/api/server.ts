@@ -42,7 +42,10 @@ import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
 import { serveGui } from '../web/serve-gui.js';
-import { can, TokenAuth, type Principal, type Scope } from './auth.js';
+import {
+  can, principalFromClientCert, TokenAuth,
+  type PeerCertificate, type Principal, type Scope,
+} from './auth.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import {
@@ -78,6 +81,22 @@ export type ApiOptions = {
   /** 테스트가 Token Endpoint 응답을 주입할 때. 없으면 전역 fetch. */
   oidcFetch?: typeof fetch;
 };
+
+/**
+ * TLS 소켓의 peer 인증서. 평문 소켓이면 `undefined` 다.
+ *
+ * **`authorized` 를 함께 낸다** — TLS 층이 체인을 검증했는지가 이 값의 뜻을 정한다.
+ * `apiTlsOptions` 는 `clientCa` 가 있을 때 `requestCert` 와 `rejectUnauthorized` 를
+ * 함께 켜므로, 검증 안 된 인증서로는 handshake 자체가 안 끝난다. 그래도 여기서 다시
+ * 보는 이유는 **그 배선이 바뀌어도 이 판정이 혼자 서야** 하기 때문이다.
+ */
+function peerCertOf(req: IncomingMessage): PeerCertificate | undefined {
+  const sock = req.socket as { getPeerCertificate?: () => unknown; authorized?: boolean };
+  if (typeof sock.getPeerCertificate !== 'function') return undefined;
+  const cert = sock.getPeerCertificate() as { subject?: Record<string, string> } | undefined;
+  if (cert === undefined || cert.subject === undefined) return undefined;
+  return { subject: cert.subject, authorized: sock.authorized === true };
+}
 
 const eventsOf = (api: ApiOptions): EventHub => {
   api.events ??= new EventHub();
@@ -880,9 +899,20 @@ async function handle(
     if (serveGui(res, url.pathname, api.guiRoot)) return;
   }
 
-  const who = api.auth.authenticate(req.headers.authorization);
+  /**
+   * **Bearer 가 먼저다** (S-05b). 토큰을 들고 왔으면 그것이 신원이고, 없을 때만
+   * 클라이언트 인증서를 본다.
+   *
+   * 순서를 반대로 하면 mTLS 를 켠 배포에서 **토큰이 조용히 무시된다** — 같은 사람이
+   * 두 신원을 갖게 되고, 어느 쪽으로 들어왔는지에 따라 권한이 달라진다.
+   *
+   * 인증서는 이름만 말하고 역할은 토큰 표에서 온다. `principalFromClientCert` 가
+   * 그 규칙을 진다.
+   */
+  const who = api.auth.authenticate(req.headers.authorization)
+    ?? principalFromClientCert(peerCertOf(req), api.auth);
   if (who === undefined) {
-    json(res, 401, { code: 'unauthenticated', message: 'Bearer 토큰이 필요하다' },
+    json(res, 401, { code: 'unauthenticated', message: 'Bearer 토큰이나 클라이언트 인증서가 필요하다' },
       { 'www-authenticate': 'Bearer' });
     return;
   }
