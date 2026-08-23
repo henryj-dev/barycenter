@@ -35,7 +35,7 @@ import {
   backendDelete, backendDrain, backendDrainStatus, backendPut, backendUndrain,
 } from '../cli/backend.js';
 import { getResource } from '../cli/get.js';
-import { listenerCreate, listenerDelete } from '../cli/listener.js';
+import { listenerCreate, listenerDelete, parseListenerOptions } from '../cli/listener.js';
 import { poolCreate, poolDelete } from '../cli/pool.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
 import {
@@ -53,6 +53,8 @@ import {
   changesetShow,
   commitByPlan,
   flag,
+  flagAll,
+  has,
   recover,
   unwrap,
 } from '../cli/flow.js';
@@ -104,6 +106,11 @@ const usage = (): never => {
                                  acme/orders | acme/orders/<id> | acme/orders/<id>/challenges | acme/challenges/<id>
                                  모르는 이름은 안 부른다
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
+                                 http·https 는 옵션도 받는다 (제안 6·7·8):
+                                   --connect-timeout 5s   --read-timeout 120s   --send-timeout 90s
+                                   --max-body 50m         (0 은 무제한)
+                                   --header req:X-A:1     --header res:X-B:2    (여러 번)
+                                   --rate 10r/s  --burst 20  --nodelay  --max-conn 100
   bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
   bary pool delete               --name
@@ -251,6 +258,19 @@ async function main(): Promise<void> {
       const preset = flag(argv, '--preset');
       const policy = flag(argv, '--policy');
       const certificate = flag(argv, '--certificate');
+      // 제안 6·7·8 — http·https 에만 뜻이 있다. 파싱은 `parseListenerOptions` 한 자리다.
+      const headerSpecs = flagAll(argv, '--header');
+      const options = parseListenerOptions({
+        ...(flag(argv, '--connect-timeout') === undefined ? {} : { connectTimeout: flag(argv, '--connect-timeout')! }),
+        ...(flag(argv, '--read-timeout') === undefined ? {} : { readTimeout: flag(argv, '--read-timeout')! }),
+        ...(flag(argv, '--send-timeout') === undefined ? {} : { sendTimeout: flag(argv, '--send-timeout')! }),
+        ...(flag(argv, '--max-body') === undefined ? {} : { maxBody: flag(argv, '--max-body')! }),
+        ...(headerSpecs.length === 0 ? {} : { header: headerSpecs }),
+        ...(flag(argv, '--rate') === undefined ? {} : { rate: flag(argv, '--rate')! }),
+        ...(flag(argv, '--burst') === undefined ? {} : { burst: flag(argv, '--burst')! }),
+        ...(has(argv, '--nodelay') ? { nodelay: true } : {}),
+        ...(flag(argv, '--max-conn') === undefined ? {} : { maxConn: flag(argv, '--max-conn')! }),
+      });
       try {
         const out = await listenerCreate(call, {
           name, protocol, bind, port: Number(portRaw),
@@ -258,6 +278,7 @@ async function main(): Promise<void> {
           ...(preset === undefined ? {} : { preset }),
           ...(policy === undefined ? {} : { policy }),
           ...(certificate === undefined ? {} : { certificate }),
+          ...(Object.keys(options).length === 0 ? {} : { options }),
         });
         console.error(`listener ${name} committed r${out.revision}`);
         show(out);

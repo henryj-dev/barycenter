@@ -39,6 +39,90 @@ export function putBackendPatch(
   return [{ op: 'put', kind: 'backend', key, body: { pool: body.pool, host: body.host, port: body.port, weight } }];
 }
 
+/**
+ * 리스너 옵션 셋 — 제안 6·7·8 의 **저작 표면** (2026-08-23).
+ *
+ * 모델·검증·렌더까지만 열어 두면 raw JSON patch 로만 넣을 수 있다. §12.1 이
+ * *"GUI 는 맨 뒤로 미루지 않는다 — 제품 명제가 GUI 이므로"* 라고 적어 뒀고,
+ * **쓸 수 있는 것과 이 제품의 방식으로 쓸 수 있는 것은 다르다.**
+ *
+ * GUI 와 CLI 가 **같은 자리**를 쓴다. 두 곳에서 각자 만들면 "GUI 로는 되는데 CLI 로는
+ * 안 되는" 것이 생긴다.
+ */
+export type ListenerOptions = {
+  limits?: ProxyLimitsInput;
+  headers?: HeaderRulesInput;
+  rateLimit?: RateLimitInput;
+};
+
+export type ProxyLimitsInput = {
+  connectTimeoutMs?: number;
+  readTimeoutMs?: number;
+  sendTimeoutMs?: number;
+  clientMaxBodyBytes?: number;
+};
+
+export type HeaderRuleInput = { name: string; value: string };
+export type HeaderRulesInput = { request?: HeaderRuleInput[]; response?: HeaderRuleInput[] };
+
+export type RateLimitInput = {
+  requestsPerSecond?: number;
+  burst?: number;
+  nodelay?: boolean;
+  maxConnections?: number;
+  zoneKb?: number;
+};
+
+/** 값이 하나라도 있는 것만 남긴다. `undefined` 면 키 자체를 안 만든다. */
+const someOf = <T extends object>(v: T | undefined): T | undefined => {
+  if (v === undefined) return undefined;
+  const kept = Object.entries(v).filter(([, x]) => x !== undefined && x !== '');
+  return kept.length === 0 ? undefined : (Object.fromEntries(kept) as T);
+};
+
+/**
+ * 폼의 **빈 행을 버린다.** 이름 없는 줄은 사용자가 안 채운 칸이지 "빈 이름 헤더" 가
+ * 아니다 — 그대로 보내면 해독기가 422 로 튕기고, 폼은 왜 막혔는지 못 말한다.
+ */
+const headerList = (rows: HeaderRuleInput[] | undefined): HeaderRuleInput[] | undefined => {
+  if (rows === undefined) return undefined;
+  const kept = rows.filter((r) => r.name.trim() !== '');
+  return kept.length === 0 ? undefined : kept.map((r) => ({ name: r.name.trim(), value: r.value }));
+};
+
+/**
+ * 옵션 → `http` 프로필에 얹을 조각.
+ *
+ * **안 적으면 아무것도 안 만든다.** 빈 객체라도 실으면 렌더 바이트가 바뀌고, 그러면
+ * 설정을 안 건드린 배포가 다음 apply 에서 세대 전환을 한다.
+ */
+export function listenerOptionFields(opts: ListenerOptions | undefined): {
+  limits?: ProxyLimitsInput;
+  headers?: HeaderRulesInput;
+  rateLimit?: RateLimitInput;
+} {
+  if (opts === undefined) return {};
+  const limits = someOf(opts.limits);
+  const rateLimit = someOf(opts.rateLimit);
+  const headers = someOf({
+    ...(headerList(opts.headers?.request) === undefined ? {} : { request: headerList(opts.headers?.request) }),
+    ...(headerList(opts.headers?.response) === undefined ? {} : { response: headerList(opts.headers?.response) }),
+  } as HeaderRulesInput);
+
+  // **해독기와 같은 규칙을 여기서도 건다.** `burst`·`nodelay` 는 `limit_req` 의 인자라
+  // zone 이 없으면 쓸 데가 없다 — 폼이 저장 못 하는 patch 를 만들지 않는다.
+  if (rateLimit !== undefined
+    && rateLimit.requestsPerSecond === undefined
+    && (rateLimit.burst !== undefined || rateLimit.nodelay !== undefined)) {
+    throw new Error('burst·nodelay 는 requestsPerSecond 가 있어야 한다');
+  }
+  return {
+    ...(limits === undefined ? {} : { limits }),
+    ...(headers === undefined ? {} : { headers }),
+    ...(rateLimit === undefined ? {} : { rateLimit }),
+  };
+}
+
 export type PutHttpListenerOp = {
   op: 'put';
   kind: 'listener';
@@ -48,14 +132,19 @@ export type PutHttpListenerOp = {
     bind: string;
     port: number;
     enabled: true;
-    http: { defaultAction: { pool: string } };
+    http: {
+      defaultAction: { pool: string };
+      limits?: ProxyLimitsInput;
+      headers?: HeaderRulesInput;
+      rateLimit?: RateLimitInput;
+    };
   };
 };
 
 /** HTTP 만. HTTPS 는 tls 결박이 따로 있다. */
 export function putHttpListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string },
+  body: { bind: string; port: number; pool: string } & ListenerOptions,
 ): PutHttpListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -72,7 +161,7 @@ export function putHttpListenerPatch(
       bind: body.bind,
       port: body.port,
       enabled: true,
-      http: { defaultAction: { pool: body.pool } },
+      http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
     },
   }];
 }
@@ -197,7 +286,12 @@ export type PutHttpsListenerOp = {
     bind: string;
     port: number;
     enabled: true;
-    http: { defaultAction: { pool: string } };
+    http: {
+      defaultAction: { pool: string };
+      limits?: ProxyLimitsInput;
+      headers?: HeaderRulesInput;
+      rateLimit?: RateLimitInput;
+    };
     tls: { policy: string; defaultCertificate: string };
   };
 };
@@ -209,7 +303,8 @@ export type PutHttpsListenerOp = {
  */
 export function putHttpsListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string; policy: string; certificate: string },
+  body: { bind: string; port: number; pool: string; policy: string; certificate: string }
+    & ListenerOptions,
 ): PutHttpsListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -228,7 +323,7 @@ export function putHttpsListenerPatch(
       bind: body.bind,
       port: body.port,
       enabled: true,
-      http: { defaultAction: { pool: body.pool } },
+      http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
       tls: { policy: body.policy, defaultCertificate: body.certificate },
     },
   }];

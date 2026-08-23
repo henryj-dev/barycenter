@@ -36,6 +36,25 @@ export function flag(argv: readonly string[], name: string): string | undefined 
 }
 
 /**
+ * **여러 번 오는 플래그** (제안 #7 의 `--header`).
+ *
+ * `flag` 는 `indexOf` 라 첫 번째만 본다. 헤더를 둘 이상 얹으려면 반복이 필요한데,
+ * 조용히 첫 번째만 먹으면 사용자가 적은 것과 저장되는 것이 달라진다.
+ */
+export function flagAll(argv: readonly string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] !== name) continue;
+    const v = argv[i + 1];
+    if (v !== undefined && !v.startsWith('--')) out.push(v);
+  }
+  return out;
+}
+
+/** 값 없이 존재로만 뜻이 되는 플래그 (`--nodelay`). */
+export const has = (argv: readonly string[], name: string): boolean => argv.includes(name);
+
+/**
  * plan 이 낸 영향 (§5.4). **전부 선택이다** — 이 회차 전에 만들어진 plan 은
  * JSONB 에 새 필드가 없고, CLI 가 거기서 깨지면 옛 plan 을 적용할 수 없다.
  */
