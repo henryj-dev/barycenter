@@ -29,7 +29,7 @@ WT = os.path.join(tempfile.gettempdir(),
 _saved = open(OWNERS, "rb").read() if os.path.exists(OWNERS) else None
 
 # 레포 안에 **다른 저장소**가 중첩된 상황을 재현하는 픽스처. 여기서 만들고 끝에 지운다.
-# ⚠️ 이미 있는 디렉토리(하위에 체크아웃된 남의 저장소 등)를 골라 쓰면 **그 레포에 그것이 있을 때만**
+# ⚠️ 있는 디렉토리(`target/idp` 같은 sub-checkout)를 골라 쓰면 **그 레포에 그것이 있을 때만**
 #    검사가 성립한다 — 없는 레포에서는 통과 케이스 2건이 조용히 실패한다(이식하며 실측).
 #    검사는 자기가 필요로 하는 모양을 **자기가 세워야** 어느 레포에서도 같은 것을 잰다.
 NESTED = "_guard_probe_foreign"
@@ -64,6 +64,17 @@ CASES = [
     ("메인에서 git add",                   "S1", MAIN,   "Bash", {"command": "git add ."},                 "DENY"),
     ("다른 세션도 똑같이 막힌다",            "S2", MAIN,   "Edit", {"file_path": f"{MAIN}/PLAN.md"},        "DENY"),
     ("밖에서 -C 로 메인을 노려도 막힌다",     "S2", "/tmp", "Bash", {"command": f"git -C {MAIN} commit -m x"}, "DENY"),
+    # 🔴 **경로가 여럿이면 앞의 하나가 판정을 대표하지 않는다.** 예전에는 첫 번째로 존재하는
+    #    경로로 대상 저장소를 정하고 끝냈다. 그래서 **다른 저장소의 경로를 앞에 세우면**
+    #    「우리 메인이 아니다」로 빠지고, 뒤에 붙은 우리 트리의 파일이 그대로 실려 갔다.
+    #    순서를 뒤집으면 막혔다 — 즉 판정이 순서에 달려 있었다.
+    ("섞임 — 남의 저장소가 앞, 우리 메인이 뒤",  "S1", MAIN, "Write",
+     {"files": [f"{FOREIGN}/x.md", f"{MAIN}/PLAN.md"], "content": "x"},                  "DENY"),
+    ("섞임 — 순서를 뒤집어도 같다",             "S1", MAIN, "Write",
+     {"files": [f"{MAIN}/PLAN.md", f"{FOREIGN}/x.md"], "content": "x"},                  "DENY"),
+    # ⚠️ 그리고 넓힌 판정이 **남의 저장소만 건드리는 편집**까지 막으면 안 된다.
+    ("남의 저장소만이면 그대로 통과",            "S1", MAIN, "Write",
+     {"files": [f"{FOREIGN}/x.md", f"{FOREIGN}/y.md"], "content": "x"},                  "ALLOW"),
     # 메인 트리 — 읽기와 최신화는 통과해야 한다
     ("메인에서 Read",                      "S1", MAIN,   "Read", {"file_path": f"{MAIN}/PLAN.md"},        "ALLOW"),
     ("메인에서 git status",                "S1", MAIN,   "Bash", {"command": "git status --short"},        "ALLOW"),
@@ -82,7 +93,7 @@ CASES = [
     ("워크트리에서 commit",                 "S2", WT,     "Bash", {"command": "git commit -m x"},           "ALLOW"),
     ("워크트리에서 push",                   "S2", WT,     "Bash", {"command": "git push origin HEAD:v1.1"}, "ALLOW"),
     ("git 밖에서는 관여 안 함",              "S2", "/tmp", "Edit", {"file_path": "/tmp/zz.md"},              "ALLOW"),
-    # 레포 안에 중첩된 **남의 저장소**(sub-checkout 등)는 우리 규칙 밖이다. 2026-08-14 에 `cd <중첩 저장소> && git merge` 가 막혔다 —
+    # 레포 안에 중첩된 **남의 저장소**(sub-checkout 등)는 우리 규칙 밖이다. 2026-08-14 에 `cd target/idp && git merge` 가 막혔다 —
     # ① 훅이 받는 cwd 는 세션 cwd(메인)라 `cd` 를 안 읽으면 대상을 틀리게 잡고
     # ② 「git-dir == common-dir」로 판정하면 **어느 저장소든** 메인 트리가 참이 된다.
     ("중첩 저장소로 cd 후 git merge",        "S1", MAIN,   "Bash", {"command": f"cd {FOREIGN}\ngit merge --no-edit upstream/main"}, "ALLOW"),
@@ -125,8 +136,8 @@ CASES = [
     #    실제로 메인 트리에 `_codex_probe.txt` 가 생겼다. 같은 키가 두 뜻을 갖는다.
     ("apply_patch(command 키) 메인 편집 → 막는다", "S1", MAIN, "apply_patch", {"command": f"*** Begin Patch\n*** Add File: {MAIN}/_probe.txt\n+x\n*** End Patch"}, "DENY"),
     ("apply_patch(command 키) 워크트리는 통과",   "S1", MAIN, "apply_patch", {"command": f"*** Begin Patch\n*** Update File: {WT}/PLAN.md\n+x\n*** End Patch"}, "ALLOW"),
-    ("apply_patch 새 워크트리 하위 경로는 통과", "S1", MAIN, "apply_patch", {"command": f"*** Begin Patch\n*** Add File: {WT}/_new_route/deep/mod.ts\n+x\n*** End Patch"}, "ALLOW"),
-    ("apply_patch 새 메인 하위 경로는 막는다",   "S1", MAIN, "apply_patch", {"command": f"*** Begin Patch\n*** Add File: {MAIN}/_new_route/deep/mod.ts\n+x\n*** End Patch"}, "DENY"),
+    ("apply_patch 새 워크트리 하위 경로는 통과", "S1", MAIN, "apply_patch", {"command": f"*** Begin Patch\n*** Add File: {WT}/_new_route/deep/+page.svelte\n+x\n*** End Patch"}, "ALLOW"),
+    ("apply_patch 새 메인 하위 경로는 막는다",   "S1", MAIN, "apply_patch", {"command": f"*** Begin Patch\n*** Add File: {MAIN}/_new_route/deep/+page.svelte\n+x\n*** End Patch"}, "DENY"),
     ("apply_patch(input 키)도 막는다",           "S1", MAIN, "apply_patch", {"input": f"*** Begin Patch\n*** Update File: {MAIN}/PLAN.md\n+x\n*** End Patch"}, "DENY"),
     ("모르는 이름 + 워크트리 경로는 통과",     "S1", MAIN,   "apply_patch", {"input": f"*** Begin Patch\n*** Update File: {WT}/PLAN.md\n+x\n*** End Patch"}, "ALLOW"),
     ("모르는 이름 + path/content 도 막는다",  "S1", MAIN,   "write_file", {"path": f"{MAIN}/docs/x.md", "content": "x"}, "DENY"),

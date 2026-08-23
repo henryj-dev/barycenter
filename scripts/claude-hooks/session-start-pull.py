@@ -75,11 +75,46 @@ def fast_forward_main(git, main_tree):
     rc, out = git(main_tree, "merge", "--ff-only", upstream)
     if rc == 0:
         return True, (out.splitlines() or ["ok"])[0][:80]
-    _, head2 = git(main_tree, "rev-parse", "HEAD")
-    _, target2 = git(main_tree, "rev-parse", upstream)
-    if head2 == target2:
-        return True, None                # 경합에서 졌을 뿐 — 다른 세션이 이미 올렸다
-    return False, (out.splitlines() or ["merge 실패"])[0][:80]
+    return _lost_the_race(git, main_tree, upstream, out)
+
+
+# 재확인 횟수와 간격. 합쳐서 0.4 초.
+RECHECK_ATTEMPTS = 5
+RECHECK_DELAY_S = 0.1
+
+
+def _lost_the_race(git, main_tree, upstream, merge_output):
+    """merge 가 실패했다. **다른 세션이 이미 올렸기 때문인가?**
+
+    ⚠️ `session-end-cleanup.py` 의 같은 이름 함수와 **일부러 같다.** 검사 하네스가 훅
+    스크립트 한 파일만 격리 저장소에 심어 돌리므로 공용 모듈로 뺄 수 없다. 한쪽만
+    고치면 다른 쪽이 조용히 옛 판정을 유지한다 — **두 파일을 함께 고칠 것.** 왜 이렇게
+    생겼는지의 전체 기록은 그쪽 docstring 에 있다. 요약하면 즉시 한 번만 읽는 재확인이
+    두 방향으로 틀렸다:
+
+    🔴 `rev-parse` 가 경합으로 죽으면 두 호출이 같은 에러 문자열을 돌려줘 「같다」로
+    읽히고, **모르는 채로 성공을 보고한다.** 그래서 rc 를 본다.
+
+    ⚠️ 이긴 쪽이 아직 ref 를 갱신하기 전에 읽으면 실패로 적는다. 그래서 짧게 재시도한다.
+    """
+    for attempt in range(RECHECK_ATTEMPTS):
+        if attempt:
+            time.sleep(RECHECK_DELAY_S)
+        rc_head, head2 = git(main_tree, "rev-parse", "HEAD")
+        rc_target, target2 = git(main_tree, "rev-parse", upstream)
+        if rc_head or rc_target:
+            continue                     # 못 읽었다 — 판단하지 않는다
+        if head2 == target2:
+            return True, None            # 경합에서 졌을 뿐 — 다른 세션이 이미 올렸다
+        # ⚠️ **다시 읽는 것만으로는 부족한 경우가 하나 남는다.** 위 두 줄은 「남이 이미
+        #    올렸는가」만 답한다. 우리 merge 가 `index.lock` 을 놓쳐 실패했는데 **아무도
+        #    이기지 않았다면**, HEAD 는 영원히 업스트림과 다르고 이 루프는 몇 번을 읽어도
+        #    실패로 끝난다 — 한 번 더 시도했으면 성공했을 자리에서. 락을 놓친 것뿐이면
+        #    이번엔 우리가 잡는다.
+        rc_retry, out_retry = git(main_tree, "merge", "--ff-only", upstream)
+        if rc_retry == 0:
+            return True, (out_retry.splitlines() or ["ok"])[0][:80]
+    return False, (merge_output.splitlines() or ["merge 실패"])[0][:80]
 
 
 OWNERS = "claude-worktree-owners.json"
