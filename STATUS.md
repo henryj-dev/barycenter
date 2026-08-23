@@ -34,14 +34,14 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 | 층 | 있는 것 | 없는 것 |
 |---|---|---|
-| 모델 | 리스너(프록시 한계값·헤더 규칙·레이트리밋 포함)·풀(헬스체크 정의)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, `least_conn`, WAF, `on_nxdomain`/`on_timeout` |
+| 모델 | 리스너(프록시 한계값·헤더 규칙·레이트리밋 포함)·풀(헬스체크 정의·`least_conn`)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, WAF, `on_nxdomain`/`on_timeout` |
 | 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백. 관측 실패와 부정 관측을 가른다 | — |
 | 동결 | B(구현된 OpenAPI · DDL). **A 는 이 회차에 풀렸다** — W3 설정 셋을 들이려고. 근거가 `SURFACE.txt` 머리에 남는다 | 미구현 계약 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
-| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status | — |
-| GUI | Kit 경로(로그인 포함). 폴링하지 않는다 | 아래 §2 |
+| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status. **리스너 옵션 플래그**(`--rate`·`--header`·`--max-body`·타임아웃) | — |
+| GUI | Kit 경로(로그인 포함). 폴링하지 않는다. **리스너 옵션 폼**과 **왜 트래픽을 안 받나** | 아래 §2 |
 
 ### GUI
 
@@ -84,13 +84,13 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **677** |
-| conformance | `npm run test:conformance` | **420** |
-| 골든 | `npm run test:golden` | 54 |
+| 단위 | `npm test` | **729** |
+| conformance | `npm run test:conformance` | **419** |
+| 골든 | `npm run test:golden` | 56 |
 | 엔진 사실 | `npm run test:engine` | 76 (SKIP 2) |
 | e2e | `npm run test:e2e` | 60 |
 | 스파이크 | `spike/*/run.sh` | 91 |
-| 저장소 | `npm run test:store` | 176 |
+| 저장소 | `npm run test:store` | 184 |
 
 스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
 B(구현된 API·DDL) 드리프트를 둘 다 막는다.
@@ -122,9 +122,26 @@ A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이�
 `docs/runbook-spof.md` 다. RTO/RPO 는 ADR-SPOF 가 v1 운영 정책으로 확정한다
 (랩 SLA 아님). OIDC 는 ID Token Bearer 와 Authorization Code 로그인이다.
 
-로드맵 v0.1~v1.0 은 전부 코드에 있다. 검수의 제안 6·7·8·9 도 닫혔다 —
-레이트리밋·커넥션 제한 · 요청/응답 헤더 · 프록시 타임아웃과 본문 크기 · 백엔드 운영
-상태 API. 남은 것은 기능이 아니라 **축소 등급 스파이크**와 재동결까지의 회차다.
+로드맵 v0.1~v1.0 은 전부 코드에 있다. 검수의 제안 6·7·8·9·10 이 닫혔고 **저작 표면
+(CLI 플래그·GUI 폼)까지 갔다.** S6 `least_conn` 과 mTLS 신원 매핑도 이 회차다.
+
+남은 것과 **왜 안 하는지**:
+
+| | 판정 |
+|---|---|
+| S2 세션 수 | inflight 와 한 카운터. stream 에서는 같은 값이고 http 에서 "세션" 은 정의가 없다 |
+| S3 · S4 · S15 | 기능이 아니라 **측정**이다. 축소 형태가 이미 구현돼 있다 |
+| S9 SNI 3분기 | 스파이크 기준이 "구분 **가능 여부**" 다. nginx 는 부재와 파싱 실패에 같은 빈 문자열을 준다 |
+| S10 `strict_priority` | 충돌 그래프를 anchored 정규식으로 내리고 500 라우트 p99 <5% 가 전제다 — 별도 회차 |
+| S14 native DNS | 남은 1/8 은 **SRV** 다. nginx OSS `resolver` 가 안 한다(상용 모듈) |
+| S20 HTTP/3 | §4.5 검증기가 다중 전송을 표현해야 한다 — 그것이 선결 조건이고 §12.0 이 h3 를 모델에서 뺀 이유다 |
+| ▲ 잔여물 셋 | 재현물을 못 쓴다. 넷 중 하나는 이 회차에 닫았다 |
+| 원격 드라이버 전송 | v0.1 이 실측했다 — 에이전트와 nginx 는 **같은 파일시스템**을 봐야 한다. 지금 배포에서 둘은 같은 프로세스라 그 사이에 전송이 없다 |
+| §11.3 동적 포트 | k8s 네이티브 배포가 별도 과제다. v1 권장은 전용 VM + hostNetwork |
+
+⚠️ 레이트리밋은 **`return` 으로 끝나는 라우트(redirect·reject)에 안 걸린다.** nginx 의
+단계 순서다 — `return` 은 rewrite, `limit_req` 는 preaccess 인데 rewrite 가 앞이다.
+`tests/golden/rate-limit.test.ts` 가 그 거동을 못 박는다.
 
 ⚠️ 레이트리밋은 **`return` 으로 끝나는 라우트(redirect·reject)에 안 걸린다.** nginx 의
 단계 순서다 — `return` 은 rewrite, `limit_req` 는 preaccess 인데 rewrite 가 앞이다.
@@ -138,7 +155,7 @@ A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이�
 | S3 재시작 부트스트랩 | eligible ∩ durable 헬스. 빈 슬롯은 의도적 zero-peer 로 민다 |
 | S4 CP 단절 | 멤버십 슬롯에 TTL 없음. 갱신 실패는 마지막 셋 유지 |
 | S5 부분 전환 | 평면별 슬롯. 한 평면이 비어도 다른 평면을 안 지운다 |
-| S6 `least_conn` | v0 알고리즘에서 제외 |
+| S6 `least_conn` | **열렸다.** 배제 근거("워커별 근사")가 사실이 아니게 됐다 — `in:` 이 dict 에 살아 워커 간 공유다. 골든이 편차 <10% 를 실측 |
 | S9 SNI 3분기 | 현행 유지 (부재·파싱실패는 reject) |
 | S10 `strict_priority` | 안 연다 |
 | S14 native DNS | 7/8. 게이트에 안 넣는다 |
