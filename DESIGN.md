@@ -722,7 +722,7 @@ type TlsPassthroughRoute = ResourceMeta & {
 | 필드 | 타입 | 비고 |
 |---|---|---|
 | `protocol_class` | enum | **`http` \| `tcp` \| `udp` — 불변.** 복합 FK 의 일부 |
-| `algorithm` | enum | `round_robin` \| `source_ip_hash` \| `hash` — **`least_conn` 없음** |
+| `algorithm` | enum | `round_robin` \| `source_ip_hash` \| `hash` \| `least_conn` (S6 로 열렸다) |
 | `hash_key` | enum+params? | **자유 문자열 금지** (§ 4.9). 클래스별 화이트리스트 |
 | `health` | object | §4.3.1 — **프로브 대상과 데이터 경로를 분리한다** |
 | `passive` | object? | `max_fails`, `fail_timeout_s` |
@@ -730,6 +730,14 @@ type TlsPassthroughRoute = ResourceMeta & {
 | `upstream_tls` | object? | `http`/`tcp` 만. `enabled`, `sni`, `ca_bundle_ref`, `client_cert_ref`, `verify` |
 | `dns` | object? | `resolver_ref`, `valid_s`, `resolve_mode` — **`on_nxdomain`/`on_timeout` 없음** (S14: 엔진이 선택지를 안 준다. 표는 `DataplaneCapabilities.nativeDns`) |
 | `sticky` | object? | HTTP: 쿠키 / L4: `source_ip_hash` |
+
+> **위 표 중 v0 코드에 없는 것** (2026-08-23 실사): `passive`, `upstream_tls`, `dns`,
+> `sticky`. `Pool` 타입에는 `key` · `protocolClass` · `algorithm` · `hashKey` ·
+> `sendProxyProtocol` · `healthCheck` 만 있다.
+>
+> 이 표는 오래 **목표**를 적어 두고 구현 상태를 안 적었다. 그러면 다음 사람이 표를
+> 계약으로 읽고, 없는 필드를 API 로 보내다 `unknown_field` 를 맞는다. 넷 다 v1 후보이지
+> 축소 결정이 아니다 — 결정이었다면 §12.0 이나 §15 에 근거가 있어야 한다.
 
 **`least_conn` 은 S6 에서 열렸다** (2026-08-23). 그 전까지는 이렇게 적혀 있었다:
 
@@ -770,6 +778,12 @@ v1 은 `health.type` 을 `protocol_class` 에 묶었는데, **TCP/UDP 서비스�
 | `probe.udp` | `payload_ref`, `expect_pattern` — 드라이버 위임 (§13-6) |
 | `interval_s` / `timeout_s` / `rise` / `fall` | |
 
+> **v0 코드에 있는 것은 `path` · `expectStatus` · `expectBody` 뿐이다** (2026-08-23 실사).
+> `interval` · `timeout` · `rise` · `fall` 은 `src/control/health.ts` 의 `HealthMonitor`
+> 옵션으로 **데몬 전체에 하나씩** 산다 — 풀별로 못 정한다. `probe.mode` · `probe.protocol` ·
+> `probe.port` · `probe.host_override` · `probe.udp` 는 없다. 프로버는 http 풀이면 상태코드,
+> 아니면 TCP connect 다(그 갈래는 `protocolClass` 가 정한다).
+
 **남는 제약** (복합 FK · 트리거 · 검증기로 강제):
 
 | 제약 | 이유 |
@@ -798,6 +812,12 @@ v1 은 `health.type` 을 `protocol_class` 에 묶었는데, **TCP/UDP 서비스�
 | `admin_state` | `enabled` \| `draining` \| `disabled` |
 | `drain.deadline_s` | 관측 목적의 기한. **강제 종료는 별도 capability** |
 | `is_backup` | 전부 죽었을 때만 |
+
+> **v0 코드의 `Backend` 는 `key` · `pool` · `host` · `port` · `weight` 뿐이다**
+> (2026-08-23 실사). `max_conns` · `admin_state` · `drain.deadline_s` · `is_backup` 이
+> 없다. 드레인은 **스펙 필드가 아니라 멤버십 평면의 동작**으로 산다 —
+> `bary backend drain` 이 슬롯에서 빼고 `in:` 으로 관측한다. 그래서 드레인 자체는
+> 되지만 "기한" 과 `deadline_exceeded` 는 표현할 자리가 없다.
 
 **BackendStatus** (관측값, 별도 테이블·별도 리비전, `If-Match` 대상 아님)
 

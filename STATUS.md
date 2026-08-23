@@ -34,7 +34,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 | 층 | 있는 것 | 없는 것 |
 |---|---|---|
-| 모델 | 리스너(프록시 한계값·헤더 규칙·레이트리밋 포함)·풀(헬스체크 정의·`least_conn`)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, WAF, `on_nxdomain`/`on_timeout` |
+| 모델 | 리스너(프록시 한계값·헤더 규칙·레이트리밋·`on_no_sni` 포함)·풀(헬스체크 정의·`least_conn`)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, WAF, `on_nxdomain`/`on_timeout`, **그리고 §4.3·§4.3.1·§4.4 의 아래 필드들** |
 | 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백. 관측 실패와 부정 관측을 가른다 | — |
 | 동결 | B(구현된 OpenAPI · DDL). **A 는 이 회차에 풀렸다** — W3 설정 셋을 들이려고. 근거가 `SURFACE.txt` 머리에 남는다 | 미구현 계약 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
@@ -139,9 +139,18 @@ A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이�
 | 원격 드라이버 전송 | v0.1 이 실측했다 — 에이전트와 nginx 는 **같은 파일시스템**을 봐야 한다. 지금 배포에서 둘은 같은 프로세스라 그 사이에 전송이 없다 |
 | §11.3 동적 포트 | k8s 네이티브 배포가 별도 과제다. v1 권장은 전용 VM + hostNetwork |
 
-⚠️ 레이트리밋은 **`return` 으로 끝나는 라우트(redirect·reject)에 안 걸린다.** nginx 의
-단계 순서다 — `return` 은 rewrite, `limit_req` 는 preaccess 인데 rewrite 가 앞이다.
-`tests/golden/rate-limit.test.ts` 가 그 거동을 못 박는다.
+**§4.3·§4.3.1·§4.4 에 적혀 있는데 코드에 없는 것** (2026-08-23 실사). 이건 축소 결정이
+아니라 **아직 안 한 것**이다 — 결정이었다면 §12.0 이나 §15 에 근거가 있어야 한다:
+
+| 자리 | 없는 필드 |
+|---|---|
+| `Pool` (§4.3) | `passive`(max_fails·fail_timeout) · `upstream_tls` · `dns` · `sticky` |
+| 헬스 프로브 (§4.3.1) | `probe.mode`·`protocol`·`port`·`host_override`·`udp`. `interval`·`timeout`·`rise`·`fall` 은 **데몬 전체에 하나씩** 이지 풀별이 아니다 |
+| `Backend` (§4.4) | `max_conns` · `admin_state` · `drain.deadline_s` · `is_backup` |
+
+드레인은 **스펙 필드가 아니라 멤버십 평면의 동작**으로 산다 — `bary backend drain` 이
+슬롯에서 빼고 `in:` 으로 관측한다. 그래서 드레인은 되지만 기한과 `deadline_exceeded` 는
+표현할 자리가 없다.
 
 ⚠️ 레이트리밋은 **`return` 으로 끝나는 라우트(redirect·reject)에 안 걸린다.** nginx 의
 단계 순서다 — `return` 은 rewrite, `limit_req` 는 preaccess 인데 rewrite 가 앞이다.
