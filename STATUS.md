@@ -92,6 +92,10 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 스파이크 | `spike/*/run.sh` | 100 |
 | 저장소 | `npm run test:store` | 207 |
 
+**검수 목록(①②③)이 코드에 닿아 있는지는 이제 게이트가 답한다** —
+`tests/conformance/goal-coverage.test.ts` 가 한 줄에 한 검사다. 사람이 커밋 로그로 세는
+대신 도는 것이 답한다. 커밋 로그는 *"그래서 지금 되는가"* 에 답하지 못한다.
+
 스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
 B(구현된 API·DDL) 드리프트를 둘 다 막는다.
 
