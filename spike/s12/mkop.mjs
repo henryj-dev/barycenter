@@ -10,9 +10,44 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const [prefix, out, suffix, generation, from, to] = process.argv.slice(2);
+const [prefix, out, suffix, generation, fromArg, toArg] = process.argv.slice(2);
 const manifest = JSON.parse(
   readFileSync(join(prefix, 'generations', generation, 'manifest.json'), 'utf8'));
+
+/**
+ * `auto` 면 **살아 있는 좌표**에서 읽는다.
+ *
+ * ── 왜 못 박으면 안 되나 (2026-08-24)
+ *
+ * 후속 봉투가 `expectedCurrent` 를 2 로 못 박고 있었다. 그건 **복구가 좌표를 옮겼다고
+ * 가정하는 것**인데, 부하가 걸린 기계에서는 복구 러너가 활성화 증거를 예산 안에 못 보고
+ * `failed` 로 확정하는 회차가 있다(이 파일의 러너 주석이 그 회차를 이미 적어 뒀다).
+ * 그러면 `current` 심볼릭 링크와 nginx 는 gen-2 인데 **좌표만 뒤에 남고**, 못 박힌
+ * 봉투는 `coordinate_mismatch` 로 영영 막힌다.
+ *
+ * **프로덕션은 그렇게 안 한다.** `ControlPlane.apply` 는 다음 오퍼레이션의 좌표를
+ * 살아 있는 상태에서 만든다 — 앞 전환이 어디서 멈췄든 그 자리에서 이어 간다.
+ * 봉투를 미리 구워 두고 재생하는 것은 이 스파이크만의 모양이었고, 그것이 없는 결함을
+ * 만들어 냈다. 러너 주석의 그 문장 그대로다: **"계측기를 실제와 다르게 맞추면 없는
+ * 결함을 만들어 낸다."**
+ *
+ * §12.0 이 묻는 것은 *"다음 오퍼레이션이 막히지 않는가"* 이고, 그 물음은 살아 있는
+ * 좌표에서 출발할 때만 뜻이 있다.
+ */
+function liveEpoch() {
+  // `FileStore` 의 봉투는 `{schema, checksum, state:{version, payload}}` 다.
+  // 세 층을 다 열어 본다 — 옛 모양으로 저장된 파일도 읽히게.
+  const raw = JSON.parse(readFileSync(join(prefix, 'state', 'agent.json'), 'utf8'));
+  const planes = raw.state?.payload?.planes ?? raw.payload?.planes ?? raw.planes;
+  const http = planes?.http?.activationEpoch;
+  if (http === undefined) {
+    throw new Error(`agent.json 에서 좌표를 못 읽었다: ${JSON.stringify(Object.keys(raw))}`);
+  }
+  return BigInt(http);
+}
+
+const from = fromArg === 'auto' ? String(liveEpoch()) : fromArg;
+const to = toArg === 'auto' ? String(BigInt(from) + 1n) : toArg;
 
 const coord = (digest) => ({
   expectedCurrent: { activationEpoch: from, membershipRevision: from },

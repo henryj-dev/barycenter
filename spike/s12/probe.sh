@@ -53,7 +53,9 @@ echo "  세대 digest: gen-1=$(echo $DIGEST1 | cut -c1-20)… gen-2=$(echo $DIGE
 #
 # 잠김은 **다음 오퍼레이션**에서만 보인다.
 node /spike/mkop.mjs $P op.json  ""  gen-2 0 2
-node /spike/mkop.mjs $P op2.json "b" gen-3 2 3
+# **후속 봉투는 여기서 안 만든다.** 좌표를 못 박으면 복구가 어디서 멈췄든 2 를
+# 가정하게 되고, 그 가정이 깨진 회차가 `coordinate_mismatch` 로 영영 막힌다.
+# 회차마다 복구 **직후에** 살아 있는 좌표로 짓는다 (`mkop.mjs auto`).
 
 # gen-1 을 활성으로 두고 엔진을 띄운다.
 ln -sfn generations/gen-1 $P/current
@@ -206,8 +208,17 @@ while [ "$i" -lt "$TOTAL" ]; do
   # 못 지난다. 프로덕션은 `reconcileConfig` 가 주기적으로 그것을 덮지만 이 스파이크는
   # 그 수렴을 안 태운다.
   #
-  # **가설이지 확정이 아니다.** 서명이 하나뿐이고 재현이 부하 의존이라 아직 못 굳혔다.
-  # 다음 재현이 이 가설을 확인하거나 뒤집는다 — 위 진단이 이제 25 줄을 남긴다.
+  # **가설이 맞았다** — 후속 봉투가 `expectedCurrent` 를 못 박고 있었고, 그것을 살아
+  # 있는 좌표에서 짓게 바꾸니 부하 아래에서도 초록이다. 원인은 엔진도 복구도 아니라
+  # **계측기**였다. 이 시리즈에서 네 번째다.
+  # **살아 있는 좌표에서 짓는다.** 프로덕션의 `ControlPlane.apply` 가 하는 그대로다 —
+  # 앞 전환이 어디서 멈췄든 그 자리에서 이어 간다.
+  MKOP_OUT=$(node /spike/mkop.mjs $P op2.json "b" gen-3 auto auto 2>&1) || {
+    # **조용히 넘어가면 다음 단계가 ENOENT 로 죽고, 그건 "수렴 실패" 로 보인다.**
+    # 봉투를 못 만든 것과 수렴을 못 한 것은 다른 말이다.
+    bad S12.sweep "후속 봉투를 못 만들었다 (#$i): $MKOP_OUT"
+    break
+  }
   NEXT_LIMIT=3
   NEXT_TRIES=0
   while [ "$NEXT_TRIES" -lt "$NEXT_LIMIT" ]; do
