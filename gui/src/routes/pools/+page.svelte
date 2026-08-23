@@ -8,6 +8,7 @@
 </script>
 
 <Pools
+  traffic={desk.traffic}
   view={desk.pools}
   live={desk.live}
   editing={desk.editing}

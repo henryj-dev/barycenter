@@ -18,7 +18,7 @@ import { viewOfCertificates, type CertificateFact, type CertsView, type OrderFac
 import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
 export type StatusSnap = {
@@ -90,11 +90,26 @@ export function createDesk() {
 
   const asList = <T>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : []);
 
+  /**
+   * 백엔드가 왜 트래픽을 안 받나 (제안 #9). **없으면 아무 말도 안 한다.**
+   *
+   * 이 API 가 안 오는 것과 "이유가 없다(= 받는 중)" 는 다르다 — 못 읽은 것을 초록으로
+   * 보이게 하면 안 되므로 실패는 빈 맵이 아니라 **표시를 안 만드는 것**으로 흐른다.
+   */
+  let traffic = $state<Map<string, { receivingTraffic: boolean; reasons: string[] }>>(new Map());
+
   const refreshPools = async (): Promise<void> => {
-    const [pr, br] = await Promise.all([
+    const [pr, br, sr] = await Promise.all([
       fetch('/api/v1/pools', { headers: auth() }),
       fetch('/api/v1/backends', { headers: auth() }),
+      fetch('/api/v1/backends/status', { headers: auth() }),
     ]);
+    // 상태 API 는 **선택**이다. 못 읽어도 풀 화면은 서야 한다 — 헬스와 드레인은
+    // 다른 경로로 오고, 이 줄 하나 때문에 화면 전체가 비면 그게 더 나쁘다.
+    traffic = sr.ok
+      ? new Map((await sr.json() as { key: string; receivingTraffic: boolean; reasons: string[] }[])
+        .map((r) => [r.key, { receivingTraffic: r.receivingTraffic, reasons: r.reasons }]))
+      : new Map();
     if (!pr.ok || !br.ok) {
       error = `pools ${pr.status}/${br.status}`;
       pools = { rows: [] };
@@ -394,11 +409,13 @@ export function createDesk() {
   const insertHttpListener = async (
     key: string,
     body: { bind: string; port: number; pool: string },
+    opts?: ListenerOptionFlags,
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
-      return await commitPatch(putHttpListenerPatch(key, body));
+      // 단위 해석은 `parseListenerOptions` 한 자리다 — CLI 와 같은 것을 쓴다.
+      return await commitPatch(putHttpListenerPatch(key, { ...body, ...parseListenerOptions(opts ?? {}) }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;
@@ -502,11 +519,12 @@ export function createDesk() {
   const insertHttpsListener = async (
     key: string,
     body: { bind: string; port: number; pool: string; policy: string; certificate: string },
+    opts?: ListenerOptionFlags,
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
-      return await commitPatch(putHttpsListenerPatch(key, body));
+      return await commitPatch(putHttpsListenerPatch(key, { ...body, ...parseListenerOptions(opts ?? {}) }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;
@@ -710,6 +728,7 @@ export function createDesk() {
     insertPassthroughListener,
     insertUdpListener,
     insertTlsPolicy,
+    get traffic() { return traffic; },
     insertHttpsListener,
     insertCertificate,
     insertSniBinding,

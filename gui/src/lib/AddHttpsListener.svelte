@@ -1,10 +1,16 @@
 <script lang="ts">
+  import type { ListenerOptionFlags } from '@web/edit';
+  import ListenerOptions from './ListenerOptions.svelte';
+
   let { pools, policies, certificates, editing, add }: {
     pools: string[];
     policies: string[];
     certificates: string[];
     editing: boolean;
-    add: (key: string, bind: string, port: number, pool: string, policy: string, certificate: string) => void;
+    add: (
+      key: string, bind: string, port: number, pool: string,
+      policy: string, certificate: string, opts: ListenerOptionFlags,
+    ) => void;
   } = $props();
 
   let key = $state('');
@@ -13,11 +19,13 @@
   let pool = $state('');
   let policy = $state('');
   let certificate = $state('');
+  // **HTTP 와 같은 컴포넌트를 쓴다.** 두 벌로 두면 한쪽만 고치는 날이 온다.
+  let opts = $state<ListenerOptionFlags>({});
 
   const ready = $derived(pools.length > 0 && policies.length > 0 && certificates.length > 0);
 
   const submit = (): void => {
-    add(key.trim(), bind.trim(), Number(port), pool, policy, certificate);
+    add(key.trim(), bind.trim(), Number(port), pool, policy, certificate, opts);
   };
 </script>
 
@@ -44,6 +52,7 @@
     {/each}
   </select>
   <button type="submit" disabled={editing || !ready}>HTTPS 포트를 연다</button>
+  <ListenerOptions {editing} bind:value={opts} />
 </form>
 
 <style>

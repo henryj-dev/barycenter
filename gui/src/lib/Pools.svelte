@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { trafficMarkOf } from '@web/pools-view';
   import type { PoolsView } from '@web/pools-view';
   import type { ProtocolClass } from '@web/edit';
   import AddBackend from './AddBackend.svelte';
@@ -6,12 +7,14 @@
   import AddHashPool from './AddHashPool.svelte';
   import AddSourceIpHashPool from './AddSourceIpHashPool.svelte';
 
-  let { view, live, editing, withdraw, withdrawPool, drain, insert, openPool, openHashPool, openSourceIpHashPool }: {
+  let { view, live, editing, traffic, withdraw, withdrawPool, drain, insert, openPool, openHashPool, openSourceIpHashPool }: {
     view: PoolsView;
     live: boolean;
     editing: boolean;
     withdraw: (key: string) => void;
     withdrawPool: (key: string) => void;
+    /** 제안 #9. 없으면 아무 말도 안 한다 — 못 읽은 것과 받는 중은 다르다. */
+    traffic?: Map<string, { receivingTraffic: boolean; reasons: string[] }>;
     drain: (key: string) => void;
     insert: (pool: string, key: string, host: string, port: number) => void;
     openPool: (input: {
@@ -65,6 +68,18 @@
                 <span class="name">{be.key}</span>
                 <span class="addr mono">{be.host}:{be.port}</span>
                 <span class="mark">{label(be.state)}</span>
+                {#if trafficMarkOf(traffic?.get(be.key)) !== undefined}
+                  <!--
+                    **헬스 칸을 덮어쓰지 않는다** (제안 #9). 이 API 가 답하려던 것은
+                    정확히 "헬스는 초록인데 트래픽이 0" 인 경우다 — 같은 칸에 쓰면
+                    그 구분이 사라진다.
+                  -->
+                  <span class="why" title={trafficMarkOf(traffic?.get(be.key))!.reasons.join(' · ')}>
+                    트래픽 없음{#if trafficMarkOf(traffic?.get(be.key))!.reasons.length > 0}
+                      — {trafficMarkOf(traffic?.get(be.key))!.reasons.join(' · ')}
+                    {/if}
+                  </span>
+                {/if}
                 <button
                   type="button"
                   disabled={editing}
@@ -138,5 +153,11 @@
   @media (max-width: 640px) {
     li { grid-template-columns: 1fr auto; }
     .addr { grid-column: 1; }
+  }
+  .why {
+    grid-column: 1 / -1;
+    font-size: 0.7rem;
+    color: var(--mute);
+    padding-left: 0.2rem;
   }
 </style>

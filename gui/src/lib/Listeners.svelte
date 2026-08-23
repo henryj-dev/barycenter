@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { ListenerOptionFlags } from '@web/edit';
   import type { ListenersView } from '@web/listeners-view';
   import type { TlsVersion, UdpPreset } from '@web/edit';
   import AddListener from './AddListener.svelte';
@@ -19,12 +20,15 @@
     certificates: string[];
     withdraw: (key: string) => void;
     withdrawPolicy: (key: string) => void;
-    insert: (key: string, bind: string, port: number, pool: string) => void;
+    insert: (key: string, bind: string, port: number, pool: string, opts: ListenerOptionFlags) => void;
     insertTcp: (key: string, bind: string, port: number, pool: string) => void;
     insertPassthrough: (key: string, bind: string, port: number, pool?: string) => void;
     insertUdp: (key: string, bind: string, port: number, pool: string, preset: UdpPreset) => void;
     insertPolicy: (key: string, minVersion: TlsVersion) => void;
-    insertHttps: (key: string, bind: string, port: number, pool: string, policy: string, certificate: string) => void;
+    insertHttps: (
+      key: string, bind: string, port: number, pool: string,
+      policy: string, certificate: string, opts: ListenerOptionFlags,
+    ) => void;
   } = $props();
 
   const label = (mark: string): string => {
