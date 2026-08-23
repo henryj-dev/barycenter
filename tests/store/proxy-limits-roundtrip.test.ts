@@ -145,4 +145,36 @@ describe('프록시 한계값이 DB 를 왕복한다 (제안 #8)', () => {
     expect(dump).toContain('clientMaxBodyBytes');
     expect(dump).toContain('connectTimeoutMs');
   });
+
+  it('헤더 규칙도 왕복한다 (제안 #7)', async () => {
+    const headers = {
+      request: [{ name: 'X-Tenant', value: 'acme' }],
+      response: [{ name: 'X-Frame-Options', value: 'DENY' }],
+    };
+    await commitAll([...pool, PUT('listener', 'web', {
+      protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true,
+      http: { defaultAction: { pool: 'app' }, headers },
+    })]);
+    const l = (await headModel()).listeners.find((x) => x.key === 'web') as
+      { http?: { headers?: unknown } };
+    expect(l.http?.headers).toEqual(headers);
+  });
+
+  it('**셋이 한 `http` 객체에 함께 산다** — 하나를 쓰면서 둘을 지우지 않는다', async () => {
+    // `defaultAction`·`limits`·`headers` 가 같은 객체를 나눠 쓴다. 저장 경로가 하나를
+    // 덮으면 나머지가 조용히 사라지고, 그건 B-01 이 낸 병과 같은 모양이다.
+    await commitAll([...pool, PUT('listener', 'web', {
+      protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true,
+      http: {
+        defaultAction: { pool: 'app' },
+        limits: { readTimeoutMs: 30_000 },
+        headers: { request: [{ name: 'X-A', value: '1' }] },
+      },
+    })]);
+    const l = (await headModel()).listeners.find((x) => x.key === 'web') as
+      { http?: { defaultAction?: unknown; limits?: unknown; headers?: unknown } };
+    expect(l.http?.defaultAction).toEqual({ pool: 'app' });
+    expect(l.http?.limits).toEqual({ readTimeoutMs: 30_000 });
+    expect(l.http?.headers).toEqual({ request: [{ name: 'X-A', value: '1' }] });
+  });
 });

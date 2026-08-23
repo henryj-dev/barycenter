@@ -17,6 +17,8 @@
  *      오타 하나가 의도를 통째로 날린다.
  *   3. **강제 변환하지 않는다.** `"8080"` 은 8080 이 아니라 오류다. 변환은 의미를 바꾼다.
  */
+import { validateHeaderName, validateHeaderValue } from '../validate/strings.js';
+
 import type {
   AcmeIntent,
   EngineSettings,
@@ -24,6 +26,8 @@ import type {
   Backend,
   Certificate,
   HttpAction,
+  HeaderRule,
+  HeaderRules,
   HttpProfile,
   ProxyLimits,
   HttpRoute,
@@ -187,13 +191,94 @@ function decodeHttpProfile(iss: Issues, v: unknown, path: string): HttpProfile |
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['defaultAction', 'limits']);
+  noExtraKeys(iss, v, path, ['defaultAction', 'limits', 'headers']);
   const action = optional(v['defaultAction'], () => decodeSniOutcome(iss, v['defaultAction'], `${path}.defaultAction`));
   const limits = optional(v['limits'], () => decodeProxyLimits(iss, v['limits'], `${path}.limits`));
+  const headers = optional(v['headers'], () => decodeHeaderRules(iss, v['headers'], `${path}.headers`));
   return {
     ...(action === undefined ? {} : { defaultAction: action }),
     ...(limits === undefined ? {} : { limits }),
+    ...(headers === undefined ? {} : { headers }),
   };
+}
+
+/**
+ * 렌더러가 **이미 내고 있고 그 위에 다른 것이 서는** 요청 헤더 (제안 #7).
+ *
+ * 덮게 두면 조용히 끊긴다: `X-Forwarded-*` 는 백엔드가 신뢰하는 클라이언트 IP 사슬이고,
+ * `Upgrade`·`Connection` 위에는 websocket 이 선다. 둘 다 증상이 "가끔 안 된다" 라
+ * 원인을 못 찾는 종류다.
+ *
+ * **`Host` 는 없다.** 다른 Host 를 기대하는 백엔드로 프록시하는 것은 정당하고 흔하다 —
+ * 막으면 되는 것을 못 쓰게 한다.
+ */
+const RESERVED_REQUEST_HEADERS = new Set(['x-forwarded-for', 'x-forwarded-proto', 'upgrade', 'connection']);
+
+/** 모델에 자기 필드가 있는 응답 헤더. 출처가 둘이면 싸운다. */
+const RESERVED_RESPONSE_HEADERS = new Set(['strict-transport-security']);
+
+function decodeHeaderRules(iss: Issues, v: unknown, path: string): HeaderRules | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['request', 'response']);
+  const request = optional(v['request'],
+    () => decodeHeaderList(iss, v['request'], `${path}.request`, RESERVED_REQUEST_HEADERS));
+  const response = optional(v['response'],
+    () => decodeHeaderList(iss, v['response'], `${path}.response`, RESERVED_RESPONSE_HEADERS));
+  return {
+    ...(request === undefined ? {} : { request }),
+    ...(response === undefined ? {} : { response }),
+  };
+}
+
+function decodeHeaderList(
+  iss: Issues, v: unknown, path: string, reserved: ReadonlySet<string>,
+): HeaderRule[] | undefined {
+  if (!Array.isArray(v)) {
+    iss.add('invalid_type', path, `배열이어야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  const out: HeaderRule[] = [];
+  // **같은 이름을 두 번 적으면 거부한다.** nginx 는 마지막을 쓰지만, 모델이 그걸
+  // 말하지 않으므로 "왜 첫 번째가 무시되나" 가 된다. 겹치는 것 자체를 막는다.
+  const seen = new Set<string>();
+  for (const [i, raw] of v.entries()) {
+    const at = `${path}[${i}]`;
+    if (!isObject(raw)) {
+      iss.add('invalid_type', at, `객체여야 한다 (받은 것: ${typeName(raw)})`);
+      continue;
+    }
+    noExtraKeys(iss, raw, at, ['name', 'value']);
+    const name = str(iss, raw['name'], `${at}.name`);
+    const value = str(iss, raw['value'], `${at}.value`);
+    if (name === undefined || value === undefined) continue;
+
+    const nameCheck = validateHeaderName(name);
+    if (!nameCheck.ok) {
+      iss.add('invalid_value', `${at}.name`, nameCheck.message);
+      continue;
+    }
+    const valueCheck = validateHeaderValue(value);
+    if (!valueCheck.ok) {
+      iss.add('invalid_value', `${at}.value`, valueCheck.message);
+      continue;
+    }
+    const lower = name.toLowerCase();
+    if (reserved.has(lower)) {
+      iss.add('invalid_value', `${at}.name`,
+        `'${name}' 은 렌더러가 이미 내고 그 위에 다른 것이 선다 — 덮으면 조용히 끊긴다`);
+      continue;
+    }
+    if (seen.has(lower)) {
+      iss.add('duplicate', `${at}.name`, `'${name}' 이 두 번 있다 — 어느 쪽이 이기는지 모델이 안 말한다`);
+      continue;
+    }
+    seen.add(lower);
+    out.push({ name, value });
+  }
+  return out;
 }
 
 /**

@@ -38,6 +38,7 @@ import type {
   HttpRoute,
   Listener,
   Model,
+  HeaderRule,
   PassthroughRoute,
   ProxyLimits,
   Certificate,
@@ -421,7 +422,7 @@ function httpServerBlocks(
 
     const locations: ConfNode[] = [];
     for (const r of ordered) {
-      const body = locationBody(r, poolsWithBackends);
+      const body = locationBody(r, poolsWithBackends, listener.http?.headers?.request);
       if (body.length > 0) locations.push(block('location', [lit(r.pathPrefix ?? '/')], body));
     }
     if (locations.length === 0) continue;
@@ -459,6 +460,7 @@ function httpServerBlocks(
         ...tlsBody,
         ...realipNodes(listener),
         ...proxyLimitNodes(listener.http?.limits),
+        ...responseHeaderNodes(listener.http?.headers?.response),
         ...(acme ? [acmeChallengeLocation()] : []),
         ...locations,
       ]),
@@ -514,8 +516,43 @@ const sizeArg = (bytes: number): string => {
   return `${bytes}`;
 };
 
+/**
+ * 응답 헤더 (제안 #7). **server 레벨이다.**
+ *
+ * ⚠️ `add_header` 는 상속이 아니라 **대체**다 — location 에 하나라도 있으면 상위
+ * server 의 것이 **전부 사라진다.** `tests/golden/hsts.test.ts` 가 실측해 두고 그
+ * 사실에 기대고 있다: *"지금 렌더러는 location 에 `add_header` 를 하나도 안 낸다."*
+ * 여기를 location 으로 옮기는 순간 **HSTS 가 조용히 없어지고**, HSTS 는 클라이언트
+ * 쪽에서 되돌릴 수 없다.
+ *
+ * `always` 를 붙인다. 5xx 에서만 사라지는 보안 헤더는 없느니만 못하다 — HSTS 가 같은
+ * 이유로 `always` 다.
+ */
+function responseHeaderNodes(rules: readonly HeaderRule[] | undefined): ConfNode[] {
+  if (rules === undefined) return [];
+  return rules.map((h) => directive('add_header', [lit(h.name), lit(h.value), lit('always')]));
+}
+
+/**
+ * 요청 헤더 (제안 #7). **location 레벨이다.**
+ *
+ * 응답과 반대 방향인 이유: `proxy_set_header` 도 대체인데, 렌더러가 이미
+ * `Host`·`X-Forwarded-For`·`X-Forwarded-Proto` 를 **location 에** 낸다. server 에 내면
+ * 그 셋에 지워진다.
+ *
+ * **기존 셋 뒤에 붙인다.** 앞에 두면 사용자 헤더가 먼저 오고 nginx 는 같은 이름의
+ * 마지막을 쓰므로, 겹칠 때 의도가 뒤집힌다. 겹치는 이름 자체는 해독기가 막지만
+ * 순서로도 같은 답이 나오게 둔다.
+ */
+function requestHeaderNodes(rules: readonly HeaderRule[] | undefined): ConfNode[] {
+  if (rules === undefined) return [];
+  return rules.map((h) => directive('proxy_set_header', [lit(h.name), lit(h.value)]));
+}
+
 /** 라우트 액션 하나를 location 본문으로. */
-function locationBody(r: HttpRoute, poolsWithBackends: Set<string>): ConfNode[] {
+function locationBody(
+  r: HttpRoute, poolsWithBackends: Set<string>, requestHeaders?: readonly HeaderRule[],
+): ConfNode[] {
   const body: ConfNode[] = [];
   switch (r.action.kind) {
     case 'proxy': {
@@ -531,6 +568,9 @@ function locationBody(r: HttpRoute, poolsWithBackends: Set<string>): ConfNode[] 
         body.push(directive('proxy_set_header', [lit('Upgrade'), variable('http_upgrade')]));
         body.push(directive('proxy_set_header', [lit('Connection'), variable('connection_upgrade')]));
       }
+      // **기존 셋 뒤에 붙인다** (제안 #7). 프록시하는 라우트에만 뜻이 있다 —
+      // redirect·reject 는 업스트림으로 가지 않으므로 얹을 요청이 없다.
+      body.push(...requestHeaderNodes(requestHeaders));
       break;
     }
     case 'redirect':
@@ -880,6 +920,7 @@ function defaultServerBlock(
     // 호스트 라우트가 없는 리스너(그리고 모르는 Host 로 오는 요청)에는 안 걸리고,
     // 운영자는 "적었는데 어떤 요청에는 안 먹는다" 를 겪는다.
     ...proxyLimitNodes(listener.http?.limits),
+    ...responseHeaderNodes(listener.http?.headers?.response),
     ...(acme ? [acmeChallengeLocation()] : []),
     ...body,
   ]);

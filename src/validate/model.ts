@@ -66,7 +66,17 @@ export type ModelIssueCode =
   /** 모르는 필드다 — 조용히 무시하면 오타가 설정을 날린다. */
   | 'unknown_field'
   /** 숫자가 허용 범위 밖이다. */
-  | 'out_of_range';
+  | 'out_of_range'
+  /**
+   * 타입은 맞는데 값이 계약을 어긴다 (제안 #7).
+   *
+   * `invalid_type` 과 다르다 — 문자열이 오긴 왔는데 헤더 이름으로 못 쓰거나, 값에
+   * CR/LF 가 있거나, 덮으면 안 되는 이름이거나 하는 경우다. 같은 코드로 접으면
+   * 클라이언트가 "타입을 고치라" 는 메시지를 받고 엉뚱한 곳을 본다.
+   */
+  | 'invalid_value'
+  /** 같은 것이 두 번 있다. 어느 쪽이 이기는지 모델이 말하지 않으므로 거부한다. */
+  | 'duplicate';
 
 export type ModelIssue = {
   code: ModelIssueCode;

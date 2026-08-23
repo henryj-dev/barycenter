@@ -40,10 +40,14 @@ function dockerAvailable(): boolean {
   try { execFileSync('docker', ['info'], { stdio: 'ignore' }); return true; } catch { return false; }
 }
 
-const model = (hsts?: HstsPolicy): Model => ({
+const model = (hsts?: HstsPolicy, response?: { name: string; value: string }[]): Model => ({
   listeners: [{
     key: 'l', protocol: 'https', bind: '0.0.0.0', port: PORT, enabled: true,
-    tls: { policy: 'p', defaultCertificate: 'c' }, http: { defaultAction: 'reject' },
+    tls: { policy: 'p', defaultCertificate: 'c' },
+    http: {
+      defaultAction: 'reject',
+      ...(response === undefined ? {} : { headers: { response } }),
+    },
   }],
   httpRoutes: [
     { key: 'ok', listener: 'l', hosts: ['a.test'], priority: 10,
@@ -69,6 +73,8 @@ hdr() {
 }
 echo "root=$(hdr /)"
 echo "deny=$(hdr /deny)"
+echo "xfo=$(curl -sk -o /dev/null -D - --resolve a.test:${PORT}:127.0.0.1 "https://a.test:${PORT}/" 2>/dev/null \\
+  | tr -d '\\r' | sed -n 's/^[Xx]-[Ff]rame-[Oo]ptions: //p')"
 `;
 
 function serve(conf: string): string {
@@ -162,4 +168,21 @@ describe('add_header 상속 함정 (§4.6)', () => {
       expect(body, `location 안에 add_header 가 생겼다:\n${body}`).not.toContain('add_header');
     }
   });
+
+  /**
+   * 제안 #7 — **사용자 응답 헤더가 HSTS 를 밀어내지 않는다.**
+   *
+   * 둘 다 server 레벨 `add_header` 다. 같은 레벨이면 nginx 는 **둘 다 낸다** — 문제가
+   * 되는 것은 레벨이 갈릴 때뿐이다. 그 사실에 기대고 있으므로 실물로 확인한다:
+   * 산출물에 두 줄이 있는 것으로는 "둘 다 나간다" 를 증명하지 못한다.
+   */
+  it('사용자 응답 헤더와 HSTS 가 **함께** 나간다', () => {
+    const conf = render(
+      model({ maxAgeSeconds: 300 }, [{ name: 'X-Frame-Options', value: 'DENY' }]),
+      caps,
+    ).conf;
+    const out = serve(conf);
+    expect(out, out).toContain('max-age=300');
+    expect(out, out).toContain('xfo=DENY');
+  }, 180_000);
 });

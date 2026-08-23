@@ -327,6 +327,39 @@ export type HttpProfile = {
    * 일이다. 없는 것을 있는 척하지 않는다.
    */
   limits?: ProxyLimits;
+  /**
+   * 얹을 헤더 (제안 #7). 없으면 아무것도 안 낸다.
+   *
+   * **자리가 갈린다.** nginx 의 `add_header` 와 `proxy_set_header` 는 둘 다 상속이
+   * 아니라 **대체**인데, 렌더러가 이미 낸 것들의 위치가 서로 반대다:
+   *
+   *   응답 → server   (location 에 내면 상위 HSTS 가 통째로 사라진다)
+   *   요청 → location (server 에 내면 기존 `Host`·`X-Forwarded-*` 셋에 지워진다)
+   *
+   * 그래서 라우트별로 안 연다. 열려면 "이 location 이 무엇을 상속받는가" 를 모델이
+   * 표현해야 하고, 그건 nginx 의 대체 규칙을 모델에 통째로 들이는 일이다.
+   */
+  headers?: HeaderRules;
+};
+
+/** 한 줄. `value` 는 §4.9 의 변수 화이트리스트를 지난다. */
+export type HeaderRule = { name: string; value: string };
+
+/**
+ * 얹을 헤더.
+ *
+ * **못 덮는 이름이 있다.** `X-Forwarded-For`·`X-Forwarded-Proto` 는 백엔드가 신뢰하는
+ * 값이라 덮으면 클라이언트 IP 사슬이 조용히 끊기고, `Upgrade`·`Connection` 위에는
+ * websocket 이 선다. 응답 쪽 `Strict-Transport-Security` 는 모델에 자기 필드가 있어
+ * 출처가 둘이 되면 싸운다 — 그리고 HSTS 는 클라이언트 쪽에서 되돌릴 수 없다.
+ *
+ * `Host` 는 **연다.** 다른 Host 를 기대하는 백엔드로 프록시하는 것은 정당하고 흔하다.
+ */
+export type HeaderRules = {
+  /** 업스트림으로 나가는 요청에 얹는다 (`proxy_set_header`). */
+  request?: HeaderRule[];
+  /** 클라이언트로 나가는 응답에 얹는다 (`add_header … always`). */
+  response?: HeaderRule[];
 };
 
 /**
