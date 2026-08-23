@@ -1,4 +1,4 @@
-# 현재 상태 (2026-08-20)
+# 현재 상태 (2026-08-23)
 
 무엇이 있고, 무엇이 열려 있고, 무엇을 안 하는가. 설계는 `DESIGN.md`, 테스트는
 `TESTS.md`, 실행은 `scripts/verify.sh` 다.
@@ -20,8 +20,10 @@ websocket 은 HTTP proxy 에서만 켠다. 인증서 패치에 개인키가 없�
 CI 는 `.github/workflows/verify.yml` 이고 **`scripts/verify.sh` 를 그대로 돌린다** — 자기
 단계 목록을 따로 들지 않는다. 갈라지면 어느 쪽이 계약인지 아무도 모른다.
 
-⚠️ `spike/s12` 가 **간헐적으로** 빨갛다 (크래시 지점 38 개 중 #25 `reload:after`). 단독
-재실행은 통과한다. 닫힌 것이 아니라 열린 검수 항목이다 — `docs/audit-2026-08-22-todo.md`.
+`spike/s12` 의 간헐 빨강은 **성격이 특정됐고 원인이 닫혔다.** 고정된 로직 결함이 아니라
+러너가 *"활성화를 관측 못 함"* 과 *"활성화가 안 일어남"* 을 똑같이 `failed` 로 접던 것이다
+(▲ 잔여물). 이제 갈라진다 — 못 읽었으면 세계에 대해 아무 주장도 하지 않고, HUP 을 다시
+보내지도 않는다.
 
 ---
 
@@ -32,10 +34,10 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 | 층 | 있는 것 | 없는 것 |
 |---|---|---|
-| 모델 | 리스너·풀·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩. 판별 유니온 | h3, `least_conn`, WAF, `on_nxdomain`/`on_timeout` |
-| 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백 | — |
-| 동결 | A 타입·DP ABI (`SURFACE.txt`) · 구현된 OpenAPI (`SURFACE-API.json`) · DDL (`SURFACE-DDL.sql`) | 미구현 계약 |
-| 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 본문 프로브(HTTP 풀) · TCP connect(L4), SSE `health`, 드레인 제외, peer inflight 관측 | — |
+| 모델 | 리스너·풀(헬스체크 정의 포함)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, `least_conn`, WAF, `on_nxdomain`/`on_timeout` |
+| 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백. 관측 실패와 부정 관측을 가른다 | — |
+| 동결 | B(구현된 OpenAPI · DDL). **A 는 이 회차에 풀렸다** — W3 설정 셋을 들이려고. 근거가 `SURFACE.txt` 머리에 남는다 | 미구현 계약 |
+| 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
 | CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문), backend drain/drain-status | — |
@@ -82,8 +84,8 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **600** |
-| conformance | `npm run test:conformance` | **408** |
+| 단위 | `npm test` | **611** |
+| conformance | `npm run test:conformance` | **420** |
 | 골든 | `npm run test:golden` | 44 |
 | 엔진 사실 | `npm run test:engine` | 76 (SKIP 2) |
 | e2e | `npm run test:e2e` | 60 |
@@ -91,7 +93,13 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 저장소 | `npm run test:store` | 167 |
 
 스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
-B(구현된 API·DDL) 드리프트를 둘 다 막는다. A 동결 근거는 `SURFACE.txt` 의 3 회차다.
+B(구현된 API·DDL) 드리프트를 둘 다 막는다.
+
+**A 동결은 이 회차에 풀렸다** — W3 의 설정 셋(`Pool.healthCheck` · dict 크기 ·
+`GenerationError('path_escape')`)이 `Model` 을 넓히기 때문이다. 112 심볼 · 카운터 0 ·
+미선언이고, **재동결까지 3 회차를 다시 쌓아야 한다.** 푸는 길은
+`surface.mjs --unfreeze "<근거>"` 하나뿐이고 근거를 요구한다 — 그 근거는 `SURFACE.txt`
+머리에 남고 `--write` 를 지나서도 안 지워진다.
 
 ---
 
@@ -108,15 +116,14 @@ HTTP 풀은 GET 본문으로 판정한다. 인증서·TLS 정책은 뺀다. Back
 `docs/runbook-spof.md` 다. RTO/RPO 는 ADR-SPOF 가 v1 운영 정책으로 확정한다
 (랩 SLA 아님). OIDC 는 ID Token Bearer 와 Authorization Code 로그인이다.
 
-로드맵 잔여에 A 표면은 없다. 신원 비교 census 게이트가 닫힌 뒤 연속
-2 회 런타임 반례 0 조건을 충족했고, 추가 적대적 검수까지 표면 무변동이어서
-**3 회차·111 심볼**로 A 타입·DP ABI 동결을 선언했다.
+로드맵 v0.1~v1.0 은 전부 코드에 있다. 남은 것은 기능이 아니라 **축소 등급 스파이크**와
+재동결까지의 회차다.
 
 스파이크 — 기능 축소 등급. 게이트에 넣지 않는 것은 넣지 않는다.
 
 | | 상태 |
 |---|---|
-| S2 드레인 관측 | 밸런서 inflight 관측. 없으면 숫자를 안 싣는다 |
+| S2 드레인 관측 | **두 평면 다** 창구가 있다 — http 는 `/membership/inflight`, stream 은 `inflight` 동사. 남은 것: inflight 와 세션이 한 카운터라 둘로 안 갈린다 |
 | S3 재시작 부트스트랩 | eligible ∩ durable 헬스. 빈 슬롯은 의도적 zero-peer 로 민다 |
 | S4 CP 단절 | 멤버십 슬롯에 TTL 없음. 갱신 실패는 마지막 셋 유지 |
 | S5 부분 전환 | 평면별 슬롯. 한 평면이 비어도 다른 평면을 안 지운다 |
@@ -129,6 +136,9 @@ HTTP 풀은 GET 본문으로 판정한다. 인증서·TLS 정책은 뺀다. Back
 
 block 등급 S8 · S11 · S12 는 열려 지나갔다. S13 은 원장을 안 짓기로 닫았다 —
 마커로는 옛 워커를 못 센다. `worker_shutdown_timeout` 이 상한이다.
+
+▲ 잔여물 넷은 여전히 "수렴이 덮는다" 하나에 매달려 있다. 그중 **살아 있던 물음** —
+종단 기록이 세계에 대해 거짓을 말하던 것 — 은 이 회차에 닫혔다.
 
 ---
 

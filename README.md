@@ -269,13 +269,13 @@ ships both `stream_realip` and `ngx_stream_lua`.
 
 | | | |
 |---|---|---|
-| **v0.0** | Architecture spike, S1–S20 | S8 · S11 · S12 (block) and S1 · S7 · S13 · S16 · S17 · S18 · S19 passed. S14 is 7/8 and stays out of the gate. S20 keeps h3 out of the model. S2 drain is still open |
+| **v0.0** | Architecture spike, S1–S20 | S8 · S11 · S12 (block) and S1 · S7 · S13 · S16 · S17 · S18 · S19 passed. S14 is 7/8 and stays out of the gate. S20 keeps h3 out of the model. S2 now observes both planes |
 | **v0.1** | Typed model, sealed changesets, apply state machine, DP agent, renderer | ← **done** |
 | **v0.2** | Pools, LB algorithms, UDP profiles, SNI pass-through, socket-overlap, route compiler | ← **done** |
-| **v0.3** | Membership plane, health probe | ← **done except drain inflight numbers (S2)** |
+| **v0.3** | Membership plane, health probe | ← **done.** Drain inflight is served on both planes; inflight and sessions are still one counter (S2) |
 | **v0.4** | `bary` CLI: export/import and changeset steps | ← **done.** Resource create matches GUI writes. Delete matches GUI withdraw |
 | **v0.5** | Web GUI: Kit routes including login, SSE, HTTP/TCP/UDP/HTTPS/passthrough writes, cert upload, SNI bind | ← **done.** No polling |
-| **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **engine done.** Order GET, dns-01, EAB, Retry-After |
+| **v0.6** | TLS terminate, ACME http-01, cert rollback, HTTPS GUI, material upload, SNI bind | ← **done.** Order GET, dns-01, EAB, Retry-After, renewal tick |
 | **v0.7** | Driver loader, reference kit, boot pins | ← **done.** `BackendDiscovery` consumer is membership slots; not frozen on the v0.1 surface |
 | **v1.0** | Roles, backup/restore, SPOF runbook, OpenAPI/DDL freeze, OIDC ID Token + Authorization Code | ← **slice open.** RTO/RPO are v1 operating policy (ADR-SPOF), not a lab SLA |
 
@@ -299,7 +299,7 @@ These are inherited from nginx and will be documented rather than hidden:
   the client's), while source-IP hashing transparently switches to `$proxy_protocol_addr`,
   which stays correct. Measured, not assumed — see `tests/engine` E28/E29.
 - **nginx OSS has no active health checks** (that is a commercial module). The control plane
-  probes backends itself; OpenResty's `balancer_by_lua` is used so that health changes don't
+  probes backends itself (status code first, narrowed per pool via `healthCheck`); OpenResty's `balancer_by_lua` is used so that health changes don't
   trigger a config reload. Note that this replaces the native balancer rather than editing an
   upstream list — weighting and consistent hashing come from `lua-resty-balancer`, while
   `least_conn`, which stream and http OSS both provide natively, degrades to a per-worker

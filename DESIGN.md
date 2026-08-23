@@ -1096,7 +1096,7 @@ bary listener create --name dns --protocol udp --bind 0.0.0.0 --port 53 --pool p
 bary listener create --name web --protocol https --bind 0.0.0.0 --port 443 --pool app --policy modern --certificate site
 bary listener create --name edge --protocol tls_passthrough --bind 0.0.0.0 --port 443
 bary pool create --name pool-a --protocol-class tcp --backend a1 --host 10.0.0.11 --port 11
-bary backend add --pool pool-a --host 10.0.0.11 --port 11 --weight 2   # 아직
+bary backend create --name a1 --pool pool-a --host 10.0.0.11 --port 11 --weight 2
 bary backend drain <id> --deadline 300s
 bary backend drain-status <id>          # inflight / active_sessions / drain_condition
 bary route create --listener web --host api.example.com --pool api-pool
@@ -1126,9 +1126,9 @@ reject 는 403·404·444 다. 기본 403. 444 는 응답 없이 끊는다.
 `backend create|delete|drain|drain-status`, `tls-policy create`, `certificate create`,
 `sni-binding create|delete`, `listener delete`, `route delete` 가 있다.
 라우트 삭제는 `--host` 또는 `--sni` 로 HTTP 와 패스스루를 가른다.
-인증서 패치에 개인키·fullchain 이 없다. 드레인은 S2 다.
+인증서 패치에 개인키·fullchain 이 없다. `drain-status` 는 관측이 없으면 숫자를 안 싣는다.
 `get` 은 있는 GET 만 부른다. certificates · tls-policies · sni-bindings · health
-와 `pools/<id>/backends` · `backends/<id>/status` 다. 주문 GET 은 없다.
+와 `pools/<id>/backends` · `backends/<id>/status` 다.
 `changeset discard` 는 연 것·봉인한 것을 버린다. 커밋된 것은 롤백이다.
 `changeset reopen` 은 sealed → open 이고 옛 plan 은 무효다.
 `recover` 는 `POST /api/v1/recover` 다. changeset 을 안 연다.
@@ -2112,7 +2112,7 @@ freeze 대상을 좁힌다. **여기 없는 것은 v0.1 의 타입·API·DB 스�
 |---|---|---|
 | 멤버십 드라이버 · 이중 zone · 헬스 프로버 | §6.5 커서와 함께 | **v0.3** |
 | 드레인 관측 (S2) · `least_conn` (S6) | 기능 | v0.3 · 미정 |
-| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6 엔진은 열렸다.** 업로드 종단·SNI·policy·갱신 틱·롤백. GUI 정책·https 포트·자료 업로드·SNI 바인딩은 있다. 주문 GET 은 없다. OCSP 는 **안 짓는다** (§4.6.1). GC 원장은 **안 짓는다** (S13) |
+| TLS 종단 · `SecretStore` · ACME · 인증서 세대 롤백 | S8·S16·S17·S18 | **v0.6 엔진은 열렸다.** 업로드 종단·SNI·policy·갱신 틱·롤백. GUI 정책·https 포트·자료 업로드·SNI 바인딩·주문 GET 은 있다. OCSP 는 **안 짓는다** (§4.6.1). GC 원장은 **안 짓는다** (S13) |
 | **HTTP/2** (https, server 별 `http2 on`) | §4.9 실측 — capability 로 가른다 | **v0.6** |
 | **HTTP/3 (QUIC)** | **S20 실행 완료 (2026-08-18) — h3 자체는 된다(7/8). 깨진 것은 ② 뿐이고, 그것이 결정적이다: quic↔udp 충돌을 엔진도 검증기도 못 잡는다(E65). 축소 규칙대로 h3 는 모델에서 계속 뺀다.** | v0.7 |
 | SNI 결과 **3분기 관측**(S9) · `strict_priority` (S10) | 기능 | v0.2 · 미정 |
@@ -2666,12 +2666,13 @@ capability 패키지이지 apply 구현이 아니다.
   그 목록은 이미 미래이고, 엔진에 남은 소켓은 impact 의 `removed` 로만 보인다.
   소켓 충돌은 검증기가 막는다 — 화면이 다시 재지 않는다.
   Pools 는 `GET /pools` · `GET /backends` 와 SSE `health` 다. 관측이 없으면
-  `unknown`. 드레인·inflight 는 없다.
+  `unknown`. 드레인 시작은 있다. inflight 숫자는 엔진이 줄 때만 싣는다 — 두 평면
+  모두 창구가 있고(S2), 못 읽으면 `no_new_traffic` 에 머문다.
   Routes 는 `GET /routes` 를 `compileHostRoutes` 에 넣는다. 사용자 priority 가
   아니라 엔진 순서다. 패스스루는 컴파일하지 않는다.
   Certificates 는 `GET /certificates` 다. 만료는 자료에서 읽고, 자료가 없으면
-  빼지 않는다. ACME **의도**(`acme`)는 설정이다. 주문·챌린지 상태는 API 에
-  없으므로 그리지 않는다.
+  빼지 않는다. ACME **의도**(`acme`)는 설정이다. 주문 상태는 `GET /acme/orders`
+  에서 오고, 인증서 목록에 섞지 않는다.
   Status 는 SSE 스냅샷의 4-way 다. `/status` 를 폴링하지 않는다. nativeDns
   선택형은 그리지 않는다.
   Rendered 는 `GET /api/v1/config/rendered` 다. head 리비전의 산출물이다.
@@ -2706,14 +2707,15 @@ capability 패키지이지 apply 구현이 아니다.
 | Pools & Backends — SSE 헬스, 풀+첫 백엔드, hash+hashKey, source_ip_hash, 백엔드 put/delete | 열림. 드레인 숫자 없음 (S2) |
 | Plan/Impact — diff 가 아니라 **영향**. §5.4 아홉 항목. apply 는 여기만 | 열림 |
 | Routes — 엔진 순서, HTTP 호스트 proxy/redirect/reject put/delete, 패스스루 SNI proxy/reject put/delete | 열림. websocket 은 프록시에서만 |
-| Certificates — 만료는 자료. 자료 put. SNI 바인딩 put/delete | 열림. 주문 GET 없음 |
+| Certificates — 만료는 자료. 자료 put. SNI 바인딩 put/delete | 열림. 주문 상태는 별 칸에 |
 | Status — SSE 스냅샷 4-way | 열림. nativeDns 선택형 없음 |
 | Rendered — GET /config/rendered. head 리비전. 폴링하지 않는다 | 열림. 모델이 정본이다 |
 | Audit — GET /audit. 로그. 폴링하지 않는다 | 열림. before/after 본문은 API 가 안 준다 |
 
 - 실시간: SSE (스냅샷 + 델타, 하트비트). GUI 는 폴링하지 않는다.
   스냅샷은 `status` 에 지금 `health` 를 얹는다. 판정 변경은 `health` 델타.
-  드레인 진행률(inflight/sessions)은 아직 없다 — S2 가 그 게이트다.
+  드레인 진행률(inflight/sessions)은 **엔진이 줄 때만** 싣는다 — 두 평면 모두 창구가
+  있다(§12.0 S2). 못 읽으면 숫자를 안 짓고 `no_new_traffic` 에 머문다.
 - **GUI 는 changeset 위에서 편집한다.** "저장"=commit, "적용"=apply 를 시각적으로 분리한다.
 
 ---
@@ -2722,19 +2724,31 @@ capability 패키지이지 apply 구현이 아니다.
 
 ### 11.1 구성
 
-- 컨트롤 플레인 + 데이터 플레인 **별도 컨테이너**.
-- **배포 1급 경로는 컨테이너 이미지**다. `docker compose` 한 장으로 CP+DP 가 뜨는 것이 기본
-  설치 경험. 바이너리 배포는 Node SEA 로 v1.0 이후 검토.
-> **DP Agent 를 호스트에 두는 구성은 없다.** end-to-end 를 붙이다 확인했다 — 호스트에서
-> `current` 심볼릭 링크를 바꿨더니 컨테이너가 보는 링크가 **비어 있었고**
-> `open() "…/current/nginx.conf" failed (22: Invalid argument)` 가 났다 (Docker Desktop
-> bind mount). 에이전트와 nginx 는 같은 파일시스템을 봐야 한다.
+- **배포 1급 경로는 컨테이너 이미지**다. `docker compose` 한 장으로 뜨는 것이 기본 설치
+  경험. 바이너리 배포는 Node SEA 로 v1.0 이후 검토.
 
-- **DP Agent 는 별도 마운트 네임스페이스의 사이드카**로 둔다. 같은 컨테이너 안에서 "Agent 만
-  RW, nginx 만 RO" 는 **literal 하게 불가능하다** — 마운트의 read-only 속성은 프로세스가
-  아니라 네임스페이스 단위다. 사이드카가 불가능한 배포에서는 **UID·디렉토리 소유권·ACL**
-  로 경계를 세우고, 그 차이를 문서에 명시한다.
-- CP ↔ DP Agent 는 **mTLS gRPC**. 멤버십 admin 소켓은 DP 네임스페이스 내부 전용.
+> **지금 서는 모양 — 한 컨테이너다.** `deploy/docker-compose.yml` 의 `dataplane` 하나에서
+> `barycenterd` 와 nginx 가 함께 돈다. 드라이버 구현체는 `LocalDataplaneDriver` **하나뿐**이고
+> 프로세스 안에서 호출된다.
+>
+> **취향이 아니라 실측이다.** end-to-end 를 붙이다 확인했다 — 호스트에서 `current` 심볼릭
+> 링크를 바꿨더니 컨테이너가 보는 링크가 **비어 있었고** `open() "…/current/nginx.conf"
+> failed (22: Invalid argument)` 가 났다 (Docker Desktop bind mount). **에이전트와 nginx 는
+> 같은 파일시스템을 봐야 한다.** §3.2 의 *"DP Agent 는 DP 와 같은 호스트에 산다"* 가 이 뜻이다.
+
+- **프로세스 분리(§3.1)는 논리로 선다.** `DpAgent` 가 `/etc/barycenter` 의 유일한 writer 이고,
+  컨트롤 플레인은 `DataplaneDriver` 를 통해서만 그것을 만진다. 그 인터페이스가 **원격 전송이
+  들어올 이음매**다 — 지금은 로컬 구현 하나만 꽂혀 있다.
+- CP ↔ DP Agent 의 **원격 전송(mTLS gRPC)은 아직 없다.** 계약(`DataplaneDriver`)은 서 있고
+  구현체가 로컬 하나뿐이다. 지금 배포에서 둘은 같은 프로세스이므로 그 사이에 전송이 없다 —
+  **없는 것을 있다고 적지 않는다.** 원격 구현을 넣는 날 이 줄이 바뀐다.
+- **admin 평면은 유닉스 도메인 소켓**이다 (검수 S-08b). 접근 통제를 OS 가 지고, conf 에는
+  경로 리터럴만 남아 `render_digest` 의 결정성이 그대로다. 소켓 디렉토리는 에이전트 사용자
+  소유 `0700` 이고, 컨테이너는 비-root(uid 10001)로 돈다 — 특권 포트만 파일 capability 로 준다.
+- **"Agent 만 RW, nginx 만 RO" 는 한 컨테이너 안에서 literal 하게 불가능하다** — 마운트의
+  read-only 속성은 프로세스가 아니라 **네임스페이스 단위**다. 별도 마운트 네임스페이스의
+  사이드카로 가르는 길은 열려 있지만 위의 "같은 파일시스템" 제약을 함께 지켜야 한다.
+  지금 경계는 **UID·디렉토리 소유권·권한**이고, 그 차이가 이 줄이다.
 
 ### 11.2 상태 저장소
 
@@ -2778,7 +2792,7 @@ k8s 네이티브 배포는 별도 과제.
 | # | 검증 | 합격 기준 (초기값, 스파이크에서 확정) | 실패 시 |
 |---|---|---|---|
 | S1 ✅ | Lua 동적 peer 변경 (HTTP·TCP·**UDP**) | 세 서브시스템 전부 reload 없이 전환 | → **대안 B** |
-| S2 | 드레인 관측 | HTTP/1·HTTP/2·TCP·UDP 각각에서 peer 별 inflight·세션 관측 가능 | 기능 축소: `no_new_traffic` 만 |
+| S2 ~ | 드레인 관측 | HTTP/1·HTTP/2·TCP·UDP 각각에서 peer 별 inflight·세션 관측 가능. **두 평면에 창구가 있다** — Lua 밸런서의 `in:` 을 http admin 은 `/membership/inflight`, stream admin 은 `inflight` 동사로 답한다. 남은 것: inflight 와 세션이 **한 카운터**라 둘로 안 갈린다 | 기능 축소: `no_new_traffic` 만 |
 | S3 | 인스턴스 재시작 부트스트랩 | 재시딩까지 공백 < 1s, 오래된 헬스 되살아남 없음 | 기능 축소: 부팅 시 전 백엔드 `unknown` |
 | S4 | CP 단절 | fail-open 유지, eviction 시 zero-peer 없음 | fail_closed 기본화 |
 | S5 ~ | **이중 zone + 워커 수렴 + 평면 부분 전환** | 양쪽 ACK 후 전 워커 수렴 < 500ms **AND** 한쪽 평면 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존에서 잘못된 peer 선택 0회 | → 대안 B (구조 불성립) |
@@ -3057,8 +3071,8 @@ openssl s_client -tls1_3 ... | sed -n 's/Protocol *: *//p'
 | **v0.1** 골격 ✅ | (동결은 둘로 나뉜다 — §9.1.1) 타입 모델(판별 유니온) + PG + `ConfigRevision`/`activation_epoch`/changeset sealing + **소유권 예약을 포함한** ApplyOperation + DP Agent + conf AST 렌더러 + 최소 auth/audit + `DataplaneDriver` **설정 평면** 계약 확정 (§9.1.1) | `curl` 로 `:999→A:11` 이 뜨고, 모순 조합은 저장이 거부되며, AST 퍼즈 테스트와 §6.2 크래시 표가 통과한다. **5차 반례 7건이 conformance test 로 고정돼 통과한다** |
 | **v0.2** L4 ✅ | 풀/백엔드, LB 알고리즘, UDP 프로파일, SNI 패스스루 + 폴백, 소켓 겹침 검증기, 라우트 컴파일러(축소 계약) | SNI 로 두 백엔드가 갈리고, http 443 ↔ stream 443 중복이 저장 단계에서 막힌다 |
 | **v0.3** 멤버십 | 이중 zone · 슬롯 렌더 · Lua 밸런서 · HTTP 본문 프로브 · TCP 프로브 · SSE `health` ✅. **드레인 관측(S2) 숫자는 엔진이 안 주면 안 싣는다** | 백엔드 down 시 reload 없이 슬롯에서 빠진다. HTTP 틀린 본문은 죽는다 |
-| **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). listener·풀·라우트(HTTP·패스스루)·백엔드·TLS 정책·인증서·SNI create ✅. 드레인 명령은 아직 | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
-| **v0.5** GUI | SSE ✅. 여덟 화면 ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. Kit 아님. 드레인 없음 | 폴링하지 않는다. apply 는 영향 화면만 |
+| **v0.4** CLI | export/import ✅ · 나뉜 changeset 단계 ✅ (`changeset new\|patch\|plan`, `commit --plan`, `apply --plan`). listener·풀·라우트(HTTP·패스스루)·백엔드·TLS 정책·인증서·SNI create ✅. `backend drain`·`undrain`·`drain-status` ✅ | 같은 매니페스트를 두 번 import 해도 결과가 같다. `apply --plan` 은 changeset 을 안 연다 |
+| **v0.5** GUI | SSE ✅. 화면(영향·리스너·풀·라우트·인증서·상태·산출물·기록·로그인) ✅. HTTP·TCP·UDP·HTTPS 쓰기 ✅. **Kit 경로다**. 드레인 시작 ✅ | 폴링하지 않는다. apply 는 영향 화면만 |
 | **v0.6** TLS | 업로드 종단 · SNI · 정책 · 롤백 · ACME http-01 러너 ✅. GUI 정책·https 포트·자료 업로드·SNI 바인딩·인증서/정책 삭제 ✅. 주문 GET · dns-01 · EAB · Retry-After ✅ | 무중단 갱신 틱 + 롤백 시 옛 자료 |
 | **v0.7** 드라이버 | 로딩 하드닝 ✅ · 참조+키트 ✅ · 기동 배선 ✅ (`BARY_DRIVER_PINS` → status.driver). 설정 평면은 `LocalDataplaneDriver`. `BackendDiscovery` 소비자는 멤버십 슬롯. 표면에는 안 올림 | 사내 레포가 코어 수정 없이 빌드·로드 (`node scripts/driver-compat.mjs <entry>`) |
 | **v1.0** | 역할 RBAC (auditor/operator/admin), `bary backup`/`restore`, SPOF 런북, 구현된 OpenAPI/DDL 동결, OIDC ID Token · Authorization Code | RTO/RPO 는 ADR-SPOF 운영 정책 (랩 SLA 아님) |
@@ -3245,7 +3259,7 @@ slice 로 v0.5 에서 검증한다.
 | 드레인 | GOAWAY + `force_close` 약속 | **관측 + 새 트래픽 차단까지.** 강제 종료는 capability |
 | SNI 결과 분기 | 3분할 확정 | **2분할.** 3분할은 S9 통과 시 |
 | ACME / 콜드 스탠바이 | v1 문서에서 계약 확정 | **스파이크 후 ADR** 로 미룸 |
-| GUI | v0.5 에 8화면 | **3화면으로 시작.** 지금 여덟 화면 + HTTP/TCP/UDP/HTTPS 쓰기 + 인증서 자료 + SNI 바인딩 + 렌더된 conf + audit. Kit·드레인은 아직 |
+| GUI | v0.5 에 8화면 | **3화면으로 시작.** 지금은 영향·리스너·풀·라우트·인증서·상태·산출물·기록·로그인 + HTTP/TCP/UDP/HTTPS 쓰기 + 인증서 자료 + SNI 바인딩 + 드레인 시작. Kit 경로다 |
 
 **반대로 축소하지 않은 것** (2차 검수도 "안전성의 최소 구조"로 인정): immutable generation,
 DP 단일 writer, graph changeset, config↔membership epoch fencing.
