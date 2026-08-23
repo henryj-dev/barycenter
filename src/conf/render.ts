@@ -21,7 +21,9 @@ import {
   block, directive, entry, lit, lua, num, regex, serialize, variable,
   type ConfNode, type ConfValue,
 } from './ast.js';
-import { compileHostRoutes, type RouteInput } from '../route/compile.js';
+import {
+  compileHostRoutes, hostPatternKey, planStrictPriority, type RouteInput,
+} from '../route/compile.js';
 import { coversHost, parseHostPattern } from '../validate/strings.js';
 import { parseRef } from '../dp/secrets.js';
 import { ModelValidationError, validateModel } from '../validate/model.js';
@@ -455,11 +457,35 @@ function httpServerBlocks(
     }
   }
 
+  /**
+   * **`strict_priority` 계획** (§7.5-4 · S10).
+   *
+   * 기본에서 server 블록의 순서는 아무 뜻이 없다 — nginx 가 클래스로 먼저 고른다.
+   * 켜면 겨루는 것들을 통째로 앵커 정규식으로 내리고, 그때부터 **등장 순서가 곧 순서**다
+   * (E20.3). 그래서 아래에서 블록을 두 무리로 나눠 낸다: 안 내린 것들(원래대로 정렬)과
+   * 내린 것들(계획이 준 순서). 내린 것들이 뒤에 와도 상관없다 — 정규식은 어차피 앞
+   * 클래스가 다 진 뒤에 평가되고, 우리는 겨루는 것을 전부 내렸으므로 앞 클래스에
+   * 경쟁자가 없다.
+   */
+  const strict = listener.http?.strictPriority === true;
+  const plan = strict
+    ? planStrictPriority([...byHost.keys()].sort().flatMap((h) => {
+      const parsed = parseHostPattern(h);
+      if (!parsed.ok) return [];
+      // 호스트별 **대표 priority** — 같은 호스트 안의 순서는 longest-prefix 가 정한다.
+      const priority = Math.max(...byHost.get(h)!.map((r) => r.priority));
+      return [{ key: h, pattern: parsed.value, priority }];
+    }))
+    : { lowered: new Set<string>(), order: [] };
+  const rankInPlan = new Map(plan.order.map((k, i) => [k, i]));
+
   const out: ConfNode[] = [];
+  const lateOut: { at: number; node: ConfNode }[] = [];
   for (const host of [...byHost.keys()].sort()) {
     const hostRoutes = byHost.get(host)!;
     const parsed = parseHostPattern(host);
     if (!parsed.ok) continue; // validateModel 이 이미 막았다
+    const lowered = plan.lowered.has(hostPatternKey(parsed.value));
 
     const inputs: RouteInput[] = hostRoutes.map((r) =>
       r.pathPrefix === undefined
@@ -481,9 +507,13 @@ function httpServerBlocks(
 
     // E22.2/E35 — nginx 의 `*.example.com` 은 다중 라벨을 삼킨다. X.509 와일드카드는
     // 한 라벨만 보장하므로, 계약대로 **앵커 정규식**으로 낸다. 패스스루와 같은 규칙이다.
+    //
+    // `strict_priority` 로 내려간 정확일치도 여기서 정규식이 된다 — 그래야 등장 순서가
+    // 뜻을 갖는다. 정규식 메타문자는 이스케이프한다: 호스트에 `.` 이 있고, 그것을
+    // 그대로 두면 `a.b` 가 `axb` 에도 걸린다.
     const nameArg: ConfValue =
       parsed.value.kind === 'exact'
-        ? lit(parsed.value.host)
+        ? (lowered ? regex(`~^${reEscape(parsed.value.host)}$`) : lit(parsed.value.host))
         : regex(`~^[^.]+\\.${parsed.value.suffix.replace(/\./g, '\\.')}$`);
 
     // S16 — 인증서와 정책은 **이 server 블록 안**에 낸다. 그래야 SNI 별로 갈린다.
@@ -505,21 +535,23 @@ function httpServerBlocks(
       ];
     })();
 
-    out.push(
-      block('server', [], [
-        directive('listen', listenArgs(listener)),
-        directive('server_name', [nameArg]),
-        ...tlsBody,
-        ...realipNodes(listener),
-        ...proxyLimitNodes(listener.http?.limits),
-        ...responseHeaderNodes(listener.http?.headers?.response),
-        ...rateLimitNodes(listener.key, listener.http?.rateLimit),
-        ...(acme ? [acmeChallengeLocation()] : []),
-        ...locations,
-      ]),
-    );
+    const node = block('server', [], [
+      directive('listen', listenArgs(listener)),
+      directive('server_name', [nameArg]),
+      ...tlsBody,
+      ...realipNodes(listener),
+      ...proxyLimitNodes(listener.http?.limits),
+      ...responseHeaderNodes(listener.http?.headers?.response),
+      ...rateLimitNodes(listener.key, listener.http?.rateLimit),
+      ...(acme ? [acmeChallengeLocation()] : []),
+      ...locations,
+    ]);
+    // 내려간 것은 **계획이 준 순서**로 뒤에 모은다. 안 내린 것은 원래대로 호스트 순.
+    if (lowered) lateOut.push({ at: rankInPlan.get(hostPatternKey(parsed.value))!, node });
+    else out.push(node);
   }
-  return out;
+  lateOut.sort((a, b) => a.at - b.at);
+  return [...out, ...lateOut.map((x) => x.node)];
 }
 
 /**

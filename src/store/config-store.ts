@@ -280,7 +280,7 @@ async function readModel(c: Queryable): Promise<Model> {
 
   const listeners = (await c.query(
     `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2,
-            l.proxy_limits, l.header_rules, l.rate_limit,
+            l.proxy_limits, l.header_rules, l.rate_limit, l.http_strict_priority,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
             l.on_no_sni_reject,
             dp.key AS default_pool, hp.key AS http_default_pool, sp.key AS sni_pool,
@@ -323,14 +323,17 @@ async function readModel(c: Queryable): Promise<Model> {
       const headers = rawH === null || rawH === undefined ? undefined : rawH as HeaderRules;
       const rawR = r['rate_limit'];
       const rateLimit = rawR === null || rawR === undefined ? undefined : rawR as RateLimit;
-      if (action === undefined && limits === undefined
-        && headers === undefined && rateLimit === undefined) return {};
+      // S10. NULL 은 **안 정함**이고 동작은 끔과 같다 — DB 가 false 를 못 넣게 막는다.
+      const strictPriority = r['http_strict_priority'] === true ? true : undefined;
+      if (action === undefined && limits === undefined && headers === undefined
+        && rateLimit === undefined && strictPriority === undefined) return {};
       return {
         http: {
           ...(action === undefined ? {} : { defaultAction: action }),
           ...(limits === undefined ? {} : { limits }),
           ...(headers === undefined ? {} : { headers }),
           ...(rateLimit === undefined ? {} : { rateLimit }),
+          ...(strictPriority === undefined ? {} : { strictPriority }),
         },
       };
     };
@@ -636,9 +639,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
                                 default_pool_id,default_pool_cls,
                                 tls_policy_id,tls_default_cert_id,http2,proxy_limits,header_rules,
                                 rate_limit,on_no_sni_pool,on_no_sni_cls,on_no_sni_reject,
+                                http_strict_priority,
                                 created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$20,$20,$21)
+                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$29,$20,$20,$21)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
@@ -661,6 +665,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            on_no_sni_pool=EXCLUDED.on_no_sni_pool,
            on_no_sni_cls=EXCLUDED.on_no_sni_cls,
            on_no_sni_reject=EXCLUDED.on_no_sni_reject,
+           http_strict_priority=EXCLUDED.http_strict_priority,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
@@ -686,7 +691,11 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           protocol === 'http' || protocol === 'https'
             ? (obj(b['http'])['rateLimit'] ?? null) : null,
           // $26~$28 — S9 로 열린 "SNI 없음" 분기. **패스스루에만** (DB 도 같은 CHECK).
-          nspool?.[0] ?? null, nspool?.[1] ?? null, noSni === 'reject' ? true : null],
+          nspool?.[0] ?? null, nspool?.[1] ?? null, noSni === 'reject' ? true : null,
+          // $29 — S10. **http 계열에만.** stream 에는 server_name 이 없다.
+          // `false` 는 안 적는다 — "안 정함" 과 구분할 필요가 없고 DB 도 그렇게 막는다.
+          (protocol === 'http' || protocol === 'https')
+            && obj(b['http'])['strictPriority'] === true ? true : null],
       );
       return;
     }

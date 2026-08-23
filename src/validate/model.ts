@@ -12,9 +12,19 @@
  * 있으면 던진다 — fail closed.
  */
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
-import { compileHostRoutes, type RouteInput } from '../route/compile.js';
+import { compileHostRoutes, planStrictPriority, type RouteInput } from '../route/compile.js';
+
+/**
+ * `strict_priority` 가 정규식으로 내릴 수 있는 호스트 수의 상한 (§7.5-4 · S10).
+ *
+ * 실측(`spike/s10`)에서 강등 하나가 요청당 약 0.037%p 를 더한다. §12.0 의 예산 5% 를
+ * 그 값으로 나누면 ~135 이고, 실측점(50·250) 사이의 보간이라 여유를 두어 자른다.
+ */
+export const STRICT_PRIORITY_MAX_LOWERED = 128;
 import { ACME_PREFIX } from '../conf/render.js';
-import { coversHost, parseHashKey, parseHostPattern, validatePathPrefix } from './strings.js';
+import {
+  coversHost, parseHashKey, parseHostPattern, validatePathPrefix, type HostPattern,
+} from './strings.js';
 import type {
   RawListener, RawModel, ProtocolClass, SniCertificateBinding,
 } from '../model/provisional.js';
@@ -44,6 +54,13 @@ export type ModelIssueCode =
   | 'sni_binding_protocol_mismatch'
   /** https 리스너의 라우트 호스트를 덮는 SNI 바인딩이 없다 — 제시할 인증서가 없다. */
   | 'sni_binding_missing'
+  /**
+   * `strict_priority` 가 상한보다 많은 호스트를 정규식으로 내린다 (§7.5-4 · S10).
+   *
+   * 정규식은 순차 평가라 강등 하나마다 요청당 비용이 붙는다 — 실측으로 250개에서
+   * +9.8% 다. 상한 없이 두면 라우트가 늘수록 조용히 느려진다.
+   */
+  | 'strict_priority_too_many'
   /** 같은 리스너에서 한 호스트가 두 인증서에 묶였다. */
   | 'sni_binding_conflict'
   /** SNI 바인딩 호스트가 exact 도 1라벨 와일드카드도 아니다. */
@@ -410,6 +427,67 @@ export function validateModel(
           `라우트 '${r.key}' 의 경로 '${path}' 는 ACME http-01 예약 경로다. ` +
           `여기를 가로채면 인증서 발급이 조용히 실패한다 (§8.2)`,
       });
+    }
+  }
+
+  /**
+   * ── `strict_priority` 강등 상한 (§7.5-4 · S10) ──────────────────────────
+   *
+   * **S10 은 자기 기준을 못 넘었다** (2026-08-23). §12.0 이 "라우트 500개 p99 영향
+   * < 5%" 를 요구했는데 `spike/s10` 실측은 이렇다:
+   *
+   *   강등 50개  → 요청당 +3.4µs (기준선 대비 +3.4%)
+   *   강등 250개 → 요청당 +8.8µs (+9.8%)
+   *
+   * 선형이다 — 정규식은 순차 평가이므로(§7.4) 강등 하나마다 비용이 붙는다. 500
+   * 라우트에서는 기준의 두 배다.
+   *
+   * §12.0 의 실패 규칙은 *"`strict_priority` 모드 미제공"* 인데, §7.5-4 는 같은 모드를
+   * 두고 *"라우트 수 상한과 벤치 기준을 함께 정의한다"* 고 적어 두었다. 그래서
+   * **모드는 내되 상한을 강제한다** — 상한 없이 내면 500 라우트짜리 배포가 조용히
+   * 두 배의 대가를 물고, 그건 §12.0 이 막으려던 바로 그것이다.
+   *
+   * 상한은 실측에서 나온다: 5% 예산 ÷ 강등당 약 0.037%p ≈ 135. **128 로 자른다** —
+   * 실측점(50·250) 사이의 보간이라 여유를 둔다.
+   */
+  {
+    const listenerOf = new Map(model.listeners.map((l) => [l.key, l]));
+    const loweredPerListener = new Map<string, Set<string>>();
+    const routesByListener = new Map<string, RouteInput[]>();
+    for (const r of model.httpRoutes) {
+      const l = listenerOf.get(r.listener);
+      if (l?.http?.strictPriority !== true) continue;
+      const list = routesByListener.get(r.listener) ?? [];
+      for (const h of r.hosts) list.push({ key: h, host: h, priority: r.priority });
+      routesByListener.set(r.listener, list);
+    }
+    for (const [key, inputs] of routesByListener) {
+      // 호스트별 대표 priority — 렌더가 쓰는 것과 같은 규칙이다.
+      const byHost = new Map<string, { pattern: HostPattern; priority: number }>();
+      for (const i of inputs) {
+        const parsed = parseHostPattern(i.host);
+        if (!parsed.ok) continue;
+        const cur = byHost.get(i.host);
+        byHost.set(i.host, {
+          pattern: parsed.value,
+          priority: Math.max(cur?.priority ?? -Infinity, i.priority),
+        });
+      }
+      const plan = planStrictPriority(
+        [...byHost.entries()].map(([h, v]) => ({ key: h, ...v })),
+      );
+      loweredPerListener.set(key, plan.lowered);
+      if (plan.lowered.size > STRICT_PRIORITY_MAX_LOWERED) {
+        issues.push({
+          code: 'strict_priority_too_many',
+          subjects: [key],
+          message:
+            `리스너 '${key}' 의 strict_priority 가 호스트 ${plan.lowered.size}개를 정규식으로 ` +
+            `내린다. 상한은 ${STRICT_PRIORITY_MAX_LOWERED}개다 — 정규식은 순차 평가라 ` +
+            `강등 하나마다 요청당 비용이 붙고, 실측으로 250개에서 +9.8% 다 (§7.5-4 · S10). ` +
+            `겹치는 호스트를 줄이거나 priority 역전을 없앤다.`,
+        });
+      }
     }
   }
 

@@ -161,3 +161,108 @@ function analyze(order: CompiledRoute[]): CompileWarning[] {
 
   return warnings;
 }
+
+// ─────────────────────────────────────────────── strict_priority (S10) ──────
+//
+// §7.5-4 — *"이 모드는 충돌 그래프의 연결 요소 전체(정확일치 포함)를 anchored
+// 정규식으로 내려 등장 순서로 정렬한다."*
+//
+// ── 왜 연결 요소 전체인가
+//
+// nginx 는 **정확일치 → 와일드카드 → 정규식** 순으로 본다(E20.1). 그 안에서 정규식만
+// 등장 순서를 따른다(E20.3). 그러니 사용자의 priority 를 그대로 재현하려면 **겨루는
+// 것들이 전부 정규식이어야** 한다 — 하나라도 정확일치로 남으면 그것이 무조건 먼저다.
+//
+// 한 쌍만 내리면 안 되는 이유가 그것이다. `a.example.com`(exact) 과 `*.example.com`
+// (wildcard) 을 내렸는데 그 둘과 겨루는 셋째가 남아 있으면, 그 셋째는 여전히 앞
+// 클래스라 두 정규식보다 **먼저** 평가된다. 그래서 **연결 요소 통째로** 내린다.
+//
+// ── 비용
+//
+// 정규식은 순차 평가다(§7.4). 내려간 호스트 수만큼 매 요청이 정규식을 훑는다 — 그래서
+// 이 모드는 옵트인이고 §12.0 의 S10 이 "라우트 500개 p99 영향 < 5%" 를 요구한다.
+// **필요한 것만 내린다**: 역전이 없는 연결 요소는 그대로 둔다.
+
+/** 두 호스트 패턴이 **같은 호스트를 매치할 수 있는가**. */
+export function patternsConflict(a: HostPattern, b: HostPattern): boolean {
+  if (a.kind === 'exact' && b.kind === 'exact') return a.host === b.host;
+  if (a.kind === 'wildcard' && b.kind === 'wildcard') return a.suffix === b.suffix;
+  const host = a.kind === 'exact' ? a.host : (b as { kind: 'exact'; host: string }).host;
+  const suffix = a.kind === 'wildcard' ? a.suffix : (b as { kind: 'wildcard'; suffix: string }).suffix;
+  // 와일드카드는 **한 라벨**만 삼킨다 — nginx 자체는 다중 라벨을 삼키지만(E22.2) 우리는
+  // 앵커 정규식(`~^[^.]+\.suffix$`)으로 좁혀 두었다. 여기서 그 계약과 같은 판정을 한다.
+  if (!host.endsWith(`.${suffix}`)) return false;
+  return !host.slice(0, host.length - suffix.length - 1).includes('.');
+}
+
+export type StrictPriorityPlan = {
+  /** 정규식으로 내릴 호스트 패턴 키. */
+  lowered: Set<string>;
+  /** 내려간 것들의 **등장 순서**. 앞에 올수록 먼저 매치된다. */
+  order: string[];
+};
+
+/**
+ * `strict_priority` 계획을 세운다.
+ *
+ * 입력은 **호스트별 대표 priority** 다 — 같은 호스트의 라우트들은 한 server 블록에
+ * 모이고 그 안의 순서는 longest-prefix 가 정하므로(E31), 호스트 사이의 겨룸만 여기서
+ * 다룬다.
+ *
+ * 역전이 **하나도 없는** 연결 요소는 안 내린다. 내려 봐야 순서가 같고, 정규식은
+ * 공짜가 아니다.
+ */
+export function planStrictPriority(
+  hosts: readonly { key: string; pattern: HostPattern; priority: number }[],
+): StrictPriorityPlan {
+  // 연결 요소. 호스트 수는 수백 단위라 union-find 없이 훑는다.
+  const adj: number[][] = hosts.map(() => []);
+  for (let i = 0; i < hosts.length; i += 1) {
+    for (let j = i + 1; j < hosts.length; j += 1) {
+      if (!patternsConflict(hosts[i]!.pattern, hosts[j]!.pattern)) continue;
+      adj[i]!.push(j);
+      adj[j]!.push(i);
+    }
+  }
+
+  const rankOf = (p: HostPattern): number =>
+    CLASS_RANK[p.kind === 'exact' ? 'exact_host' : 'wildcard_host'];
+
+  const seenIdx = new Set<number>();
+  const lowered = new Set<string>();
+  const loweredIdx: number[] = [];
+  for (let s = 0; s < hosts.length; s += 1) {
+    if (seenIdx.has(s)) continue;
+    const comp: number[] = [];
+    const stack = [s];
+    seenIdx.add(s);
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      comp.push(cur);
+      for (const nb of adj[cur]!) {
+        if (seenIdx.has(nb)) continue;
+        seenIdx.add(nb);
+        stack.push(nb);
+      }
+    }
+    // 이 요소 안에 **클래스가 priority 를 이기는 쌍**이 있는가.
+    const inverted = comp.some((i) => comp.some((j) => {
+      const a = hosts[i]!;
+      const b = hosts[j]!;
+      return rankOf(a.pattern) > rankOf(b.pattern) && a.priority < b.priority;
+    }));
+    if (!inverted) continue;
+    for (const i of comp) {
+      lowered.add(patternKey(hosts[i]!.pattern));
+      loweredIdx.push(i);
+    }
+  }
+
+  // 등장 순서 = priority 내림차순, 동점은 키로 갈라 **결정적**으로 만든다.
+  loweredIdx.sort((x, y) =>
+    hosts[y]!.priority - hosts[x]!.priority || cmp(hosts[x]!.key, hosts[y]!.key));
+  return { lowered, order: loweredIdx.map((i) => patternKey(hosts[i]!.pattern)) };
+}
+
+/** 렌더가 쓰는 것과 **같은 키**. 두 벌을 두면 반드시 갈라진다. */
+export const hostPatternKey = patternKey;

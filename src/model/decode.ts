@@ -192,16 +192,19 @@ function decodeHttpProfile(iss: Issues, v: unknown, path: string): HttpProfile |
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['defaultAction', 'limits', 'headers', 'rateLimit']);
+  noExtraKeys(iss, v, path, ['defaultAction', 'limits', 'headers', 'rateLimit', 'strictPriority']);
   const action = optional(v['defaultAction'], () => decodeSniOutcome(iss, v['defaultAction'], `${path}.defaultAction`));
   const limits = optional(v['limits'], () => decodeProxyLimits(iss, v['limits'], `${path}.limits`));
   const headers = optional(v['headers'], () => decodeHeaderRules(iss, v['headers'], `${path}.headers`));
   const rateLimit = optional(v['rateLimit'], () => decodeRateLimit(iss, v['rateLimit'], `${path}.rateLimit`));
+  // S10. **`false` 를 명시한 것과 안 정한 것을 구분하지 않는다** — 동작이 같다.
+  const strictPriority = optional(v['strictPriority'], () => bool(iss, v['strictPriority'], `${path}.strictPriority`));
   return {
     ...(action === undefined ? {} : { defaultAction: action }),
     ...(limits === undefined ? {} : { limits }),
     ...(headers === undefined ? {} : { headers }),
     ...(rateLimit === undefined ? {} : { rateLimit }),
+    ...(strictPriority === undefined ? {} : { strictPriority }),
   };
 }
 

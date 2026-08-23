@@ -53,6 +53,8 @@ export type ListenerOptions = {
   limits?: ProxyLimitsInput;
   headers?: HeaderRulesInput;
   rateLimit?: RateLimitInput;
+  /** S10 — 전역 숫자 priority 를 켠다. **강등 수에 상한이 있다** (§7.5-4). */
+  strictPriority?: boolean;
 };
 
 export type ProxyLimitsInput = {
@@ -100,6 +102,7 @@ export function listenerOptionFields(opts: ListenerOptions | undefined): {
   limits?: ProxyLimitsInput;
   headers?: HeaderRulesInput;
   rateLimit?: RateLimitInput;
+  strictPriority?: boolean;
 } {
   if (opts === undefined) return {};
   const limits = someOf(opts.limits);
@@ -120,6 +123,9 @@ export function listenerOptionFields(opts: ListenerOptions | undefined): {
     ...(limits === undefined ? {} : { limits }),
     ...(headers === undefined ? {} : { headers }),
     ...(rateLimit === undefined ? {} : { rateLimit }),
+    // **`false` 는 안 낸다.** 안 정한 것과 동작이 같고, 내면 안 건드린 배포의 렌더
+    // 바이트가 바뀐다 — 그러면 전 배포가 다음 apply 에서 세대 전환을 한다.
+    ...(opts.strictPriority === true ? { strictPriority: true } : {}),
   };
 }
 
@@ -146,6 +152,7 @@ export type ListenerOptionFlags = {
   burst?: string;
   nodelay?: boolean;
   maxConn?: string;
+  strictPriority?: boolean;
 };
 
 /** `50m` · `512k` · `1500`. **모르는 단위는 거부한다** — 조용히 바이트로 읽지 않는다. */
@@ -229,6 +236,9 @@ export function parseListenerOptions(f: ListenerOptionFlags): ListenerOptions {
     ...(Object.keys(limits).length === 0 ? {} : { limits }),
     ...(Object.keys(headers).length === 0 ? {} : { headers }),
     ...(Object.keys(rateLimit).length === 0 ? {} : { rateLimit }),
+    // S10 — 파싱할 것이 없다(불리언이다). 그래도 여기를 지나야 `false` 를 버리는
+    // 규칙이 한 자리에 있다.
+    ...(f.strictPriority === undefined ? {} : { strictPriority: f.strictPriority }),
   });
 }
 
@@ -246,6 +256,7 @@ export type PutHttpListenerOp = {
       limits?: ProxyLimitsInput;
       headers?: HeaderRulesInput;
       rateLimit?: RateLimitInput;
+      strictPriority?: boolean;
     };
   };
 };
@@ -400,6 +411,7 @@ export type PutHttpsListenerOp = {
       limits?: ProxyLimitsInput;
       headers?: HeaderRulesInput;
       rateLimit?: RateLimitInput;
+      strictPriority?: boolean;
     };
     tls: { policy: string; defaultCertificate: string };
   };

@@ -72,7 +72,18 @@
         <input type="checkbox" bind:checked={value.nodelay} disabled={editing} />
         nodelay — burst 를 지연 없이 통과
       </label>
+      <label class="check">
+        <input type="checkbox" bind:checked={value.strictPriority} disabled={editing} />
+        priority 를 매치 클래스보다 앞세운다 (S10)
+      </label>
     </div>
+    <p class="note">
+      기본에서 라우트 priority 는 <b>같은 매치 클래스 안에서만</b> 뜻이 있다 — nginx 가
+      정확일치를 와일드카드보다 먼저 보기 때문이다. 켜면 겨루는 호스트들을 앵커
+      정규식으로 내려 priority 순서를 그대로 재현한다.
+      <b>대가가 있다</b>: 정규식은 순차 평가라 강등 하나마다 요청당 비용이 붙는다
+      (실측 250개에서 +9.8%). 그래서 <b>128개 상한</b>이 걸린다.
+    </p>
 
     <div class="headers">
       <div class="hrow head"><span>헤더</span><span>이름</span><span>값</span><span></span></div>

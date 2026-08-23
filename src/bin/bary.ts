@@ -114,6 +114,8 @@ const usage = (): never => {
                                    --connect-timeout 5s   --read-timeout 120s   --send-timeout 90s
                                    --max-body 50m         (0 은 무제한)
                                    --header req:X-A:1     --header res:X-B:2    (여러 번)
+                                   --strict-priority      priority 가 매치 클래스를 이기게 한다 (S10)
+                                                          겹치는 호스트를 앵커 정규식으로 내린다 — 128개 상한
                                    --rate 10r/s  --burst 20  --nodelay  --max-conn 100
   bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|least_conn|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
@@ -277,6 +279,8 @@ async function main(): Promise<void> {
         ...(flag(argv, '--burst') === undefined ? {} : { burst: flag(argv, '--burst')! }),
         ...(has(argv, '--nodelay') ? { nodelay: true } : {}),
         ...(flag(argv, '--max-conn') === undefined ? {} : { maxConn: flag(argv, '--max-conn')! }),
+        // S10 — 전역 숫자 priority. **강등 수에 상한이 있다** (§7.5-4).
+        ...(has(argv, '--strict-priority') ? { strictPriority: true } : {}),
       });
       try {
         const out = await listenerCreate(call, {
