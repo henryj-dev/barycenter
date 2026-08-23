@@ -2646,7 +2646,15 @@ capability 패키지이지 apply 구현이 아니다.
   Kit adapter-static 경로가 정본이다. `pageOf` 가 자리를 가른다. 로그인 화면은
   `/login` 이다. 한 `index.html` SPA 폴백이 아니다.
 - `barycenterd` 가 `gui/build`(또는 `BARY_GUI`) 를 **같은 출처**에서 낸다. CORS 를
-  열지 않기 위해서다. 페이지는 토큰 없이 열리고, `/api/v1/*` 는 그대로 Bearer 다.
+  열지 않기 위해서다.
+  산출물은 `scripts/build.sh` 가 만들고(그래서 `verify.sh` 의 build 단계가 곧 화면
+  빌드다), `deploy/Dockerfile` 이 런타임 이미지에 싣는다.
+  > ⚠️ **GUI 가 값으로 닿는 모듈에는 노드 내장을 쓸 수 없다.** `validate/strings.ts` 의
+  > `node:net` 하나 때문에 브라우저 번들이 서지 않았고(`"isIP" is not exported by
+  > "__vite-browser-external"`), 그 상태로 한동안 게이트가 초록이었다 — 화면이 없으면
+  > 데몬이 **조용히 API 만** 연다(`serveRoot`). 이미지에는 `gui/` 가 아예 안 들어가
+  > 있었다. 지금은 셋 다 이어져 있고, `tests/unit/gui-browser-safe.test.ts` 가 import
+  > 폐포를 훑어 이 계약을 지킨다. `import type` 은 지워지므로 따라가지 않는다. 페이지는 토큰 없이 열리고, `/api/v1/*` 는 그대로 Bearer 다.
   EventSource 는 Authorization 을 못 붙이므로 `GET /api/v1/events` 는 fetch 스트림
   + `pullSse` 다.
 - 열린 화면: Plan·Impact · Listeners · Pools · Routes · Certificates · Status · Rendered · Audit · Login.

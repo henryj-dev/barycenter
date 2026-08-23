@@ -7,6 +7,8 @@
 [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md) 로 옮겼다.
 그 파일은 정본이 아니다.
 
+화면 산출물(`gui/build`)은 `scripts/build.sh` 가 만들고 이미지가 싣는다 — 전에는
+게이트에도 이미지에도 없었고, 브라우저 번들이 안 서는 상태였다.
 마지막 GUI 쓰기는 source_ip_hash 풀 put 이다. hashKey 를 안 붙인다.
 산출물 화면은 head 렌더다. 기록 화면은 로그다. nginx.conf 는 정본이 아니다.
 CLI 는 listener·풀·HTTP/패스스루 라우트·백엔드·TLS 정책·인증서·SNI create 가 있다.
