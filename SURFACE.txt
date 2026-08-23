@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 116 심볼 · sha256:c5a7e7671069f5345e7774ee8d048a3f31b2cb105c04a28fb872944b4001195e
+# 116 심볼 · sha256:e4a939df97a033736819e56547ea4d95ef52009189c63b781bdf3c71be273910
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -397,6 +397,7 @@ export type PassthroughListener = ListenerBase & {
     protocol: 'tls_passthrough';
     acceptProxyProtocol?: InboundProxyProtocol;
     onUnmatchedSni?: SniOutcome;
+    onNoSni?: SniOutcome;
     prereadTimeoutS?: number;
 };
 ── PassthroughRoute
@@ -501,6 +502,7 @@ export type RawListener = ListenerBase & {
     };
     http?: HttpProfile;
     onUnmatchedSni?: SniOutcome;
+    onNoSni?: SniOutcome;
     prereadTimeoutS?: number;
     tls?: RawTlsBinding;
     http2?: boolean;

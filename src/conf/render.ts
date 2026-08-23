@@ -1074,10 +1074,28 @@ function passthroughNodes(
     entries.push(entry(match, target));
   }
 
-  // SNI 가 없으면(비-TLS·파싱 실패 포함) 빈 값 → proxy_pass 실패 → 연결 종료.
-  // §4.1 — 이건 설정 대상이 아니다. 설정 가능한 폴백으로 보내면 SNI 를 안 보내는
-  // 클라이언트가 조용히 임의 백엔드에 닿는다.
-  entries.push(entry(lit(''), lit('')));
+  /**
+   * `$ssl_preread_server_name` 이 비는 경우는 **셋**이다: TLS 인데 SNI 가 없거나,
+   * 바이트가 TLS 로 안 읽히거나(비-TLS·malformed), preread 가 시간 초과다.
+   *
+   * 기본은 셋 다 빈 값 → `proxy_pass` 실패 → 연결 종료다. `onNoSni` 를 걸었을
+   * 때만 `$ssl_preread_protocol` 로 첫째를 갈라 낸다 — **쓰지 않는 분기를 미리
+   * 만들지 않는다** (S9 전부터의 규칙이고, 지금도 유효하다).
+   */
+  const noSniNodes: ConfNode[] = [];
+  if (listener.onNoSni !== undefined && listener.onNoSni !== 'reject') {
+    const tierVar = `${sniVar}_notls`;
+    noSniNodes.push(block('map', [variable('ssl_preread_protocol'), variable(tierVar)], [
+      // protocol 이 비었다 = preread 가 TLS 를 못 읽었다(비-TLS·malformed).
+      // **여기는 계속 reject 고정이다.** S9 가 이 통과 no-SNI 가 갈린다는 것을
+      // 실측했고, 갈리기 때문에 no-SNI 만 열 수 있다.
+      entry(lit(''), lit('')),
+      entry(lit('default'), outcomeValue(listener.onNoSni, poolsWithBackends)),
+    ]));
+    entries.push(entry(lit(''), variable(tierVar)));
+  } else {
+    entries.push(entry(lit(''), lit('')));
+  }
   entries.push(entry(lit('default'), outcomeValue(listener.onUnmatchedSni, poolsWithBackends)));
 
   const sniMap = block('map', [variable('ssl_preread_server_name'), variable(sniVar)], entries);
@@ -1092,7 +1110,9 @@ function passthroughNodes(
     directive('proxy_pass', [variable(sniVar)]),
   ]);
 
-  return [sniMap, server];
+  // **notls map 이 sniMap 보다 앞에 온다.** nginx 는 map 정의 순서에 의존하지
+  // 않지만, 읽는 사람은 의존한다 — 참조되는 변수가 먼저 정의돼 있어야 읽힌다.
+  return [...noSniNodes, sniMap, server];
 }
 
 function streamServerBlock(listener: TcpListener | UdpListener, pool: Pool | undefined): ConfNode {
@@ -1347,9 +1367,13 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
             usedPools.add(r.action.pool);
           }
         }
-        const o = l.onUnmatchedSni;
-        if (o !== undefined && o !== 'reject' && poolsWithBackends.has(o.pool)) {
-          usedPools.add(o.pool);
+        // **폴백 풀도 upstream 을 받아야 한다.** 안 넣으면 map 이 정의되지 않은
+        // 업스트림을 가리키고 `nginx -t` 가 게시 전에 죽는다 — 그 풀을 라우트가
+        // 하나도 안 쓰는 배치가 정확히 그 경우다.
+        for (const o of [l.onUnmatchedSni, l.onNoSni]) {
+          if (o !== undefined && o !== 'reject' && poolsWithBackends.has(o.pool)) {
+            usedPools.add(o.pool);
+          }
         }
       } else if (poolsWithBackends.has(l.defaultPool)) {
         // tcp·udp 는 기본 풀이 **필수**다 (타입이 강제한다). undefined 검사가 필요 없다.

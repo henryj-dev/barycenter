@@ -2,7 +2,7 @@
  * CLI 리소스 쓰기 — DESIGN.md §5.6
  *
  * HTTP·TCP·UDP·HTTPS·패스스루 리스너 create·delete. apply 는 안 한다.
- * 패스스루는 tls 를 안 붙인다. unmatched SNI 풀은 선택이다.
+ * 패스스루는 tls 를 안 붙인다. unmatched SNI 풀과 no-SNI 풀(S9)은 선택이다.
  */
 import {
   deletePatch,
@@ -30,6 +30,8 @@ export type ListenerCreateInput = {
   certificate?: string;
   /** 제안 6·7·8. http·https 에만 붙는다 — 모델이 그 자리를 거기에만 준다. */
   options?: ListenerOptions;
+  /** 패스스루에만. TLS 인데 SNI 가 없을 때의 폴백 (S9). */
+  noSniPool?: string;
 };
 
 const udpPreset = (v: string | undefined): UdpPreset | undefined =>
@@ -87,12 +89,13 @@ export function listenerCreatePatch(
     });
   }
   if (input.protocol === 'tls_passthrough') {
-    return putPassthroughListenerPatch(
-      input.name,
-      input.pool === undefined || input.pool === ''
-        ? { bind: input.bind, port: input.port }
-        : { bind: input.bind, port: input.port, pool: input.pool },
-    );
+    return putPassthroughListenerPatch(input.name, {
+      bind: input.bind,
+      port: input.port,
+      ...(input.pool === undefined || input.pool === '' ? {} : { pool: input.pool }),
+      ...(input.noSniPool === undefined || input.noSniPool === ''
+        ? {} : { noSniPool: input.noSniPool }),
+    });
   }
   return undefined;
 }

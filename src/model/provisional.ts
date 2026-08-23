@@ -209,12 +209,10 @@ export type SniCertificateBinding = {
 };
 
 /**
- * 유효한 SNI 인데 매칭이 없을 때의 동작. §4.1
+ * SNI 분기의 결과. §4.1
  *
- * SNI 부재와 파싱 실패(비-TLS 포함)는 **설정 대상이 아니다** — 언제나 reject 다.
- * 설정 가능한 폴백 풀로 보내면, SNI 를 안 보내는 클라이언트가 조용히 임의 백엔드에
- * 도달한다. $ssl_preread_protocol 로 구분은 가능하지만(E26.1) v0 은 동작이 같으므로
- * 분기를 만들지 않는다.
+ * **파싱 실패(비-TLS 포함)는 설정 대상이 아니다** — 언제나 reject 다. TLS 패스스루
+ * 포트에 온, TLS 로 읽히지 않는 바이트를 어디로도 보내지 않는다.
  */
 export type SniOutcome = 'reject' | { pool: string };
 
@@ -238,6 +236,7 @@ export type RawListener = ListenerBase & {
   udp?: { preset: UdpPreset };
   http?: HttpProfile;
   onUnmatchedSni?: SniOutcome;
+  onNoSni?: SniOutcome;
   prereadTimeoutS?: number;
   tls?: RawTlsBinding;
   http2?: boolean;
@@ -281,7 +280,24 @@ export type HttpsListener = ListenerBase & {
 export type PassthroughListener = ListenerBase & {
   protocol: 'tls_passthrough';
   acceptProxyProtocol?: InboundProxyProtocol;
+  /** 유효한 SNI 인데 매칭이 없다. */
   onUnmatchedSni?: SniOutcome;
+  /**
+   * **TLS 는 맞는데 SNI 가 없다** (S9 로 열렸다, 2026-08-23).
+   *
+   * 오래 `reject` 고정이었다. 근거는 "부재와 파싱 실패를 안정적으로 못 가른다" 였고,
+   * §12.0 이 그 판정을 S9 에 걸어 두었다. S9 가 실물에서 재 보니 **갈린다**:
+   *
+   *   TLS + SNI 없음  → `$ssl_preread_protocol` 이 차 있다   (별도 분기)
+   *   malformed       → preread 가 DECLINED, protocol 이 비었다 (비-TLS 와 한 통)
+   *   preread timeout → nginx 가 연결을 끊는다                 (분기에 안 온다)
+   *
+   * 승격되는 것은 **이 필드 하나뿐이다.** malformed 가 비-TLS 와 같은 통으로 가는
+   * 것이 §4.1 이 "파싱 실패는 reject 고정" 이라고 적은 이유를 그대로 살려 준다 —
+   * 여기에 풀을 걸어도 쓰레기 바이트는 그 풀에 안 닿는다. 그게 이 승격이 안전한
+   * 정확한 이유이고, 갈리지 않았다면 승격하면 안 됐을 이유이기도 하다.
+   */
+  onNoSni?: SniOutcome;
   prereadTimeoutS?: number;
 };
 

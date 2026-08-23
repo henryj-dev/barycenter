@@ -152,6 +152,7 @@ else
     run "spike S1/S5          " ./spike/s1-s5/run.sh
     run "spike S7             " ./spike/s7/run.sh
     run "spike S8             " ./spike/s8/run.sh
+    run "spike S9             " ./spike/s9/run.sh
     run "spike S11            " ./spike/s11/run.sh
     run "spike S12            " ./spike/s12/run.sh
     run "spike S13            " ./spike/s13/run.sh
@@ -208,7 +209,23 @@ cat <<'GATES'
          불가하다 — 별도 카운터를 안 두고 root 를 정본에서 모은다. **마커로는 옛
          워커를 못 센다**(HUP 뒤 리스닝 소켓을 닫는다). `worker_shutdown_timeout`
          이 잔존 창을 유계로 만든다. 지금은 숫자 상한에만 기댄다 — 대가는 §12.0.
- ❌ S2 S3 S4 S6 S9 S10 S14 S15   전부 **기능 축소** 등급 — 떨어져도 설계를 다시 안 한다
+ ✅ S9   SNI 결과 3분기   **열렸다 (2026-08-23).** spike/s9 — 손으로 만든 ClientHello 를
+         흘려 셋이 서로 다른 결과를 내는 것을 봤다:
+
+           TLS + SNI 없음  → $ssl_preread_protocol 이 차 있다      (별도 분기)
+           malformed       → preread 가 DECLINED, protocol 이 비었다 (비-TLS 와 한 통)
+           preread timeout → nginx 가 연결을 끊는다                  (분기에 안 온다)
+
+         engine_facts 의 E26.2 가 "S9 에서 재실행" 으로 스킵돼 있던 자리다. 백엔드를
+         stream-lua 로 두어 클라이언트가 TLS 를 말할 필요를 없앴다 — TLS 백엔드로 하면
+         "분기가 틀렸다" 와 "핸드셰이크가 실패했다" 가 구분되지 않는다.
+
+         이 결과로 §4.1 의 `on_no_sni` 가 **설정 가능으로 승격**됐다. malformed 가
+         비-TLS 와 한 통으로 가는 것이 승격을 안전하게 만든다 — 파싱 실패는 사용자가
+         고른 풀에 여전히 안 닿는다. `tests/golden/on-no-sni.test.ts` 가 우리 렌더로
+         그것까지 실물에서 잰다.
+
+ ❌ S2 S3 S4 S6 S10 S14 S15   전부 **기능 축소** 등급 — 떨어져도 설계를 다시 안 한다
 
  ─── 6차 검수: 반례 7건이 **녹색 상태에서** 재현됐다 ────────────────
 

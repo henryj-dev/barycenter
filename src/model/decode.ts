@@ -490,14 +490,16 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
       };
     }
     case 'tls_passthrough': {
-      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'onUnmatchedSni', 'prereadTimeoutS']);
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'onUnmatchedSni', 'onNoSni', 'prereadTimeoutS']);
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
       const sni = optional(v['onUnmatchedSni'], () => decodeSniOutcome(iss, v['onUnmatchedSni'], `${path}.onUnmatchedSni`));
+      const noSni = optional(v['onNoSni'], () => decodeSniOutcome(iss, v['onNoSni'], `${path}.onNoSni`));
       const preread = optional(v['prereadTimeoutS'], () => int(iss, v['prereadTimeoutS'], `${path}.prereadTimeoutS`, 1, 3600));
       return {
         ...head, protocol,
         ...(accept === undefined ? {} : { acceptProxyProtocol: accept }),
         ...(sni === undefined ? {} : { onUnmatchedSni: sni }),
+        ...(noSni === undefined ? {} : { onNoSni: noSni }),
         ...(preread === undefined ? {} : { prereadTimeoutS: preread }),
       };
     }

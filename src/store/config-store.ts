@@ -282,12 +282,15 @@ async function readModel(c: Queryable): Promise<Model> {
     `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2,
             l.proxy_limits, l.header_rules, l.rate_limit,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
+            l.on_no_sni_reject,
             dp.key AS default_pool, hp.key AS http_default_pool, sp.key AS sni_pool,
+            np.key AS no_sni_pool,
             tp.key AS tls_policy, tc.key AS tls_default_certificate
        FROM listeners l
        LEFT JOIN pools dp ON dp.id = l.default_pool_id
        LEFT JOIN pools hp ON hp.id = l.http_default_pool_id
        LEFT JOIN pools sp ON sp.id = l.on_unmatched_sni_pool
+       LEFT JOIN pools np ON np.id = l.on_no_sni_pool
        LEFT JOIN tls_policies tp ON tp.id = l.tls_policy_id
        LEFT JOIN certificates tc ON tc.id = l.tls_default_cert_id
       ORDER BY l.key`,
@@ -351,10 +354,18 @@ async function readModel(c: Queryable): Promise<Model> {
       const reject = bool(r, 'on_unmatched_sni_reject');
       const outcome: SniOutcome | undefined =
         sp !== undefined ? { pool: sp } : reject ? 'reject' : undefined;
+      // S9 로 열린 분기. 셋 다 NULL 이면 **필드가 없다** — 'reject' 로 적어 두면
+      // "안 정했다" 와 "reject 를 골랐다" 가 같아지고, 그 둘은 다음에 기본값을 바꿀 때
+      // 갈려야 한다.
+      const np = maybeText(r, 'no_sni_pool');
+      const nreject = bool(r, 'on_no_sni_reject');
+      const noSni: SniOutcome | undefined =
+        np !== undefined ? { pool: np } : nreject ? 'reject' : undefined;
       const t = maybeText(r, 'preread_timeout_s');
       return {
         ...base, protocol: 'tls_passthrough', ...pp,
         ...(outcome !== undefined ? { onUnmatchedSni: outcome } : {}),
+        ...(noSni !== undefined ? { onNoSni: noSni } : {}),
         ...(t !== undefined ? { prereadTimeoutS: Number(t) } : {}),
       };
     }
@@ -596,6 +607,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       const http = obj(b['http']);
       const da = http['defaultAction'];
       const sni = b['onUnmatchedSni'];
+      const noSni = b['onNoSni'];
       // 판별 유니온을 컬럼으로 편다. **프로토콜에 없는 필드는 NULL 로 못 박는다** —
       // 값을 남겨 두면 나중에 프로토콜이 바뀔 때 아무도 의도하지 않은 설정이 되살아난다.
       const dpool = protocol === 'tcp' || protocol === 'udp'
@@ -604,6 +616,8 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
         ? await poolRef(c, String(obj(da)['pool']), `listener '${op.key}'`) : undefined;
       const spool = protocol === 'tls_passthrough' && obj(sni)['pool'] !== undefined
         ? await poolRef(c, String(obj(sni)['pool']), `listener '${op.key}'`) : undefined;
+      const nspool = protocol === 'tls_passthrough' && obj(noSni)['pool'] !== undefined
+        ? await poolRef(c, String(obj(noSni)['pool']), `listener '${op.key}'`) : undefined;
       // §4.6 — TLS 결박은 https 에만. 다른 프로토콜에서는 NULL 로 못 박는다 (DB 도
       // `listener_tls_only_https` 로 같은 규칙을 건다).
       const tls = protocol === 'https'
@@ -621,9 +635,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
                                 on_unmatched_sni_reject,preread_timeout_s,
                                 default_pool_id,default_pool_cls,
                                 tls_policy_id,tls_default_cert_id,http2,proxy_limits,header_rules,
-                                rate_limit,created_by,updated_by,revision)
+                                rate_limit,on_no_sni_pool,on_no_sni_cls,on_no_sni_reject,
+                                created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 $18,$19,$22,$23,$24,$25,$20,$20,$21)
+                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$20,$20,$21)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
@@ -643,6 +658,9 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            proxy_limits=EXCLUDED.proxy_limits,
            header_rules=EXCLUDED.header_rules,
            rate_limit=EXCLUDED.rate_limit,
+           on_no_sni_pool=EXCLUDED.on_no_sni_pool,
+           on_no_sni_cls=EXCLUDED.on_no_sni_cls,
+           on_no_sni_reject=EXCLUDED.on_no_sni_reject,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
@@ -666,7 +684,9 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
             ? (obj(b['http'])['headers'] ?? null) : null,
           // $25 — 같은 규칙 (제안 #6). stream 에는 `limit_req` 가 없다.
           protocol === 'http' || protocol === 'https'
-            ? (obj(b['http'])['rateLimit'] ?? null) : null],
+            ? (obj(b['http'])['rateLimit'] ?? null) : null,
+          // $26~$28 — S9 로 열린 "SNI 없음" 분기. **패스스루에만** (DB 도 같은 CHECK).
+          nspool?.[0] ?? null, nspool?.[1] ?? null, noSni === 'reject' ? true : null],
       );
       return;
     }

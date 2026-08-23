@@ -285,12 +285,17 @@ export function validateModel(
     }
     notHere('udp', l.protocol !== 'udp' && l.udp !== undefined);
     notHere('onUnmatchedSni', l.protocol !== 'tls_passthrough' && l.onUnmatchedSni !== undefined);
+    notHere('onNoSni', l.protocol !== 'tls_passthrough' && l.onNoSni !== undefined);
     notHere('prereadTimeoutS', l.protocol !== 'tls_passthrough' && l.prereadTimeoutS !== undefined);
 
     if (l.defaultPool !== undefined) needPool(l.key, l.defaultPool, cls);
     if (l.protocol === 'tls_passthrough') {
       const o = l.onUnmatchedSni;
       if (o !== undefined && o !== 'reject') needPool(l.key, o.pool, 'tcp');
+      // SNI 없음 분기도 같은 규칙이다 — 없는 풀을 가리키면 렌더가 조용히 빈 값을
+      // 내고, 그러면 사용자가 고른 폴백이 사실은 reject 로 동작한다.
+      const ns = l.onNoSni;
+      if (ns !== undefined && ns !== 'reject') needPool(l.key, ns.pool, 'tcp');
     }
     if ((l.protocol === 'http' || l.protocol === 'https') && l.http?.defaultAction !== undefined) {
       const a = l.http.defaultAction;

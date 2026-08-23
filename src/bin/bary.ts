@@ -106,6 +106,10 @@ const usage = (): never => {
                                  acme/orders | acme/orders/<id> | acme/orders/<id>/challenges | acme/challenges/<id>
                                  모르는 이름은 안 부른다
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
+                                 tls_passthrough 는 폴백 둘을 받는다:
+                                   --pool <풀>            유효한 SNI 인데 매칭이 없다
+                                   --no-sni-pool <풀>     TLS 인데 SNI 가 없다 (S9)
+                                 파싱 실패(비-TLS·malformed)는 설정 대상이 아니다 — 언제나 끊는다
                                  http·https 는 옵션도 받는다 (제안 6·7·8):
                                    --connect-timeout 5s   --read-timeout 120s   --send-timeout 90s
                                    --max-body 50m         (0 은 무제한)
@@ -256,6 +260,9 @@ async function main(): Promise<void> {
       const pool = flag(argv, '--pool');
       if (protocol !== 'tls_passthrough' && (pool === undefined || pool === '')) usage();
       const preset = flag(argv, '--preset');
+      // S9 — **패스스루에만.** TLS 는 맞는데 SNI 가 없을 때의 폴백이다. 파싱 실패는
+      // 여전히 설정 대상이 아니다(그 통은 갈려 있다).
+      const noSniPool = flag(argv, '--no-sni-pool');
       const policy = flag(argv, '--policy');
       const certificate = flag(argv, '--certificate');
       // 제안 6·7·8 — http·https 에만 뜻이 있다. 파싱은 `parseListenerOptions` 한 자리다.
@@ -276,6 +283,7 @@ async function main(): Promise<void> {
           name, protocol, bind, port: Number(portRaw),
           ...(pool === undefined ? {} : { pool }),
           ...(preset === undefined ? {} : { preset }),
+          ...(noSniPool === undefined ? {} : { noSniPool }),
           ...(policy === undefined ? {} : { policy }),
           ...(certificate === undefined ? {} : { certificate }),
           ...(Object.keys(options).length === 0 ? {} : { options }),

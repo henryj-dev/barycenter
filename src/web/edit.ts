@@ -509,18 +509,26 @@ export type PutPassthroughListenerOp = {
     port: number;
     enabled: true;
     onUnmatchedSni?: { pool: string };
+    onNoSni?: { pool: string };
   };
 };
 
 /**
  * TLS 패스스루. 인증서를 제시하지 않는다 — tls 를 안 붙인다.
  * 기본 풀은 없다. 라우트가 목적지를 가른다.
- * unmatched SNI 만 풀로 보낼 수 있다. 부재·파싱 실패는 설정 대상이 아니다.
+ *
+ * 폴백은 **둘**이다 (S9 로 하나가 열렸다):
+ *   `pool`      — 유효한 SNI 인데 매칭이 없다
+ *   `noSniPool` — TLS 는 맞는데 SNI 가 없다
+ *
+ * **파싱 실패(비-TLS·malformed)는 여전히 설정 대상이 아니다.** spike/s9 가 그 통이
+ * no-SNI 와 갈린다는 것을 실측했고, 갈리기 때문에 하나만 열 수 있었다.
+ *
  * PROXY 수신은 trustedCidrs 가 없어서 안 켠다.
  */
 export function putPassthroughListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool?: string },
+  body: { bind: string; port: number; pool?: string; noSniPool?: string },
 ): PutPassthroughListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -535,6 +543,8 @@ export function putPassthroughListenerPatch(
     enabled: true,
   };
   if (pool !== undefined && pool !== '') patchBody.onUnmatchedSni = { pool };
+  const noSniPool = body.noSniPool?.trim();
+  if (noSniPool !== undefined && noSniPool !== '') patchBody.onNoSni = { pool: noSniPool };
   return [{ op: 'put', kind: 'listener', key, body: patchBody }];
 }
 
