@@ -242,11 +242,16 @@ if [ -f "$P/state/agent.json.lock" ]; then
 else
   LOCKED="락 파일이 없다"
 fi
-REC=$(node /spike/runner.mjs $P none gen-2 2>&1 | sed -n 's/^RESULT //p')
+# **출력을 붙잡는다.** 전에는 `RESULT` 줄만 걸러서, 실패했을 때 남는 것이
+# "'failed' 였다" 뿐이었다 — 게이트에서 이 점이 간헐로 떨어질 때 그 한 줄로는 원인을
+# 못 좁힌다. 나머지 줄을 함께 낸다.
+REC_OUT=$(node /spike/runner.mjs $P none gen-2 2>&1)
+REC=$(printf '%s' "$REC_OUT" | sed -n 's/^RESULT //p')
 if [ "$REC" = "activated" ]; then
   ok S12.lock "**죽은 주인의 락을 회수한다** ($LOCKED → 다음 프로세스가 activated)"
 else
   bad S12.lock "락을 회수하지 못했다 ($LOCKED → '$REC')"
+  printf '%s\n' "$REC_OUT" | grep -v '^RESULT ' | tail -6 | sed 's/^/          /'
 fi
 
 # ── 중복 cycle 상한 ────────────────────────────────────────────────────
