@@ -84,13 +84,13 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **729** |
-| conformance | `npm run test:conformance` | **419** |
-| 골든 | `npm run test:golden` | 56 |
-| 엔진 사실 | `npm run test:engine` | 76 (SKIP 2) |
+| 단위 | `npm test` | **743** |
+| conformance | `npm run test:conformance` | **424** |
+| 골든 | `npm run test:golden` | 62 |
+| 엔진 사실 | `npm run test:engine` | 76 (SKIP 1) |
 | e2e | `npm run test:e2e` | 60 |
-| 스파이크 | `spike/*/run.sh` | 91 |
-| 저장소 | `npm run test:store` | 184 |
+| 스파이크 | `spike/*/run.sh` | 96 |
+| 저장소 | `npm run test:store` | 189 |
 
 스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
 B(구현된 API·DDL) 드리프트를 둘 다 막는다.
