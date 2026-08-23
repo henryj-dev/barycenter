@@ -540,11 +540,19 @@ export function putPassthroughListenerPatch(
 
 export type ProtocolClass = 'http' | 'tcp' | 'udp';
 
+/**
+ * 해시 키가 없는 알고리즘들 (S6 에 `least_conn` 이 합류했다).
+ *
+ * 모양이 같으므로 빌더를 하나로 둔다 — 갈라 두면 새 알고리즘이 늘 때마다 자리가 하나
+ * 더 생기고, 그중 하나만 고치는 날이 온다.
+ */
+export type KeylessAlgorithm = 'round_robin' | 'least_conn';
+
 export type PutPoolOp = {
   op: 'put';
   kind: 'pool';
   key: string;
-  body: { protocolClass: ProtocolClass; algorithm: 'round_robin' };
+  body: { protocolClass: ProtocolClass; algorithm: KeylessAlgorithm };
 };
 
 export type PutHashPoolOp = {
@@ -564,6 +572,8 @@ export function putPoolWithBackendPatch(input: {
   backend: string;
   host: string;
   port: number;
+  /** 없으면 `round_robin`. 옛 호출부가 안 바뀌게 기본을 준다. */
+  algorithm?: KeylessAlgorithm;
 }): [PutPoolOp, ...PutBackendOp[]] {
   if (input.pool === '') throw new Error('풀 키가 비어 있다');
   if (input.protocolClass !== 'http' && input.protocolClass !== 'tcp' && input.protocolClass !== 'udp') {
@@ -577,7 +587,7 @@ export function putPoolWithBackendPatch(input: {
       op: 'put',
       kind: 'pool',
       key: input.pool,
-      body: { protocolClass: input.protocolClass, algorithm: 'round_robin' },
+      body: { protocolClass: input.protocolClass, algorithm: input.algorithm ?? 'round_robin' },
     },
     ...backends,
   ];

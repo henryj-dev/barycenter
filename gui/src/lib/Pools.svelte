@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { KeylessAlgorithm } from '@web/edit';
   import { trafficMarkOf } from '@web/pools-view';
   import type { PoolsView } from '@web/pools-view';
   import type { ProtocolClass } from '@web/edit';
@@ -19,6 +20,7 @@
     insert: (pool: string, key: string, host: string, port: number) => void;
     openPool: (input: {
       pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
+      algorithm: KeylessAlgorithm;
     }) => void;
     openHashPool: (input: {
       pool: string; protocolClass: ProtocolClass; hashKey: string;

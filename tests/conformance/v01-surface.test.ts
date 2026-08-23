@@ -100,8 +100,17 @@ describe('v0.1 표면', () => {
     expect(accepts({ algorithm: 'round_robin' })).toBe(true);
     expect(accepts({ algorithm: 'hash', hashKey: 'remote_addr' })).toBe(true);
     expect(accepts({ algorithm: 'source_ip_hash' })).toBe(true);
-    // v0.1 에 **없는** 것
-    expect(accepts({ algorithm: 'least_conn' }), 'least_conn 은 v0 에 없다').toBe(false);
+    /**
+     * **`least_conn` 은 S6 에서 합류했다** (2026-08-23).
+     *
+     * 전에는 이 자리가 "v0.1 에 없는 것" 이었다. 배제 근거는 *"Lua 밸런서 경로에서는
+     * 워커별 근사가 된다"* 였는데, 그 뒤에 생긴 `in:` 카운터가 `lua_shared_dict` 에
+     * 살아 **워커 간 공유**다 — 근거가 사실이 아니게 됐다. 골든이 §12.0 의 합격 기준
+     * (균등 부하 편차 < 10%)을 실물로 넘겼다.
+     */
+    expect(accepts({ algorithm: 'least_conn' }), 'least_conn 은 S6 에서 열렸다').toBe(true);
+    // v0.1 에 **없는** 것 — nginx 디렉티브 이름이지 우리 enum 이 아니다.
+    expect(accepts({ algorithm: 'ip_hash' }), 'ip_hash 는 우리 enum 이 아니다').toBe(false);
 
     const listener = (protocol: string): boolean =>
       surface.parseModel({

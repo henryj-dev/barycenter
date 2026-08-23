@@ -269,6 +269,11 @@ function algorithmDirectives(pool: Pool, sourceIpVar: string): ConfNode[] {
   switch (pool.algorithm) {
     case 'round_robin':
       return [];
+    case 'least_conn':
+      // **Lua 가 없는 엔진에서는 nginx 네이티브를 쓴다** (S6). http·stream 둘 다 있다.
+      // 여기서 아무것도 안 내면 조용히 round_robin 이 되고, 그게 "필드는 있는데 아무도
+      // 안 지킨다" 의 한 판이다.
+      return [directive('least_conn', [])];
     case 'source_ip_hash':
       // E1 — stream 에는 ip_hash 디렉티브가 없다.
       return pool.protocolClass === 'http'
@@ -365,6 +370,39 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
  * 지금은 그 사실을 여기 적어 둔다.
  */
 function pickExpression(pool: Pool): string {
+  if (pool.algorithm === 'least_conn') {
+    /**
+     * **`in:` 을 읽어 최소를 고르고, 동점은 라운드로빈으로 가른다** (S6).
+     *
+     * `in:` 은 `lua_shared_dict` 에 살아 **워커 간 공유**다 — 이 알고리즘이 성립하는
+     * 전제가 그것이고, 옛 배제 근거("워커별 근사")가 더 이상 사실이 아닌 이유다.
+     *
+     * ── 동점을 왜 라운드로빈으로 가르나 (골든이 잡았다)
+     *
+     * 처음엔 "동점이면 먼저 나온 것" 으로 뒀다. 실물로 재니 **A 가 60, B·C 가 0** 이었다.
+     * 순차 요청에서는 inflight 가 매번 0 으로 돌아와 **셋이 늘 동점**이고, 그러면 항상
+     * 첫 번째만 고른다 — 밸런싱이 아예 안 된다.
+     *
+     * nginx 네이티브도 같은 문제를 같은 방법으로 푼다: 최소 연결 수가 같은 peer 들
+     * 사이에서는 가중 라운드로빈으로 고른다. 여기서는 `rr:` 카운터를 그대로 쓴다 —
+     * `round_robin` 이 이미 쓰는 것이고, `incr` 이 원자적이라 워커가 여럿이어도 섞이지
+     * 않는다.
+     *
+     * 키가 없으면 **0 으로 본다.** nil 을 큰 값으로 치면 갓 붙은 백엔드가 영영 트래픽을
+     * 못 받는다 — 새 peer 가 먼저 받는 것이 옳다.
+     */
+    return `local bestN = d:get("in:" .. list[1]) or 0
+            for i = 2, n do
+                local c = d:get("in:" .. list[i]) or 0
+                if c < bestN then bestN = c end
+            end
+            local tied = {}
+            for i = 1, n do
+                if (d:get("in:" .. list[i]) or 0) == bestN then tied[#tied + 1] = i end
+            end
+            local c = d:incr("rr:${upstreamName(pool.key)}", 1, 0) or 1
+            local idx = tied[(c % #tied) + 1]`;
+  }
   if (pool.algorithm === 'round_robin') {
     // dict 카운터. `incr` 은 원자적이라 워커가 여럿이어도 순서가 섞이지 않는다.
     return `local c = d:incr("rr:${upstreamName(pool.key)}", 1, 0) or 1

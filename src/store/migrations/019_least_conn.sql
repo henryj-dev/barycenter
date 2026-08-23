@@ -1,0 +1,14 @@
+-- 019_least_conn.sql
+-- S6 — **`least_conn` 배제 근거가 더 이상 사실이 아니다**
+--
+-- 001 의 주석은 "Lua 밸런서 경로에서는 워커별 근사가 된다" 였다. 그때는 맞았다.
+-- 그 뒤에 `in:` 카운터가 생겼고(드레인 관측 S2), 그것은 `lua_shared_dict` 에 산다 —
+-- **워커 간 공유**다. 이 저장소가 이미 `rr:` 카운터와 멤버십 `slot:` 에서 그 성질에
+-- 기대고 있다.
+--
+-- **이 마이그레이션은 이것 하나만 한다** — 007 이 같은 자리에서 배운 규칙이다.
+-- PostgreSQL 은 `ADD VALUE` 로 추가한 enum 값을 **같은 트랜잭션 안에서 쓰지 못한다**
+-- (`unsafe use of new value of enum type`). 이 저장소는 마이그레이션 하나를 한
+-- 트랜잭션으로 돌리므로, `'least_conn'` 을 참조하는 DDL 이 생기면 다음 파일로 넘긴다.
+-- 지금은 참조할 것이 없다 — `hash_key` CHECK 은 `algorithm='hash'` 만 본다.
+ALTER TYPE algorithm ADD VALUE IF NOT EXISTS 'least_conn';

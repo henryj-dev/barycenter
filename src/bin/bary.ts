@@ -112,7 +112,7 @@ const usage = (): never => {
                                    --header req:X-A:1     --header res:X-B:2    (여러 번)
                                    --rate 10r/s  --burst 20  --nodelay  --max-conn 100
   bary listener delete           --name
-  bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
+  bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|least_conn|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
   bary pool delete               --name
   bary route create              --name --listener --host|--sni --pool|--to|--reject [--status] [--path-prefix] [--websocket]. apply 는 아니다
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다

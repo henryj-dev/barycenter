@@ -119,8 +119,16 @@ describe('① 모르는 enum 값은 거부된다 — 4차·6차에서 두 번 �
     expect(codes(listener({ protocol: 'bogus', defaultPool: 'pt' }))).toContain('invalid_enum');
   });
 
-  it("algorithm: 'least_conn' — v0 에 없다", () => {
-    expect(codes(base({ pools: [{ ...httpPool, algorithm: 'least_conn' }] }))).toContain('invalid_enum');
+  it("algorithm: 'ip_hash' — nginx 디렉티브 이름이지 우리 enum 이 아니다", () => {
+    /**
+     * 전에는 이 자리가 `least_conn` 이었다. **S6 에서 그것이 유효해졌으므로**(dict 의
+     * `in:` 이 워커 간 공유라 워커별 근사가 아니다) 반례가 아니게 됐다.
+     *
+     * 그렇다고 이 검사를 지우면 안 된다 — 재는 것은 "모르는 enum 을 거부하는가" 이지
+     * 특정 값이 아니다. nginx 디렉티브 이름을 그대로 적는 것은 흔한 오타이고, 조용히
+     * 통과하면 `ip_hash` 라고 적은 사람이 round_robin 을 얻는다.
+     */
+    expect(codes(base({ pools: [{ ...httpPool, algorithm: 'ip_hash' }] }))).toContain('invalid_enum');
   });
 
   it("protocolClass: 'https'", () => {

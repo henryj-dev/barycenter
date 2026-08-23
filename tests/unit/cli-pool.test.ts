@@ -83,12 +83,25 @@ describe('pool create 패치', () => {
     expect(JSON.stringify(patch)).not.toContain('hashKey');
   });
 
-  it('least_conn 과 모르는 hashKey 는 패치를 안 만든다', () => {
+  it('모르는 알고리즘과 모르는 hashKey 는 패치를 안 만든다', () => {
     const base = { name: 'app', protocolClass: 'http', backend: 'a1', host: '10.0.0.11', port: 11 };
     expect(poolCreatePatch({ ...base, algorithm: 'hash' })).toBeUndefined();
     expect(poolCreatePatch({ ...base, algorithm: 'hash', hashKey: 'not_a_var' })).toBeUndefined();
-    expect(poolCreatePatch({ ...base, algorithm: 'least_conn' })).toBeUndefined();
+    // nginx 디렉티브 이름을 그대로 적는 것은 흔한 오타다.
+    expect(poolCreatePatch({ ...base, algorithm: 'ip_hash' })).toBeUndefined();
     expect(poolCreatePatch({ ...base, protocolClass: 'quic' })).toBeUndefined();
+  });
+
+  it('**`least_conn` 은 패치를 만든다** — S6 에서 열렸다', () => {
+    /**
+     * 배제 근거였던 "워커별 근사" 가 사실이 아니게 됐다 — `in:` 카운터가
+     * `lua_shared_dict` 에 살아 워커 간 공유다. 모양은 round_robin 과 같다(해시 키 없음).
+     */
+    const base = { name: 'app', protocolClass: 'http', backend: 'a1', host: '10.0.0.11', port: 11 };
+    const patch = poolCreatePatch({ ...base, algorithm: 'least_conn' });
+    expect(patch).toBeDefined();
+    expect(JSON.stringify(patch)).toContain('least_conn');
+    expect(JSON.stringify(patch)).not.toContain('hashKey');
   });
 });
 

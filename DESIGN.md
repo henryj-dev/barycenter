@@ -715,10 +715,29 @@ type TlsPassthroughRoute = ResourceMeta & {
 | `dns` | object? | `resolver_ref`, `valid_s`, `resolve_mode` — **`on_nxdomain`/`on_timeout` 없음** (S14: 엔진이 선택지를 안 준다. 표는 `DataplaneCapabilities.nativeDns`) |
 | `sticky` | object? | HTTP: 쿠키 / L4: `source_ip_hash` |
 
-**`least_conn` 은 v0 enum 에 아예 넣지 않는다.** stream/http OSS 에 네이티브로 있지만, S1 이
-통과해 Lua 밸런서 경로가 확정된 이상 그 경로에서는 **워커별 근사**가 된다. 정확한 것처럼
-보이는 이름으로 근사를 파는 것이 가장 나쁘다. S6 이 오차를 재고 나서 되살릴지 정한다.
+**`least_conn` 은 S6 에서 열렸다** (2026-08-23). 그 전까지는 이렇게 적혀 있었다:
+
+> `least_conn` 은 v0 enum 에 아예 넣지 않는다. stream/http OSS 에 네이티브로 있지만,
+> S1 이 통과해 Lua 밸런서 경로가 확정된 이상 그 경로에서는 **워커별 근사**가 된다.
+> 정확한 것처럼 보이는 이름으로 근사를 파는 것이 가장 나쁘다.
+
+**그때는 맞았고, 지금은 아니다.** 그 뒤에 `in:` 카운터가 생겼다 — 드레인 관측(S2)이 넣은
+peer 별 inflight 이고, `lua_shared_dict` 에 산다. 이 저장소가 이미 두 번 그 공유성에
+기대고 있다: `round_robin` 의 `rr:` 카운터(렌더러 주석이 *"워커 간 공유다. 워커 로컬로
+두면 워커 수만큼 편향된다"*), 그리고 멤버십 `slot:`(S1·S5 가 수렴 실측). 그러니 이제
+**워커별 근사가 아니다** — 전 워커의 inflight 합을 보고 고른다.
+
+**동점은 라운드로빈으로 가른다.** 골든이 잡았다: 순차 요청에서는 inflight 가 매번 0 으로
+돌아와 셋이 늘 동점이고, "먼저 나온 것" 규칙이면 첫 번째만 계속 고른다(실측 A 60 · B 0 ·
+C 0). nginx 네이티브도 같은 문제를 같은 방법으로 푼다. §12.0 의 합격 기준(균등 부하 편차
+< 10%)을 `tests/golden/least-conn.test.ts` 가 실물로 넘긴다.
+
+남는 오차는 다른 종류다 — 읽고 고르는 사이가 원자적이지 않아 두 워커가 같은 peer 를
+동시에 고를 수 있다. 네이티브도 같은 성질이고, **워커 수만큼 편향되는 것**과는 크기가
+다르다. 멤버십 평면이 없는 엔진에서는 nginx 의 `least_conn;` 을 그대로 쓴다.
+
 v2 는 이걸 "축소했다"고 써놓고 enum 에는 남겨 뒀다 — 문구만의 축소는 축소가 아니다.
+이번에는 반대다: **근거가 바뀌었으므로 코드까지 열었다.**
 
 #### 4.3.1 헬스 프로브 — 데이터 경로와 분리
 
@@ -2796,7 +2815,7 @@ k8s 네이티브 배포는 별도 과제.
 | S3 | 인스턴스 재시작 부트스트랩 | 재시딩까지 공백 < 1s, 오래된 헬스 되살아남 없음 | 기능 축소: 부팅 시 전 백엔드 `unknown` |
 | S4 | CP 단절 | fail-open 유지, eviction 시 zero-peer 없음 | fail_closed 기본화 |
 | S5 ~ | **이중 zone + 워커 수렴 + 평면 부분 전환** | 양쪽 ACK 후 전 워커 수렴 < 500ms **AND** 한쪽 평면 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존에서 잘못된 peer 선택 0회 | → 대안 B (구조 불성립) |
-| S6 | `least_conn` 근사 오차 | 균등 부하에서 편차 < 10% | v0 알고리즘에서 제외 |
+| S6 ✅ | `least_conn` 근사 오차 | 균등 부하에서 편차 < 10% | v0 알고리즘에서 제외 |
 | S7 ✅ | reload 실패 판정 | 포트 점유 상태 HUP 재현 + 오탐/미탐 0, 판정 시간 < 3s | 판정 절차 재설계 (ApplyOperation freeze 에는 block) |
 | S8 ✅ | 인증서 세대 롤백 | 갱신 후 롤백 시 옛 key/chain 정확 복원 | 설계 재작업 (block) |
 | S9 | SNI 결과 3분기 관측성 | TLS-no-SNI / malformed / preread timeout 구분 가능 여부 (**비-TLS 는 E26.1 로 이미 확인**) | 현행 유지 — 부재·파싱실패는 계속 `reject` 고정 |

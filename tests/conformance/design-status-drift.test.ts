@@ -51,12 +51,6 @@ type AbsenceClaim = {
 
 const CLAIMS: AbsenceClaim[] = [
   {
-    what: '`least_conn` 알고리즘',
-    claim: '`least_conn` 은 v0 enum 에 아예 넣지 않는다',
-    present: () => /'least_conn'/.test(read('src/model/provisional.ts')),
-    where: 'src/model/provisional.ts — algorithm 유니온에 들어왔다',
-  },
-  {
     what: 'HTTP/3 (h3)',
     claim: 'h3 는 **모델에서 뺀다**',
     present: () => /'h3'|'http3'/.test(read('src/model/provisional.ts')),
@@ -98,6 +92,9 @@ const CLAIMS: AbsenceClaim[] = [
  *   §10   :2673 "주문·챌린지 상태는 API 에 없다" → `certs-view.ts` 가 낸다
  *   §10   :2709 "주문 GET 없음"                 → 같다
  *   §15.3       "Kit·드레인은 아직"             → 둘 다 있다
+ *   §4.3        "`least_conn` 은 v0 enum 에 아예 넣지 않는다"
+ *               → **S6 에서 열렸다.** 배제 근거("워커별 근사")가 사실이 아니게 됐다 —
+ *               `in:` 카운터가 `lua_shared_dict` 에 살아 워커 간 공유다.
  *   §11.1       "CP ↔ DP 는 mTLS gRPC"          → **낡음이 아니라 미구현**이었다.
  *               구현체는 `LocalDataplaneDriver` 하나뿐이고 배포는 한 컨테이너다.
  *               "없는 것을 있다고 적지 않는다" 로 고쳤다.

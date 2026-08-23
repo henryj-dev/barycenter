@@ -1,15 +1,18 @@
 <script lang="ts">
-  import type { ProtocolClass } from '@web/edit';
+  import type { KeylessAlgorithm, ProtocolClass } from '@web/edit';
 
   let { editing, add }: {
     editing: boolean;
     add: (input: {
       pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
+      algorithm: KeylessAlgorithm;
     }) => void;
   } = $props();
 
   let pool = $state('');
   let protocolClass = $state<ProtocolClass>('http');
+  // S6 — 해시 키가 없는 둘. `least_conn` 은 dict 의 `in:` 을 읽는다.
+  let algorithm = $state<KeylessAlgorithm>('round_robin');
   let backend = $state('');
   let host = $state('');
   let port = $state('80');
@@ -18,6 +21,7 @@
     add({
       pool: pool.trim(),
       protocolClass,
+      algorithm,
       backend: backend.trim(),
       host: host.trim(),
       port: Number(port),
@@ -31,6 +35,10 @@
     <option value="http">http</option>
     <option value="tcp">tcp</option>
     <option value="udp">udp</option>
+  </select>
+  <select bind:value={algorithm} disabled={editing}>
+    <option value="round_robin">round_robin</option>
+    <option value="least_conn">least_conn</option>
   </select>
   <input bind:value={backend} placeholder="첫 백엔드 키" autocomplete="off" disabled={editing} />
   <input bind:value={host} placeholder="호스트" autocomplete="off" disabled={editing} />

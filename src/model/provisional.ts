@@ -305,9 +305,23 @@ export type Listener =
   | UdpListener;
 
 /**
- * `least_conn` 은 v0 에 없다. stream/http OSS 에 네이티브로 있지만, S1 이 통과해 Lua
- * 밸런서 경로가 확정된 이상 그 경로에서는 워커별 근사가 된다. 정확한 것처럼 보이는
- * 이름으로 근사를 파느니 빼는 편이 낫다. S6 이 오차를 재고 나서 되살릴지 정한다.
+ * ── `least_conn` 을 되살린 이유 (S6, 2026-08-23)
+ *
+ * 전에는 이렇게 적혀 있었다: *"Lua 밸런서 경로가 확정된 이상 그 경로에서는 **워커별
+ * 근사**가 된다. 정확한 것처럼 보이는 이름으로 근사를 파느니 빼는 편이 낫다."*
+ *
+ * **그때는 맞았고, 지금은 아니다.** 그 뒤에 `in:` 카운터가 생겼다 — 드레인 관측(S2)이
+ * 넣은 peer 별 inflight 이고, `lua_shared_dict` 에 산다. 이 저장소가 이미 두 번 그
+ * 공유성에 기대고 있다: `round_robin` 의 `rr:` 카운터(렌더러 주석이 *"워커 간 공유다.
+ * 워커 로컬로 두면 워커 수만큼 편향된다"*), 그리고 멤버십 `slot:`(S1·S5 가 수렴 실측).
+ *
+ * 그러니 이제 **워커별 근사가 아니다** — 전 워커의 inflight 합을 보고 고른다.
+ *
+ * ⚠️ 남는 오차는 다른 종류다: 읽고 고르는 사이가 원자적이지 않아 두 워커가 같은 peer
+ * 를 동시에 고를 수 있다. nginx 네이티브도 같은 성질이고(공유 zone 에 락을 걸지만 선택
+ * 자체는 순간의 값을 본다), **워커 수만큼 편향되는 것**과는 크기가 다르다.
+ *
+ * 멤버십 평면이 **없는** 엔진에서는 nginx 의 `least_conn;` 을 그대로 쓴다.
  */
 /**
  * `default_server` 의 동작. E32 로 실측: 명시하지 않으면 모르는 Host 가 **첫 번째 server**
@@ -438,7 +452,7 @@ export type ProxyLimits = {
   clientMaxBodyBytes?: number;
 };
 
-export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash';
+export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash' | 'least_conn';
 
 /**
  * HTTP 헬스체크 (검수 B-07).
