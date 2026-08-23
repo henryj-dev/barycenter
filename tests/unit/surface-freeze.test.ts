@@ -114,6 +114,20 @@ describe('A 표면 동결 게이트', () => {
       expect(readFileSync(baseline, 'utf8')).toBe(before);
     });
 
+    it('여러 줄 근거를 거부한다 — 헤더가 한 줄에 산다', () => {
+      /**
+       * 헤더는 `#` 로 시작하는 줄들이고 파서는 `^# 해제 근거: (.+)$` 를 **정확히 하나**
+       * 요구한다. 개행이 든 근거를 그대로 쓰면 둘째 줄이 `#` 없이 남아 헤더가 깨지고,
+       * 그 다음부터 `--check` 가 파일을 아예 못 읽는다 — **게이트를 무력화하는 입력**이다.
+       *
+       * 실제로 그렇게 됐다: `--unfreeze "한 줄\n두 줄"` 이 `두 줄` 을 맨 줄로 남겼다.
+       */
+      const before = readFileSync(baseline, 'utf8');
+      expect(run('--unfreeze', '한 줄\n두 줄').status).toBe(1);
+      expect(run('--unfreeze', '캐리지\r리턴').status).toBe(1);
+      expect(readFileSync(baseline, 'utf8')).toBe(before);
+    });
+
     it('동결되지 않은 기준은 풀 것이 없다', () => {
       writeFileSync(baseline, stamp({ rounds: 1, frozen: false }));
       expect(run('--unfreeze', '아무 근거').status).toBe(1);
