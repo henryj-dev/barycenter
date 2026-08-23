@@ -670,10 +670,11 @@ export class ApplyRunner {
             // 문장으로 닫으면 종단 기록이 거짓을 담고, 다음 사람은 엔진 로그를 뒤지다가
             // 정작 죽은 것이 admin 경로였다는 것을 못 본다.
             await this.failAll(j, blind
-              ? `reload 를 보낸 뒤 활성화 관측 자체가 실패했다 — **세계의 상태를 모른다**`
+              // 이 문자열은 저널과 JSON 로그로 나간다 — 마크다운을 넣지 않는다.
+              ? `reload 를 보낸 뒤 활성화 관측 자체가 실패했다 — 세계의 상태를 모른다`
                 + ` (기대 세대 ${gen}). 활성화가 안 일어났다는 뜻이 아니다:`
                 + ' 세대가 이미 넘어가 있을 수 있다.'
-                + ' admin 소켓·관측 예산을 먼저 보고, `current` 링크와 서빙 세대를 직접 확인한다'
+                + ' admin 소켓과 관측 예산을 먼저 보고, current 링크와 서빙 세대를 직접 확인한다'
               : `reload 를 ${RELOAD_ATTEMPT_LIMIT} 번 보냈는데 활성화가 관측되지 않았다`
                 + ` (기대 세대 ${gen}, 관측 ${JSON.stringify(seen ?? null)})`
                 + ' — 엔진의 error log 를 본다');
