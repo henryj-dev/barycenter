@@ -34,13 +34,13 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 | 층 | 있는 것 | 없는 것 |
 |---|---|---|
-| 모델 | 리스너·풀(헬스체크 정의 포함)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, `least_conn`, WAF, `on_nxdomain`/`on_timeout` |
+| 모델 | 리스너(프록시 한계값·헤더 규칙·레이트리밋 포함)·풀(헬스체크 정의)·백엔드·HTTP/패스스루 라우트·인증서·TLS 정책·SNI 바인딩·엔진 dict 크기. 판별 유니온 | h3, `least_conn`, WAF, `on_nxdomain`/`on_timeout` |
 | 적용 | 봉인된 changeset, 시맨틱 plan, 크래시 저널, 펜싱, 롤백. 관측 실패와 부정 관측을 가른다 | — |
 | 동결 | B(구현된 OpenAPI · DDL). **A 는 이 회차에 풀렸다** — W3 설정 셋을 들이려고. 근거가 `SURFACE.txt` 머리에 남는다 | 미구현 계약 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
-| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문), backend drain/drain-status | — |
+| CLI | `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status | — |
 | GUI | Kit 경로(로그인 포함). 폴링하지 않는다 | 아래 §2 |
 
 ### GUI
@@ -84,20 +84,21 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | typecheck | `npm run typecheck` | — |
 | 표면 | `node scripts/surface.mjs --check` | — |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **615** |
+| 단위 | `npm test` | **677** |
 | conformance | `npm run test:conformance` | **420** |
-| 골든 | `npm run test:golden` | 44 |
+| 골든 | `npm run test:golden` | 54 |
 | 엔진 사실 | `npm run test:engine` | 76 (SKIP 2) |
 | e2e | `npm run test:e2e` | 60 |
 | 스파이크 | `spike/*/run.sh` | 91 |
-| 저장소 | `npm run test:store` | 167 |
+| 저장소 | `npm run test:store` | 176 |
 
 스위트 통과와 동결 가능은 다르다. `--freeze-gate` 는 A(타입·DP ABI) 표면과
 B(구현된 API·DDL) 드리프트를 둘 다 막는다.
 
-**A 동결은 이 회차에 풀렸다** — W3 의 설정 셋(`Pool.healthCheck` · dict 크기 ·
-`GenerationError('path_escape')`)이 `Model` 을 넓히기 때문이다. 112 심볼 · 카운터 0 ·
-미선언이고, **재동결까지 3 회차를 다시 쌓아야 한다.** 푸는 길은
+**A 동결은 이 회차에 풀렸다.** 먼저 W3 의 설정 셋(`Pool.healthCheck` · dict 크기 ·
+`GenerationError('path_escape')`)이, 이어서 제안 6·7·8 의 넷(`ProxyLimits` ·
+`HeaderRule` · `HeaderRules` · `RateLimit`)이 `Model` 을 넓혔다. **116 심볼 · 카운터 0 ·
+미선언**이고, **재동결까지 3 회차를 다시 쌓아야 한다.** 푸는 길은
 `surface.mjs --unfreeze "<근거>"` 하나뿐이고 근거를 요구한다 — 그 근거는 `SURFACE.txt`
 머리에 남고 `--write` 를 지나서도 안 지워진다.
 
@@ -121,8 +122,13 @@ A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이�
 `docs/runbook-spof.md` 다. RTO/RPO 는 ADR-SPOF 가 v1 운영 정책으로 확정한다
 (랩 SLA 아님). OIDC 는 ID Token Bearer 와 Authorization Code 로그인이다.
 
-로드맵 v0.1~v1.0 은 전부 코드에 있다. 남은 것은 기능이 아니라 **축소 등급 스파이크**와
-재동결까지의 회차다.
+로드맵 v0.1~v1.0 은 전부 코드에 있다. 검수의 제안 6·7·8·9 도 닫혔다 —
+레이트리밋·커넥션 제한 · 요청/응답 헤더 · 프록시 타임아웃과 본문 크기 · 백엔드 운영
+상태 API. 남은 것은 기능이 아니라 **축소 등급 스파이크**와 재동결까지의 회차다.
+
+⚠️ 레이트리밋은 **`return` 으로 끝나는 라우트(redirect·reject)에 안 걸린다.** nginx 의
+단계 순서다 — `return` 은 rewrite, `limit_req` 는 preaccess 인데 rewrite 가 앞이다.
+`tests/golden/rate-limit.test.ts` 가 그 거동을 못 박는다.
 
 스파이크 — 기능 축소 등급. 게이트에 넣지 않는 것은 넣지 않는다.
 
@@ -174,6 +180,7 @@ block 등급 S8 · S11 · S12 는 열려 지나갔다. S13 은 원장을 안 짓
 | `control/discovery.ts` | 발견한 엔드포인트 → 멤버십 슬롯. 표면 아님 |
 | `control/acme-*.ts` | 주문 원장 · 틱 러너 · 게시 |
 | `engine/probe.ts` | `nginx -V` 를 실제로 묻는다 |
+| `control/backend-status.ts` | 왜 이 백엔드가 트래픽을 안 받나 — 이유를 전부 낸다 |
 | `web/edit.ts` | GUI 가 얹는 patch. apply 가 아니다 |
 | `dp/` | 적용 상태기계 · 세대 · 시크릿 |
 | `index.ts` | 동결 대상 표면 |
