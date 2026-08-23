@@ -2910,7 +2910,7 @@ k8s 네이티브 배포는 별도 과제.
 | S16 ✅ | SNI 별 TLS policy 렌더 | 비-default server 별 `ssl_protocols` 가 **실제 handshake 에 적용**되는가 | `override` 제거 |
 | S17 ✅ | TLS 인증서 선택 렌더 | exact / 1라벨 와일드카드 / `default_server` 조합에서 SAN 미커버 인증서 제시 0회 | v0 은 exact host 만 |
 | S18 ✅ | ACME 상태기계 | 오더·챌린지·재시도·고아 TXT 정리 (v0.6 전) | ACME 범위 축소 |
-| S20 ❌ | **HTTP/3 (QUIC)** | ① h3 로 실제 요청이 오간다(설정이 서는 것과 다르다) ② UDP/443 점유가 §4.5 겹침 검증에 잡힌다 ③ 같은 포트 TCP(h1/h2)와 공존 ④ Alt-Svc 로 브라우저가 승격한다 ⑤ reload 중 h3 연결 거동 | v0 은 h1/h2 만 — h3 는 **모델에서 뺀다** (표현하면 안 걸리는 설정이 된다) |
+| S20 ❌ | **HTTP/3 (QUIC)** | 7/8. 남은 하나가 ②였다 — `listen 443 quic` 이 UDP 도 점유하는데 `stream udp:443` 과 겹치면 **한쪽이 조용히 진다**(엔진도 `nginx -t` 도 말이 없다). **그 선결 조건은 2026-08-23 에 풀렸다**: §4.5 의 예약이 전송을 하나가 아니라 **집합**으로 낸다(`transportsOf`). h3 를 여는 날 `transportsOf('https')` 에 `udp` 를 더하는 것 하나로 그 겹침이 잡힌다 | v0 은 h1/h2 만 — h3 는 **모델에서 뺀다** (표현하면 안 걸리는 설정이 된다) |
 | S19 ✅ | **롤백 경로 합성** | 옛 topology·TLS 자료를 **새 세대로 clone 하고 새 epoch 를 구워** 활성화. S8(세대 결박)과 S11(새 epoch)이 함께 성립하는가 | 설계 재작업 (block) |
 
 **S8·S11·S12 실패는 프로젝트 block 이다** (설계를 다시 해야 한다). 나머지는 기능 축소 또는

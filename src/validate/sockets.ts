@@ -31,9 +31,63 @@ export type SocketReservation = {
 
 export type SocketConflict = { a: string; b: string; reason: string };
 
-/** L7 프로토콜은 전부 TCP 위에 있다. 이 접힘이 http:443 ↔ stream:443 충돌을 드러낸다. */
+/**
+ * 이 프로토콜이 **점유하는 전송 전부**. §4.5
+ *
+ * ── 왜 하나가 아니라 집합인가 (S20)
+ *
+ * v0 의 프로토콜은 전부 전송이 하나다 — L7 은 TCP, `udp` 는 UDP. 그래서 오래
+ * `transportOf(): Transport` 였고, 그것으로 http:443 ↔ stream:443 충돌이 드러났다.
+ *
+ * **그 모양이 h3 의 선결 조건에 걸린다.** S20 이 실측했다:
+ *
+ *   S20.udp_occupancy  `listen 443 quic` 은 같은 포트를 **UDP 로도** 점유한다
+ *   S20.udp_conflict   그 UDP 와 `stream { listen 443 udp; }` 가 겹치면
+ *                      **한쪽이 조용히 진다** — 엔진도 `nginx -t` 도 아무 말을 안 한다
+ *
+ * 운영자는 설정한 것이 사라진 이유를 알 수 없다. 그래서 §12.0 이 h3 를 모델에서 뺐고,
+ * 그 판정의 근거가 *"§4.5 가 그 겹침을 표현하지 못한다"* 였다.
+ *
+ * **이제 표현한다.** 프로토콜 하나가 전송 여럿을 점유할 수 있고, 겹침은 전송이 **하나라도
+ * 겹치면** 성립한다. h3 를 여는 날 이 함수에 `udp` 를 더하는 것 하나로 그 겹침이 잡힌다 —
+ * 검증기·렌더·모델 어디도 다시 안 만진다.
+ *
+ * 지금은 어느 프로토콜도 둘을 안 낸다. **그게 맞다** — 없는 것을 있는 척하지 않는다.
+ * 바뀐 것은 *"표현할 수 있는가"* 이고, 그것이 §12.0 이 막아 둔 바로 그 문이다.
+ */
+export function transportsOf(protocol: ListenerProtocol): readonly Transport[] {
+  return protocol === 'udp' ? UDP_ONLY : TCP_ONLY;
+}
+
+const TCP_ONLY: readonly Transport[] = Object.freeze(['tcp']);
+const UDP_ONLY: readonly Transport[] = Object.freeze(['udp']);
+
+/**
+ * 옛 이름. **집합의 첫 원소**를 준다.
+ *
+ * 전송이 하나인 동안은 같은 답이다. 둘이 되는 순간 이 함수는 **거짓말을 시작하므로**,
+ * 그때는 부르는 쪽을 `transportsOf` 로 옮겨야 한다 — 아래 `sharesTransport` 처럼.
+ */
 export function transportOf(protocol: ListenerProtocol): Transport {
-  return protocol === 'udp' ? 'udp' : 'tcp';
+  return transportsOf(protocol)[0]!;
+}
+
+/**
+ * 두 전송 집합이 **하나라도** 겹치는가.
+ *
+ * 프로토콜이 아니라 집합을 받는 이유는 **잴 수 있게** 하기 위해서다. 지금 모델의
+ * 프로토콜은 전부 전송이 하나라, 프로토콜만 받으면 "둘을 내는 프로토콜이 왔을 때"
+ * 를 재현물이 만들 수가 없다 — 그러면 이 규칙은 h3 가 들어오는 날까지 안 지켜진다.
+ */
+export function transportSetsOverlap(
+  a: readonly Transport[], b: readonly Transport[],
+): boolean {
+  return b.some((t) => a.includes(t));
+}
+
+/** 두 프로토콜이 전송을 **하나라도** 공유하는가. */
+export function sharesTransport(a: ListenerProtocol, b: ListenerProtocol): boolean {
+  return transportSetsOverlap(transportsOf(a), transportsOf(b));
 }
 
 const V4_MAPPED = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i;
@@ -92,7 +146,10 @@ export function isLoopbackBind(input: string): boolean {
 export function socketsOverlap(a: SocketReservation, b: SocketReservation): boolean {
   if (a.key === b.key) return false;
   if (a.port !== b.port) return false;
-  if (transportOf(a.protocol) !== transportOf(b.protocol)) return false;
+  // **전송이 하나라도 겹치면 다툰다** (S20). 한 프로토콜이 둘을 점유할 수 있으므로
+  // 등호 비교로는 못 잡는다 — `listen 443 quic` 의 UDP 와 `stream udp:443` 이 정확히
+  // 그 경우이고, 엔진은 그때 조용히 한쪽을 버린다.
+  if (!sharesTransport(a.protocol, b.protocol)) return false;
 
   const na = normalizeBind(a.bind);
   const nb = normalizeBind(b.bind);
