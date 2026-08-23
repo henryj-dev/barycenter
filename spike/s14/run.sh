@@ -303,8 +303,16 @@ done
 # 0 이었던 이유고, 그건 "연결이 안 섰다" 가 아니라 "내가 죽였다" 였다. `-d` 로 띄운다.
 docker exec "$ENGINE" sh -c ': > /tmp/long.out'
 docker exec -d "$ENGINE" sh -c "{ sleep 25; } | nc -w 25 127.0.0.1 $LONG_PORT > /tmp/long.out 2>&1"
-sleep 2
-before=$(docker exec "$ENGINE" sh -c 'wc -l < /tmp/long.out' 2>/dev/null | tr -d ' ')
+# **여기도 상태로 기다린다.** 바로 위에서 배운 것을 이 줄에만 안 쓰고 `sleep 2` 로 뒀다가
+# 네 번 중 한 번쯤 줄 수가 0 으로 나왔다 — 백엔드가 첫 줄을 쓰기 전에 읽은 것이다.
+# 그러면 결론이 "세션이 끊겼다" 가 아니라 **"못 쟀다"** 가 되고, 스파이크가 흔들린다.
+before=0
+w=0
+while [ "$w" -lt 30 ]; do
+  before=$(docker exec "$ENGINE" sh -c 'wc -l < /tmp/long.out' 2>/dev/null | tr -d ' ')
+  [ "${before:-0}" -gt 0 ] && break
+  w=$((w+1)); sleep 0.5
+done
 printf '%s' "{\"mode\":\"normal\",\"ttl\":2,\"A\":{\"be.test\":[\"$B_IP\"]}}" | zone
 sleep 6
 after=$(docker exec "$ENGINE" sh -c 'wc -l < /tmp/long.out' 2>/dev/null | tr -d ' ')
