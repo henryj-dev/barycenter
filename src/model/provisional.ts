@@ -315,6 +315,44 @@ export type Listener =
  */
 export type HttpProfile = {
   defaultAction?: 'reject' | { pool: string };
+  /**
+   * 프록시 타임아웃과 본문 크기 (제안 #8). 없으면 **nginx 기본값**이다.
+   *
+   * 전에는 셋 다 고정이었다 — `proxy_connect_timeout` 60s · `proxy_read_timeout` 60s ·
+   * `client_max_body_size` **1m**. 마지막 것이 특히 물린다: 기본 1m 이라 조금 큰
+   * 업로드가 413 으로 죽는데 고칠 손잡이가 없었다.
+   *
+   * **라우트(location)별로는 안 연다.** nginx 는 거기서도 받지만, 라우트마다 다른 값을
+   * 주려면 "어느 라우트가 무엇을 상속받는가" 가 모델에 드러나야 하고 그건 다른 크기의
+   * 일이다. 없는 것을 있는 척하지 않는다.
+   */
+  limits?: ProxyLimits;
+};
+
+/**
+ * 프록시 한계값. **전부 선택이고, 안 적으면 그 디렉티브를 아예 안 낸다.**
+ *
+ * 기본값을 우리가 정해 렌더하면 설정을 안 건드린 배포의 렌더 바이트가 바뀌고, 그러면
+ * 전 배포가 다음 apply 에서 세대 전환을 한다. B-12(dict 크기)가 1024 의 배수를 `m` 으로
+ * 낸 것과 같은 이유다.
+ */
+export type ProxyLimits = {
+  /**
+   * `proxy_connect_timeout` (ms).
+   *
+   * ⚠️ **nginx 상한이 75s 다.** 문서가 못 박았다 — *"this timeout cannot usually
+   * exceed 75 seconds."* 넘겨 적으면 조용히 무시되므로 해독기가 막는다.
+   */
+  connectTimeoutMs?: number;
+  /** `proxy_read_timeout` (ms). 두 번의 **읽기 사이** 간격이지 전체 시간이 아니다. */
+  readTimeoutMs?: number;
+  /** `proxy_send_timeout` (ms). 두 번의 **쓰기 사이** 간격이다. */
+  sendTimeoutMs?: number;
+  /**
+   * `client_max_body_size` (바이트). **`0` 은 무제한**이고, 그건 "안 적음" 과 다르다 —
+   * 안 적으면 nginx 기본 1m 이고, `0` 은 검사를 끄는 것이다.
+   */
+  clientMaxBodyBytes?: number;
 };
 
 export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash';

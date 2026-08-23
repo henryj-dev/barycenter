@@ -39,6 +39,7 @@ import type {
   Listener,
   Model,
   PassthroughRoute,
+  ProxyLimits,
   Certificate,
   CipherPolicyRef,
   HstsPolicy,
@@ -457,6 +458,7 @@ function httpServerBlocks(
         directive('server_name', [nameArg]),
         ...tlsBody,
         ...realipNodes(listener),
+        ...proxyLimitNodes(listener.http?.limits),
         ...(acme ? [acmeChallengeLocation()] : []),
         ...locations,
       ]),
@@ -464,6 +466,53 @@ function httpServerBlocks(
   }
   return out;
 }
+
+/**
+ * 프록시 타임아웃과 본문 크기 (제안 #8).
+ *
+ * **안 적은 것은 안 낸다.** 기본값을 우리가 정해 렌더하면 설정을 안 건드린 배포의 렌더
+ * 바이트가 바뀌고, 그러면 전 배포가 다음 apply 에서 세대 전환을 한다.
+ *
+ * server 블록에 낸다 — location 마다 다르게 주는 것은 모델이 표현하지 않는다(§4.9 의
+ * "표현하면 안 걸리는 설정이 된다" 와 같은 판단).
+ */
+function proxyLimitNodes(limits: ProxyLimits | undefined): ConfNode[] {
+  if (limits === undefined) return [];
+  const out: ConfNode[] = [];
+  if (limits.connectTimeoutMs !== undefined) {
+    out.push(directive('proxy_connect_timeout', [lit(msArg(limits.connectTimeoutMs))]));
+  }
+  if (limits.readTimeoutMs !== undefined) {
+    out.push(directive('proxy_read_timeout', [lit(msArg(limits.readTimeoutMs))]));
+  }
+  if (limits.sendTimeoutMs !== undefined) {
+    out.push(directive('proxy_send_timeout', [lit(msArg(limits.sendTimeoutMs))]));
+  }
+  if (limits.clientMaxBodyBytes !== undefined) {
+    out.push(directive('client_max_body_size', [lit(sizeArg(limits.clientMaxBodyBytes))]));
+  }
+  return out;
+}
+
+/**
+ * ms → nginx 시간 인자.
+ *
+ * **초로 안 떨어지면 `ms` 로 낸다.** 반올림하면 운영자가 적은 값과 엔진이 쓰는 값이
+ * 달라지고, 그 차이는 타임아웃이 실제로 물리는 날에만 드러난다.
+ */
+const msArg = (ms: number): string => (ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`);
+
+/**
+ * 바이트 → nginx 크기 인자.
+ *
+ * 1024 의 배수만 `k`·`m` 으로 접는다 — 아니면 바이트 그대로다. B-12 의 dict 크기와
+ * 같은 규칙이고, 이유도 같다: **사람이 적은 값이 산출물에서 그대로 보여야 한다.**
+ */
+const sizeArg = (bytes: number): string => {
+  if (bytes !== 0 && bytes % (1024 * 1024) === 0) return `${bytes / (1024 * 1024)}m`;
+  if (bytes !== 0 && bytes % 1024 === 0) return `${bytes / 1024}k`;
+  return `${bytes}`;
+};
 
 /** 라우트 액션 하나를 location 본문으로. */
 function locationBody(r: HttpRoute, poolsWithBackends: Set<string>): ConfNode[] {
@@ -827,6 +876,10 @@ function defaultServerBlock(
     directive('server_name', [lit('_')]),
     ...tlsBody,
     ...realipNodes(listener),
+    // **default_server 에도 낸다.** 한계값은 리스너 단위 계약이다 — 여기 안 내면
+    // 호스트 라우트가 없는 리스너(그리고 모르는 Host 로 오는 요청)에는 안 걸리고,
+    // 운영자는 "적었는데 어떤 요청에는 안 먹는다" 를 겪는다.
+    ...proxyLimitNodes(listener.http?.limits),
     ...(acme ? [acmeChallengeLocation()] : []),
     ...body,
   ]);

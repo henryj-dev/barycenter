@@ -35,6 +35,8 @@ import type {
   SniCertificateBinding,
   TlsPolicy,
   SniOutcome,
+  HttpProfile,
+  ProxyLimits,
 } from '../model/provisional.js';
 import type { Db, Queryable, Row } from './pg.js';
 import {
@@ -276,6 +278,7 @@ async function readModel(c: Queryable): Promise<Model> {
 
   const listeners = (await c.query(
     `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2,
+            l.proxy_limits,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
             dp.key AS default_pool, hp.key AS http_default_pool, sp.key AS sni_pool,
             tp.key AS tls_policy, tc.key AS tls_default_certificate
@@ -298,21 +301,33 @@ async function readModel(c: Queryable): Promise<Model> {
       ? { acceptProxyProtocol: { trustedCidrs: cidrs as string[] } }
       : {};
     const protocol = text(r, 'protocol');
-    if (protocol === 'http') {
+    /**
+     * http 프로필을 한 자리에서 만든다 (제안 #8).
+     *
+     * 전에는 http 와 https 가 같은 세 줄을 각자 들고 있었다. `limits` 를 더하면서 그
+     * 중복이 **한쪽만 고칠 자리**가 되므로 먼저 모은다 — 이 저장소가 반복해서 잡는
+     * "자리가 둘이면 언젠가 갈린다" 다.
+     */
+    const httpProfile = (): { http: HttpProfile } | Record<string, never> => {
       const hp = maybeText(r, 'http_default_pool');
       const reject = bool(r, 'http_default_reject');
       const action = hp !== undefined ? { pool: hp } : reject ? ('reject' as const) : undefined;
+      const raw = r['proxy_limits'];
+      const limits = raw === null || raw === undefined ? undefined : raw as ProxyLimits;
+      if (action === undefined && limits === undefined) return {};
       return {
-        ...base, protocol: 'http', ...pp,
-        ...(action !== undefined ? { http: { defaultAction: action } } : {}),
+        http: {
+          ...(action === undefined ? {} : { defaultAction: action }),
+          ...(limits === undefined ? {} : { limits }),
+        },
       };
+    };
+    if (protocol === 'http') {
+      return { ...base, protocol: 'http', ...pp, ...httpProfile() };
     }
     if (protocol === 'https') {
-      const hp = maybeText(r, 'http_default_pool');
-      const reject = bool(r, 'http_default_reject');
-      const action = hp !== undefined ? { pool: hp } : reject ? ('reject' as const) : undefined;
       return {
-        ...base, protocol: 'https', ...pp,
+        ...base, protocol: 'https', ...pp, ...httpProfile(),
         tls: {
           policy: text(r, 'tls_policy'),
           defaultCertificate: text(r, 'tls_default_certificate'),
@@ -320,7 +335,6 @@ async function readModel(c: Queryable): Promise<Model> {
         // 011 이 더했다. `undefined` 와 `false` 는 다르다 — 전자는 "안 정했다"(기본값
         // 켬), 후자는 "끄라고 했다" 다. 전에는 둘을 구분할 자리가 아예 없었다 (B-01).
         ...(r['http2'] === null || r['http2'] === undefined ? {} : { http2: bool(r, 'http2') }),
-        ...(action !== undefined ? { http: { defaultAction: action } } : {}),
       };
     }
     if (protocol === 'tls_passthrough') {
@@ -597,10 +611,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
                                 http_default_reject,on_unmatched_sni_pool,on_unmatched_sni_cls,
                                 on_unmatched_sni_reject,preread_timeout_s,
                                 default_pool_id,default_pool_cls,
-                                tls_policy_id,tls_default_cert_id,http2,
+                                tls_policy_id,tls_default_cert_id,http2,proxy_limits,
                                 created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 $18,$19,$22,$20,$20,$21)
+                 $18,$19,$22,$23,$20,$20,$21)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
@@ -617,6 +631,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            tls_policy_id=EXCLUDED.tls_policy_id,
            tls_default_cert_id=EXCLUDED.tls_default_cert_id,
            http2=EXCLUDED.http2,
+           proxy_limits=EXCLUDED.proxy_limits,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
@@ -630,7 +645,11 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           tls?.policy ?? null, tls?.cert ?? null, by, revision,
           // $22 — **https 에만.** 다른 프로토콜에서는 NULL 로 못 박는다(DB 도 같은
           // CHECK 을 건다). 안 정한 것과 끄라고 한 것을 구분하려면 boolean|null 이어야 한다.
-          protocol === 'https' ? b['http2'] ?? null : null],
+          protocol === 'https' ? b['http2'] ?? null : null,
+          // $23 — **http 계열에만** (제안 #8). DB 도 같은 CHECK 을 건다. tcp·udp·패스스루에
+          // 적힌 값은 아무도 안 읽고, 안 읽는 값이 저장되면 다음 사람은 그게 동작한다고 믿는다.
+          protocol === 'http' || protocol === 'https'
+            ? (obj(b['http'])['limits'] ?? null) : null],
       );
       return;
     }

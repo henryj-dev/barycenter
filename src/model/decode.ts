@@ -25,6 +25,7 @@ import type {
   Certificate,
   HttpAction,
   HttpProfile,
+  ProxyLimits,
   HttpRoute,
   Listener,
   Model,
@@ -186,9 +187,49 @@ function decodeHttpProfile(iss: Issues, v: unknown, path: string): HttpProfile |
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['defaultAction']);
+  noExtraKeys(iss, v, path, ['defaultAction', 'limits']);
   const action = optional(v['defaultAction'], () => decodeSniOutcome(iss, v['defaultAction'], `${path}.defaultAction`));
-  return action === undefined ? {} : { defaultAction: action };
+  const limits = optional(v['limits'], () => decodeProxyLimits(iss, v['limits'], `${path}.limits`));
+  return {
+    ...(action === undefined ? {} : { defaultAction: action }),
+    ...(limits === undefined ? {} : { limits }),
+  };
+}
+
+/**
+ * 프록시 한계값 (제안 #8).
+ *
+ * **상한이 nginx 의 것이다.** `proxy_connect_timeout` 은 75s 를 넘기면 조용히 무시되고,
+ * 그러면 운영자는 자기가 정한 값이 왜 안 먹는지 영영 못 찾는다 — 저장 단계에서 막는다.
+ * 나머지 둘에는 그런 하드 상한이 없으므로 "터무니없는 값" 만 거른다(24시간).
+ *
+ * 타임아웃 `0` 은 거부한다 — nginx 가 안 받는다. `clientMaxBodyBytes` 의 `0` 은 반대로
+ * **의미가 있다**(무제한). 같은 숫자가 두 자리에서 다른 뜻이라 하한을 따로 준다.
+ */
+function decodeProxyLimits(iss: Issues, v: unknown, path: string): ProxyLimits | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, [
+    'connectTimeoutMs', 'readTimeoutMs', 'sendTimeoutMs', 'clientMaxBodyBytes',
+  ]);
+  const DAY_MS = 86_400_000;
+  const connect = optional(v['connectTimeoutMs'],
+    () => int(iss, v['connectTimeoutMs'], `${path}.connectTimeoutMs`, 1, 75_000));
+  const read = optional(v['readTimeoutMs'],
+    () => int(iss, v['readTimeoutMs'], `${path}.readTimeoutMs`, 1, DAY_MS));
+  const send = optional(v['sendTimeoutMs'],
+    () => int(iss, v['sendTimeoutMs'], `${path}.sendTimeoutMs`, 1, DAY_MS));
+  // **`0` 이 무제한이라 하한이 0 이다.** 상한은 nginx 가 부호 있는 크기로 다루는 범위.
+  const body = optional(v['clientMaxBodyBytes'],
+    () => int(iss, v['clientMaxBodyBytes'], `${path}.clientMaxBodyBytes`, 0, 2 ** 31 - 1));
+  return {
+    ...(connect === undefined ? {} : { connectTimeoutMs: connect }),
+    ...(read === undefined ? {} : { readTimeoutMs: read }),
+    ...(send === undefined ? {} : { sendTimeoutMs: send }),
+    ...(body === undefined ? {} : { clientMaxBodyBytes: body }),
+  };
 }
 
 function decodeHttpAction(iss: Issues, v: unknown, path: string): HttpAction | undefined {
