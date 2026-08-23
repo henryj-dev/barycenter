@@ -38,12 +38,29 @@ export type DbRetentionOptions = {
   /** **안 정하면 안 지운다.** 감사 추적의 보존 기간은 우리가 정할 것이 아니다. */
   auditDays?: number;
   healthEventDays?: number;
+  /**
+   * 만료된 plan 을 며칠 뒤 지우나 (제안 #10). **안 정하면 안 지운다.**
+   *
+   * `committed`·`operation_bound` 는 **절대 안 지운다** — 스키마 주석이 적어 뒀듯이
+   * 커밋된 artifact 는 롤백 수단이고, 24시간 뒤 되돌릴 방법이 사라지는 상황을
+   * 안 만든다.
+   */
+  planDays?: number;
+  /**
+   * 버려진 changeset 을 며칠 뒤 지우나. **안 정하면 안 지운다.**
+   *
+   * `discarded` 만 본다. `open`·`sealed` 는 누가 편집 중이고, `committed` 에는
+   * 커밋된 plan 이 매달려 있다(FK CASCADE 라 함께 사라진다).
+   */
+  changesetDays?: number;
   maxPerSweep?: number;
 };
 
 export type DbRetentionResult = {
   healthEvents: number;
   audit: number;
+  plans: number;
+  changesets: number;
 };
 
 /**
@@ -102,10 +119,46 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
     ? undefined
     : checkDays('audit', opts.auditDays);
 
+  const planDays = opts.planDays === undefined ? undefined : checkDays('plans', opts.planDays);
+  const changesetDays = opts.changesetDays === undefined
+    ? undefined
+    : checkDays('changesets', opts.changesetDays);
+
   const healthEvents = await prune(opts.db, 'health_events', 'seq', healthDays, limit);
   const audit = auditDays === undefined
     ? 0
     : await prune(opts.db, 'audit', 'id', auditDays, limit);
 
-  return { healthEvents, audit };
+  /**
+   * **만료된 plan 만.** `state` 로 거른다 — 나이만 보면 커밋된 것까지 간다.
+   *
+   * `expires_at` 이 **이미 지났고** 그 위에 보존 기간을 더 준다. TTL 은 "이 plan 을
+   * 더는 못 쓴다" 는 선이고, 보존 기간은 "그 뒤로 얼마나 더 들고 있나" 다 — 둘을 한
+   * 숫자로 접으면 진단하려고 남겨 둔 창이 사라진다.
+   */
+  const plans = planDays === undefined ? 0 : (await opts.db.query(
+    `DELETE FROM plans WHERE ctid IN (
+       SELECT ctid FROM plans
+       WHERE state IN ('planned', 'expired')
+         AND expires_at < now() - make_interval(days => $1::int)
+       ORDER BY created_at LIMIT $2::int)`,
+    [String(planDays), String(limit)],
+  )).rowCount ?? 0;
+
+  /**
+   * **버려진 changeset 만.** 딸린 plan 은 FK CASCADE 로 따라간다 — 고아를 안 남긴다.
+   *
+   * `committed` 를 안 지우는 이유가 그 CASCADE 다: 커밋된 changeset 을 지우면 롤백
+   * 수단인 plan 이 **함께** 사라진다.
+   */
+  const changesets = changesetDays === undefined ? 0 : (await opts.db.query(
+    `DELETE FROM changesets WHERE ctid IN (
+       SELECT ctid FROM changesets
+       WHERE state = 'discarded'
+         AND created_at < now() - make_interval(days => $1::int)
+       ORDER BY created_at LIMIT $2::int)`,
+    [String(changesetDays), String(limit)],
+  )).rowCount ?? 0;
+
+  return { healthEvents, audit, plans, changesets };
 }

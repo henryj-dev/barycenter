@@ -405,18 +405,25 @@ export async function main(): Promise<void> {
    * **리더만.** 여러 노드가 동시에 밀면 서로의 잠금을 기다리기만 한다.
    */
   const auditDaysRaw = env('BARY_AUDIT_RETENTION_DAYS', '');
+  // 제안 #10 의 남은 절반. **셋 다 빈 값이면 안 지운다** — 같은 이유다.
+  const planDaysRaw = env('BARY_PLAN_RETENTION_DAYS', '');
+  const changesetDaysRaw = env('BARY_CHANGESET_RETENTION_DAYS', '');
   const dbRetention = {
     healthEventDays: Number(env('BARY_HEALTH_EVENT_RETENTION_DAYS', String(DEFAULT_HEALTH_EVENT_DAYS))),
     // 빈 값은 **무한 보존**이다. 감사 추적의 보존 기간은 우리가 정할 것이 아니라
     // 운영자가 정하는 것이고, 기본값으로 지우면 업그레이드가 곧 데이터 소실이다.
     ...(auditDaysRaw === '' ? {} : { auditDays: Number(auditDaysRaw) }),
+    ...(planDaysRaw === '' ? {} : { planDays: Number(planDaysRaw) }),
+    ...(changesetDaysRaw === '' ? {} : { changesetDays: Number(changesetDaysRaw) }),
   };
   const dbRetentionTimer = setInterval(() => {
     void (async (): Promise<void> => {
       if (!election.state.isLeader) return;
       try {
         const out = await sweepDatabase({ db, ...dbRetention });
-        if (out.healthEvents > 0 || out.audit > 0) log.info('db.swept', out);
+        if (out.healthEvents > 0 || out.audit > 0 || out.plans > 0 || out.changesets > 0) {
+          log.info('db.swept', out);
+        }
       } catch (e) {
         log.error('db.sweep_failed', { error: (e as Error).message });
       }
