@@ -81,7 +81,7 @@ describe('S9 — on_no_sni 승격', () => {
     // 정의되지 않은 업스트림을 가리키고 `nginx -t` 가 게시 전에 죽는다.
     const conf = render(model({ onNoSni: { pool: 'lonely' } })).conf;
     const m = /map \$ssl_preread_protocol \$\w+ \{([^}]*)\}/.exec(conf)!;
-    const target = /default\s+(\S+);/.exec(m[1])![1];
+    const target = /default\s+(\S+);/.exec(m[1]!)![1]!;
     expect(target).not.toBe('""');
     expect(conf).toContain(`upstream ${target} {`);
   });
@@ -92,8 +92,8 @@ describe('S9 — on_no_sni 승격', () => {
     })).conf;
     const proto = /map \$ssl_preread_protocol \$\w+ \{([^}]*)\}/.exec(conf)![1];
     const name = /map \$ssl_preread_server_name \$\w+ \{([^}]*)\}/.exec(conf)![1];
-    const noSniTarget = /default\s+(\S+);/.exec(proto)![1];
-    const unmatchedTarget = /default\s+(\S+);/.exec(name)![1];
+    const noSniTarget = /default\s+(\S+);/.exec(proto!)![1];
+    const unmatchedTarget = /default\s+(\S+);/.exec(name!)![1];
     expect(noSniTarget).not.toBe(unmatchedTarget);
   });
 
@@ -123,7 +123,7 @@ describe('S9 — on_no_sni 승격', () => {
       certificates: [], tlsPolicies: [], sniBindings: [],
     });
     expect(out.ok).toBe(true);
-    const l = (out as { model: { listeners: { onNoSni?: unknown }[] } }).model.listeners[0];
+    const l = (out as { model: { listeners: { onNoSni?: unknown }[] } }).model.listeners[0]!;
     expect(l.onNoSni).toEqual({ pool: 'fallback' });
   });
 
@@ -143,15 +143,15 @@ describe('S9 — on_no_sni 승격', () => {
     const [op] = putPassthroughListenerPatch('pt', {
       bind: '0.0.0.0', port: 8443, pool: 'a', noSniPool: 'b',
     });
-    expect(op.body.onUnmatchedSni).toEqual({ pool: 'a' });
-    expect(op.body.onNoSni).toEqual({ pool: 'b' });
+    expect(op!.body.onUnmatchedSni).toEqual({ pool: 'a' });
+    expect(op!.body.onNoSni).toEqual({ pool: 'b' });
   });
 
   it('빈 문자열은 필드를 안 만든다 — "" 는 "안 정했다" 다', () => {
     const [op] = putPassthroughListenerPatch('pt', {
       bind: '0.0.0.0', port: 8443, noSniPool: '   ',
     });
-    expect(op.body.onNoSni).toBeUndefined();
+    expect(op!.body.onNoSni).toBeUndefined();
   });
 
   it('CLI 가 --no-sni-pool 을 패치까지 나른다', () => {

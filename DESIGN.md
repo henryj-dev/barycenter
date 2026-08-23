@@ -2830,7 +2830,7 @@ k8s 네이티브 배포는 별도 과제.
 | # | 검증 | 합격 기준 (초기값, 스파이크에서 확정) | 실패 시 |
 |---|---|---|---|
 | S1 ✅ | Lua 동적 peer 변경 (HTTP·TCP·**UDP**) | 세 서브시스템 전부 reload 없이 전환 | → **대안 B** |
-| S2 ~ | 드레인 관측 | HTTP/1·HTTP/2·TCP·UDP 각각에서 peer 별 inflight·세션 관측 가능. **두 평면에 창구가 있다** — Lua 밸런서의 `in:` 을 http admin 은 `/membership/inflight`, stream admin 은 `inflight` 동사로 답한다. 남은 것: inflight 와 세션이 **한 카운터**라 둘로 안 갈린다 | 기능 축소: `no_new_traffic` 만 |
+| S2 ~ | 드레인 관측 | HTTP/1·HTTP/2·TCP·UDP 각각에서 peer 별 inflight·세션 관측 가능. **두 평면에 창구가 있다** — Lua 밸런서의 `in:` 을 http admin 은 `/membership/inflight`, stream admin 은 `inflight` 동사로 답한다. ✅ **닫혔다 (2026-08-23).** "한 카운터라 둘로 안 갈린다" 를 오래 *못 가른다* 로 읽었는데, 실제로는 **가를 것이 없다** — 우리 렌더에서 두 수는 같은 수다. stream 은 balancer·log 가 연결당 한 번이라 정의상 같고, http 는 upstream 에 `keepalive` 를 안 내므로 요청 하나가 업스트림 연결 하나다. `tests/conformance/inflight-is-sessions.test.ts` 가 그 **전제**를 지킨다 — 누가 `keepalive` 를 넣으면 빨개지고, 그때 필요한 것은 테스트 삭제가 아니라 세션 카운터 분리다 | 기능 축소: `no_new_traffic` 만 |
 | S3 | 인스턴스 재시작 부트스트랩 | 재시딩까지 공백 < 1s, 오래된 헬스 되살아남 없음 | 기능 축소: 부팅 시 전 백엔드 `unknown` |
 | S4 | CP 단절 | fail-open 유지, eviction 시 zero-peer 없음 | fail_closed 기본화 |
 | S5 ~ | **이중 zone + 워커 수렴 + 평면 부분 전환** | 양쪽 ACK 후 전 워커 수렴 < 500ms **AND** 한쪽 평면 실패·ACK 유실·늦은 RPC·리더 교체·옛 HTTP/2 워커 잔존에서 잘못된 peer 선택 0회 | → 대안 B (구조 불성립) |
