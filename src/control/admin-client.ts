@@ -132,3 +132,30 @@ export async function clearStaleSockets(paths: readonly string[]): Promise<void>
     unlinkSync(path);
   }
 }
+
+/**
+ * stream admin 과 이야기한다 — **원시 TCP** (S-08b · S2).
+ *
+ * stream 에는 HTTP 가 없고 두 zone 은 서로 안 보이므로(E14 · E25 · §3.4) http admin 으로
+ * 대신 쓸 수 없다. `adminFetch` 와 같은 자리에 두는 이유는 하나다: **소비자가 둘이 됐다.**
+ * 데몬이 슬롯을 밀고(`write`·`read`), 컨트롤 플레인이 드레인 숫자를 묻는다(`inflight`).
+ * 데몬 안에 두면 컨트롤 플레인이 데몬을 import 해야 하고 그건 방향이 거꾸로다.
+ *
+ * `adminFetch` 가 `typeof fetch` 를 돌려주는 것과 같은 이유로 **함수를 돌려준다** —
+ * 부르는 쪽이 소켓을 모르고, 테스트가 그 자리에 자기 것을 넣는다.
+ */
+export function adminTalk(socketPath: string, timeoutMs = 5000): (payload: string) => Promise<string> {
+  return (payload: string) => new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    // `net.connect` 는 유닉스 소켓을 그대로 받는다 — http 쪽과 달리 감쌀 것이 없다.
+    const s = connect({ path: socketPath });
+    s.setTimeout(timeoutMs, () => {
+      s.destroy();
+      reject(new Error(`stream admin 이 ${timeoutMs}ms 안에 안 답했다`));
+    });
+    s.on('connect', () => s.end(payload));
+    s.on('data', (d: Buffer) => chunks.push(d));
+    s.on('close', () => resolve(Buffer.concat(chunks).toString()));
+    s.on('error', (e) => reject(e));
+  });
+}

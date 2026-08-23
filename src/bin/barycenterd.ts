@@ -16,7 +16,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { createServer as createHttpsServer } from 'node:https';
-import { connect } from 'node:net';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +30,7 @@ import {
 } from '../api/auth.js';
 import type { OidcRpSettings } from '../api/oidc-code.js';
 import { render } from '../conf/render.js';
-import { adminFetch, clearStaleSockets } from '../control/admin-client.js';
+import { adminFetch, adminTalk, clearStaleSockets } from '../control/admin-client.js';
 import { encodeSlots, httpAdminConf, resolveSlots, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
@@ -94,29 +93,16 @@ async function pushHttp(socket: string, epoch: string, body: string): Promise<st
 }
 
 /**
- * stream 평면 admin 과 이야기한다. **원시 TCP 다** — stream 에는 HTTP 가 없고, 두 zone 은
- * 서로 안 보이므로(E14 · E25 · §3.4) http admin 으로 대신 쓸 수도 없다.
+ * stream 평면에 슬롯을 밀고 **되읽는다.**
+ *
+ * 전송은 `adminTalk` 이 진다 — 드레인의 `inflight` 창구와 같은 소켓·같은 문법이라
+ * 클라이언트를 둘로 두면 한쪽만 고치는 날이 온다.
  */
-function talkStream(socket: string, payload: string, timeoutMs = 5000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    // `net.connect` 는 유닉스 소켓을 그대로 받는다 — http 쪽과 달리 감쌀 것이 없다.
-    const s = connect({ path: socket });
-    s.setTimeout(timeoutMs, () => {
-      s.destroy();
-      reject(new Error(`stream admin 이 ${timeoutMs}ms 안에 안 답했다`));
-    });
-    s.on('connect', () => s.end(payload));
-    s.on('data', (d: Buffer) => chunks.push(d));
-    s.on('close', () => resolve(Buffer.concat(chunks).toString()));
-    s.on('error', (e) => reject(e));
-  });
-}
-
 async function pushStream(socket: string, epoch: string, body: string): Promise<string> {
-  const wrote = await talkStream(socket, `${epoch} write\n${body}\n\n`);
+  const talk = adminTalk(socket);
+  const wrote = await talk(`${epoch} write\n${body}\n\n`);
   if (!wrote.startsWith('staged ')) throw new Error(`stream 멤버십 적재 실패: ${wrote.trim()}`);
-  return (await talkStream(socket, `${epoch} read\n`)).trim();
+  return (await talk(`${epoch} read\n`)).trim();
 }
 
 /**

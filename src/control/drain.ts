@@ -49,6 +49,29 @@ export async function observePeerFromAdmin(
   }
 }
 
+/**
+ * stream 평면에 같은 것을 묻는다 — **전송만 다르다** (S2, 2026-08-23).
+ *
+ * stream 에는 HTTP 가 없어 admin 이 원시 TCP 다. 그래서 `fetch` 대신 "한 줄 보내고 답을
+ * 받는" 함수를 주입받는다. 답의 **모양은 http 창구와 같다** — 다르게 두면 그 순간
+ * "어느 평면이냐" 가 드레인 판정 곳곳으로 새어 나가고, `parsePeerObservation` 이 둘로
+ * 갈라진다.
+ *
+ * epoch 은 뜻이 없다(`in:` 은 epoch 에 안 매인다). 헤더 문법을 맞추려고 `0` 을 보낸다.
+ */
+export async function observeStreamPeer(
+  talk: (payload: string) => Promise<string>, peer: string,
+): Promise<unknown> {
+  try {
+    const text = (await talk(`0 inflight\n${peer}\n`)).trim();
+    if (text === '' || text === '{}') return undefined;
+    return JSON.parse(text) as unknown;
+  } catch {
+    // 못 읽은 것과 0 인 것은 다르다. 지어내지 않는다.
+    return undefined;
+  }
+}
+
 export function parsePeerObservation(raw: unknown): { inflight: number; sessions: number } | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const o = raw as Record<string, unknown>;

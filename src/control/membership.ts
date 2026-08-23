@@ -317,6 +317,23 @@ server {
         if not head then return end
         local epoch, verb = head:match("^(%S+)%s+(%S+)$")
         if not epoch then ngx.print("bad header\\n") return end
+        -- **peer 별 inflight** (S2). 밸런서가 올린 숫자만 준다 — 없으면 빈 객체다.
+        --
+        -- 전에는 이 창구가 http 에만 있었다. 그런데 \`in:\` 을 올리는 balancer 와 내리는
+        -- log 단계는 **양쪽 평면에 다 있다** — 즉 숫자는 세고 있는데 물을 데가 없어서
+        -- TCP·UDP 백엔드는 \`quiesced\` 판정을 영영 못 받았다. 두 zone 은 서로 안 보이므로
+        -- (E14 · E25) http admin 으로 대신 물을 수도 없다.
+        --
+        -- peer 는 **다음 줄**로 받는다. 헤더는 정확히 두 토큰이고(\`write\`·\`read\` 가 같은
+        -- 문법을 쓴다) 거기 끼워 넣으면 그 파싱이 함께 헐거워진다.
+        if verb == "inflight" then
+            local peer = sock:receive("*l")
+            if not peer or peer == "" then ngx.print("{}\\n") return end
+            local n = d:get("in:" .. peer)
+            if n == nil then ngx.print("{}\\n") return end
+            ngx.print('{"inflight":' .. n .. ',"active_sessions":' .. n .. '}\\n')
+            return
+        end
         if verb == "read" then
             local out = {}
             for _, k in ipairs(d:get_keys(0)) do

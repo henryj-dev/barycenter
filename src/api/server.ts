@@ -322,9 +322,19 @@ const ROUTES: Route[] = [
       return;
     }
     const be = m.backends.find((b) => b.key === key);
+    /**
+     * **어느 평면에 물을지는 풀이 정한다** (S2, 2026-08-23).
+     *
+     * `in:` 카운터는 평면마다 자기 dict 에 있고 두 zone 은 서로 안 보인다(E14 · E25).
+     * 전에는 무조건 http admin 에 물었으므로 TCP·UDP 백엔드는 숫자가 세어지고 있는데도
+     * 늘 "관측 없음" 이었고, 그래서 `quiesced` 가 영영 안 나왔다.
+     */
+    const cls = be === undefined
+      ? undefined
+      : m.pools.find((p) => p.key === be.pool)?.protocolClass;
     const raw = be === undefined
       ? undefined
-      : await api.control.observePeer(be.host, be.port);
+      : await api.control.observePeer(be.host, be.port, cls === 'http' ? 'http' : 'stream');
     const obs = parsePeerObservation(raw);
     const status = drainStatusOf({
       backend: key,

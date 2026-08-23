@@ -13,9 +13,9 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
-import { adminFetch } from './admin-client.js';
+import { adminFetch, adminTalk } from './admin-client.js';
 import { type DiscoveryIntake } from './discovery.js';
-import { drainKeys, observationPeerOf, observePeerFromAdmin } from './drain.js';
+import { drainKeys, observationPeerOf, observePeerFromAdmin, observeStreamPeer } from './drain.js';
 import { currentHealth, eligibleCountForPlane, reduceMembership, shouldPushMembership } from './health.js';
 import { assertAdminSocket, httpAdminConf, slotsForEligible, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
@@ -124,9 +124,20 @@ export class ControlPlane {
 
   /**
    * 엔진이 준 peer 관측. 못 읽으면 undefined — 드레인이 0 을 짓지 않는다.
+   *
+   * **평면을 갈라야 한다** (S2, 2026-08-23). `in:` 카운터는 두 평면이 각자 자기 dict 에
+   * 들고 있고 두 zone 은 서로 안 보인다(E14 · E25 · §3.4). 전에는 무조건 http admin 에
+   * 물었으므로 TCP·UDP 백엔드는 **숫자가 세어지고 있는데도** 늘 "관측 없음" 이었고,
+   * 그래서 `quiesced` 판정을 영영 못 받았다.
+   *
+   * 평면은 풀의 `protocolClass` 가 정한다 — 부르는 쪽이 이미 아는 값이다.
    */
-  async observePeer(host: string, port: number): Promise<unknown> {
+  async observePeer(host: string, port: number, plane: Plane = 'http'): Promise<unknown> {
     const peer = await observationPeerOf(host, port);
+    if (plane === 'stream') {
+      const socket = this.opts.streamAdminSocket ?? defaultStreamSocket(this.opts.adminSocket);
+      return observeStreamPeer(adminTalk(socket), peer);
+    }
     return observePeerFromAdmin(adminFetch(this.opts.adminSocket), peer);
   }
 
