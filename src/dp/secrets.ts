@@ -94,6 +94,18 @@ export interface SecretStore {
   putKey(name: string, privkey: string): KeyRef;
   /** 키만 읽는다. `store://` 참조를 주면 던진다. */
   getKey(ref: string): string;
+  /**
+   * 저장소에 **실재하는 참조 전부** — `store://` 와 `key://` 를 섞어서 (검수 D1).
+   *
+   * GC 의 root 수집이 쓴다. 세대 디렉토리는 인증서 **키**로 갈려 있어 시크릿 *이름* 을
+   * 모르므로, 거기서 뽑을 수 있는 것은 `@<버전>` 자리표뿐이다. 그 자리표를 실제 참조로
+   * 넓히려면 **저장소가 무엇을 들고 있는지** 물어야 한다 — 그 창구가 여기다.
+   *
+   * 전에는 이 창구가 없었고, 대신 `versions(name)` 이 있었는데 **호출자가 0 개였다.**
+   * 그래서 root 수집이 넓힐 재료를 못 얻었고, 부류 ②(디스크의 세대가 참조하는 자료)가
+   * 조용히 무효였다. 이름을 모르는 쪽에 이름을 묻던 것이 문제였다.
+   */
+  listRefs(): string[];
 }
 
 const sha256 = (s: string): string =>
@@ -199,13 +211,43 @@ export class FsSecretStore implements SecretStore {
     }
   }
 
-  /** 이 이름의 버전들. GC 와 운영 조회용. */
-  versions(name: string): string[] {
-    try {
-      return readdirSync(join(this.root, name)).sort();
-    } catch {
-      return [];
-    }
+  /**
+   * 저장소에 실재하는 참조 전부.
+   *
+   * **`secret-gc.ts` 의 `scan()` 과 같은 참조 모양을 내야 한다.** 저쪽은 지울 후보를
+   * 훑고 이쪽은 지키 대상을 넓히므로, 모양이 갈리면 **넓힌 root 가 후보와 안 만나
+   * 보호가 조용히 사라진다.** 둘을 한 함수로 합치지 않은 이유는 저쪽이 store 인스턴스가
+   * 아니라 경로 하나만 받도록 일부러 떼어 둔 것이기 때문이고(§8.4 GC 는 저장소를 모른다),
+   * 그 대신 `tests/unit/audit-secret-roots-wiring.test.ts` 가 **둘의 합의**를 못 박는다 —
+   * `put` 이 준 참조가 root 에 들어가고 그 디렉토리가 남는지 함께 본다.
+   *
+   * 못 읽는 것은 **건너뛴다.** 목록이 반쪽이면 GC 가 덜 지킬 뿐이지만, 던지면 GC 가
+   * 아예 안 돈다 — 남기는 쪽으로 틀리는 것이 이 모듈의 규칙이다.
+   */
+  listRefs(): string[] {
+    const out: string[] = [];
+    const walk = (base: string, scheme: 'store' | 'key'): void => {
+      let names: string[];
+      try {
+        names = readdirSync(base);
+      } catch {
+        return;
+      }
+      for (const name of names) {
+        // `keys/` 는 인증서 자료 루트 **아래**에 있으므로 이름으로 걸러낸다.
+        if (scheme === 'store' && name === 'keys') continue;
+        let versions: string[];
+        try {
+          versions = readdirSync(join(base, name));
+        } catch {
+          continue;                       // 파일이거나 그 사이 사라졌다
+        }
+        for (const version of versions) out.push(`${scheme}://${name}@${version}`);
+      }
+    };
+    walk(this.root, 'store');
+    walk(join(this.root, 'keys'), 'key');
+    return out.sort();
   }
 }
 

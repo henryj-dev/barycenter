@@ -10,15 +10,25 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+import type { SecretStore } from '../dp/secrets.js';
 import type { Db } from '../store/pg.js';
 
 /** 롤백이 닿을 수 있는 리비전 수. 이 밖으로의 롤백은 자료가 없어 **실패한다.** */
 export const DEFAULT_ROLLBACK_REVISIONS = 20;
 
 export type RootsOptions = {
-  db: Db;
+  /** `query` 만 쓴다. 테스트가 빈 DB 를 넣을 수 있어야 배선을 잴 수 있다. */
+  db: Pick<Db, 'query'>;
   /** `generations/` 가 있는 곳. 세대 안의 인증서 디렉토리를 훑는다. */
   prefix: string;
+  /**
+   * 저장소가 실재로 들고 있는 참조들 (검수 D1).
+   *
+   * **필수다.** 세대에서 뽑히는 것은 `@<버전>` 자리표뿐이라 이것 없이는 넓힐 수가 없고,
+   * 넓히지 못하면 부류 ② 가 통째로 사라진다. 선택으로 두면 안 넘기는 호출자가 생기고
+   * 그것이 정확히 이 결함이었다.
+   */
+  secrets: Pick<SecretStore, 'listRefs'>;
   rollbackRevisions?: number;
 };
 
@@ -33,6 +43,16 @@ export type RootsOptions = {
  *   ③ **ACME 계정 키** — 계정은 지워지지 않으므로 언제나 root 다
  *   ④ **진행 중이거나 최근에 끝난 주문의 자료·키** — finalize 직전에 죽은 주문이 다음
  *      틱에 같은 키로 이어 가야 한다
+ *
+ * ── ② 의 넓히기는 **여기 안에 있다** (검수 D1)
+ *
+ * 전에는 이 함수가 `@<버전>` 자리표를 섞어 돌려주고, 그것을 실제 참조로 넓히는 것은
+ * **호출자의 몫**이었다. 데몬은 그 넓히기에 *이미 root 인 것들*을 넘겼고, 그러면
+ * 더할 수 있는 것이 하나도 없다 — 부류 ② 가 조용히 무효였다. 함수는 옳았고 호출부가
+ * 틀렸으므로 함수를 재는 테스트로는 안 잡혔다.
+ *
+ * 그래서 **부를 자리를 하나로 만든다.** 자리가 하나면 잘못 부를 수가 없다.
+ * 나가는 것은 완성된 root 집합이고, `@` 자리표는 여기서 끝난다.
  */
 export async function collectSecretRoots(opts: RootsOptions): Promise<Set<string>> {
   const roots = new Set<string>();
@@ -83,7 +103,8 @@ export async function collectSecretRoots(opts: RootsOptions): Promise<Set<string
       if (typeof v === 'string') roots.add(v);
     }
   }
-  return roots;
+  // ② 의 자리표를 실제 참조로 넓힌다. **저장소에게 묻는다** — 세대는 이름을 모른다.
+  return expandVersionRoots(roots, opts.secrets.listRefs());
 }
 
 /**

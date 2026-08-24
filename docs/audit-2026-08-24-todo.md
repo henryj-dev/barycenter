@@ -37,22 +37,30 @@
 
 **W0-1 을 제일 먼저.** 이 회차에서 값이 제일 큰 항목이고, 나머지와 독립이다.
 
-### ☐ W0-1 · D1 — 시크릿 GC root 배선 `[M]` ← **먼저**
+### ☑ W0-1 · D1 — 시크릿 GC root 배선 `[M]` ← **먼저**
 
-- [ ] `tests/unit/audit-secret-roots-wiring.test.ts` — 세대 디렉토리에만 있는 인증서
+- [x] `tests/unit/audit-secret-roots-wiring.test.ts` — 세대 디렉토리에만 있는 인증서
       버전(최근 리비전 밖 · `keepPerName` 밖 · `minAge` 밖)을 만들어 놓고
       **데몬이 쓰는 것과 같은 방식으로** root 를 모아 sweep 했을 때 그것이 남는가
-- [ ] **빨강 확인** — `npx vitest run tests/unit/audit-secret-roots-wiring`
-- [ ] `src/dp/secrets.ts` — `SecretStore` 에 `listRefs(): string[]` 을 더하고
-      `FsSecretStore` 가 구현한다. **`versions(name)` 은 지운다** — 호출자가 0 개이고
+- [x] **빨강 확인** — `npx vitest run tests/unit/audit-secret-roots-wiring`
+      (4 중 2 빨강: 세대가 가리키는 버전이 지워지고, `@` 자리표가 결과에 샜다)
+- [x] `src/dp/secrets.ts` — `SecretStore` 에 `listRefs(): string[]` 을 더하고
+      `FsSecretStore` 가 구현한다. **`versions(name)` 은 지웠다** — 호출자가 0 개이고
       이것이 그 자리를 대신한다 (죽은 코드를 남기지 않는다)
-- [ ] `src/bin/barycenterd.ts:505` — `all` 을 `secrets.listRefs()` 로 바꾼다
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-secret-roots-wiring.test.ts -t "세대에만 있는 버전은 GC 가 안 지운다"`
+- [x] `src/bin/barycenterd.ts:505` — `all` 을 `secrets.listRefs()` 로 바꾼다
+- [x] `npm run verify:quick` — 단위 816 → **820**
+- [x] 커밋 — `Pinned-by: tests/unit/audit-secret-roots-wiring.test.ts -t "**세대에만 있는 버전은 안 지운다** — 부류 ② 가 실제로 걸린다"`
 
 > ⚠️ **함수가 아니라 배선을 겨눈다.** `expandVersionRoots` 자체의 단위 테스트는 이미
 > 있고 초록이다(`tests/unit/secret-gc.test.ts:154`). 그것을 고쳐 봐야 이 결함을
 > 안 잡는다 — 재현물은 **호출부를 지나야** 한다.
+
+> **계획과 달라진 것.** 투두는 *"`all` 을 `secrets.listRefs()` 로 바꾼다"* 였는데,
+> 그러면 **넓히기를 호출자가 계속 들고 있게 된다** — 다음 호출자가 같은 실수를 할
+> 자리가 그대로 남는다. 그래서 넓히기를 `collectSecretRoots` **안으로** 넣고
+> `secrets` 를 필수 인자로 만들었다. 부를 자리가 하나면 잘못 부를 수가 없다.
+> `expandVersionRoots` 는 그대로 export 로 남는다 — 기존 단위 테스트가 그 함수의
+> 계약을 따로 지킨다.
 
 ### ☐ W0-2 · G6 — 도달성 게이트를 클래스 메서드까지 `[M]`
 

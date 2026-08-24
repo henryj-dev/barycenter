@@ -37,7 +37,7 @@ import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
 import { FileDns01 } from '../control/dns01.js';
 import { publishIssued } from '../control/acme-publish.js';
-import { collectSecretRoots, expandVersionRoots } from '../control/secret-roots.js';
+import { collectSecretRoots } from '../control/secret-roots.js';
 import { sweepSecrets } from '../dp/secret-gc.js';
 import { ControlPlane, defaultStreamSocket } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
@@ -501,9 +501,10 @@ export async function main(): Promise<void> {
       void (async (): Promise<void> => {
         if (!election.state.isLeader) return;
         try {
-          const raw = await collectSecretRoots({ db, prefix });
-          const all = [...raw].filter((r) => !r.startsWith('@'));
-          const roots = expandVersionRoots(raw, all);
+          // **부를 자리가 하나다** (검수 D1). 전에는 여기서 `@` 자리표를 손으로
+          // 넓혔는데, 넘긴 목록이 *이미 root 인 것들*이라 넓히기가 아무것도 안 했다 —
+          // 디스크의 세대가 참조하는 자료가 조용히 보호 밖이었다.
+          const roots = await collectSecretRoots({ db, prefix, secrets });
           const out = sweepSecrets({ root: secretsRoot, roots });
           if (out.removed.length > 0 || out.failed.length > 0) {
             log.info('secrets.swept', {
