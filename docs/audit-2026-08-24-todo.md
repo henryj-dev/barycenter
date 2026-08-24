@@ -405,24 +405,36 @@
 > 기다린 시간이었다 — 즉 실제 배포에서도 그런 백엔드 하나가 매 틱 프로브 예산을
 > 통째로 먹고 있었다.
 
-### ☐ W2-2 · D11 · D16 — ACME 타임아웃 · 재진입 가드 · 계정 재사용 `[S]`
+### ☑ W2-2 · D11 · D16 — ACME 타임아웃 · 재진입 가드 · 계정 재사용 `[S]`
 
 세 항목이 같은 두 파일이라 한 커밋이다.
 
-- [ ] `tests/unit/audit-acme-timeout.test.ts` — ㉠ 안 답하는 CA 에 `post` 가
-      유한 시간에 끝나는가 ㉡ 틱이 겹쳐 돌지 않는가 ㉢ `accountUrl` 이 있으면
-      `newAccount` 를 **다시 안 부르는가**
-- [ ] **빨강 확인**
-- [ ] `src/acme/client.ts` — `AcmeOptions.timeoutMs`(기본 30초)를 더하고
-      `directory()` · `#takeNonce()` · `post()` 의 모든 `fetch` 에
-      `AbortSignal.timeout` 을 건다
-- [ ] `src/acme/client.ts` — `resumeAccount(url)` 을 더한다 (`#kid` 를 놓는다)
-- [ ] `src/control/acme-runner.ts:176` — else 분기를 `client.resumeAccount(acct.accountUrl)`
-      로 바꾼다. **주석이 말하던 것을 코드가 하게 된다**
-- [ ] `src/control/acme-runner.ts:342` — `#running` 가드
-      (`HealthProber` 의 것을 그대로 가져온다)
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-acme-timeout.test.ts -t "안 답하는 CA 가 러너를 못 매단다"`
+- [x] `tests/unit/audit-acme-timeout.test.ts` — 7 케이스. **실물 PG 를 안 쓴다** —
+      묻는 것이 「원장이 무엇을 하는가」가 아니라 「러너가 CA 에 무엇을 묻는가」다
+- [x] **빨강 확인** — 셋이 서로 다른 모양이었다:
+      ㉠ `Test timed out in 20000ms` (매달린다) ·
+      ㉡ `expected 19 to be 1` (틱이 열아홉 겹쳤다) ·
+      ㉢ `expected [ 'register' ] to deeply equal [ 'resume:…' ]`
+- [x] `src/acme/client.ts` — `AcmeOptions.timeoutMs`(기본 30 초). `#send` 하나를 두고
+      **모든 요청이 거기를 지나게** 했다 — `#fetch` 직접 호출이 남으면 다음 요청이
+      마감 없이 들어온다
+- [x] `src/acme/client.ts` — `resumeAccount(url)` · `get timeoutMs`
+- [x] `src/control/acme-runner.ts` — else 분기가 `client.resumeAccount(acct.accountUrl)`.
+      **주석이 말하던 것을 코드가 하게 됐다**
+- [x] `src/control/acme-runner.ts` — `#running` 가드 (`HealthProber` 의 것과 같다)
+- [x] `./scripts/verify.sh --quick` — 9/9 초록 (unit 864 → 871).
+      `test:store` 의 `acme-runner` 16 초록
+- [x] 커밋 — `Pinned-by: tests/unit/audit-acme-timeout.test.ts -t "안 답하는 CA 가 러너를 못 매단다"`
+
+> **㉢ 의 빨강을 두 번 봤다** (W0-7 과 같은 이유). 처음에는
+> `c.resumeAccount is not a function` 이었는데 그건 메서드가 없다는 말이지 러너가
+> 틀렸다는 말이 아니다. `resumeAccount` 만 먼저 넣고 다시 재서 **러너가 `register` 를
+> 부르는 것**을 눈으로 본 뒤에 고쳤다.
+
+**기존 가짜 CA 가 실물 계약보다 좁았다.** `tests/store/acme-runner.test.ts` 의
+`fakeClient` 에 `resumeAccount` 가 없어서 다섯이 빨개졌다. 가짜에 한 줄을 더해 맞췄다 —
+그리고 그것이 이 결함이 오래 안 보인 이유이기도 하다: **가짜가 실물보다 좁으면 그
+차이만큼 검증이 비고, 비어 있다는 사실 자체가 안 보인다.**
 
 ### ☐ W2-3 · G4 — SSE 와 원격 응답의 상한 `[S]`
 

@@ -71,6 +71,10 @@ function fakeClient(script: Script): any {
   let poll = 0;
   return {
     async register(): Promise<string> { return 'https://ca.test/acct/1'; },
+    // **이미 아는 계정은 `newAccount` 없이 이어 쓴다** (검수 D16). 이 가짜에 이 줄이
+    // 없던 동안 러너는 틱마다 `register()` 를 불렀고, 그것이 정상으로 보였다 —
+    // 가짜가 실물 계약보다 좁으면 그 차이만큼 검증이 비는 자리다.
+    resumeAccount(_url: string): void { /* `kid` 를 놓는 것이 전부다 */ },
     async newOrder(domains: readonly string[]): Promise<unknown> {
       if (script.failOn === 'newOrder') throw new Error('CA 가 주문을 거절했다');
       return {

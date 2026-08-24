@@ -68,6 +68,8 @@ export class AcmeRunner {
   readonly #o: AcmeRunnerOptions;
   readonly #newKey: () => KeyObject;
   #timer: NodeJS.Timeout | undefined;
+  /** 틱이 겹치지 않게 (검수 D11). `HealthProber` 의 것과 같은 가드다. */
+  #running = false;
 
   constructor(opts: AcmeRunnerOptions) {
     this.#o = opts;
@@ -179,7 +181,12 @@ export class AcmeRunner {
     } else {
       // 이미 등록된 계정이면 `kid` 를 다시 쓴다 — `newAccount` 를 또 부르면 CA 가
       // 같은 계정을 돌려주긴 하지만 요청 하나가 낭비되고 레이트리밋에 계산된다.
-      await client.register();
+      //
+      // **이 줄은 오래 `await client.register()` 였다** (검수 D16). 위 주석이 계약을
+      // 말하는데 코드가 안 지켰다 — `#kid` 를 놓을 방법이 클라이언트에 없었기 때문이다.
+      // Let's Encrypt 의 `newAccount` 는 IP 당 시간당 10 회이고 러너는 **틱마다**
+      // 이걸 불렀다: 기본 30 초 간격이면 한 시간에 120 회다.
+      client.resumeAccount(acct.accountUrl);
     }
 
     switch (order.state) {
@@ -340,16 +347,32 @@ export class AcmeRunner {
     );
   }
 
+  /**
+   * 주기 실행. **틱이 겹치지 않는다** (검수 D11).
+   *
+   * `setInterval` 은 앞 틱이 끝났는지 안 본다. CA 가 느리면(또는 안 답하면) 틱이
+   * 쌓이고, 각자 `claimDue` 로 실행권을 잡으려 든다 — 원장이 그 경합을 막아 주긴
+   * 하지만 막는 것과 안 만드는 것은 다르다. 쌓인 틱은 전부 살아 있는 fetch 를 하나씩
+   * 물고 있고, 그것이 이 프로세스의 소켓과 메모리다.
+   *
+   * `HealthProber.start` 가 같은 자리에 같은 가드를 갖고 있다. **한쪽만 갖고 있는
+   * 것이 그 자체로 신호였다** — 두 틱은 같은 성질을 가졌다(느릴 수 있고, durable
+   * 실행권을 잡는다).
+   */
   start(intervalMs: number, isLeader: () => boolean, certs: () => Promise<Parameters<AcmeRunner['scan']>[0]>): void {
     this.#timer = setInterval(() => {
       void (async (): Promise<void> => {
         // **리더만 돈다.** 스탠바이가 함께 주문하면 nonce 가 서로를 깨뜨린다.
         if (!isLeader()) return;
+        if (this.#running) return;
+        this.#running = true;
         try {
           await this.scan(await certs());
           await this.step();
         } catch (e) {
           log.error('acme.tick.failed', { error: (e as Error).message });
+        } finally {
+          this.#running = false;
         }
       })();
     }, intervalMs);

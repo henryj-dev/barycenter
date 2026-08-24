@@ -151,6 +151,19 @@ export type AcmeOptions = {
   sleep?: (ms: number) => Promise<void>;
   /** 429 / rateLimited 재시도 횟수. 기본 5. */
   rateLimitRetries?: number;
+  /**
+   * 요청 하나의 마감. 기본 30 초 (검수 D11).
+   *
+   * **Node 의 `fetch` 에는 기본 타임아웃이 없다.** 연결이 서 있고 바이트가 안 오면
+   * 그대로 매달린다. 그리고 CA 가 죽는 방식은 대개 「거절」이 아니라 「안 답함」이다 —
+   * 레이트리밋 뒤의 큐, LB 뒤의 좀비 백엔드. 마감이 없으면 그 침묵이 러너의 틱을
+   * 영영 붙잡는다.
+   *
+   * 재시도 예산과 곱해진다는 것을 안다: `nonceRetries`(5) × 이 값이 한 `post` 의
+   * 최악이다. 그래도 유한한 것이 무한한 것보다 낫고, 러너의 `#running` 가드가 그
+   * 사이에 틱이 쌓이는 것을 막는다.
+   */
+  timeoutMs?: number;
 };
 
 /**
@@ -167,12 +180,14 @@ export class AcmeClient {
   readonly #fetch: typeof fetch;
   readonly #nonceRetries: number;
   readonly #rateLimitRetries: number;
+  readonly #timeoutMs: number;
   readonly #sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly opts: AcmeOptions) {
     this.#fetch = opts.fetchImpl ?? fetch;
     this.#nonceRetries = opts.nonceRetries ?? 5;
     this.#rateLimitRetries = opts.rateLimitRetries ?? 5;
+    this.#timeoutMs = opts.timeoutMs ?? 30_000;
     this.#sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
@@ -180,9 +195,44 @@ export class AcmeClient {
     return this.#kid;
   }
 
+  /** 요청 하나의 마감. **안 준 배포에도 유한한 값이 있다** (검수 D11). */
+  get timeoutMs(): number {
+    return this.#timeoutMs;
+  }
+
+  /**
+   * 마감을 붙인 `fetch`. **이 클래스의 모든 요청이 여기를 지난다.**
+   *
+   * `#fetch` 를 직접 부르는 자리를 남기면 다음 요청이 마감 없이 들어온다 — 이 저장소가
+   * 목록으로 관리하다 물린 자리가 이미 여럿이다(`build.sh` 의 진입점 N1,
+   * `assertDirectiveStrings` 의 필드 N3). 자리를 하나로 두어 빠뜨릴 곳을 없앤다.
+   */
+  async #send(url: string, init?: RequestInit): Promise<Response> {
+    return this.#fetch(url, { ...init, signal: AbortSignal.timeout(this.#timeoutMs) });
+  }
+
+  /**
+   * **이미 아는 계정을 이어 쓴다** (검수 D16).
+   *
+   * `#drive` 의 주석이 오래 이렇게 적혀 있었다:
+   *
+   * > 이미 등록된 계정이면 `kid` 를 다시 쓴다 — `newAccount` 를 또 부르면 CA 가 같은
+   * > 계정을 돌려주긴 하지만 요청 하나가 낭비되고 레이트리밋에 계산된다.
+   *
+   * **그리고 코드는 `register()` 를 불렀다.** 다른 길이 없었기 때문이다 — `#kid` 를
+   * 놓는 방법이 이 클래스에 없었다. 주석이 계약을 말하고 코드가 안 지키는 자리였고,
+   * 그 대가는 실측 가능하다: Let's Encrypt 의 `newAccount` 는 IP 당 시간당 10 회이고
+   * 러너는 **틱마다** 그것을 불렀다 — 기본 30 초 간격이면 한 시간에 120 회다.
+   *
+   * 서명 헤더가 `jwk` 에서 `kid` 로 바뀌는 것이 이 호출의 전부다 (§6.2).
+   */
+  resumeAccount(url: string): void {
+    this.#kid = url;
+  }
+
   async directory(): Promise<Directory> {
     if (this.#directory !== undefined) return this.#directory;
-    const r = await this.#fetch(this.opts.directoryUrl);
+    const r = await this.#send(this.opts.directoryUrl);
     if (!r.ok) throw new Error(`디렉토리를 못 읽었다: ${r.status}`);
     this.#directory = (await r.json()) as Directory;
     return this.#directory;
@@ -201,7 +251,7 @@ export class AcmeClient {
       return held;
     }
     const dir = await this.directory();
-    const r = await this.#fetch(dir.newNonce, { method: 'HEAD' });
+    const r = await this.#send(dir.newNonce, { method: 'HEAD' });
     const n = r.headers.get('replay-nonce');
     if (n === null) throw new Error('newNonce 가 Replay-Nonce 를 안 줬다');
     return n;
@@ -234,7 +284,7 @@ export class AcmeClient {
     const body = payload === undefined ? '' : b64url(JSON.stringify(payload));
     for (let attempt = 0; ; attempt += 1) {
       const nonce = await this.#takeNonce();
-      const r = await this.#fetch(url, {
+      const r = await this.#send(url, {
         method: 'POST',
         headers: { 'content-type': 'application/jose+json' },
         body: this.#sign(url, nonce, body),
