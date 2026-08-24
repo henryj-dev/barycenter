@@ -309,15 +309,37 @@
 > 만으로는 그 인증서가 안 나온다. 플래그를 요구하면 그것을 빠뜨리는 CA 에서 와일드카드
 > 발급이 막히는 대가만 남는다.
 
-### ☐ W1-4 · G3 — 환경변수 해독기 `[S]`
+### ☑ W1-4 · G3 — 환경변수 해독기 `[S]`
 
-- [ ] `tests/unit/audit-env-numbers.test.ts` — `BARY_PROBE_INTERVAL_MS=abc` 가
-      `NaN` 이 아니라 **기동 실패**가 되는가
-- [ ] **빨강 확인**
-- [ ] `src/bin/barycenterd.ts` — `envInt(name, fallback, {min, max})` 하나를 만들고
-      `Number(env(...))` 를 전부 그것으로 바꾼다. 범위 밖·정수 아님은 던진다
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-env-numbers.test.ts -t "숫자 환경변수는 강제 변환하지 않는다"`
+- [x] `tests/unit/audit-env-numbers.test.ts` — 6 케이스. **`main()` 을 부른다** —
+      `envInt` 를 직접 부르면 `envInt` 만 재게 된다. 도커 없이 돈다
+- [x] **빨강 확인** — 넷이 `expected '환경변수 BARY_DSN 이 필요하다' to contain
+      'BARY_PROBE_INTERVAL_MS'`. 숫자가 **DSN 보다 먼저** 안 걸린다는 뜻이다
+- [x] `src/validate/env.ts` — `envInt(name, fallback, {min,max})` · `envIntOpt`
+- [x] `src/bin/barycenterd.ts` — `readTimings()` 하나가 열넷을 한 번에 읽는다.
+      `Number(env(...))` 17 곳과 보존 기간 `Number(raw)` 5 곳이 전부 사라졌다
+- [x] `./scripts/verify.sh --quick` — 9/9 초록 (unit 851 → 857)
+- [x] 커밋 — `Pinned-by: tests/unit/audit-env-numbers.test.ts -t "숫자 환경변수는 강제 변환하지 않는다"`
+
+**계획보다 넓게 갔다 — 둘.**
+
+1. **`envInt` 를 `barycenterd.ts` 안이 아니라 `src/validate/env.ts` 에 뒀다.**
+   해독기는 `validate/` 에 산다는 것이 이 저장소의 배치이고(`strings`·`syntax`·
+   `sockets`), 진입점 파일에 두면 두 번째 진입점이 생기는 날 사본이 는다.
+2. **자리마다 부르지 않고 `readTimings()` 로 모았다.** 투두는 "전부 그것으로 바꾼다"
+   였는데, 그대로 하면 **`BARY_PROBE_INTERVAL_MS` 를 두 번 읽는 것이 남는다** —
+   프로버에 넘길 때 한 번, 로그에 찍을 때 또 한 번. `BARY_ACME_INTERVAL_MS`·
+   `BARY_ACME_RENEW_DAYS`·`BARY_ACME_ORPHAN_INTERVAL_MS` 도 같았다. 기본값이 같아서
+   지금은 안 갈리지만, 한쪽만 고치는 날 **로그가 거짓말을 시작한다.**
+
+> **읽는 자리를 DB 접속 앞으로 옮겼다.** 설정이 틀린 채로 PG 에 붙어 마이그레이션까지
+> 돌리고 죽는 것은 아무에게도 이롭지 않고, 그래야 이 판정을 도커 없이 잰다.
+> 순서가 테스트의 편의가 아니라 **설계**라는 것을 주석에 적었다.
+
+> **빈 문자열을 기본값으로 접는 것이 요점 하나다.** `Number('')` 은 `0` 이라,
+> `FOO=` 로 지운 변수가 `setInterval(f, 0)` 이 된다. 오케스트레이터가 빈 값을 흔히 만든다.
+> 보존 기간만은 빈 값이 **「무한 보존」**이라 `envIntOpt` 로 갈랐다 — 기본값으로 접으면
+> 업그레이드가 곧 데이터 소실이다.
 
 ### ☐ W1 마무리
 

@@ -55,6 +55,7 @@ import { renderCapsOf } from '../engine/render-caps.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
+import { envInt, envIntOpt } from '../validate/env.js';
 import { isLoopbackBind } from '../validate/sockets.js';
 
 const run = promisify(execFile);
@@ -65,6 +66,63 @@ const env = (name: string, fallback?: string): string => {
   if (fallback !== undefined) return fallback;
   throw new Error(`환경변수 ${name} 이 필요하다`);
 };
+
+const MINUTE = 60_000;
+const DAY_MS = 86_400_000;
+
+/**
+ * **숫자 설정을 한 자리에서, 한 번만 읽는다** (검수 G3).
+ *
+ * ── 왜 `Number(env(...))` 가 아닌가
+ *
+ * `Number('abc')` 는 던지지 않는다. `NaN` 이고, `NaN` 은 조용히 두 가지로 갈린다 —
+ * `setInterval(f, NaN)` 은 Node 가 `1` 로 읽어 **초당 천 번** 돌고,
+ * `left <= NaN * 86_400_000` 은 항상 거짓이라 **인증서가 영영 갱신 안 된다.**
+ * 어느 쪽도 실패로 안 보인다. `parseTokenSpecs` 와 `decodeModel` 이 각각 같은 자리에서
+ * 내린 판단을 여기도 적용한다: **환경변수도 런타임 입력이다.**
+ *
+ * ── 왜 하나로 모으나
+ *
+ * `BARY_PROBE_INTERVAL_MS` 는 **두 번** 읽혔다 — 프로버에 넘길 때 한 번, 그 사실을
+ * 로그에 찍을 때 또 한 번. `BARY_ACME_INTERVAL_MS`·`BARY_ACME_RENEW_DAYS`·
+ * `BARY_ACME_ORPHAN_INTERVAL_MS` 도 같다. 기본값이 같아서 지금은 안 갈리지만,
+ * 한쪽만 고치는 날 **로그가 거짓말을 하기 시작한다.** 이 저장소가 반복해서 배운
+ * *"자리가 둘이면 언젠가 갈린다"* 다.
+ *
+ * ── 왜 DB 접속보다 먼저인가
+ *
+ * 설정이 틀린 채로 PG 에 붙어 마이그레이션까지 돌리고 나서 죽는 것은 아무에게도
+ * 이롭지 않다. 그리고 그래야 이 판정을 **도커 없이** 잴 수 있다.
+ *
+ * 범위가 하는 일은 "이 값이 옳은가" 가 아니라 **"이 값이 이 변수의 것인가"** 다 —
+ * 초와 밀리초를 바꿔 적는 것이 이 부류의 실수다. 그래서 상한은 넉넉하다.
+ */
+function readTimings(): {
+  electionMs: number; probeMs: number; probeTimeoutMs: number;
+  probeFail: number; probeRise: number;
+  healthEventDays: number; dbRetentionMs: number;
+  acmeMs: number; acmeRenewDays: number; acmePublishMs: number;
+  secretGcMs: number; acmeOrphanMs: number; acmeOrphanAgeS: number;
+  oidcJwksMs: number;
+} {
+  return {
+    electionMs: envInt('BARY_ELECTION_INTERVAL_MS', 5_000, { min: 100, max: DAY_MS }),
+    probeMs: envInt('BARY_PROBE_INTERVAL_MS', 2_000, { min: 100, max: DAY_MS }),
+    probeTimeoutMs: envInt('BARY_PROBE_TIMEOUT_MS', 1_000, { min: 1, max: 5 * MINUTE }),
+    probeFail: envInt('BARY_PROBE_FAIL_THRESHOLD', 2, { min: 1, max: 100 }),
+    probeRise: envInt('BARY_PROBE_RISE_THRESHOLD', 1, { min: 1, max: 100 }),
+    healthEventDays: envInt('BARY_HEALTH_EVENT_RETENTION_DAYS',
+      DEFAULT_HEALTH_EVENT_DAYS, { min: 1, max: 3_650 }),
+    dbRetentionMs: envInt('BARY_DB_RETENTION_INTERVAL_MS', 3_600_000, { min: MINUTE, max: DAY_MS }),
+    acmeMs: envInt('BARY_ACME_INTERVAL_MS', 30_000, { min: 1_000, max: DAY_MS }),
+    acmeRenewDays: envInt('BARY_ACME_RENEW_DAYS', 30, { min: 1, max: 365 }),
+    acmePublishMs: envInt('BARY_ACME_PUBLISH_INTERVAL_MS', 15_000, { min: 1_000, max: DAY_MS }),
+    secretGcMs: envInt('BARY_SECRET_GC_INTERVAL_MS', 3_600_000, { min: MINUTE, max: DAY_MS }),
+    acmeOrphanMs: envInt('BARY_ACME_ORPHAN_INTERVAL_MS', 900_000, { min: MINUTE, max: DAY_MS }),
+    acmeOrphanAgeS: envInt('BARY_ACME_ORPHAN_AGE_S', 3_600, { min: 60, max: 86_400 * 30 }),
+    oidcJwksMs: envInt('BARY_OIDC_JWKS_INTERVAL_MS', 300_000, { min: MINUTE, max: DAY_MS }),
+  };
+}
 
 /**
  * 토큰 명세. **평문은 안 받는다** — `sha256:<hex>` 만.
@@ -182,6 +240,12 @@ export async function main(): Promise<void> {
     writeBootstrap(prefix, adminSocket, streamAdminSocket);
     return;
   }
+
+  /**
+   * **숫자 설정을 DB 보다 먼저 읽는다** (검수 G3). 설정이 틀린 채로 PG 에 붙어
+   * 마이그레이션까지 돌리고 나서 죽는 것은 아무에게도 이롭지 않다.
+   */
+  const t = readTimings();
 
   const dsn = env('BARY_DSN');
   const db = new Db(dsn);
@@ -318,7 +382,7 @@ export async function main(): Promise<void> {
     }).catch((e: unknown) => {
       log.error('leader.promote_failed', { error: String(e) });
     });
-  }, Number(env('BARY_ELECTION_INTERVAL_MS', '5000')));
+  }, t.electionMs);
   retry.unref();
 
   const control = new ControlPlane(db, store, driver, election,
@@ -348,10 +412,10 @@ export async function main(): Promise<void> {
   const events = new EventHub();
   const proberOn = renderCaps.httpLua === true || renderCaps.streamLua === true;
   const prober = new HealthProber(db, {
-    intervalMs: Number(env('BARY_PROBE_INTERVAL_MS', '2000')),
-    timeoutMs: Number(env('BARY_PROBE_TIMEOUT_MS', '1000')),
-    failThreshold: Number(env('BARY_PROBE_FAIL_THRESHOLD', '2')),
-    riseThreshold: Number(env('BARY_PROBE_RISE_THRESHOLD', '1')),
+    intervalMs: t.probeMs,
+    timeoutMs: t.probeTimeoutMs,
+    failThreshold: t.probeFail,
+    riseThreshold: t.probeRise,
   });
   if (proberOn) {
     prober.start(
@@ -365,7 +429,7 @@ export async function main(): Promise<void> {
         }
       },
     );
-    log.info('prober.started', { intervalMs: Number(env('BARY_PROBE_INTERVAL_MS', '2000')) });
+    log.info('prober.started', { intervalMs: t.probeMs });
   } else {
     log.info('prober.disabled', { reason: '멤버십 평면이 꺼진 배포 — 반영할 곳이 없다' });
   }
@@ -381,26 +445,26 @@ export async function main(): Promise<void> {
    *
    * **리더만.** 여러 노드가 동시에 밀면 서로의 잠금을 기다리기만 한다.
    */
-  const auditDaysRaw = env('BARY_AUDIT_RETENTION_DAYS', '');
+  const auditDaysRaw = envIntOpt('BARY_AUDIT_RETENTION_DAYS', { min: 1, max: 3_650 });
   // 제안 #10 의 남은 절반. **전부 빈 값이면 안 지운다** — 같은 이유다.
-  const planDaysRaw = env('BARY_PLAN_RETENTION_DAYS', '');
-  const changesetDaysRaw = env('BARY_CHANGESET_RETENTION_DAYS', '');
+  const planDaysRaw = envIntOpt('BARY_PLAN_RETENTION_DAYS', { min: 1, max: 3_650 });
+  const changesetDaysRaw = envIntOpt('BARY_CHANGESET_RETENTION_DAYS', { min: 1, max: 3_650 });
   // 종단한 apply 이력. 비종단 행은 나이와 무관하게 남는다 — 복구가 이어받을 것이다.
-  const operationDaysRaw = env('BARY_OPERATION_RETENTION_DAYS', '');
+  const operationDaysRaw = envIntOpt('BARY_OPERATION_RETENTION_DAYS', { min: 1, max: 3_650 });
   /**
    * 옛 리비전. **켜도 대개 아무것도 안 지운다** — 사슬이라 붙잡힌 것이 나오면 거기서
    * 멈추고, 롤백 수단인 plan 이 가리키는 리비전은 붙잡힌 것에 든다. 그게 맞는 동작이다.
    */
-  const revisionDaysRaw = env('BARY_REVISION_RETENTION_DAYS', '');
+  const revisionDaysRaw = envIntOpt('BARY_REVISION_RETENTION_DAYS', { min: 1, max: 3_650 });
   const dbRetention = {
-    healthEventDays: Number(env('BARY_HEALTH_EVENT_RETENTION_DAYS', String(DEFAULT_HEALTH_EVENT_DAYS))),
+    healthEventDays: t.healthEventDays,
     // 빈 값은 **무한 보존**이다. 감사 추적의 보존 기간은 우리가 정할 것이 아니라
     // 운영자가 정하는 것이고, 기본값으로 지우면 업그레이드가 곧 데이터 소실이다.
-    ...(auditDaysRaw === '' ? {} : { auditDays: Number(auditDaysRaw) }),
-    ...(planDaysRaw === '' ? {} : { planDays: Number(planDaysRaw) }),
-    ...(changesetDaysRaw === '' ? {} : { changesetDays: Number(changesetDaysRaw) }),
-    ...(operationDaysRaw === '' ? {} : { operationDays: Number(operationDaysRaw) }),
-    ...(revisionDaysRaw === '' ? {} : { revisionDays: Number(revisionDaysRaw) }),
+    ...(auditDaysRaw === undefined ? {} : { auditDays: auditDaysRaw }),
+    ...(planDaysRaw === undefined ? {} : { planDays: planDaysRaw }),
+    ...(changesetDaysRaw === undefined ? {} : { changesetDays: changesetDaysRaw }),
+    ...(operationDaysRaw === undefined ? {} : { operationDays: operationDaysRaw }),
+    ...(revisionDaysRaw === undefined ? {} : { revisionDays: revisionDaysRaw }),
   };
   const dbRetentionTimer = setInterval(() => {
     void (async (): Promise<void> => {
@@ -414,7 +478,7 @@ export async function main(): Promise<void> {
         log.error('db.sweep_failed', { error: (e as Error).message });
       }
     })();
-  }, Number(env('BARY_DB_RETENTION_INTERVAL_MS', '3600000')));
+  }, t.dbRetentionMs);
   dbRetentionTimer.unref?.();
   const stopDbRetention = (): void => clearInterval(dbRetentionTimer);
 
@@ -438,11 +502,11 @@ export async function main(): Promise<void> {
     secrets,
     placer: new HttpChallengePlacer(adminFetch(adminSocket)),
     ...(dnsDir === '' ? {} : { dnsPlacer: new FileDns01(dnsDir) }),
-    renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
+    renewBeforeDays: t.acmeRenewDays,
   });
   if (acmeOn) {
     acmeRunner.start(
-      Number(env('BARY_ACME_INTERVAL_MS', '30000')),
+      t.acmeMs,
       () => election.state.isLeader,
       async () => {
         // 인증서 목록은 **head 리비전**에서 온다 — 의도는 설정이고, 주문만 운영 상태다.
@@ -483,7 +547,7 @@ export async function main(): Promise<void> {
           log.error('acme.publish.tick_failed', { error: (e as Error).message });
         }
       })();
-    }, Number(env('BARY_ACME_PUBLISH_INTERVAL_MS', '15000')));
+    }, t.acmePublishMs);
     publishTimer.unref?.();
     stopPublish = () => clearInterval(publishTimer);
 
@@ -517,7 +581,7 @@ export async function main(): Promise<void> {
           log.error('secrets.sweep_failed', { error: (e as Error).message });
         }
       })();
-    }, Number(env('BARY_SECRET_GC_INTERVAL_MS', '3600000')));
+    }, t.secretGcMs);
     secretGcTimer.unref?.();
     const stopSecretGcTimer = (): void => clearInterval(secretGcTimer);
     stopSecretGc = stopSecretGcTimer;
@@ -542,21 +606,21 @@ export async function main(): Promise<void> {
         if (!election.state.isLeader) return;
         try {
           const n = await acmeRunner.cleanup(
-            Number(env('BARY_ACME_ORPHAN_AGE_S', '3600')));
+            t.acmeOrphanAgeS);
           if (n > 0) log.info('acme.orphans.cleaned', { challenges: n });
         } catch (e) {
           log.error('acme.orphans.failed', { error: (e as Error).message });
         }
       })();
-    }, Number(env('BARY_ACME_ORPHAN_INTERVAL_MS', '900000')));
+    }, t.acmeOrphanMs);
     orphanTimer.unref?.();
     stopOrphans = (): void => clearInterval(orphanTimer);
 
     log.info('acme.started', {
-      intervalMs: Number(env('BARY_ACME_INTERVAL_MS', '30000')),
-      renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
+      intervalMs: t.acmeMs,
+      renewBeforeDays: t.acmeRenewDays,
       autoApply: env('BARY_ACME_AUTOAPPLY', '1') !== '0',
-      orphanIntervalMs: Number(env('BARY_ACME_ORPHAN_INTERVAL_MS', '900000')),
+      orphanIntervalMs: t.acmeOrphanMs,
     });
   } else {
     log.info('acme.disabled', {
@@ -608,7 +672,7 @@ export async function main(): Promise<void> {
         const out = await jwks.refresh();
         if (out.changed) log.info('oidc.jwks.rotated', { keys: out.keys });
       })();
-    }, Number(env('BARY_OIDC_JWKS_INTERVAL_MS', '300000')));
+    }, t.oidcJwksMs);
     jwksTimer.unref?.();
     stopJwks = (): void => clearInterval(jwksTimer);
   }
