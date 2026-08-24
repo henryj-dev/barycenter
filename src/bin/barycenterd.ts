@@ -430,6 +430,7 @@ export async function main(): Promise<void> {
   const acmeOn = renderCaps.httpLua === true && env('BARY_ACME', '1') !== '0';
   let stopPublish = (): void => {};
   let stopSecretGc = (): void => {};
+  let stopOrphans = (): void => {};
   const acmeStore = new AcmeStore(db);
   const dnsDir = env('BARY_DNS01_DIR', '');
   const acmeRunner = new AcmeRunner({
@@ -521,10 +522,41 @@ export async function main(): Promise<void> {
     const stopSecretGcTimer = (): void => clearInterval(secretGcTimer);
     stopSecretGc = stopSecretGcTimer;
 
+    /**
+     * **주기적 고아 스캔** (§8.2 · 검수 G6 이 이 배선의 부재를 잡았다).
+     *
+     * `AcmeRunner.cleanup` 은 구현돼 있었고 테스트도 초록인데 **프로덕션 호출자가
+     * 0 개였다.** 도달성 게이트가 export 된 이름만 세던 시절에는 안 보였다 —
+     * 클래스는 쓰이고 그 안의 메서드 하나만 죽어 있었다.
+     *
+     * 왜 필요한가는 S18 이 실측했다: **버려진 주문을 CA 는 안 치운다.** 주문 상태로
+     * 물으면 영영 안 걸리므로 원장이 "놓았는가" 로 판단하고(`orphans`), 그것을 도는
+     * 것이 이 틱이다. dict 쪽은 TTL(`ACME_TTL_SECONDS`)이 덮지만 **원장은 안 덮는다** —
+     * `cleaned_at` 이 안 적히면 고아 목록이 영원히 자란다.
+     *
+     * 러너 틱과 **다른 타이머**다. 발급 한 바퀴가 CA 를 기다리는 동안 청소가 막히면
+     * 안 되고, 청소는 실패해도 발급을 막을 이유가 없다.
+     */
+    const orphanTimer = setInterval(() => {
+      void (async (): Promise<void> => {
+        if (!election.state.isLeader) return;
+        try {
+          const n = await acmeRunner.cleanup(
+            Number(env('BARY_ACME_ORPHAN_AGE_S', '3600')));
+          if (n > 0) log.info('acme.orphans.cleaned', { challenges: n });
+        } catch (e) {
+          log.error('acme.orphans.failed', { error: (e as Error).message });
+        }
+      })();
+    }, Number(env('BARY_ACME_ORPHAN_INTERVAL_MS', '900000')));
+    orphanTimer.unref?.();
+    stopOrphans = (): void => clearInterval(orphanTimer);
+
     log.info('acme.started', {
       intervalMs: Number(env('BARY_ACME_INTERVAL_MS', '30000')),
       renewBeforeDays: Number(env('BARY_ACME_RENEW_DAYS', '30')),
       autoApply: env('BARY_ACME_AUTOAPPLY', '1') !== '0',
+      orphanIntervalMs: Number(env('BARY_ACME_ORPHAN_INTERVAL_MS', '900000')),
     });
   } else {
     log.info('acme.disabled', {
@@ -681,6 +713,7 @@ export async function main(): Promise<void> {
       acmeRunner.stop();
       stopPublish();
       stopSecretGc();
+      stopOrphans();
       stopDbRetention();
       stopJwks();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은

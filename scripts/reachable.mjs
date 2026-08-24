@@ -19,6 +19,20 @@
  *   1. **미사용 import** — 가져와 놓고 안 쓴다. 계약이 옮겨 갔다는 신호다.
  *   2. **호출자 없는 export** — 공개 표면(`src/index.ts`)에도 없고, 다른 `src/` 파일이
  *      import 하지도 않는다. 테스트만 부르는 코드다.
+ *   3. **호출자 없는 public 메서드** — 2026-08-24 검수(D1·G6)가 더했다. 아래 참조.
+ *
+ * ── 왜 메서드까지 세는가 (검수 G6)
+ *
+ * 2026-08-24 검수가 `FsSecretStore.versions()` 를 손으로 찾았다 — **호출자가 0 개인
+ * public 메서드**였고, 그것이 시크릿 GC 의 root 수집이 필요로 하던 재료였다(D1).
+ * 재료가 있는데 아무도 안 쓰고 있었다는 사실이 그 결함의 신호였는데, 이 게이트는
+ * **export 된 이름만** 세느라 못 봤다.
+ *
+ * 이름을 세는 것과 **그 이름이 무엇을 하는 이름인지** 세는 것은 다르다. 클래스는
+ * export 돼 있고 쓰이므로 ② 는 초록이다 — 죽은 것은 그 안의 메서드 하나다.
+ *
+ * 판정은 **속성 접근**으로 한다(`x.foo` · `x?.foo` · `x['foo']`). 선언은 속성 접근이
+ * 아니므로 ② 가 한때 물렸던 함정("선언 자체가 사용으로 보인다")이 여기서는 없다.
  *
  * ── 무엇을 실패로 보지 않는가 ───────────────────────────────────────────
  *
@@ -34,7 +48,17 @@ import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+/**
+ * 저장소 루트. **테스트가 갈아 끼운다** (검수 G6).
+ *
+ * 게이트를 재는 방법은 픽스처 트리에 대고 돌려 보는 것뿐이다 — 이 저장소의 `src/` 는
+ * 초록이어야 하므로 여기서는 아무 신호도 안 나온다. `pinned.mjs` 가 순수 로직을
+ * `pinned-lib.mjs` 로 뽑아 잰 것과 같은 이유이고, 여기서는 파일시스템을 훑는 것이
+ * 일의 전부라 **루트를 바꾸는 편**이 그 자리를 만든다.
+ */
+const ROOT = process.env['BARY_REACHABLE_ROOT'] !== undefined
+  ? resolve(process.env['BARY_REACHABLE_ROOT'])
+  : resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(ROOT, 'src');
 
 /**
@@ -72,6 +96,28 @@ const ALLOW = new Map([
   ['src/acme/der.ts:nullValue', 'DER 원시 — 테스트가 인코딩을 직접 잰다'],
   ['src/cli/backup.ts:secretRefsIn', '백업에 시크릿이 안 실리는지 테스트가 직접 잰다'],
   ['src/control/acme-store.ts:backoffSeconds', '백오프 곡선을 테스트가 직접 잰다'],
+
+  // ── ③ 메서드 예외 (검수 G6) ─────────────────────────────────────────
+  //
+  // **관측 창구.** 상태를 바꾸지 않고 읽기만 하며, 프로덕션은 그 값으로 판정하지
+  // 않는다(하면 그 자리가 배선이다). 테스트가 불변식을 재는 데 쓴다.
+  ['src/dp/agent.ts:DpAgent.evidenceFor',
+    '§6.3 근거 조회 — 사후 감사용이고 프로덕션 독자가 없다는 것이 agent.ts 의 `EVIDENCE_RETENTION` 에 적혀 있다'],
+  ['src/dp/agent.ts:DpAgent.reservationOwner',
+    '슬롯 주인 관측 — 판정은 `ownsSlot` 이 임계구역 안에서 한다. 밖에서 읽은 값으로 판정하면 그 사이가 벌어진다'],
+  ['src/dp/apply.ts:ApplyRunner.phases',
+    '지나온 단계 — 러너의 관측 창구다. §6.2 의 전이 순서를 테스트가 이것으로 잰다'],
+
+  // **평면 단위 원시 연산** (§3.6). 러너는 `reserveAll` 로 전 평면을 한 임계구역에서
+  // 잡는다 — 그것이 6차 반례 ③ 의 답이었다. 낱개 `reserve` 는 그 아래 계약이고,
+  // 테스트가 평면 하나의 CAS 를 직접 재는 자리다.
+  ['src/dp/agent.ts:DpAgent.reserve',
+    '§3.6 평면 단위 예약 — 러너는 `reserveAll` 을 쓴다. 이것은 그 아래 계약을 테스트가 직접 재는 자리'],
+
+  // ⚠️ **부채다. 예외가 아니다.** 아래는 「배선하거나 지운다」에 아직 답을 안 한 것이고,
+  // 이 자리에 있다는 사실 자체가 그 빚의 장부다 (검수 D21).
+  ['src/control/acme-store.ts:AcmeStore.upsertAccount',
+    '⚠️ 부채 (검수 D21) — ACME 계정을 만드는 **제품 경로가 없다.** 배선하려면 API·CLI 표면을 정해야 하고(B 동결 드리프트), 그 결정 전까지 여기 둔다'],
 ]);
 
 /**
@@ -96,8 +142,16 @@ function walk(dir) {
 const files = walk(SRC).sort();
 const rel = (p) => relative(ROOT, p);
 
-/** 파일별 { exports, imports, used } */
+/** 파일별 { exports, imports, used, members } */
 const info = new Map();
+
+/**
+ * `src/` 전체에서 **속성으로 접근된** 이름들 (검수 G6).
+ *
+ * 파일별이 아니라 전역이다 — 메서드는 다른 파일에서 불리는 것이 정상이고,
+ * `this.foo()` 도 같은 축에 든다(자기 클래스 안에서만 쓰이는 메서드는 살아 있다).
+ */
+const propertyUses = new Set();
 
 for (const path of files) {
   const text = readFileSync(path, 'utf8');
@@ -116,8 +170,30 @@ for (const path of files) {
   const used = new Map();
   const bump = (n) => used.set(n, (used.get(n) ?? 0) + 1);
 
+  /**
+   * 이 파일이 선언하는 **public 메서드** — `{ cls, name }`.
+   *
+   * `private` · `#이름` · `constructor` 는 뺀다. 앞의 둘은 밖에서 부를 수가 없고,
+   * 생성자는 `new` 가 부르므로 속성 접근으로 안 잡힌다.
+   */
+  const members = [];
+
   const collectName = (node) => {
     if (ts.isIdentifier(node.name ?? {})) exports.add(node.name.text);
+  };
+
+  /**
+   * public 메서드 하나를 모은다.
+   *
+   * **속성(필드)은 안 센다.** 필드는 초기화 자체가 값을 쓰는 일이라 「죽었다」의 뜻이
+   * 메서드와 다르고, 여기서 겨누는 것은 *"부를 수 있는데 아무도 안 부르는 것"* 이다.
+   */
+  const collectMember = (cls, m) => {
+    if (!ts.isMethodDeclaration(m) && !ts.isGetAccessor(m) && !ts.isSetAccessor(m)) return;
+    if (!ts.isIdentifier(m.name)) return;        // `#private` · 계산된 이름
+    const mods = ts.getModifiers(m) ?? [];
+    if (mods.some((x) => x.kind === ts.SyntaxKind.PrivateKeyword)) return;
+    members.push({ cls, name: m.name.text });
   };
 
   const visit = (node) => {
@@ -133,6 +209,10 @@ for (const path of files) {
         || ts.isEnumDeclaration(node)
       ) {
         collectName(node);
+      }
+      // export 된 클래스의 public 메서드를 모은다 (검수 G6).
+      if (ts.isClassDeclaration(node) && ts.isIdentifier(node.name ?? {})) {
+        for (const m of node.members) collectMember(node.name.text, m);
       }
     }
     // `export { A, B }` / `export { A } from '...'`
@@ -157,12 +237,22 @@ for (const path of files) {
     }
     if (ts.isImportDeclaration(node)) return;
 
+    // ── 속성 접근 — 메서드 판정의 유일한 근거다 (검수 G6) ──
+    //
+    // `x.foo` · `x?.foo` 는 `PropertyAccessExpression`, `x['foo']` 는 문자열 리터럴이다.
+    // **선언은 여기 안 걸린다** — 그것이 ② 가 한때 물렸던 함정을 피하는 방법이다.
+    if (ts.isPropertyAccessExpression(node)) propertyUses.add(node.name.text);
+    if (ts.isElementAccessExpression(node)
+        && ts.isStringLiteralLike(node.argumentExpression)) {
+      propertyUses.add(node.argumentExpression.text);
+    }
+
     if (ts.isIdentifier(node)) bump(node.text);
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(sf, visit);
 
-  info.set(rel(path), { exports, imports, used });
+  info.set(rel(path), { exports, imports, used, members });
 }
 
 // ── 공개 표면: index.ts 가 재수출하는 이름 ─────────────────────────────
@@ -185,6 +275,9 @@ for (const dir of CONSUMER_DIRS) {
         if (name !== '') importedSomewhere.add(name);
       }
     }
+    // 소비자의 속성 접근도 센다 — 화면이 뷰 모델의 메서드를 부른다 (검수 G6).
+    // 여기서는 "누가 이 이름을 만지는가" 만 알면 되므로 정규식으로 충분하다.
+    for (const m of text.matchAll(/[?.]\s*([A-Za-z_$][\w$]*)/g)) propertyUses.add(m[1]);
   }
 }
 
@@ -210,6 +303,21 @@ for (const [file, i] of info) {
     // 모듈 안의 도우미를 테스트가 직접 부르려고 내보내는 것은 정당하다.
     if ((i.used.get(name) ?? 0) >= 2) continue;
     problems.push(`호출자 없음     ${file}  ${name}`);
+  }
+}
+
+// ③ 호출자 없는 public 메서드 (검수 G6)
+for (const [file, i] of info) {
+  for (const { cls, name } of i.members ?? []) {
+    if (ALLOW.has(`${file}:${cls}.${name}`)) continue;
+    // **클래스가 이미 예외면 그 안도 예외다.** 주입 이음매(`MemoryStore`·`FakeEffects`)는
+    // 프로덕션 호출자가 없는 것이 정상이고, 그 근거는 클래스 단위로 이미 적혀 있다.
+    if (ALLOW.has(`${file}:${cls}`)) continue;
+    // **공개 표면의 클래스는 안 센다.** 밖의 소비자가 부를 수 있고 그들은 여기 안 보인다.
+    // 그 폐포는 `surface.mjs` 가 따로 잰다.
+    if (surface.has(cls)) continue;
+    if (propertyUses.has(name)) continue;
+    problems.push(`부르는 데 없음  ${file}  ${cls}.${name}`);
   }
 }
 
