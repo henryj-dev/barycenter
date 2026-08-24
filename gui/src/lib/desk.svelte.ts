@@ -18,6 +18,7 @@ import { viewOfCertificates, type CertificateFact, type CertsView, type OrderFac
 import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
+import { backoffMs } from '@web/reconnect';
 import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 
@@ -219,17 +220,23 @@ export function createDesk() {
     pools = applyHealthFlip(pools, row);
   };
 
-  const connect = async (): Promise<void> => {
-    stop?.();
-    error = undefined;
-    sessionStorage.setItem(tokenKey, token);
-    const ac = new AbortController();
-    stop = () => ac.abort();
+  /**
+   * 스트림 한 번. **재연결은 `connect` 가 한다** (검수 G1).
+   *
+   * 셋을 갈라 돌려준다. `live` 로는 못 가른다 — `finally` 가 그것을 내리므로 돌아온
+   * 시점에는 언제나 `false` 다.
+   *
+   *   `served`   붙어서 흘리다 끊겼다 — 다음 재시도는 **처음부터**다
+   *   `refused`  못 붙었다 — 대기를 늘린다
+   *   `stop`     우리가 끊었거나 토큰이 거절됐다 — **다시 안 붙는다**
+   */
+  const streamOnce = async (ac: AbortController): Promise<'served' | 'refused' | 'stop'> => {
     const r = await fetch('/api/v1/events', { headers: auth(), signal: ac.signal });
     if (!r.ok || r.body === null) {
       error = r.status === 401 ? '토큰이 거절됐다' : `events ${r.status}`;
       live = false;
-      return;
+      // 401 은 다시 붙어 봐야 같다. 그건 사람이 고칠 것이다.
+      return r.status === 401 ? 'stop' : 'refused';
     }
     live = true;
     const reader = r.body.getReader();
@@ -255,11 +262,53 @@ export function createDesk() {
         }
       }
     } catch (e) {
-      if ((e as { name?: string }).name !== 'AbortError') {
-        error = e instanceof Error ? e.message : String(e);
+      if ((e as { name?: string }).name === 'AbortError') {
+        // 우리가 끊었다. 다시 붙지 않는다.
+        live = false;
+        return 'stop';
       }
+      error = e instanceof Error ? e.message : String(e);
     } finally {
       live = false;
+    }
+    // 여기 왔다는 것은 **붙어서 흘렸다**는 뜻이다 — 위에서 이미 돌아갔을 것이므로.
+    return 'served';
+  };
+
+  /**
+   * **끊기면 다시 붙는다** (검수 G1).
+   *
+   * 전에는 스트림이 끝나면 `live = false` 만 하고 끝났다 — 망이 잠깐 끊기거나 데몬이
+   * 재기동하면 **화면이 그 자리에서 멈추고 다시는 안 살아났다.** 운영자는 그것이
+   * 「아무 일도 안 일어나는 중」인지 「연결이 죽은 것」인지 알 수 없다. 그리고 이 화면은
+   * 트래픽을 바꾸는 데 쓰인다.
+   *
+   * **`Last-Event-ID` 를 안 쓴다.** 스트림이 열릴 때 언제나 전체 스냅샷을 주므로
+   * 재연결 = 새 스냅샷 = 일관된 상태이고, 이건 **구성상 옳다** — 빠뜨릴 이벤트라는
+   * 개념이 없다. 근거는 `src/web/reconnect.ts` 머리말에 있다.
+   */
+  const connect = async (): Promise<void> => {
+    stop?.();
+    error = undefined;
+    sessionStorage.setItem(tokenKey, token);
+
+    const ac = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    stop = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      ac.abort();
+    };
+
+    let attempt = 0;
+    while (!ac.signal.aborted) {
+      const outcome = await streamOnce(ac);
+      if (outcome === 'stop' || ac.signal.aborted) return;
+      // **붙었다 끊긴 것과 못 붙은 것을 가른다.** 붙었었다면 다음 재시도는 처음부터다 —
+      // 안 그러면 잠깐씩 자주 끊기는 망에서 대기가 끝없이 길어진다.
+      if (outcome === 'served') attempt = 0;
+      const wait = backoffMs(attempt);
+      if (outcome === 'refused') attempt += 1;
+      await new Promise<void>((r) => { timer = setTimeout(r, wait); });
     }
   };
 
