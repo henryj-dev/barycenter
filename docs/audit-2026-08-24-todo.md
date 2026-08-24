@@ -895,14 +895,28 @@ FAIL  fail  예외: ACME 400 …:badNonce: JWS has an invalid anti-replay nonce
 > 컨테이너를 안 죽이고 `unhealthy` 로 표시만 하므로, 거기 맞는 것은 readiness 다.
 > compose 의 `depends_on: service_healthy` 와 로드밸런서가 그것을 읽는다.
 
-### ☐ W4-3 · D14 — 인증서 선택 규칙 `[S]`
+### ☑ W4-3 · D14 — 인증서 선택 규칙 `[S]`
 
-**정할 것:** 정확일치 우선으로 할 것인가, 겹치는 바인딩 자체를 막을 것인가.
+- [x] **정확일치 우선(㉠)** 을 골랐다
+- [x] `tests/unit/audit-cert-specificity.test.ts` — 6 케이스.
+      **빨강 확인** 둘 (`expected 'wild' to be 'exact'`)
+- [x] `src/conf/render.ts` — `coverScore()` 로 **제일 잘 덮는 것**을 고른다
+- [x] `./scripts/verify.sh --quick` 9/9 (unit 908 → 914) · TLS 골든 13/13
 
-- 앞: nginx 의 `server_name` 규칙과 같아 설명할 것이 없다. 기존 설정이 안 깨진다
-- 뒤: 표현 불가능하게 만든다(이 저장소의 기본 취향). **기존 설정이 저장 불가가 될 수 있다**
+**㉡(겹치는 바인딩을 막는다)은 못 쓴다.** 그쪽이 이 저장소의 기본 취향(표현 불가능하게
+만든다)이지만, 막는 자리가 `validateModel` 인데 **`render()` 가 그것을 부르고 롤백은
+렌더를 지난다** — 겹치는 바인딩이 든 옛 리비전이 렌더 불가가 되어 **롤백이 막힌다.**
+`assertDirectiveStrings` 의 머리말이 같은 함정을 이미 적어 뒀고, D7 이 그 대가를
+실측했다.
 
-- [ ] 결정 후 `src/conf/render.ts:946` 또는 `src/validate/model.ts`
+**㉠ 의 값은 「설명할 것이 없다」이다.** nginx 의 `server_name` 우선순위 그대로라
+(정확일치 → 긴 와일드카드 → 짧은 와일드카드), `server_name` 이 고르는 server 와
+`ssl_certificate` 가 고르는 인증서가 **같은 근거로** 갈린다.
+
+> **동점 tie-break 을 안 만들었다.** 같은 특정성이려면 같은 호스트 문자열이어야 하고,
+> 그건 `sni_binding_conflict` 가 이미 막는다 — 여기서 규칙을 발명하면 *"도달 불가한
+> 방어는 방어가 아니라 죽은 코드"* 를 하나 더 만드는 셈이다. 대신 **그 사실을 재현물이
+> 못 박는다**: 나중에 검증기가 느슨해지면 그 검사가 먼저 빨개진다.
 
 ### ☐ W4-4 · G2 — CSP `script-src` `[S]`
 

@@ -973,7 +973,45 @@ function tlsNodes(
   ];
 }
 
-/** 리스너의 SNI 바인딩에서 이 호스트의 인증서와 버전 범위를 찾는다. */
+/**
+ * 패턴이 이 호스트를 **얼마나 구체적으로** 덮는가 (검수 D14).
+ *
+ * nginx 의 `server_name` 우선순위 그대로다: **정확일치 → 긴 와일드카드 → 짧은
+ * 와일드카드.** 같은 순서를 쓰는 것이 이 규칙의 값이다 — 운영자에게 새로 설명할 것이
+ * 없고, `server_name` 이 고르는 server 와 `ssl_certificate` 가 고르는 인증서가
+ * **같은 근거로** 갈린다.
+ *
+ * 안 덮으면 `-1`.
+ */
+function coverScore(pattern: string, host: string): number {
+  if (!coversHost(pattern, host)) return -1;
+  // 정확일치가 어떤 와일드카드보다도 구체적이다.
+  if (pattern === host) return Number.MAX_SAFE_INTEGER;
+  // 와일드카드끼리는 접미사가 긴 쪽이 구체적이다 — `*.sub.a.com` 이 `*.a.com` 을 이긴다.
+  return pattern.length;
+}
+
+/**
+ * 리스너의 SNI 바인딩에서 이 호스트의 인증서와 버전 범위를 찾는다.
+ *
+ * ── **먼저 덮는 것이 아니라 제일 잘 덮는 것** (검수 D14)
+ *
+ * 전에는 정렬된 바인딩을 훑어 먼저 덮는 것을 썼다. 그래서 `a.example.com` 을 정확일치
+ * 바인딩과 `*.example.com` 바인딩이 둘 다 덮고 인증서가 다르면, **실제로 제시되는
+ * 인증서를 바인딩 키의 알파벳 순서가 정했다.**
+ *
+ * `sni_binding_conflict` 는 *같은 호스트 문자열*이 두 인증서에 묶인 경우만 잡으므로 이
+ * 조합은 통과한다. S17 이 겨눈 실패(커버하지 않는 인증서 제시)의 약한 판이다 — 둘 다
+ * 덮기는 하지만 **운영자가 고른 쪽이 아닐 수 있다.**
+ *
+ * **겹치는 바인딩을 막는 길은 못 쓴다.** 막는 자리가 `validateModel` 인데 `render()`
+ * 가 그것을 부르고 **롤백은 렌더를 지난다** — 그런 바인딩이 든 옛 리비전이 렌더 불가가
+ * 되어 롤백이 막힌다. `assertDirectiveStrings` 의 머리말이 같은 함정을 적어 뒀다.
+ *
+ * 동점은 **안 생긴다.** 같은 특정성이려면 같은 호스트 문자열이어야 하고, 그건
+ * `sni_binding_conflict` 가 이미 막는다 — 여기서 tie-break 을 발명하면 도달 못 하는
+ * 방어를 하나 더 만드는 셈이다.
+ */
 function certFor(
   host: string,
   listener: HttpsListener,
@@ -981,18 +1019,27 @@ function certFor(
   policy: TlsPolicy,
   certs: Map<string, Certificate>,
 ): { cert: Certificate; min: TlsVersion; max: TlsVersion | undefined } {
+  let best: SniCertificateBinding | undefined;
+  let bestScore = -1;
   for (const b of bindings) {
-    if (!b.hosts.some((p) => coversHost(p, host))) continue;
-    const cert = certs.get(b.certificate);
+    // 바인딩이 호스트를 여럿 들면 **그중 제일 잘 맞는 것**으로 점수를 낸다.
+    const score = Math.max(...b.hosts.map((p) => coverScore(p, host)));
+    if (score > bestScore) {
+      bestScore = score;
+      best = b;
+    }
+  }
+  if (best !== undefined) {
+    const cert = certs.get(best.certificate);
     if (cert === undefined) {
-      throw new Error(`알 수 없는 인증서가 렌더에 도달했다: '${b.certificate}'`);
+      throw new Error(`알 수 없는 인증서가 렌더에 도달했다: '${best.certificate}'`);
     }
     return {
       cert,
-      min: b.override?.minVersion ?? policy.minVersion,
+      min: best.override?.minVersion ?? policy.minVersion,
       // `override.maxVersion` 가 없으면 policy 로 돌아간다. `undefined` 를 "상한 없음"
       // 으로 읽으면 override 가 정책을 **넓히는** 셈이 된다.
-      max: b.override?.maxVersion ?? policy.maxVersion,
+      max: best.override?.maxVersion ?? policy.maxVersion,
     };
   }
   // 검증기가 이미 막았다 (`sni_binding_missing`). 여기 오면 렌더러가 인증서를 지어내는
