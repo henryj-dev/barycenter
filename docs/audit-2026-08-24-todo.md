@@ -284,16 +284,30 @@
 > ⚠️ **「거짓 초록」이 아니라 「거짓 빨강」이었다.** 대가는 다르지만 끝은 같다 —
 > 게이트가 말하는 것을 사람이 안 믿게 된다. 이 회차에 실제로 그랬다.
 
-### ☐ W1-3 · D19 — CA 가 준 이름을 대조한다 `[S]`
+### ☑ W1-3 · D19 — CA 가 준 이름을 대조한다 `[S]`
 
-- [ ] `tests/unit/audit-dns01-identifier.test.ts` — 주문 도메인에 없는
-      `identifier.value`(`../` 포함)로 `place` 가 거부되는가
-- [ ] **빨강 확인**
-- [ ] `src/control/acme-runner.ts` — `#startOrder` 에서 `authz.identifier.value` 가
-      `order.domains` 에 있는지 보고 아니면 던진다. `FileDns01` 이 아니라 **부르는 쪽**이다
-      (http-01 도 같은 값을 쓴다)
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-dns01-identifier.test.ts -t "주문에 없는 도메인은 챌린지를 안 놓는다"`
+- [x] `tests/store/audit-dns01-identifier.test.ts` — 5 케이스. **`tests/unit/` 이 아니라
+      `tests/store/`** 다: 러너의 `#startOrder` 는 `AcmeStore`(실물 PG)를 지나야
+      닿는다. 가짜 store 를 만들면 `as never` 캐스팅 더미가 되고, 그러면 이 검사가
+      배선이 아니라 목(mock)을 재게 된다
+- [x] **빨강 확인** — 셋. 그중 하나는 **경로 탈출 실물 재현**:
+      `expected [ 'dns-challenges', 'keys', 'pwned' ] to not include 'pwned'` —
+      CA 가 준 이름으로 시크릿 저장소 루트에 파일이 쓰였다
+- [x] `src/control/acme-runner.ts` — `assertOrdered(order, authz.identifier.value)`.
+      `FileDns01` 이 아니라 **부르는 쪽**이다 (http-01 도 같은 값을 쓴다)
+- [x] `./scripts/verify.sh --quick`
+- [x] 커밋 — `Pinned-by: tests/store/audit-dns01-identifier.test.ts -t "경로 조각이 든 이름은 파일시스템에 안 닿는다"`
+
+> **처음 쓴 탈출 케이스는 아무것도 안 쟀다.** `challengeTypeWanted` 가 와일드카드가
+> 아니면 http-01 을 고르므로 그 케이스가 `FileDns01` 을 안 지났고, 그래서 **수정 전에도
+> 초록**이었다. `*.` 로 시작하게 바꿔 dns-01 로 강제하자 빨개졌다. 배치기를 안 지나는
+> 검사는 배치기에 대해 아무 말도 안 한다.
+
+> **`authz.wildcard` 플래그까지는 안 본다.** apex 를 받아야 하는 이유(RFC 8555 §7.1.3 —
+> `*.b.test` 의 authz 는 `b.test` 다)는 코드 주석에 적었고, 「CA 가 apex 만 검증하는」
+> 경우는 **프로토콜이 이미 닫는다**: finalize 에 나가는 CSR 이 `*.b.test` 라 apex authz
+> 만으로는 그 인증서가 안 나온다. 플래그를 요구하면 그것을 빠뜨리는 CA 에서 와일드카드
+> 발급이 막히는 대가만 남는다.
 
 ### ☐ W1-4 · G3 — 환경변수 해독기 `[S]`
 

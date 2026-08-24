@@ -223,6 +223,8 @@ export class AcmeRunner {
     const accountKey = (await this.#accountFor(order)).key;
     for (const authzUrl of created.authorizations) {
       const authz: Authorization = await client.fetchAuthorization(authzUrl);
+      // **CA 가 준 이름을 대조한다** — 아래 전부가 이 값 위에 선다 (검수 D19).
+      assertOrdered(order, authz.identifier.value);
       const wanted = challengeTypeWanted(
         { value: authz.identifier.value, ...(authz.wildcard === true ? { wildcard: true } : {}) },
         this.#o.placer.type === 'http-01',
@@ -386,6 +388,51 @@ export async function cleanupPlacedChallenges(
   }
   if (n > 0) count(`bary_acme_cleanup_total{outcome="removed"}`);
   return n;
+}
+
+/**
+ * **CA 가 준 이름이 우리가 주문한 것인가** (검수 D19).
+ *
+ * `authz.identifier.value` 는 아래 전부의 입력이다:
+ *
+ *   placer.place(값, …)        dns-01 이면 `join(dir, '_acme-challenge.<값>')` 이 된다.
+ *                              `join` 이 `..` 을 정규화하므로 **챌린지 디렉토리 밖에**
+ *                              파일을 쓸 수 있다 — 실측했다(`tests/store/audit-dns01-…`).
+ *   store.putChallenge({domain: 값})   원장에 남고 고아 스캔이 그걸로 치운다
+ *   placer.remove(값, …)       치울 때 같은 경로를 다시 만든다
+ *
+ * ── "CA 를 못 믿나" 는 잘못된 질문이다
+ *
+ * 우리가 믿는 것은 **디렉토리 URL 을 적은 운영자**이지 그 URL 뒤에 있는 것이 아니다.
+ * 디렉토리는 설정값이고(`acme_accounts.directory_url`) 사설 CA·프록시·오타가 전부 정상
+ * 배포다. 그리고 주문한 것과 다른 이름이 돌아오는 것은 배신이기 전에 **버그**이고,
+ * 버그가 조용히 파일을 쓰면 안 된다.
+ *
+ * ── 왜 배치기가 아니라 여기인가
+ *
+ * http-01 도 같은 값을 쓴다. 배치기마다 고치면 배치기가 늘 때마다 빠뜨릴 자리가
+ * 하나 는다 — 이 저장소가 목록으로 관리하다 물린 자리가 이미 둘이다(N1 · N3).
+ *
+ * ── 와일드카드는 이름이 다르게 온다
+ *
+ * RFC 8555 §7.1.3 — `*.b.test` 를 주문하면 authz 의 identifier 는 `b.test` 다. 문자열로만
+ * 대조하면 **정상 와일드카드 발급이 통째로 막힌다.** 그래서 apex 도 받는다.
+ *
+ * `authz.wildcard` 플래그까지 요구하지는 **않는다.** 그 플래그가 빠진 CA 에서 와일드카드
+ * 발급이 막히는 대가가 있고, 막으려는 것(우리가 와일드카드를 주문했는데 CA 가 apex 만
+ * 검증하는 것)은 **프로토콜이 이미 닫는다** — finalize 에 나가는 CSR 이 `*.b.test` 라
+ * apex authz 만으로는 CA 가 그 인증서를 못 낸다.
+ */
+function assertOrdered(order: AcmeOrderRow, value: string): void {
+  const ordered = order.domains.some(
+    (d) => d === value || (d.startsWith('*.') && d.slice(2) === value),
+  );
+  if (!ordered) {
+    throw new Error(
+      `CA 가 주문에 없는 도메인의 authz 를 줬다: ${JSON.stringify(value)} `
+      + `(주문한 것: ${order.domains.join(', ')})`,
+    );
+  }
 }
 
 export class HttpChallengePlacer implements ChallengePlacer {
