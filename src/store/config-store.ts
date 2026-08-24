@@ -20,7 +20,7 @@ import { compileHostRoutes, type CompileWarning, type RouteInput } from '../rout
 import { decodeModel } from '../model/decode.js';
 import { certCoversHost } from '../dp/certinfo.js';
 import {
-  validateBackendHost, validateHeaderValue, validatePathPrefix,
+  normalizeHost, validateBackendHost, validateHeaderValue, validatePathPrefix,
 } from '../validate/strings.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { ModelValidationError } from '../validate/model.js';
@@ -1502,12 +1502,19 @@ function shapeCheck(op: PatchOp): void {
  * `src/validate/strings.ts` 의 첫 줄이 *"어떤 사용자 문자열도 raw nginx 디렉티브로
  * 흘러들지 않는다"* 인데, 실제로 검증기를 안 지나는 값이 셋 있었다:
  *
- *   · `redirect.to`  — `return 301 "<to>"`. nginx 는 **인용 안에서도 변수를 보간한다.**
- *   · `pathPrefix`   — `location <prefix>`. `^~` 면 nginx 가 수식어로 읽는다.
- *   · `backend.host` — `server <host>:<port>`.
+ *   · `redirect.to`      — `return 301 "<to>"`. nginx 는 **인용 안에서도 변수를 보간한다.**
+ *   · `pathPrefix`       — `location <prefix>`. `^~` 면 nginx 가 수식어로 읽는다.
+ *   · `backend.host`     — `server <host>:<port>`.
+ *   · `upstreamTls.sni`  — `proxy_ssl_name <sni>` (검수 N3).
  *
  * 그리고 이미 있던 `validateHeaderValue`(변수 화이트리스트까지 구현돼 있다)를 **아무도
  * 안 불렀다.** 여기가 그 호출자다.
+ *
+ * ⚠️ **넷째는 S-11 이 놓친 것이 아니라 그 뒤에 들어왔다.** `upstream_tls` 는 S-11 이
+ * 이 함수를 만든 뒤에 열렸고, 그때 이 목록이 안 따라왔다 — `build.sh` 의 `chmod` 가
+ * 진입점 목록을 손으로 들고 있다가 새 진입점을 빠뜨린 것과 **같은 모양이다**(N1).
+ * 필드를 여는 자리에서 이 함수를 같이 보게 만드는 장치는 아직 없다. 새 문자열 필드를
+ * 디렉티브로 내보낼 때는 여기에 한 줄이 는다는 것만 여기 적어 둔다.
  *
  * ⚠️ **해독기가 아니라 여기다.** key 문법(S-01b)과 같은 이유다 — `modelAt` 이 옛 리비전
  * 스냅샷을 `decodeModel` 로 읽으므로 좁히면 그런 값이 든 리비전이 해독 불가가 되고
@@ -1522,6 +1529,20 @@ function assertDirectiveStrings(op: PatchOp & { op: 'put' }, body: Record<string
   if (op.kind === 'backend' && typeof body['host'] === 'string') {
     const r = validateBackendHost(body['host']);
     if (!r.ok) fail('host', r.message);
+  }
+
+  if (op.kind === 'pool') {
+    const sni = obj(body['upstreamTls'])['sni'];
+    if (typeof sni === 'string') {
+      // **`proxy_ssl_name` 은 complex value 다** — nginx 가 `$` 를 보간한다. `lit()` 이
+      // 인용해도 그 보간은 안 막힌다(`redirect.to` 가 물렸던 성질과 같다).
+      //
+      // 그리고 이 값은 문법이 틀려도 **조용히 틀린다.** 업스트림이 다른 인증서를
+      // 제시하고, `verify` 가 켜져 있으면 handshake 가 깨지고 꺼져 있으면 그냥
+      // 엉뚱한 이름으로 붙는다 — apply 뒤에야 드러나는 종류다.
+      const r = normalizeHost(sni);
+      if (!r.ok) fail('upstreamTls.sni', r.message);
+    }
   }
 
   if (op.kind === 'httpRoute') {

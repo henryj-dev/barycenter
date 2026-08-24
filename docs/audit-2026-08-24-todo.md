@@ -202,15 +202,21 @@
 이 저장소의 규칙은 *"타입은 런타임 입력을 막지 못한다"* 이고 `decodeModel` ·
 `parseTokenSpecs` 가 그것을 실행한다. **직전 회차가 들여온 표면 셋이 그 규칙 밖에 있다.**
 
-### ☐ W1-1 · N3 — `upstreamTls.sni` 를 검증기에 태운다 `[S]`
+### ☑ W1-1 · N3 — `upstreamTls.sni` 를 검증기에 태운다 `[S]`
 
-- [ ] `tests/store/audit-upstream-sni.test.ts` — `sni: "$http_host"` 와 호스트가 아닌
-      문자열이 PATCH 에서 **400** 으로 막히는가 (**실물 PG**)
-- [ ] **빨강 확인**
-- [ ] `src/store/config-store.ts:1485` — `assertDirectiveStrings` 에 `op.kind === 'pool'`
+- [x] `tests/store/audit-upstream-sni.test.ts` — `sni: "$http_host"` 와 호스트가 아닌
+      문자열이 PATCH 에서 **400** 으로 막히는가 (**실물 PG**) — 5 케이스
+- [x] **빨강 확인** — 셋 다 `expected undefined to be an instance of StoreError`.
+      *통과해 버리는* 빨강이라 행동상의 재현물이다 (컴파일 모양이 아니다)
+- [x] `src/store/config-store.ts` — `assertDirectiveStrings` 에 `op.kind === 'pool'`
       분기를 더하고 `upstreamTls.sni` 를 `normalizeHost` 에 태운다
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/store/audit-upstream-sni.test.ts -t "proxy_ssl_name 에 변수가 못 들어간다"`
+- [x] `./scripts/verify.sh --quick` — 9/9 초록
+- [x] 커밋 — `Pinned-by: tests/store/audit-upstream-sni.test.ts -t "변수 참조를 막는다"`
+
+> **왜 S-11 이 놓친 게 아닌가.** `upstream_tls` 는 `assertDirectiveStrings` 가 생긴
+> **뒤에** 열렸고 그때 이 목록이 안 따라왔다 — N1(`build.sh` 의 `chmod` 진입점 목록)과
+> 같은 모양이다. 함수 머리말에 그 사실을 적었지만, 그건 장치가 아니라 산문이다.
+> 목록을 게이트가 대조하게 만드는 것은 아래 W1-2 와 묶어 남는다.
 
 > **목록이 자라는 것을 게이트가 세게 한다.** `assertDirectiveStrings` 가 보는 필드는
 > 이제 넷이다. 디렉티브로 나가는 필드가 늘 때마다 이 자리를 빠뜨리므로,
