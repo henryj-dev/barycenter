@@ -33,10 +33,10 @@ export type StatusSnap = {
   unfinished?: unknown;
 };
 
-const tokenKey = 'bary.token';
-
 export function createDesk() {
-  let token = $state(sessionStorage.getItem(tokenKey) ?? '');
+  // OIDC 로그인은 HttpOnly 세션 쿠키를 쓴다. 수동 Bearer 입력은 새로고침하면 사라지는
+  // 메모리 값으로만 남긴다 — 브라우저 저장소에 API 자격증명을 보관하지 않는다.
+  let token = $state('');
   let live = $state(false);
   let error = $state<string | undefined>();
   let head = $state<string | undefined>();
@@ -290,8 +290,6 @@ export function createDesk() {
   const connect = async (): Promise<void> => {
     stop?.();
     error = undefined;
-    sessionStorage.setItem(tokenKey, token);
-
     const ac = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     stop = () => {

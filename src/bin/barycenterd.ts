@@ -749,6 +749,7 @@ export async function main(): Promise<void> {
   const apiOpts = {
     db, store, control, auth, election, secrets, events,
     plaintextExposed: false,
+    sessionSecure: false,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
     ...(oidcRp === undefined ? {} : { oidcRp }),
   };
@@ -771,6 +772,7 @@ export async function main(): Promise<void> {
   const exposureError = plaintextExposureError(host ?? '', tlsOn, allowPlaintextExposed);
   if (exposureError !== undefined) throw new Error(exposureError);
   apiOpts.plaintextExposed = plaintextExposed;
+  apiOpts.sessionSecure = tlsOn;
   const server = tlsOn
     ? createHttpsServer(
         apiTlsOptions({

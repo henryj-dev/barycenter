@@ -54,6 +54,9 @@ import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import { AuthFailureLimiter } from './auth-rate-limit.js';
 import {
+  BrowserSessions, LOGIN_COOKIE, SESSION_COOKIE, cookieValue, expiredCookie, sessionCookie,
+} from './browser-session.js';
+import {
   authorizationRequest, exchangeAuthorizationCode, pkceChallenge, pkceVerifier,
   type OidcRpSettings,
 } from './oidc-code.js';
@@ -87,6 +90,10 @@ export type ApiOptions = {
   oidcFetch?: typeof fetch;
   /** 외부 주소에 TLS 없이 바인딩된 상태. 인증된 metrics 에만 노출한다. */
   plaintextExposed?: boolean;
+  /** GUI 로그인 세션. 없으면 API 인스턴스마다 하나를 만든다. */
+  sessions?: BrowserSessions;
+  /** HTTPS 서버에서만 Secure 쿠키를 붙인다. */
+  sessionSecure?: boolean;
 };
 
 export function plaintextExposureMetric(exposed: boolean): LabeledGauge {
@@ -848,6 +855,7 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
 export function apiHandler(api: ApiOptions): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const authFailures = new AuthFailureLimiter();
+  api.sessions ??= new BrowserSessions();
   return (req, res) => {
     void handle(req, res, api, max, authFailures).catch((e) => {
       /**
@@ -967,6 +975,17 @@ async function handle(
     return;
   }
 
+  // 로그아웃은 인증이 없어도 쿠키를 지워야 한다. 응답 본문에 신원을 싣지 않는다.
+  if (req.method === 'POST' && url.pathname === '/api/v1/session/logout') {
+    res.setHeader('set-cookie', [
+      expiredCookie(SESSION_COOKIE, api.sessionSecure === true),
+      expiredCookie(LOGIN_COOKIE, api.sessionSecure === true),
+    ]);
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   // Authorization Code 시작·교환. 아직 Bearer 가 없다. 스코프 표에 안 올린다.
   if (req.method === 'GET' && url.pathname === '/api/v1/oidc/authorization-request') {
     const rp = api.oidcRp;
@@ -977,17 +996,19 @@ async function handle(
     /**
      * **PKCE 와 nonce 를 여기서 만든다** (검수 S-06 나머지).
      *
-     * 셋 다 클라이언트가 보관했다가 되보낸다. `state` 를 이미 그렇게 다루고 있었다 —
-     * 이 RP 는 상태를 안 가지므로 시작과 교환이 다른 노드에 닿아도 된다.
+     * PKCE verifier·nonce는 API의 짧은 수명 로그인 세션에 보관한다. 브라우저에는
+     * state와 opaque 로그인 쿠키만 내보내므로 토큰·검증자를 저장소에 남기지 않는다.
      */
     const state = randomBytes(16).toString('hex');
     const nonce = randomBytes(16).toString('hex');
     const codeVerifier = pkceVerifier();
+    const loginId = api.sessions!.beginLogin({ state, nonce, codeVerifier });
+    res.setHeader('set-cookie', sessionCookie(LOGIN_COOKIE, loginId, api.sessionSecure === true, 600));
     json(res, 200, {
       url: authorizationRequest(rp, {
         state, nonce, codeChallenge: pkceChallenge(codeVerifier),
       }).toString(),
-      state, nonce, code_verifier: codeVerifier,
+      state,
     });
     return;
   }
@@ -1020,26 +1041,34 @@ async function handle(
      * 아무것도 안 막는다 — 다운그레이드가 공격자의 선택이 된다. 시작 응답이 항상
      * 검증자를 주므로, 못 보내는 클라이언트는 시작 흐름을 안 지난 클라이언트다.
      */
-    const codeVerifier = obj['code_verifier'];
-    if (typeof codeVerifier !== 'string' || codeVerifier === '') {
+    const state = obj['state'];
+    if (typeof state !== 'string' || state === '') {
       json(res, 400, {
         code: 'malformed',
-        message: 'code_verifier 가 필요하다 — authorization-request 가 준 값을 되보낸다',
+        message: 'state 가 필요하다 — authorization-request 가 준 값을 되보낸다',
       });
       return;
     }
-    // nonce 는 선택이다. 안 보낸 클라이언트를 막을 이유는 없다 — 시작 때 nonce 를
-    // 실었으면 IdP 가 되돌려 주고, 그때만 검사가 뜻을 갖는다.
-    const nonce = obj['nonce'];
+    // state와 로그인 쿠키가 모두 있어야 서버가 보관한 PKCE verifier·nonce를 꺼낸다.
+    const login = api.sessions!.takeLogin(cookieValue(req.headers.cookie, LOGIN_COOKIE), state);
+    if (login === undefined) {
+      json(res, 401, { code: 'unauthenticated', message: '로그인 흐름이 없거나 만료됐다' });
+      return;
+    }
     const exchanged = await exchangeAuthorizationCode(rp, code, api.oidcFetch ?? fetch, {
-      codeVerifier,
-      ...(typeof nonce === 'string' && nonce !== '' ? { nonce } : {}),
+      codeVerifier: login.codeVerifier,
+      nonce: login.nonce,
     });
     if (exchanged === undefined) {
       json(res, 401, { code: 'unauthenticated', message: 'ID Token 이 거절됐다' });
       return;
     }
-    json(res, 200, { id_token: exchanged.id_token });
+    const sessionId = api.sessions!.create(exchanged.principal);
+    res.setHeader('set-cookie', [
+      sessionCookie(SESSION_COOKIE, sessionId, api.sessionSecure === true, 8 * 60 * 60),
+      expiredCookie(LOGIN_COOKIE, api.sessionSecure === true),
+    ]);
+    json(res, 200, { authenticated: true });
     return;
   }
 
@@ -1060,6 +1089,7 @@ async function handle(
    * 그 규칙을 진다.
    */
   const who = api.auth.authenticate(req.headers.authorization)
+    ?? api.sessions!.get(cookieValue(req.headers.cookie, SESSION_COOKIE))
     ?? principalFromClientCert(peerCertOf(req), api.auth);
   if (who === undefined) {
     const key = req.socket.remoteAddress ?? 'unknown';
