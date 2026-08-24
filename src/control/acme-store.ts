@@ -131,6 +131,28 @@ export class AcmeStore {
       : { id: text(r, 'id'), directoryUrl: text(r, 'directory_url') };
   }
 
+  /**
+   * 계정 목록 (검수 D21).
+   *
+   * **개인키 참조를 안 낸다.** 운영자가 `key://` 로 할 수 있는 일이 없고, 안 내는 것이
+   * `publicOrder`·`publicChallenge` 가 이미 쓰는 규칙이다.
+   */
+  async accounts(): Promise<
+    { id: string; key: string; directoryUrl: string; contact: string[]; registered: boolean }[]
+  > {
+    const r = await this.db.query(
+      `SELECT id,key,directory_url,contact,account_url FROM acme_accounts ORDER BY key`);
+    return r.rows.map((row) => ({
+      id: text(row, 'id'),
+      key: text(row, 'key'),
+      directoryUrl: text(row, 'directory_url'),
+      contact: (row['contact'] as string[] | null) ?? [],
+      // **CA 에 등록됐는가.** 창구는 원장에만 적고 등록은 러너가 첫 주문 때 한다 —
+      // 그 차이가 운영자에게 보여야 "왜 아직 안 됐나" 를 물을 수 있다.
+      registered: row['account_url'] !== null && row['account_url'] !== undefined,
+    }));
+  }
+
   /** 주문이 매달린 계정. `#drive` 가 디렉토리 URL 과 키 참조를 여기서 읽는다. */
   async accountById(id: string): Promise<{
     id: string; key: string; directoryUrl: string; accountKeyRef: string;

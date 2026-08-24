@@ -47,6 +47,8 @@ import {
   can, principalFromClientCert, TokenAuth,
   type PeerCertificate, type Principal, type Scope,
 } from './auth.js';
+import { newEcKey } from '../acme/der.js';
+import { PATH_SEGMENT_RULE, PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import {
@@ -390,6 +392,75 @@ const ROUTES: Route[] = [
       return;
     }
     json(c.res, 200, status);
+  }),
+
+  /**
+   * **ACME 계정을 만든다** (검수 D21 · DESIGN §8.2.1).
+   *
+   * 전에는 `acme_accounts` 에 넣는 코드의 호출자가 **테스트뿐**이었다. 계정이 없으면
+   * 러너가 `acme.no_account` 를 경고로 찍고 건너뛰므로, 새 배포에서 인증서에 `acme`
+   * 의도를 적어도 **주문이 영영 안 열렸다** — ACME 기능 전체가 도달 불가였다.
+   *
+   * **CA 등록은 여기서 안 한다.** 원장에 적고 계정 키를 만들 뿐이고, `newAccount` 는
+   * 러너가 첫 주문 때 부른다(`#drive` 가 `accountUrl` 이 없으면). 창구가 CA 를 기다리면
+   * CA 가 느린 날 계정을 못 만들고, 그건 **관측 못 한 것을 실패로 접는 것**이다.
+   */
+  route('POST', '/api/v1/acme/accounts', 'write', async (c, api) => {
+    const secrets = api.secrets;
+    if (secrets === undefined) {
+      json(c.res, 501, {
+        code: 'no_secret_store',
+        message: '시크릿 저장소가 없다 — 계정 키를 둘 곳이 없다',
+      });
+      return;
+    }
+    const body = (c.body ?? {}) as Record<string, unknown>;
+    const key = field(body, 'key');
+    const directoryUrl = field(body, 'directoryUrl');
+    // **경계에 해독기를 둔다.** `key` 는 시크릿 이름(`acme-<key>`)이 되어 경로 조각이
+    // 되고, 디렉토리 URL 은 우리가 개인키로 서명해 말을 거는 상대다.
+    if (!PATH_SEGMENT_SYNTAX.test(key)) {
+      throw new StoreError(400, 'malformed',
+        `계정 key 가 문법에 안 맞는다: ${JSON.stringify(key)} — ${PATH_SEGMENT_RULE}`);
+    }
+    if (!directoryUrl.startsWith('https://')) {
+      throw new StoreError(400, 'malformed',
+        'ACME 디렉토리는 https 여야 한다 — 평문으로 계정 키 서명을 보내지 않는다');
+    }
+    const contact = Array.isArray(body['contact'])
+      ? (body['contact'] as unknown[]).map((x) => {
+        if (typeof x !== 'string') {
+          throw new StoreError(400, 'malformed', 'contact 는 문자열 배열이어야 한다');
+        }
+        return x;
+      })
+      : [];
+
+    // 계정 키는 **인증서가 없는 키**라 `key://` 참조로 산다 (§4.8).
+    const ref = secrets.putKey(`acme-${key}`,
+      newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString());
+    const id = await new AcmeStore(api.db).upsertAccount({
+      key, directoryUrl, accountKeyRef: ref.ref, contact, by: c.who.name,
+    });
+    await api.store.audit(c.who.name, 'acme.account.created', 'acme', id,
+      { key, directoryUrl, contact });
+    // **참조도 안 낸다.** 운영자가 그것으로 할 수 있는 일이 없다.
+    json(c.res, 201, { id, key, directoryUrl, contact, registered: false });
+  }),
+
+  /**
+   * 계정 목록 (검수 D21).
+   *
+   * 만들 수만 있고 확인할 수 없으면 「제품 경로가 있다」가 절반만 참이다 — 운영자도
+   * GUI 도 「계정이 있는가」를 물을 자리가 필요하다.
+   */
+  route('GET', '/api/v1/acme/accounts', 'read', async (c, api) => {
+    const accounts = await new AcmeStore(api.db).accounts();
+    if (leaksSecret(accounts)) {
+      json(c.res, 500, { error: 'secret_leak', message: '계정 목록에 시크릿이 실렸다' });
+      return;
+    }
+    json(c.res, 200, { accounts });
   }),
 
   route('GET', '/api/v1/acme/orders', 'read', async (c, api) => {
