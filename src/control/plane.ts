@@ -163,6 +163,47 @@ export class ControlPlane {
    * 사실이 없는 인증서(v0.6 1단계에 올라간 것)는 **계열에서 빠진다.** 0 으로 채우면
    * "모른다" 가 "이미 만료" 로 보이고, 없는 알람보다 거짓 알람이 나쁘다.
    */
+  /**
+   * 지금 dict 에 있는 `slot:` 키 수 — 평면별 (검수 D4).
+   *
+   * ── 회수를 붙였는데 왜 게이지가 필요한가
+   *
+   * 회수가 **안 불리는 경로**가 남는다: 세대 GC 가 꺼진 배포(`keepGenerations <= 0`),
+   * 회수 요청이 실패한 회차, 아직 모르는 자리. 「고쳤다」와 「안 자란다」는 다르고,
+   * **자라는 것이 보여야** 다음 사람이 이 자리를 다시 만들지 않는다.
+   *
+   * ── 못 물으면 계열에서 빠진다
+   *
+   * admin 소켓이 아직 없거나(기동 직후) 엔진이 Lua 없이 떴으면 답이 없다. 그때
+   * **0 을 내지 않는다** — `certificateExpiry` 가 만료를 모를 때 0 을 안 내는 것과
+   * 같은 이유다. 0 은 「안 자란다」로 읽히고, 그건 우리가 모르는 것에 대한 주장이다.
+   */
+  async membershipSlotKeys(): Promise<LabeledGauge[]> {
+    const samples: LabeledGauge['samples'] = [];
+    const read = async (plane: Plane, get: () => Promise<string>): Promise<void> => {
+      try {
+        const n = Number((await get()).trim());
+        if (Number.isInteger(n) && n >= 0) samples.push({ labels: { plane }, value: n });
+      } catch {
+        // 못 물었다. 계열에서 빠진다 — 위 주석의 이유다.
+      }
+    };
+    const call = adminFetch(this.opts.adminSocket);
+    await read('http', async () => {
+      const r = await call('http://admin/membership/count', { signal: AbortSignal.timeout(2000) });
+      if (!r.ok) throw new Error(`http ${r.status}`);
+      return r.text();
+    });
+    const streamSocket = this.opts.streamAdminSocket ?? defaultStreamSocket(this.opts.adminSocket);
+    await read('stream', () => adminTalk(streamSocket)('0 count\n'));
+
+    return [{
+      name: 'bary_membership_slot_keys',
+      help: 'lua_shared_dict 에 남아 있는 slot: 키 수 (평면별). 자라면 퇴역 epoch 이 안 회수되고 있다',
+      samples,
+    }];
+  }
+
   async certificateExpiry(): Promise<LabeledGauge[]> {
     const secrets = this.opts.secrets;
     if (secrets === undefined) return [];
@@ -858,10 +899,68 @@ export class ControlPlane {
       if (out.removed.length > 0 || out.failed.length > 0) {
         void this.store.audit(by, 'generations.sweep', 'dataplane', undefined, out);
       }
+      // **세대를 지웠으면 그 epoch 의 슬롯도 회수한다** (검수 D4).
+      void this.reclaimSlots(out.removed, by);
     } catch (e) {
       void this.store.audit(by, 'generations.sweep.failed', 'dataplane', undefined,
         { error: String(e) });
     }
+  }
+
+  /**
+   * 퇴역한 epoch 의 멤버십 슬롯을 회수한다 (검수 D4).
+   *
+   * ── 판정을 다시 짓지 않는다
+   *
+   * 「이 epoch 은 이제 아무도 안 든다」는 **`sweepGenerations` 가 이미 답한다** —
+   * `protect` 목록과 `workerLingerMs` 가 그 판정이고, S13 이 실측한 근거가 거기 있다.
+   * 여기서 다시 계산하면 두 판정이 갈리고, 갈리면 **살아 있는 epoch 의 슬롯을 지운다.**
+   * 그때 `balancer_by_lua` 는 `ngx.exit(ngx.ERROR)` 를 타고 그 풀의 트래픽이 끊긴다.
+   *
+   * 그래서 입력은 **지워진 세대 이름 그대로**다. 세대 이름이 `r<리비전>-e<epoch>` 이라
+   * epoch 은 거기서 읽는다 — 새 상태를 안 만든다.
+   *
+   * ── 실패해도 조용히 넘어간다
+   *
+   * 슬롯이 남는 것은 **자라는 문제**이고, 회수 실패로 apply 를 실패시키는 것은
+   * **끊기는 문제**다. 세대 청소가 그렇게 하는 것과 같은 판단이다. 대신 감사에 남긴다.
+   */
+  private async reclaimSlots(removedGenerations: readonly string[], by: string): Promise<void> {
+    const epochs = [...new Set(
+      removedGenerations
+        .map((g) => /-e(\d+)$/.exec(g)?.[1])
+        .filter((e): e is string => e !== undefined),
+    )];
+    if (epochs.length === 0) return;
+
+    const streamSocket = this.opts.streamAdminSocket ?? defaultStreamSocket(this.opts.adminSocket);
+    const call = adminFetch(this.opts.adminSocket);
+    const talk = adminTalk(streamSocket);
+    const failed: { epoch: string; plane: string; reason: string }[] = [];
+
+    for (const epoch of epochs) {
+      // **양 평면 다 부른다.** 두 zone 은 서로 안 보이므로(E14 · E25) 한쪽만 부르면
+      // 다른 쪽이 계속 자란다. 그 풀이 실제로 있었는지는 창구가 알고, 없으면 0 개다.
+      try {
+        const r = await call(
+          `http://admin/membership?epoch=${encodeURIComponent(epoch)}&remove=1`,
+          { method: 'POST', body: '', signal: AbortSignal.timeout(5000) });
+        if (!r.ok) failed.push({ epoch, plane: 'http', reason: `http ${r.status}` });
+      } catch (e) {
+        failed.push({ epoch, plane: 'http', reason: (e as Error).message });
+      }
+      try {
+        const out = await talk(`${epoch} remove\n`);
+        if (!out.startsWith('removed ')) {
+          failed.push({ epoch, plane: 'stream', reason: out.trim().slice(0, 120) });
+        }
+      } catch (e) {
+        failed.push({ epoch, plane: 'stream', reason: (e as Error).message });
+      }
+    }
+
+    void this.store.audit(by, 'membership.slots.reclaimed', 'dataplane', undefined,
+      { epochs, ...(failed.length > 0 ? { failed } : {}) });
   }
 
   private async recordPhase(id: string, phase: string, detail: unknown): Promise<void> {

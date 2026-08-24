@@ -240,6 +240,34 @@ server {
             local epoch = ngx.var.arg_epoch
             if not epoch or epoch == "" then ngx.status = 400; ngx.print("no epoch"); return end
             local d = ngx.shared.${MEMBERSHIP_DICT.http}
+
+            -- **퇴역한 epoch 의 슬롯을 회수한다** (검수 D4).
+            --
+            -- 전에는 쓰기만 있었다. dict 는 프로세스 수명이라 nginx 재시작 전까지
+            -- **세대 전환마다 풀 수만큼 키가 쌓였다.** 차면 LRU 가 밀어내고, 밀려난
+            -- 것이 \`slot:\` 이면 \`balancer_by_lua\` 가 \`ngx.exit(ngx.ERROR)\` 를 타
+            -- **그 풀의 모든 요청이 끊긴다.** \`membershipDictKb\`(B-12)는 그 절벽을
+            -- 뒤로 미는 손잡이인데, 미는 것과 안 자라게 하는 것은 다르다.
+            --
+            -- ACME 토큰의 \`arg_remove\` 와 **같은 모양**이다 — 새 계약이 아니다.
+            -- 다만 지우는 단위가 토큰 하나가 아니라 **epoch 하나**다: 그 epoch 의
+            -- 슬롯이 몇 개인지는 부르는 쪽이 모르고(풀 수는 모델이 정한다),
+            -- 알 필요도 없다.
+            if ngx.var.arg_remove then
+                local n = 0
+                local suffix = ":" .. epoch
+                for _, k in ipairs(d:get_keys(0)) do
+                    -- **접두사와 접미사를 함께 본다.** \`slot:\` 로만 걸면 다른 키를
+                    -- 지울 수 있고, epoch 으로만 걸면 \`in:\`·\`rr:\` 이 걸린다.
+                    if k:sub(1, 5) == "slot:" and k:sub(-#suffix) == suffix then
+                        d:delete(k)
+                        n = n + 1
+                    end
+                end
+                ngx.print("removed ", n)
+                return
+            end
+
             local n = 0
             for line in body:gmatch("[^\\n]+") do
                 local name, peers = line:match("^([^=]+)=(.*)$")
@@ -316,6 +344,25 @@ server {
         }
     }
 
+    # **지금 dict 에 있는 \`slot:\` 키 수** (검수 D4).
+    #
+    # 회수를 붙였다고 안 자란다는 보장은 없다 — 회수가 안 불리는 경로, 세대 GC 가
+    # 꺼진 배포, 아직 모르는 자리가 남는다. **자라는 것이 보여야** 다음 사람이 이
+    # 자리를 다시 만들지 않는다.
+    #
+    # 키만 센다. 값을 안 읽는 이유는 이 창구가 \`/metrics\` 스크레이프마다 불리기
+    # 때문이다 — 세는 비용은 키 수에 비례하지만 읽는 비용은 바이트에 비례한다.
+    location = /membership/count {
+        content_by_lua_block {
+            local d = ngx.shared.${MEMBERSHIP_DICT.http}
+            local n = 0
+            for _, k in ipairs(d:get_keys(0)) do
+                if k:sub(1, 5) == "slot:" then n = n + 1 end
+            end
+            ngx.print(n)
+        }
+    }
+
     # peer 별 inflight. 밸런서가 올린 숫자만 준다. 없으면 빈 객체 — 숫자를 안 짓는다.
     location = /membership/inflight {
         content_by_lua_block {
@@ -375,6 +422,31 @@ server {
             end
             table.sort(out)
             ngx.print(table.concat(out, "\\n"), "\\n")
+            return
+        end
+        -- 슬롯 키 수 (검수 D4). http 의 \`/membership/count\` 와 같은 값이다 —
+        -- 두 zone 은 서로 안 보이므로 각자 답해야 한다.
+        if verb == "count" then
+            local n = 0
+            for _, k in ipairs(d:get_keys(0)) do
+                if k:sub(1, 5) == "slot:" then n = n + 1 end
+            end
+            ngx.print(n, "\\n")
+            return
+        end
+        -- **회수도 양 평면에 있어야 한다** (검수 D4). 두 zone 은 서로 안 보이므로
+        -- (E14 · E25) http admin 으로 대신 지울 수가 없다 — 한쪽만 회수하면 다른
+        -- 쪽이 계속 자란다.
+        if verb == "remove" then
+            local n = 0
+            local suffix = ":" .. epoch
+            for _, k in ipairs(d:get_keys(0)) do
+                if k:sub(1, 5) == "slot:" and k:sub(-#suffix) == suffix then
+                    d:delete(k)
+                    n = n + 1
+                end
+            end
+            ngx.print("removed ", n, "\\n")
             return
         end
         local n = 0

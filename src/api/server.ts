@@ -636,8 +636,13 @@ const ROUTES: Route[] = [
    */
   route('GET', '/metrics', 'read', async (c, api) => {
     c.res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
-    c.res.end(renderMetrics(
-      await api.control.gauges(), await api.control.certificateExpiry()));
+    // **계열을 나란히 낸다.** `renderMetrics` 는 표본 없는 계열을 통째로 빼므로,
+    // 못 물은 것이 0 으로 새지 않는다 (검수 D4 의 슬롯 키 게이지가 그 규칙을 쓴다).
+    const [certs, slots] = await Promise.all([
+      api.control.certificateExpiry(),
+      api.control.membershipSlotKeys(),
+    ]);
+    c.res.end(renderMetrics(await api.control.gauges(), [...certs, ...slots]));
   }),
 
   /**

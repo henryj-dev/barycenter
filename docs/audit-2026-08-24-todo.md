@@ -665,20 +665,43 @@ e2e 쪽 주석이 그 이유를 이미 적어 뒀다:
    > 그대로이고, **추론 경로**가 더 이상 성립하지 않게 됐을 뿐이다.
 2. **스파이크 S18 이 빨갰다 — 확률적 flake 다** (→ W3-6). 단독 재실행 `PASS=8 FAIL=0`.
 
-### ☐ W3-3 · D4 — 퇴역 epoch 의 슬롯을 회수한다 `[L]`
+### ☑ W3-3 · D4 — 퇴역 epoch 의 슬롯을 회수한다 `[L]`
 
-- [ ] `tests/golden/slot-reclaim.test.ts` — 세대를 여러 번 넘긴 뒤
-      `/membership/read` 로 **옛 epoch 의 키가 안 남아 있는가**
-- [ ] **빨강 확인**
-- [ ] `src/control/membership.ts:222` — `/membership` 에 `remove` 인자를 더한다.
-      ACME 의 `arg_remove` 와 **같은 모양**이다 (새 계약이 아니다)
-- [ ] `src/control/plane.ts` — `sweep()` 이 세대를 지울 때 그 epoch 의 슬롯도 함께
-      지운다. **판정을 다시 짓지 않는다** — `workerLingerMs` 가 이미 「아무도 안 든다」를 답한다
-- [ ] stream 평면(`streamAdminConf`)에도 같은 동사를 낸다
-- [ ] 관측 창구를 하나 낸다 — `bary_membership_slot_keys` 게이지.
-      **자라는 것이 보여야** 다음에 이 자리를 안 다시 만든다
-- [ ] `npm run test:golden` · `./scripts/verify.sh` 전체
-- [ ] 커밋 — `Pinned-by: tests/golden/slot-reclaim.test.ts -t "퇴역한 epoch 의 슬롯이 안 남는다"`
+- [x] `tests/golden/slot-reclaim.test.ts` — 3 케이스. **양 평면 다** 실물로 몬다
+- [x] **빨강 확인** — 셋 다. http `expected 'pool_app=…' to be ''`,
+      stream `expected 'pool_edge=…' to be ''`
+- [x] `src/control/membership.ts` — `/membership?remove=1` (http) · `<epoch> remove`
+      (stream). ACME 의 `arg_remove` 와 **같은 모양**이다
+- [x] `src/control/plane.ts` — `reclaimSlots(out.removed, by)`. **판정을 다시 짓지
+      않는다** — 입력이 `sweepGenerations` 가 지운 **세대 이름 그대로**이고, epoch 은
+      `r<리비전>-e<epoch>` 에서 읽는다
+- [x] stream 평면(`streamAdminConf`)에도 같은 동사
+- [x] `bary_membership_slot_keys` 게이지 — **평면별**. `/membership/count` 와
+      stream `count` 동사가 재료다
+- [x] `npm run test:golden` 3/3 · `./scripts/verify.sh --quick` 9/9
+- [x] 커밋 — `Pinned-by: tests/golden/slot-reclaim.test.ts -t "퇴역한 epoch 의 슬롯이 안 남는다"`
+
+**지우는 단위가 슬롯 하나가 아니라 epoch 하나다.** ACME 는 토큰 하나를 지우는데
+(`?remove=<토큰>`) 여기는 그럴 수가 없다 — 그 epoch 에 슬롯이 몇 개인지는 **부르는
+쪽이 모르고**(풀 수는 모델이 정한다) 알 필요도 없다. 그래서 `?remove=1` 은 값이 아니라
+플래그이고, 창구가 그 epoch 의 `slot:` 키를 훑어 지운다.
+
+> **접두사와 접미사를 함께 본다.** `slot:` 로만 걸면 다른 키를 지울 수 있고, epoch 으로만
+> 걸면 `in:`·`rr:` 이 걸린다. 재현물의 둘째 케이스가 이웃 epoch 을 안 건드리는지 잰다.
+
+**게이지가 왜 여전히 필요한가.** 회수를 붙였다고 안 자란다는 보장은 없다 — 세대 GC 가
+꺼진 배포(`keepGenerations <= 0`), 회수가 실패한 회차, 아직 모르는 자리가 남는다.
+「고쳤다」와 「안 자란다」는 다르고, **자라는 것이 보여야** 다음 사람이 이 자리를 다시
+만들지 않는다.
+
+> **못 물으면 계열에서 빠진다.** admin 소켓이 아직 없거나 엔진이 Lua 없이 떴으면
+> 답이 없는데, 그때 **0 을 내지 않는다** — 0 은 「안 자란다」로 읽히고 그건 우리가 모르는
+> 것에 대한 주장이다. `certificateExpiry` 가 만료를 모를 때 0 을 안 내는 것과 같은 규칙이고,
+> `renderMetrics` 가 표본 없는 계열을 통째로 빼 준다.
+
+**무대를 세우며 또 물린 것:** 템플릿 리터럴 안의 **백틱을 escape 안 했다.** conf 전체가
+템플릿 리터럴이라 주석에 적은 `` `slot:` `` 이 리터럴을 끝냈고, typecheck 가 TS1005 로
+잡았다. 기존 주석들이 전부 `\`in:\`` 로 적혀 있던 이유가 그것이다.
 
 ### ☐ W3-4 · N4 후속 — 「데몬이 안 떴다」가 이유를 말하게 한다 `[S]`
 
