@@ -138,7 +138,7 @@ beforeAll(async () => {
     '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
     '-e', 'BARY_PREFIX=/prefix',
     '-e', 'BARY_SECRETS=/secrets',
-    '-e', 'BARY_LISTEN=0.0.0.0:8088',
+    '-e', 'BARY_LISTEN=0.0.0.0:8088', '-e', 'BARY_ALLOW_PLAINTEXT_EXPOSED=1',
     '-e', 'BARY_ENGINE_BIN=/usr/local/openresty/bin/openresty',
     '-e', `BARY_TOKENS=[{"name":"tester","hash":"sha256:${hash}","scopes":["read","write","apply"]}]`,
     '-e', 'BARY_RELOAD_CMD=kill -HUP $(cat /prefix/logs/nginx.pid)',

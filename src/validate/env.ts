@@ -28,6 +28,19 @@
 
 export type IntRange = { min: number; max: number };
 
+/** 엄격한 불리언 환경변수. 모르는 값은 거짓으로 접지 않고 기동을 실패시킨다. */
+export function envBool(
+  name: string,
+  fallback = false,
+  source: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = source[name];
+  if (raw === undefined || raw === '') return fallback;
+  if (raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false') return false;
+  throw new Error(`환경변수 ${name} 이 불리언이 아니다: ${JSON.stringify(raw)} (1/0 또는 true/false)`);
+}
+
 /**
  * 정수 환경변수. 없거나 빈 문자열이면 `fallback`.
  *

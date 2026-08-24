@@ -90,7 +90,8 @@ COPY --from=build /src/gui/build ./gui/build
 #
 # **대신 밖에서 좁힌다.** compose 는 `127.0.0.1:8088:8088` 로 퍼블리시한다. 이 API 로
 # 개인키와 Bearer 토큰이 지나가므로 **8088 을 0.0.0.0 으로 퍼블리시하지 말 것.**
-# 데몬이 기동할 때 `listen.exposed` 로 그 사실을 경고한다.
+# 컨테이너 안의 바인드는 외부 주소이므로, 앞단 TLS 종단을 인지했다는 선언을 함께 둔다.
+# 데몬은 그래도 `listen.exposed` 경고를 남긴다.
 #
 # 서버 TLS 는 이제 있다 (검수 S-05b) — `BARY_TLS_CERT_FILE` 과 `BARY_TLS_KEY_FILE` 을
 # 주면 https 로 뜬다. 그래도 이 이미지의 기본은 평문이다: 인증서를 이미지에 굽지
@@ -100,6 +101,7 @@ COPY --from=build /src/gui/build ./gui/build
 # 밸런서 슬롯을 다시 쓰므로, 루프백 TCP 는 hostNetwork 배포에서 보호가 되지 못했다.
 ENV BARY_PREFIX=/prefix \
     BARY_LISTEN=0.0.0.0:8088 \
+    BARY_ALLOW_PLAINTEXT_EXPOSED=1 \
     BARY_RELOAD_CMD="kill -HUP \$(cat /prefix/logs/nginx.pid)" \
     BARY_CONFIGTEST_CMD="/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t"
 

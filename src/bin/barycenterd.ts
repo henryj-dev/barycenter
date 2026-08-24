@@ -55,7 +55,7 @@ import { renderCapsOf } from '../engine/render-caps.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
-import { envInt, envIntOpt } from '../validate/env.js';
+import { envBool, envInt, envIntOpt } from '../validate/env.js';
 import { isLoopbackBind, parseListen } from '../validate/sockets.js';
 
 const run = promisify(execFile);
@@ -75,6 +75,16 @@ const DAY_MS = 86_400_000;
  * DB 닫기가 더 있고, 그 둘은 망을 지난다.
  */
 const SHUTDOWN_DEADLINE_MS = 10_000;
+
+export function plaintextExposureError(
+  host: string, tlsOn: boolean, allowPlaintextExposed: boolean,
+): string | undefined {
+  if (tlsOn || isLoopbackBind(host) || allowPlaintextExposed) return undefined;
+  return '제어 API를 외부 주소에 평문으로 묶을 수 없다. '
+    + 'TLS를 켜거나(BARY_TLS_CERT_FILE/BARY_TLS_KEY_FILE), '
+    + '루프백에 묶거나(BARY_LISTEN=127.0.0.1:8088), '
+    + '앞단이 TLS를 종단한다면 BARY_ALLOW_PLAINTEXT_EXPOSED=1을 명시하라';
+}
 
 /**
  * **숫자 설정을 한 자리에서, 한 번만 읽는다** (검수 G3).
@@ -724,6 +734,7 @@ export async function main(): Promise<void> {
 
   const apiOpts = {
     db, store, control, auth, election, secrets, events,
+    plaintextExposed: false,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
     ...(oidcRp === undefined ? {} : { oidcRp }),
   };
@@ -741,6 +752,11 @@ export async function main(): Promise<void> {
   const tlsKey = env('BARY_TLS_KEY_FILE', '');
   const tlsClientCa = env('BARY_TLS_CLIENT_CA_FILE', '');
   const tlsOn = tlsCert !== '' || tlsKey !== '';
+  const allowPlaintextExposed = envBool('BARY_ALLOW_PLAINTEXT_EXPOSED');
+  const plaintextExposed = !tlsOn && !isLoopbackBind(host ?? '');
+  const exposureError = plaintextExposureError(host ?? '', tlsOn, allowPlaintextExposed);
+  if (exposureError !== undefined) throw new Error(exposureError);
+  apiOpts.plaintextExposed = plaintextExposed;
   const server = tlsOn
     ? createHttpsServer(
         apiTlsOptions({
@@ -769,11 +785,13 @@ export async function main(): Promise<void> {
    *
    * 진짜 답은 서버 TLS 이고 그건 별건이다. 그때까지 이 줄이 자리를 지킨다.
    */
-  if (!tlsOn && !isLoopbackBind(host ?? '')) {
+  if (plaintextExposed) {
     log.warn('listen.exposed', {
       host,
       why: '제어 API 에 TLS 가 없다 — 개인키와 토큰이 평문으로 지나간다',
-      advice: '앞단에서 TLS 를 종단하거나 루프백에만 퍼블리시하라',
+      advice: allowPlaintextExposed
+        ? 'BARY_ALLOW_PLAINTEXT_EXPOSED=1 로 명시적으로 허용됨 — 앞단 TLS 종단을 확인하라'
+        : '앞단에서 TLS 를 종단하거나 루프백에만 퍼블리시하라',
     });
   }
 

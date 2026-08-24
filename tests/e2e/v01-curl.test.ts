@@ -178,7 +178,7 @@ beforeAll(async () => {
     ...appMount(),
     '-e', 'BARY_DSN=postgres://postgres:bary@bary-v01-pg:5432/bary',
     '-e', 'BARY_PREFIX=/prefix',
-    '-e', 'BARY_LISTEN=0.0.0.0:8088',
+    '-e', 'BARY_LISTEN=0.0.0.0:8088', '-e', 'BARY_ALLOW_PLAINTEXT_EXPOSED=1',
     '-e', `BARY_TOKENS=${tokensEnv()}`,
     '-e', 'BARY_RELOAD_CMD=kill -HUP $(cat /prefix/logs/nginx.pid)',
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
@@ -435,7 +435,7 @@ describe('v0.1 완료 판정', () => {
       ...appMount(),
       '-e', 'BARY_DSN=postgres://postgres:bary@bary-v01-pg:5432/bary',
       '-e', 'BARY_PREFIX=/standby-prefix',
-      '-e', 'BARY_LISTEN=0.0.0.0:8088',
+      '-e', 'BARY_LISTEN=0.0.0.0:8088', '-e', 'BARY_ALLOW_PLAINTEXT_EXPOSED=1',
       '-e', 'BARY_NODE_NAME=standby',
       '-e', `BARY_TOKENS=${tokensEnv()}`,
       '--entrypoint', '/bin/sh', IMAGE, '-c', [

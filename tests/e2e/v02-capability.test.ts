@@ -96,7 +96,7 @@ beforeAll(async () => {
     ...appMount(),
     '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
     '-e', 'BARY_PREFIX=/prefix',
-    '-e', 'BARY_LISTEN=0.0.0.0:8088',
+    '-e', 'BARY_LISTEN=0.0.0.0:8088', '-e', 'BARY_ALLOW_PLAINTEXT_EXPOSED=1',
     // **여기가 요점이다** — 조회할 실행 파일이 공식 nginx 다.
     '-e', 'BARY_ENGINE_BIN=/usr/sbin/nginx',
     '-e', `BARY_TOKENS=[{"name":"tester","hash":"sha256:${hash}","scopes":["read","write","apply"]}]`,

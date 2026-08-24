@@ -38,6 +38,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { main } from '../../src/bin/barycenterd.js';
+import { envBool } from '../../src/validate/env.js';
 
 let prefix = '';
 let saved: NodeJS.ProcessEnv;
@@ -103,5 +104,20 @@ describe('숫자 환경변수', () => {
     process.env['BARY_ELECTION_INTERVAL_MS'] = '3000';
     process.env['BARY_HEALTH_EVENT_RETENTION_DAYS'] = '7';
     expect(await failure()).toContain('BARY_DSN');
+  });
+});
+
+describe('불리언 환경변수', () => {
+  it('1과 true는 참이고 0·빈 값·미설정은 거짓이다', () => {
+    expect(envBool('X', false, { X: '1' })).toBe(true);
+    expect(envBool('X', false, { X: 'true' })).toBe(true);
+    expect(envBool('X', true, { X: '0' })).toBe(false);
+    expect(envBool('X', true, { X: '' })).toBe(true);
+    expect(envBool('X', false, {})).toBe(false);
+  });
+
+  it('모르는 값은 거짓으로 접지 않고 던진다', () => {
+    expect(() => envBool('X', false, { X: 'yes' })).toThrow(/환경변수 X/);
+    expect(() => envBool('X', false, { X: 'TRUE ' })).toThrow(/불리언/);
   });
 });

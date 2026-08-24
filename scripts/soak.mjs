@@ -103,6 +103,7 @@ async function up() {
     ...appMount(),
     '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
     '-e', 'BARY_PREFIX=/prefix', '-e', 'BARY_LISTEN=0.0.0.0:8088',
+    '-e', 'BARY_ALLOW_PLAINTEXT_EXPOSED=1',
     '-e', 'BARY_ADMIN_PORT=19999', '-e', 'BARY_STREAM_ADMIN_PORT=19998',
     '-e', 'BARY_ENGINE_BIN=/usr/local/openresty/bin/openresty',
     '-e', `BARY_TOKENS=[{"name":"soak","hash":"sha256:${hash}","scopes":["read","write","apply"]}]`,

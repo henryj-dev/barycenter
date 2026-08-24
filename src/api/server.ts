@@ -35,7 +35,7 @@ import {
   drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
 } from '../control/drain.js';
 import { healthRows } from '../control/health.js';
-import { render as renderMetrics } from '../obs/metrics.js';
+import { render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
@@ -84,7 +84,17 @@ export type ApiOptions = {
   oidcRp?: OidcRpSettings;
   /** 테스트가 Token Endpoint 응답을 주입할 때. 없으면 전역 fetch. */
   oidcFetch?: typeof fetch;
+  /** 외부 주소에 TLS 없이 바인딩된 상태. 인증된 metrics 에만 노출한다. */
+  plaintextExposed?: boolean;
 };
+
+export function plaintextExposureMetric(exposed: boolean): LabeledGauge {
+  return {
+    name: 'bary_api_plaintext_exposed',
+    help: '제어 API가 외부 주소에 TLS 없이 바인딩되었는가 (1/0)',
+    samples: [{ labels: {}, value: exposed ? 1 : 0 }],
+  };
+}
 
 /**
  * TLS 소켓의 peer 인증서. 평문 소켓이면 `undefined` 다.
@@ -714,7 +724,11 @@ const ROUTES: Route[] = [
       api.control.certificateExpiry(),
       api.control.membershipSlotKeys(),
     ]);
-    c.res.end(renderMetrics(await api.control.gauges(), [...certs, ...slots]));
+    c.res.end(renderMetrics(await api.control.gauges(), [
+      ...certs,
+      ...slots,
+      plaintextExposureMetric(api.plaintextExposed === true),
+    ]));
   }),
 
   /**

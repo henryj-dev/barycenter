@@ -50,6 +50,7 @@ describe('제어 API 노출 (검수 S-05a)', () => {
     // 다음 사람이 "보안 문제네" 하고 되돌리면 API 가 안 열린다. 이유가 파일에 있어야 한다.
     const dockerfile = readFileSync(join(ROOT, 'deploy/Dockerfile'), 'utf8');
     expect(dockerfile).toContain('BARY_LISTEN=0.0.0.0:8088');
+    expect(dockerfile).toContain('BARY_ALLOW_PLAINTEXT_EXPOSED=1');
     expect(dockerfile).toMatch(/포트 퍼블리시|publish/);
   });
 });
