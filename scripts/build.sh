@@ -44,8 +44,22 @@ echo "dist/ 준비됨 — $(find dist -name '*.js' | wc -l | tr -d ' ') 개 모�
 # **lock 이 바뀌면 다시 받는다** (검수 G7). 전에는 디렉토리 유무만 봤다 — 그래서
 # `gui/package-lock.json` 이 바뀌어도 옛 의존성으로 빌드했고, 그 차이는 "내 컴퓨터에선
 # 되는데" 로만 드러난다. 해시를 옆에 적어 두고 대조한다.
+#
+# **해시 도구가 기계마다 다르다** (검수 2026-08-24 CI-3). alpine(빌드 이미지)에는
+# `shasum` 이 없고 `sha256sum` 만 있다. macOS 는 그 반대다. 처음엔 `shasum` 만 불렀고,
+# `2>/dev/null` 이 그 실패를 삼켜 **이미지 안에서는 해시가 늘 빈 문자열**이었다 —
+# 빈 문자열끼리 비교하니 항상 같고, lock 이 바뀌어도 다시 안 받는다. 즉 이 검사 전체가
+# 조용히 죽어 있었다. 이 저장소가 세는 자리다: *"필드는 있는데 아무도 안 읽는다."*
+# 그래서 **둘 다 없으면 빌드를 세운다** — 감시를 못 하는 채로 지나가지 않는다.
 gui_lock_stamp=gui/node_modules/.bary-lock
-gui_lock_now=$(shasum -a 256 gui/package-lock.json 2>/dev/null | cut -d' ' -f1)
+if command -v sha256sum >/dev/null 2>&1; then
+  gui_lock_now=$(sha256sum gui/package-lock.json | cut -d' ' -f1)
+elif command -v shasum >/dev/null 2>&1; then
+  gui_lock_now=$(shasum -a 256 gui/package-lock.json | cut -d' ' -f1)
+else
+  echo "sha256 도구가 없다 (sha256sum·shasum 둘 다) — gui lock 감시를 못 한다" >&2
+  exit 1
+fi
 if [ ! -d gui/node_modules ] || [ "$(cat "$gui_lock_stamp" 2>/dev/null)" != "$gui_lock_now" ]; then
   (cd gui && npm ci --no-audit --no-fund >/dev/null)
   printf '%s' "$gui_lock_now" > "$gui_lock_stamp"

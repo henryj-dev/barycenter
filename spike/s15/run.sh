@@ -33,6 +33,8 @@
 # 1/(n+1) 만 옮긴다 — 그 값도 함께 내서 **얼마나 다른지**가 보이게 한다.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib.sh
+. "$HERE/../lib.sh"
 
 IMAGE="${1:-${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}}"
 NAME=bary-s15-engine
@@ -58,7 +60,7 @@ echo " image: $IMAGE"
 echo "=============================================================="
 echo ""
 
-WORK="$(mktemp -d)"
+WORK="$(bary_spike_workdir)"
 trap 'cleanup; rm -rf "$WORK"' EXIT
 cp "$HERE/probe.lua" "$WORK/probe.lua"
 cat > "$WORK/nginx.conf" <<EOF
@@ -73,6 +75,7 @@ http {
   }
 }
 EOF
+bary_spike_readable "$WORK/probe.lua" "$WORK/nginx.conf"
 
 docker run -d --name "$NAME" -p "127.0.0.1:$PORT:$PORT" -v "$WORK:/w:ro" \
   -v "$WORK/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro" \

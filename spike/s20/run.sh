@@ -33,6 +33,8 @@
 # **엔진 사실 E65** 로 갈라 넣었고, 그쪽은 게이트 안에서 초록으로 산다.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib.sh
+. "$HERE/../lib.sh"
 
 IMAGE="${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}"
 H3CLIENT="${BARY_H3_CLIENT:-docker.io/ymuski/curl-http3}"
@@ -45,7 +47,7 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf "  PASS  %-18s %s\n" "$1" "$2"; }
 bad() { FAIL=$((FAIL+1)); printf "  FAIL  %-18s %s\n" "$1" "$2"; }
 
-TMP=$(mktemp -d)
+TMP=$(bary_spike_workdir)
 cleanup() {
   docker rm -f "$ENGINE" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true

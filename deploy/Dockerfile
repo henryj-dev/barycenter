@@ -24,7 +24,12 @@ WORKDIR /src
 COPY package.json package-lock.json ./
 # 빌드에는 devDependency(typescript)가 필요하다.
 RUN npm ci
-COPY tsconfig.json tsconfig.build.json ./
+# **`tsconfig.testing.json` 도 넣는다** (검수 2026-08-24 CI-2). `build.sh` 는 `dist/` 와
+# `dist-testing/` 을 **둘 다** 만들고, 여기 빠뜨렸을 때 이미지 빌드가 `TS5058: The
+# specified path does not exist` 로 죽었다 — 게이트(`verify`)는 저장소에서 돌아 초록인데
+# `quickstart`(이미지 빌드)만 빨간, 찾기 나쁜 모양이었다. 산출물 자체는 런타임 스테이지가
+# `dist/` 만 복사하므로 이미지에 안 실린다.
+COPY tsconfig.json tsconfig.build.json tsconfig.testing.json ./
 COPY scripts ./scripts
 COPY src ./src
 # **화면도 이미지에 들어간다.** 전에는 `gui/` 를 아예 안 복사했다 — 즉 이 이미지로

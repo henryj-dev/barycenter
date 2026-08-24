@@ -9,6 +9,7 @@
 **/node_modules
 **/.svelte-kit
 dist
+dist-testing
 gui/build
 
 # 워크트리·상태·산출물 — 이미지와 무관하다.

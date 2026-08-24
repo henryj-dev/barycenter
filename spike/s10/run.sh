@@ -23,6 +23,8 @@
 #    번갈아 때리면 그 지터가 양쪽에 똑같이 실린다.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib.sh
+. "$HERE/../lib.sh"
 ROOT="$(cd "$HERE/../.." && pwd)"
 
 IMAGE="${1:-${BARY_ENGINE_IMAGE:-docker.io/openresty/openresty:alpine}}"
@@ -38,7 +40,7 @@ ok()   { PASS=$((PASS+1)); printf "  PASS  %-22s %s\n" "$1" "$2"; }
 bad()  { FAIL=$((FAIL+1)); printf "  FAIL  %-22s %s\n" "$1" "$2"; }
 skip() { SKIP=$((SKIP+1)); printf "  SKIP  %-22s %s\n" "$1" "$2"; }
 
-WORK="$(mktemp -d)"
+WORK="$(bary_spike_workdir)"
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1; rm -rf "$WORK"; }
 trap cleanup EXIT
 if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
@@ -94,6 +96,7 @@ http {
   server { listen $BENCH_PORT; location /bench { content_by_lua_file /w/bench.lua; } }
 }
 EOF
+bary_spike_readable "$WORK"/*.lua "$WORK"/*.conf
 
 echo ""
 echo "  두 엔진을 한 컨테이너에 띄우고 번갈아 때린다…"
