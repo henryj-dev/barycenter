@@ -1107,6 +1107,19 @@ S11 하네스의 교훈이다.
 
 ---
 
+## 감사 회차 재현물 (2026-08-25)
+
+이번 회차의 재현물은 다음 경계와 운영 자세를 고정한다.
+
+| 파일 | 계약 |
+|---|---|
+| `tests/unit/audit-manifest-duplicate.test.ts` | manifest의 `(kind,key)` 중복 거부 |
+| `tests/unit/audit-configtest-fail-open.test.ts` | configTest 실행 실패의 preflight 실패 승격과 빈 명령 거부 |
+| `tests/unit/audit-env-numbers.test.ts` | 환경변수 불리언의 엄격한 해독 |
+| `tests/unit/audit-plaintext-exposed.test.ts` | 외부 평문 바인드의 명시적 허용과 metrics 노출 |
+| `tests/unit/audit-auth-ratelimit.test.ts` | 인증 실패 카운터·429·Retry-After·성공 해제·TTL |
+| `tests/unit/audit-secret-store-posture.test.ts` | FsSecretStore가 암호화되지 않음을 기동 자세로 표시 |
+
 ## 11. 열린 결정
 
 ### 닫힌 것

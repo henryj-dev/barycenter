@@ -55,6 +55,11 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 쓰기는 changeset 을 지나 **commit 까지** 한다. apply 는 영향 화면만 한다.
 
+인증은 현재 Bearer 토큰을 요청 헤더에 붙이는 정적 SPA 방식이다. OIDC의 state·PKCE
+verifier·nonce는 사용 후 제거하지만, 브라우저 저장소의 토큰을 XSS로 읽을 수 있는 잔여
+위험이 있다. HttpOnly/Secure/SameSite 세션은 BFF 또는 데몬 세션 저장소와 다중 인스턴스
+세션 계약이 필요한 별도 로드맵이다.
+
 | 쓰기 | 계약 |
 |---|---|
 | 풀 | 첫 백엔드와 같이. `round_robin` · `hash`+hashKey · `source_ip_hash`. 빈 풀은 plan 이 막는다. delete 한 줄 |

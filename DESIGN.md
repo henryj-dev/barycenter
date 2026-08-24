@@ -2012,7 +2012,10 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
   → **노출은 구현됨** — `GET /certificates` 가 `domains`·`notBefore`·`notAfter`·
   `expiresInDays` 를, `/metrics` 가 `bary_certificate_expiry_seconds{certificate=...}` 를
   낸다. **자동 갱신 틱은 있다** — `AcmeRunner` 가 만료 30일 전에 주문을 연다.
-  주문 GET 과 dns-01 파일 프로바이더(`BARY_DNS01_DIR`)는 있다.
+  주문 GET 과 dns-01 파일 프로바이더(`BARY_DNS01_DIR`)는 있다. 파일 프로바이더는
+  `BARY_DNS01_DIR/_acme-challenge.<domain>` 에 TXT 값을 한 줄로 쓰고, cleanup 때
+  같은 파일을 지운다. 운영 배포는 이 디렉터리를 감시해 `nsupdate` 또는 외부 DNS 훅으로
+  전파하고, ACME 검증이 끝난 뒤에도 파일 정본을 임의로 지우거나 덮어쓰지 않는다.
   GUI 로 수명주기를 **조작**하는 것은 없다.
 
   **사실은 설정이 아니라 바이트에서 온다.** changeset 으로 받으면 클라이언트가 만료일을
@@ -2022,6 +2025,10 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
   키를 읽어 들이면, 그 위험 때문에 결국 안 보게 된다.
 - **인증서 교체는 reload 를 유발한다** → 갱신도 디바운스 큐에 태운다.
 - 업로드 인증서도 1급 시민. **GUI 는 개인키를 절대 되돌려주지 않는다**(쓰기 전용).
+- 인증서 자료 업로드는 선택형 `SecretStore` 의존성이다. `SecretStore` 가 없는 데몬은
+  `POST /api/v1/certificates/material` 에 `501 no_secret_store` 를 반환한다. 배포 문서는
+  자료 업로드가 항상 가능하다고 가정하지 말고, 파일시스템 저장소를 쓰는 경우 기동 로그의
+  `secrets.posture` 에 `encrypted:false` 와 저장소 권한을 확인한다.
 
 ### 8.2 ACME 수명주기
 

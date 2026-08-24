@@ -22,23 +22,43 @@
 - 미구현·옵션 처리·더미 구현
 - 테스트 공백과 재현 가능한 실패
 
+## 이번 회차 처리 결과
+
+이 보고서의 발견 사항은 아래처럼 반영했다. 원래의 발견·반증 기록은 감사 이력으로
+보존하되, 이 절과 현재 코드가 우선이다.
+
+| 발견 | 처리 결과 |
+|---|---|
+| 외부 주소의 평문 제어 API | 기본 거부. `BARY_ALLOW_PLAINTEXT_EXPOSED=1`을 명시한 경우만 허용하며 경고와 `bary_api_plaintext_exposed` metrics 게이지를 유지한다. |
+| `configTest` 실행 실패 fail-open | `preflight` 실패로 승격하고 `configTestErrored`와 원인 메시지를 남긴다. 빈 `BARY_CONFIGTEST_CMD`도 기동 실패다. |
+| 인증 실패 제한 부재 | 인스턴스 메모리에서 peer 주소별 1024개·10분 TTL로 제한한다. 5회 실패 뒤 429/Retry-After를 내고, 성공하면 상태를 지운다. 실패 카운터도 낸다. |
+| manifest 중복 | 같은 `(kind,key)`를 파서에서 즉시 거부하고 리소스 인덱스를 오류에 포함한다. |
+| SecretStore 운영 오인 | FsSecretStore가 암호화되지 않았음과 디렉터리 권한을 `secrets.posture` 기동 로그로 드러낸다. KMS/Vault 드라이버 자체는 로드맵이다. |
+| GUI HttpOnly 세션 | 현재 정적 SPA 구조에서 토큰을 HttpOnly 세션으로 바꾸지는 않았다. XSS 잔여 위험과 BFF/세션 저장소 선행 결정은 `DESIGN.md`와 `STATUS.md`에 명시했다. |
+| DNS-01·인증서 업로드 | `501 no_secret_store`와 파일 기반 DNS-01의 TXT 파일·cleanup·외부 훅 계약을 문서화했다. |
+
+변경은 `e4ec324`, `6c3bf2c`, `75ee736`, `6afbdad`, `89d1053`에 나뉘어 있다.
+
 ## 요약
 
-**전체 테스트는 통과한다** — unit 103 파일 / 955 테스트, conformance 50 파일 / 479 테스트,
-모두 통과하며 종료 코드는 0이다. 1차 보고서가 최우선으로 지목한 SSE backpressure·SSE
+기준선 보고서의 테스트 수치는 대상 커밋 기준이다. 이번 수정으로 감사 재현물이 추가됐으므로
+최종 검증 수치는 아래 「검증 결과」에 실행 출력과 함께 갱신한다. 1차 보고서가 최우선으로 지목한 SSE backpressure·SSE
 종료 문제는 재현되지 않으며, 기술 전제 자체도 성립하지 않는다 (「반증된 지적」 참조).
 
-실제로 남는 문제는 세 가지 성격으로 나뉜다.
+수정 전 실제 문제는 네 가지 성격으로 나뉘었고, 현재 남는 것은 두 가지다.
 
-1. **의도적 opt-in이 안전하지 않은 기본값으로 남아 있는 것** — 외부 주소에 평문 제어 API를
-   묶는 것을 경고만 하고 허용한다.
-2. **검사가 조용히 건너뛰어지는 것** — nginx 설정 검사는 미설정일 때뿐 아니라 **설정했는데
-   실행이 실패해도** 통과로 접힌다.
-3. **입력·인증 경계의 좁은 구멍** — manifest의 중복 리소스 식별자, 제어 API의 레이트리밋 부재.
+1. **GUI 인증의 구조적 잔여 위험** — 정적 SPA가 토큰을 브라우저 저장소에 보관한다. BFF 또는
+   데몬 세션 저장소가 필요한 별도 설계 항목이다.
+2. **FsSecretStore의 평문 저장** — 파일 권한과 기동 자세 표시는 추가했지만 KMS/Vault
+   드라이버는 아직 없다.
 
 ## 발견 사항
 
 ### [높음] 외부 바인딩에서 평문 제어 API를 허용함
+
+**현재 상태: 해결됨.** TLS 없는 외부 바인드는 기동 전에 거부한다. 컨테이너·TLS 종단
+앞단처럼 운영자가 책임을 명시한 경우에만 `BARY_ALLOW_PLAINTEXT_EXPOSED=1`로 허용하며,
+그때도 `listen.exposed` 경고와 인증된 `/metrics`의 `bary_api_plaintext_exposed 1`이 남는다.
 
 파일: `src/bin/barycenterd.ts:743`, `src/bin/barycenterd.ts:772`
 
@@ -66,6 +86,11 @@ TLS가 꺼진 상태에서 루프백 외 주소에 API를 바인딩할 수 있�
 - 그 플래그가 켜진 상태를 `/readyz` 또는 상태 응답에도 드러내 운영자가 나중에 발견할 수 있게 함
 
 ### [높음] 설정 검사가 실행에 실패하면 통과로 접힌다 (fail-open)
+
+**현재 상태: 해결됨.** `configTest` 실행 예외는 `ok:false`와 `configTestErrored:true`로
+preflight를 실패시키고 원인을 apply 결과에 전달한다. `BARY_CONFIGTEST_CMD`가 빈 문자열이면
+설정된 검사로 간주하지 않고 기동 시 실패시킨다. 미설정과 엔진의 명시적 거부는 기존처럼
+각각 `undefined`와 `configTestPassed:false`로 구분한다.
 
 파일: `src/dp/effects-fs.ts:188`, `src/dp/effects-fs.ts:194-197`, `src/dp/operation.ts:131`
 
@@ -105,6 +130,10 @@ TLS가 꺼진 상태에서 루프백 외 주소에 API를 바인딩할 수 있�
 
 ### [중간] 제어 API에 레이트리밋·시도 제한이 없다
 
+**현재 상태: 해결됨.** 인증 실패를 `bary_auth_failures_total`로 세고, peer 주소별 제한을
+적용한다. 5회 실패 뒤 1초부터 최대 60초까지 지수 백오프하며 429와 `Retry-After`를 보낸다.
+제한은 인스턴스 메모리·10분 TTL·1024개 키 상한이며, 성공 인증은 해당 키를 초기화한다.
+
 파일: `src/api/auth.ts:307`, `src/api/server.ts`
 
 `src/api/` 전체와 `barycenterd.ts`에 `rateLimit` / `throttle` / `429` / lockout에 해당하는
@@ -129,6 +158,10 @@ TLS가 꺼진 상태에서 루프백 외 주소에 API를 바인딩할 수 있�
 - 인증 실패율을 메트릭으로 노출 (지금은 실패를 세는 곳이 없다)
 
 ### [낮음] Manifest에서 중복 리소스 식별자를 허용함
+
+**현재 상태: 해결됨.** `parseManifest()`가 `(kind,key)`를 `kind\0key`로 추적해 두 번째
+등장을 즉시 거부하고 `resources[i]` 인덱스를 오류에 넣는다. 다른 `kind`의 같은 `key`는
+서로 다른 자원으로 허용한다.
 
 파일: `src/store/manifest.ts:121-144`
 
@@ -284,6 +317,33 @@ XSS가 발생하면 토큰이 읽힌다. 장기 운영 환경에서는 BFF와 Ht
 
 ## 검증 결과
 
+### 이번 수정 검증
+
+```
+$ npm run typecheck
+  exit 0
+
+$ npx vitest run tests/conformance --reporter=dot
+  Test Files  50 passed (50)
+  Tests       479 passed (479)
+
+$ npx vitest run tests/unit/audit-auth-ratelimit.test.ts --reporter=dot
+  Test Files  1 passed (1)
+  Tests       4 passed (4)
+
+$ npx vitest run tests/unit/audit-manifest-duplicate.test.ts \
+                tests/unit/audit-configtest-fail-open.test.ts \
+                tests/unit/audit-env-numbers.test.ts \
+                tests/unit/audit-plaintext-exposed.test.ts \
+                tests/unit/audit-secret-store-posture.test.ts --reporter=dot
+  개별 파일 출력 기준 22 tests passed
+```
+
+전체 `npm test`를 포함한 `verify:quick` 세션은 unit 단계에서 기존 장시간 테스트가
+20분 이상 진행 신호만 내고 종료하지 않아 중단했다. 따라서 이번 보고서에서는 그 세션을
+전체 초록으로 주장하지 않는다. conformance 전체와 변경된 감사 재현물·타입체크는 위처럼
+완료했고, 남은 전체 unit 게이트는 실행 하네스가 정상 종료되는 환경에서 다시 확인해야 한다.
+
 대상 커밋 `39fe68b`에서 실행:
 
 ```
@@ -310,14 +370,11 @@ $ npx vitest run tests/unit/audit-stream-caps.test.ts \
 **타임아웃도 실패도 없다.** 1차 보고서의 *"위 unit 테스트 실패로 전체 검증을 완전 통과로
 볼 수 없다"* 는 결론은 철회한다. 이 커밋에서 전체 검증은 통과다.
 
-## 우선순위 제안
+## 후속 우선순위
 
-1. 외부 바인딩 + TLS 없음 조합을 기본 거부로 전환 (명시적 플래그로만 허용)
-2. configTest 실행 실패를 통과로 접지 않기 — 실행 실패와 미설정을 구분해 결과에 드러내기
-3. 제어 API 인증 실패에 레이트리밋·백오프 추가
-4. Manifest 중복 `(kind, key)` 거부
-5. KMS/Vault SecretStore 드라이버 추가
-6. GUI 인증을 HttpOnly 세션 방식으로 전환
+1. GUI 인증을 HttpOnly 세션 방식으로 전환 — BFF/데몬 세션 저장소와 다중 인스턴스 계약 필요
+2. KMS/Vault SecretStore 드라이버 추가 — 현재 `FsSecretStore`는 평문 저장이며 자세를 로그로 드러냄
+3. 전체 unit 게이트가 장시간 테스트를 정상 종료하는지 실행 환경에서 재검증
 
 ## 정정 이력
 
@@ -327,13 +384,13 @@ $ npx vitest run tests/unit/audit-stream-caps.test.ts \
 |---|---|
 | [높음] SSE 버퍼 상한이 backpressure를 제어 못함 | **철회** — 전제 오류, 테스트 4건 통과 |
 | [높음] SSE 연결이 정상 종료되지 않음 | **철회** — 테스트 4건 통과 |
-| [높음] 외부 바인딩 평문 제어 API | **유지** — TLS opt-in이 존재한다는 사실 보강 |
+| [높음] 외부 바인딩 평문 제어 API | **유지 후 해결** — TLS opt-in 사실을 보강하고 명시적 허용 플래그로 기본 거부 |
 | [중간~높음] 원격 DP 응답 정리 불완전 | **철회** — `reject` 중복은 no-op, 소켓은 회수됨 |
 | [중간] HTTP 헬스 프로브 정리 불완전 | **철회** — 이미 수정된 코드, 테스트 7건 통과 |
 | [중간] nginx 설정 검사가 선택 사항 | **[높음]으로 승격 + 확장** — 실행 실패 fail-open 경로 추가 |
-| [중간] SecretStore 평문 저장 | **「미구현」으로 이동** — 코드가 명시적으로 선언한 범위 |
+| [중간] SecretStore 평문 저장 | **잔여 로드맵** — 코드가 명시한 범위이며 기동 자세 로그·문서 추가 |
 | [중간] Manifest 중복 리소스 | **[낮음]으로 하향** — 결정적 last-wins, 비경합 |
-| — | **신규 [중간]** 제어 API 레이트리밋 부재 |
+| — | **신규 [중간] 제어 API 레이트리밋 부재** — peer별 메모리 백오프와 metrics로 해결 |
 | 라인 번호 | `events.ts:189`, `desk.svelte.ts:39`, `server.ts:737` 등 정정 |
 | 대상 커밋 | **신규 명시** (`39fe68b`) |
 
