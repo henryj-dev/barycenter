@@ -6,14 +6,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { materializeGeneration } from '../../src/dp/materialize.js';
 import { FsEffects } from '../../src/dp/effects-fs.js';
 import { bootEffects } from '../../src/dp/effects-boot.js';
+import type { ApplyOperation, Plane } from '../../src/dp/operation.js';
 
-const op = (digest: string) => ({
+const op = (digest: string): ApplyOperation => ({
   operationId: 'op', transitionId: 'transition', leaderToken: '1',
   targetGeneration: 'gen-1', generationDigest: digest,
-  affectedPlanes: ['http'] as const,
-  targets: { http: {
-    expectedCurrent: { activationEpoch: '0', payloadDigest: 'old' },
-    target: { activationEpoch: '1', payloadDigest: 'new' },
+  affectedPlanes: ['http'] as Plane[],
+  planes: { http: {
+    expectedCurrent: { activationEpoch: '0', membershipRevision: '0' },
+    target: { activationEpoch: '1', membershipRevision: '1' },
+    payloadDigest: 'new',
   } },
 });
 
