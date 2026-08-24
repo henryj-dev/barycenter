@@ -14,7 +14,7 @@
  * 원격에 두는 구성은 애초에 설계에 없다.
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
 import { createServer as createHttpsServer } from 'node:https';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -84,6 +84,19 @@ export function plaintextExposureError(
     + 'TLS를 켜거나(BARY_TLS_CERT_FILE/BARY_TLS_KEY_FILE), '
     + '루프백에 묶거나(BARY_LISTEN=127.0.0.1:8088), '
     + '앞단이 TLS를 종단한다면 BARY_ALLOW_PLAINTEXT_EXPOSED=1을 명시하라';
+}
+
+/**
+ * SecretStore 의 보안 자세를 로그에 남긴다. 자료 자체나 파일 이름은 읽지 않는다.
+ * `FsSecretStore` 는 암호화 저장소가 아니므로, "암호화돼 있겠지"라는 운영자의 추측을
+ * 기동 로그에서 끊어야 한다 (DESIGN.md §4.8).
+ */
+export function fsSecretStorePosture(root: string): {
+  backend: 'filesystem'; encrypted: false; root: string; exists: boolean; mode?: string;
+} {
+  if (!existsSync(root)) return { backend: 'filesystem', encrypted: false, root, exists: false };
+  const mode = (statSync(root).mode & 0o7777).toString(8).padStart(4, '0');
+  return { backend: 'filesystem', encrypted: false, root, exists: true, mode };
 }
 
 /**
@@ -321,6 +334,7 @@ export async function main(): Promise<void> {
    */
   const secretsRoot = env('BARY_SECRETS', `${prefix}/secrets`);
   const secrets = new FsSecretStore(secretsRoot);
+  log.warn('secrets.posture', fsSecretStorePosture(secretsRoot));
 
   // **사실 창구를 넘긴다** (검수 B-05). 안 넘기면 바인딩된 인증서가 그 호스트를
   // 덮는지 아무도 안 본다 — `certCoversHost` 가 구현돼 있는데 호출자가 없었다.
