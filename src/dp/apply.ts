@@ -44,6 +44,11 @@ export type PreflightResult = {
   reason?: string;
   /** `nginx -t` 결과. 관측하지 못했으면 undefined. */
   configTestPassed?: boolean;
+  /**
+   * 검사를 실행하려 했지만 예외로 완료하지 못했다.
+   * `false`는 엔진이 거부한 것이고 `undefined`는 검사를 설정하지 않은 것이므로 별도 필드다.
+   */
+  configTestErrored?: boolean;
 };
 
 export interface Effects {
@@ -567,7 +572,10 @@ export class ApplyRunner {
           const check = await this.budget('preflight', () => this.effects.preflight(j.op));
           this.agent.assertOwnership(j.op);
           if (!check.ok) {
-            await this.failAll(j, check.reason ?? '게시 전 검사 실패');
+            const reason = check.configTestErrored === true
+              ? `설정 검사를 실행하지 못했다 — ${check.reason ?? '원인 없음'}`
+              : (check.reason ?? '게시 전 검사 실패');
+            await this.failAll(j, reason);
             break;
           }
           await ignoreConflict(this.write(next(j, { phase: 'publish_intent' })));

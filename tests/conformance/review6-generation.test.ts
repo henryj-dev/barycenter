@@ -200,7 +200,7 @@ describe('게시 전 검사가 실제로 게시를 막는다 (§6.2 #2)', () => 
     expect(existsSync(join(prefix, 'current')), 'nginx -t 가 거부했는데 게시했다').toBe(false);
   });
 
-  it('config test 를 **돌리지 못한 것**은 실패가 아니다', async () => {
+  it('config test 를 **돌리지 못한 것**은 게시 전 실패다', async () => {
     const m = make('gen-1');
     const agent = new DpAgent(new MemoryStore());
     const r = await new ApplyRunner(
@@ -212,8 +212,8 @@ describe('게시 전 검사가 실제로 게시를 막는다 (§6.2 #2)', () => 
       }),
       FAST,
     ).run(OP({ generationDigest: m.digest }));
-    // 관측 못 한 것과 거부당한 것은 다르다 (§6.3).
-    expect(r.phase).toBe('activated');
+    // §6.3은 활성화 증거 판정의 원칙이고, 게시 전 게이트는 실행 오류를 막는다.
+    expect(r.phase).toBe('failed');
   });
 
   it('preflight 는 게시보다 **먼저** 불린다', async () => {

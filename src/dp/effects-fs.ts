@@ -192,8 +192,14 @@ export class FsEffects implements Effects {
         ? { ok: true, configTestPassed: true }
         : { ok: false, reason: '엔진이 설정을 거부했다 (nginx -t)', configTestPassed: false };
     } catch (e) {
-      // 검사를 **못 한 것**은 실패가 아니다. 판정은 관측이 한다 (§6.3).
-      return { ok: true, reason: `config test 를 돌리지 못했다: ${(e as Error).message}` };
+      // §6.3의 "관측하지 못한 것은 반증이 아니다"는 활성화 증거 판정의 원칙이다.
+      // 여기는 게시 전 게이트다. 설정한 검사를 실행하지 못한 것은 false(거부)나
+      // undefined(미설정)가 아니므로 게시를 막고 별도 상태로 남긴다.
+      return {
+        ok: false,
+        configTestErrored: true,
+        reason: `config test 를 돌리지 못했다: ${(e as Error).message}`,
+      };
     }
   }
 

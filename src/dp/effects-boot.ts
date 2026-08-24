@@ -66,6 +66,10 @@ async function pushStream(socket: string, epoch: string, body: string): Promise<
 export function bootEffects(opts: EffectsBootOptions): FsEffects {
   const { prefix, adminSocket, streamAdminSocket } = opts;
   const env = opts.env ?? process.env;
+  const configTestCmd = env['BARY_CONFIGTEST_CMD'];
+  if (configTestCmd !== undefined && configTestCmd === '') {
+    throw new Error('BARY_CONFIGTEST_CMD 가 비어 있다 — nginx -t 명령을 적거나 변수를 제거하라');
+  }
 
   const pushMembership = async (
     plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>,
@@ -103,11 +107,11 @@ export function bootEffects(opts: EffectsBootOptions): FsEffects {
         return undefined;
       }
     },
-    ...(env['BARY_CONFIGTEST_CMD'] === undefined ? {} : {
+    ...(configTestCmd === undefined ? {} : {
       configTest: async (generation: string): Promise<boolean> => {
         try {
           await run('/bin/sh', ['-c',
-            (env['BARY_CONFIGTEST_CMD'] ?? '').replace(/\{generation\}/g, generation)]);
+            configTestCmd.replace(/\{generation\}/g, generation)]);
           return true;
         } catch {
           return false;
