@@ -88,7 +88,53 @@ export class Db {
     }
   }
 
+  /**
+   * 마이그레이션 잠금의 advisory 키 (검수 D15).
+   *
+   * **리더 선출과 다른 키다.** 같은 키를 쓰면 마이그레이션이 선출을 기다리게 되는데,
+   * 마이그레이션은 선출 **전에** 도는 것이 계약이다(스탠바이도 스키마는 최신이어야
+   * 읽기를 답한다). `hashtext()` 를 안 쓰는 이유도 저쪽과 같다 — 버전 간 안정성이
+   * 보장되지 않아 PG 를 올리면 키가 바뀐다.
+   */
+  static readonly MIGRATE_LOCK = [0x62_61, 0x6d_67] as const;   // 'ba' 'mg'
+
+  /**
+   * 스키마를 최신으로. **한 번에 하나만 돈다** (검수 D15).
+   *
+   * ── 왜 트랜잭션만으로는 부족한가
+   *
+   * 마이그레이션 하나가 한 트랜잭션인 것은 **부분 적용**을 막는다. 동시 실행은 못
+   * 막는다 — `schema_migrations` 를 읽는 시점에는 둘 다 「아직 안 했다」로 보이고,
+   * 그 다음 둘 다 같은 DDL 을 커밋하려 든다. 진 쪽은
+   * `duplicate key value violates unique constraint "pg_type_typname_nsp_index"` 로
+   * 죽고, 데몬은 `process.exit(1)` → 오케스트레이터의 재시작 루프다.
+   *
+   * 이 배포는 인스턴스가 여럿인 것을 정상으로 친다(§11.4 콜드 스탠바이). 업그레이드는
+   * **정확히 둘이 동시에 뜨는 순간**이다.
+   *
+   * 세션 잠금을 쓰고 `finally` 로 놓는다. 트랜잭션 잠금(`xact`)은 마이그레이션마다
+   * 트랜잭션이 갈리므로 그 사이가 열린다.
+   */
   async migrate(): Promise<string[]> {
+    const client = await this.#pool.connect();
+    try {
+      const [hi, lo] = Db.MIGRATE_LOCK;
+      // **기다린다.** `try_` 로 두고 물러나면 진 쪽이 낡은 스키마로 서비스를 시작한다.
+      await client.query('SELECT pg_advisory_lock($1::int, $2::int)', [hi, lo]);
+      try {
+        return await this.#migrateLocked();
+      } finally {
+        // 놓는 것을 잊으면 다음 기동이 영영 매달린다. 세션을 닫아도 풀리지만,
+        // 이 커넥션은 풀로 **돌아가므로** 명시적으로 놓는다.
+        await client.query('SELECT pg_advisory_unlock($1::int, $2::int)', [hi, lo])
+          .catch(() => undefined);
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  async #migrateLocked(): Promise<string[]> {
     await this.query(
       `CREATE TABLE IF NOT EXISTS schema_migrations (
          name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`,

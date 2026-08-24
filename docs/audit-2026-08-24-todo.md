@@ -152,15 +152,21 @@
 > 다시 재서 **슬롯이 뒤바뀌는 것**을 눈으로 본 뒤에 고쳤다 — 컴파일 모양의 빨강을
 > 재현물로 세면 그 자리는 검증되지 않는다.
 
-### ☐ W0-8 · D15 — 기동 마이그레이션 잠금 `[S]`
+### ☑ W0-8 · D15 — 기동 마이그레이션 잠금 `[S]`
 
-- [ ] `tests/store/audit-migrate-lock.test.ts` — 같은 DB 에 `migrate()` 를 둘 동시에
-      돌려 둘 다 성공하는가 (**실물 PG**)
-- [ ] **빨강 확인**
-- [ ] `src/store/pg.ts:91` — 루프 전체를 `pg_advisory_lock` 으로 감싼다.
-      키는 리더 선출(`0x6261`/`0x7279`)과 **다르게** 잡는다
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/store/audit-migrate-lock.test.ts -t "동시 기동이 마이그레이션을 두 번 안 민다"`
+- [x] `tests/store/audit-migrate-lock.test.ts` — 같은 DB 에 `migrate()` 를 둘 동시에
+      돌려 둘 다 성공하는가 (**실물 PG**). 멱등과 **잠금 반납**도 함께 본다
+- [x] **빨강 확인** — `duplicate key value violates unique constraint
+      "pg_type_typname_nsp_index"`. 예측한 그대로다
+- [x] `src/store/pg.ts:91` — 루프 전체를 `pg_advisory_lock` 으로 감싼다.
+      키는 리더 선출(`0x6261`/`0x7279`)과 **다르게** 잡는다 (`0x6261`/`0x6d67`)
+- [x] `npm run verify:quick` · `npm run test:store` — 저장소 214 → **217**
+- [x] 커밋 — `Pinned-by: tests/store/audit-migrate-lock.test.ts -t "**둘이 동시에 떠도 둘 다 성공한다** — 진 쪽이 재시작 루프에 안 빠진다"`
+
+> **세션 잠금이지 트랜잭션 잠금이 아니다.** 마이그레이션마다 트랜잭션이 갈리므로
+> `xact` 로 두면 그 사이가 열린다. 그리고 커넥션이 풀로 **돌아가므로** `finally` 에서
+> 명시적으로 놓는다 — 세션을 닫아도 풀리지만 이 커넥션은 안 닫힌다.
+> 잠금을 놓는지도 재현물이 잰다(`pg_locks` 에 granted advisory 가 0).
 
 ### ☐ W0-9 · N1 — 새 실행 파일에 실행 권한 `[XS]` (`src/` 밖)
 
