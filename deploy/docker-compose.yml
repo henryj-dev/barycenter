@@ -73,6 +73,16 @@ services:
       - "127.0.0.1:8999:999"          # examples/hello.json — http
       - "127.0.0.1:8998:998"          # examples/l4.json    — tcp
       - "127.0.0.1:8997:997/udp"      # examples/l4.json    — udp
+    # **죽으면 다시 띄운다** (검수 D12).
+    #
+    # `no`(기본값)면 데몬이 죽은 채로 남고, 그러면 nginx 는 옛 세대를 계속 서빙하는데
+    # 바꿀 수단이 없다 — 트래픽은 흐르는데 제어가 사라진 상태다. S8 이 실측한
+    # *"열린 fd 로 트래픽은 계속 흐르고 다음 reload 만 깨진다"* 와 같은 모양이다.
+    #
+    # `unless-stopped` 다. `always` 와 달리 사람이 일부러 멈춘 것은 안 되살린다.
+    restart: unless-stopped
+    # 준비 상태는 Dockerfile 의 `HEALTHCHECK`(`/readyz`)가 답한다. 여기서 다시 적지
+    # 않는다 — 두 자리에 두면 갈린다.
     # 세대와 `current` 링크는 **컨테이너 안에서만** 다뤄야 한다 (§3.2 · §7.2).
     # 호스트 bind mount 로 빼면 링크 교체가 엔진 쪽에 안 보인다 — 실측했다.
     volumes:

@@ -20,6 +20,7 @@ import { backendStatusRows, type BackendStatusRow } from './backend-status.js';
 import { currentHealth, eligibleCountForPlane, healthRows, reduceMembership, shouldPushMembership } from './health.js';
 import { assertAdminSocket, httpAdminConf, routedPools, slotsForEligible, streamAdminConf } from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
+import { RemoteDataplaneDriver } from '../dp/remote.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
 import { certificateFiles, type SecretStore } from '../dp/secrets.js';
@@ -163,6 +164,63 @@ export class ControlPlane {
    * 사실이 없는 인증서(v0.6 1단계에 올라간 것)는 **계열에서 빠진다.** 0 으로 채우면
    * "모른다" 가 "이미 만료" 로 보이고, 없는 알람보다 거짓 알람이 나쁘다.
    */
+  /**
+   * **이 인스턴스가 보는 데이터 플레인의 준비 상태** (검수 D12).
+   *
+   * ── 왜 `/healthz` 를 안 바꿨나
+   *
+   * `/healthz` 는 `{ok:true}` 만 답한다 — **순수 liveness** 다. 오케스트레이터는 그걸
+   * 보고 프로세스를 죽인다. 거기에 엔진 상태를 넣으면 **의존성 장애가 곧 재시작**이
+   * 되고, 재시작해도 엔진은 그대로라 재시작 루프가 된다. 뜻이 다른 두 질문이라
+   * 창구도 둘이다 — k8s 가 liveness/readiness 를 가른 이유와 같다.
+   *
+   * ── 무엇을 주장하고 무엇을 안 주장하나
+   *
+   *   `dataplane`  드라이버가 답하는가. 원격이면 에이전트 왕복이고, 로컬이면 파일이다
+   *   `engine`     admin 소켓이 답하는가 — **엔진이 실제로 살아 있는가**
+   *
+   * ⚠️ **「못 물었다」와 「죽었다」를 가르는 것이 이 창구의 전부다.**
+   *
+   * 원격 드라이버 배포에는 이 인스턴스 **옆에 엔진이 없다** — admin 소켓에 못 붙는
+   * 것이 정상이다. 반면 로컬 배포에서 못 붙는 것은 **엔진이 죽은 것**이고, 그게 바로
+   * 이 창구가 잡으려는 것이다. 둘을 접으면 창구가 아무것도 안 말한다.
+   *
+   * 가르는 신호는 **드라이버의 종류**다. 소켓 파일의 유무로는 못 가른다 — nginx 는
+   * 정상 종료에 소켓을 지우고 `SIGKILL` 에는 남기므로, 파일이 없는 것이 「원격이라
+   * 없다」인지 「죽으면서 지웠다」인지 알 수 없다.
+   *
+   * ── 세대 대조를 여기서 안 한다
+   *
+   * 엔진이 답하는 세대와 우리가 게시한 것이 다를 수 있다. 그건 전환 중이면 정상이고,
+   * 아니면 `reconcile` 이 판정한다 — **이미 있는 판정을 여기서 다시 짓지 않는다**
+   * (D4 에서 내린 것과 같은 판단).
+   */
+  async readiness(): Promise<{ ok: boolean; dataplane: boolean; engine?: boolean }> {
+    let dataplane = true;
+    try {
+      await this.driver.status();
+    } catch {
+      dataplane = false;
+    }
+
+    // 원격이면 엔진은 **이 인스턴스가 볼 수 있는 것이 아니다.** 안 싣는다.
+    if (this.driver instanceof RemoteDataplaneDriver) {
+      return { ok: dataplane, dataplane };
+    }
+
+    let engine = false;
+    try {
+      const r = await adminFetch(this.opts.adminSocket)(
+        'http://admin/generation', { signal: AbortSignal.timeout(2000) });
+      engine = r.ok;
+    } catch {
+      // 로컬인데 admin 소켓이 답을 안 한다 — **엔진이 죽었다.**
+      engine = false;
+    }
+
+    return { ok: dataplane && engine, dataplane, engine };
+  }
+
   /**
    * 지금 dict 에 있는 `slot:` 키 수 — 평면별 (검수 D4).
    *

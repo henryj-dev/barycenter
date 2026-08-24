@@ -193,4 +193,37 @@ describe('capability 가 판정을 바꾼다 (§7.6)', () => {
     expect(rendered.body.conf).not.toContain('$proxy_protocol_addr');
     expect(rendered.body.conf).toContain('hash $remote_addr consistent;');
   }, 180_000);
+
+  /**
+   * **엔진을 죽이면 `/readyz` 가 빨개진다** (검수 D12).
+   *
+   * ⚠️ **이 파일의 마지막 검사여야 한다.** nginx 를 죽이므로 뒤에 오는 것이 있으면
+   * 그것이 이 검사 때문에 깨진다. vitest 는 파일 안의 순서를 지킨다.
+   *
+   * 그리고 `/healthz` 는 **그대로 200** 이어야 한다 — 그것이 이 항목의 결정이다.
+   * liveness 에 엔진을 넣으면 오케스트레이터가 프로세스를 죽이고, 재시작해도 엔진은
+   * 그대로라 재시작 루프가 된다.
+   */
+  it('**엔진이 죽으면 `/readyz` 가 503, `/healthz` 는 200**', async () => {
+    expect((await api('GET', '/readyz')).status, '죽이기 전에는 준비돼야 한다').toBe(200);
+
+    // nginx 만 죽인다. 데몬은 그대로다 — 그 구분이 이 검사의 전부다.
+    docker('exec', DP, 'sh', '-c',
+      'kill -TERM $(cat /prefix/logs/nginx.pid) 2>/dev/null || pkill nginx || true');
+
+    const gone = await (async (): Promise<number> => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const r = await api('GET', '/readyz');
+        if (r.status !== 200 || Date.now() >= deadline) return r.status;
+        await new Promise((x) => setTimeout(x, 500));
+      }
+    })();
+    expect(gone, '엔진이 죽었는데 준비됐다고 답한다').toBe(503);
+
+    // **프로세스는 살아 있다.**
+    const live = await api('GET', '/healthz');
+    expect(live.status, 'liveness 가 의존성 장애로 빨개졌다 — 재시작 루프가 된다').toBe(200);
+    expect(live.body).toEqual({ ok: true });
+  }, 120_000);
 });

@@ -98,6 +98,20 @@ EXPOSE 8088
 # 죽는다 — 권한 오류로 엉뚱한 데서 죽는 것보다 낫다.
 USER bary
 
+# **준비 상태를 컨테이너 층에 노출한다** (검수 D12).
+#
+# `/readyz` 는 「엔진이 살아 있고 드라이버가 답하는가」다. `/healthz`(liveness)와 뜻이
+# 다르다 — 여기에 liveness 를 걸면 **엔진이 죽었을 때 오케스트레이터가 데몬을 죽이고**,
+# 재시작해도 엔진은 그대로라 재시작 루프가 된다.
+#
+# 도커의 `HEALTHCHECK` 는 컨테이너를 안 죽인다(`unhealthy` 로 표시만 한다) — 그래서
+# 여기 거는 것은 **readiness 가 맞다.** compose 의 `depends_on: condition:
+# service_healthy` 와 로드밸런서가 그것을 읽는다.
+#
+# `--start-period` 는 첫 apply 전까지의 창이다. 그 동안 실패는 재시도로 안 센다.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8088/readyz || exit 1
+
 # tini 를 pid 1 로 둔다. 좀비 수거도 이유지만, 여기서는 **에이전트가 pid 1 이 아니게
 # 하는 것**이 더 중요하다 — pid 1 은 재기동마다 확실히 재사용되고, 그러면 durable
 # store 의 락 판정이 pid 만으로는 갈리지 않는다. (락 레코드에 프로세스 시작 시각을

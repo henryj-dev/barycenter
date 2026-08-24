@@ -859,17 +859,41 @@ FAIL  fail  예외: ACME 400 …:badNonce: JWS has an invalid anti-replay nonce
 > 고쳤다. peer 수가 상한보다 많으면 상한을 포기하고 한 칸씩 준다 — **백엔드를 빼는 것은
 > 장애이고 dict 를 더 쓰는 것은 비용이다.**
 
-### ☐ W4-2 · D12 — 엔진 생사를 나타내는 창구 `[M]`
+### ☑ W4-2 · D12 — 엔진 생사를 나타내는 창구 `[M]`
 
-**정할 것:** `/healthz` 를 바꿀 것인가, `/readyz` 를 새로 낼 것인가.
+- [x] **`/readyz` 를 새로 냈다.** `/healthz` 는 안 바꿨다
+- [x] `ControlPlane.readiness()` — `dataplane`(드라이버가 답하는가) ·
+      `engine`(admin 소켓이 답하는가)
+- [x] `tests/unit/audit-readyz.test.ts` — 6 케이스 (계약: 상태 코드·본문·무인증)
+- [x] `tests/e2e/v02-capability.test.ts` — **실물 nginx 를 죽이고** 잰다.
+      `/readyz` 503 · `/healthz` 200
+- [x] `deploy/Dockerfile` 에 `HEALTHCHECK`(`/readyz`),
+      `deploy/docker-compose.yml` 에 `restart: unless-stopped`
+- [x] `./scripts/verify.sh --quick` 9/9 (unit 895 → 908)
+- [x] 커밋
 
-- 바꾸면 지금 `/healthz` 를 쓰는 오케스트레이터의 뜻이 조용히 달라진다
-- 새로 내면 **API 표면이 하나 는다** (B 동결 드리프트 게이트가 잰다)
+**`/healthz` 를 안 바꾼 이유.** 그건 **순수 liveness** 이고 오케스트레이터는 그걸 보고
+**프로세스를 죽인다.** 엔진 상태를 넣으면 의존성 장애가 곧 재시작이 되고, 재시작해도
+엔진은 그대로라 **재시작 루프**가 된다. 뜻이 다른 두 질문이라 창구도 둘이다.
 
-- [ ] 결정 후: `probeAccepting` 이 이미 admin 소켓을 두드리므로 재료는 있다
-- [ ] `deploy/Dockerfile` 에 `HEALTHCHECK`, `deploy/docker-compose.yml` 에
-      `restart: unless-stopped`
-- [ ] e2e 로 잰다 — nginx 를 죽이고 그 창구가 빨개지는가
+**예상한 대가가 안 생겼다.** 투두는 「API 표면이 하나 는다」를 적었는데
+`node scripts/freeze-b.mjs --check` 가 `ok B freeze 44 routes` 그대로다 — 프로브는
+스코프 표 **밖**에 사는 것이 맞는 자리이고(`/healthz` 가 그렇다), B 게이트는
+`route()` 표를 읽는다. 숨긴 것이 아니라 안 생긴 것이다.
+
+> ⚠️ **「못 물었다」와 「죽었다」를 가르는 것이 이 창구의 전부다.** 원격 드라이버
+> 배포에는 옆에 엔진이 없어서 admin 소켓에 못 붙는 것이 **정상**이고, 로컬에서 못 붙는
+> 것은 **엔진이 죽은 것**이다. 둘을 접으면 창구가 아무 말도 안 한다. 가르는 신호는
+> **드라이버의 종류**다 — 소켓 파일의 유무로는 못 가른다(nginx 는 정상 종료에 소켓을
+> 지우고 `SIGKILL` 에는 남긴다).
+
+> **세대 대조는 여기서 안 한다.** 엔진이 답하는 세대와 우리가 게시한 것이 다를 수
+> 있지만, 전환 중이면 정상이고 아니면 `reconcile` 이 판정한다 — **이미 있는 판정을
+> 다시 짓지 않는다**(D4 에서 내린 것과 같은 판단).
+
+> **`HEALTHCHECK` 에 liveness 가 아니라 readiness 를 건다.** 도커의 `HEALTHCHECK` 는
+> 컨테이너를 안 죽이고 `unhealthy` 로 표시만 하므로, 거기 맞는 것은 readiness 다.
+> compose 의 `depends_on: service_healthy` 와 로드밸런서가 그것을 읽는다.
 
 ### ☐ W4-3 · D14 — 인증서 선택 규칙 `[S]`
 
