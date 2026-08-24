@@ -30,9 +30,10 @@
  * 공격은 스크립트와 급이 다르다 — **지어내지 않고 있는 그대로 좁힌다**: 스크립트는
  * 해시로 잠그고 스타일 속성만 연다.
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -49,6 +50,7 @@ const GUI = new URL('../../gui/build', import.meta.url).pathname;
 let server: Server | undefined;
 
 afterEach(async () => {
+  for (const d of fixtures.splice(0)) rmSync(d, { recursive: true, force: true });
   const s = server;
   server = undefined;
   if (s !== undefined) {
@@ -57,14 +59,14 @@ afterEach(async () => {
   }
 });
 
-async function listen(): Promise<string> {
+async function listen(guiRoot = GUI): Promise<string> {
   server = createApi({
     db: { query: async () => ({ rows: [] }) } as unknown as Db,
     store: {} as ConfigStore,
     control: {} as ControlPlane,
     auth: new TokenAuth([{ name: 'r', hash: hashToken('t'), scopes: ['read'] }]),
     election: { state: { isLeader: true } } as unknown as LeaderElection,
-    guiRoot: GUI,
+    guiRoot,
   });
   await new Promise<void>((r) => server?.listen(0, '127.0.0.1', r));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -78,7 +80,83 @@ const sha256b64 = (s: string): string => createHash('sha256').update(s, 'utf8').
 
 const built = existsSync(GUI);
 
-describe.skipIf(!built)('CSP', () => {
+/**
+ * **빌드에 안 매달리는 무대.**
+ *
+ * 아래 `describe.skipIf(!built)` 는 실제 산출물을 잰다 — 값이 있지만 `gui/build` 가
+ * 없는 트리에서는 통째로 건너뛴다. 그러면 **재현물이 아무것도 안 지킨다**:
+ * `pinned.mjs` 가 정확히 그것을 잡았다(*"수정 전에도 초록이다"*).
+ *
+ * 그래서 기전은 **손으로 만든 HTML** 로 따로 못 박는다. 재는 것이 「서빙하는 바이트에서
+ * 해시를 유도하는가」이므로, 그 바이트를 우리가 쓰면 된다.
+ */
+function guiFixture(html: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'bary-csp-'));
+  writeFileSync(join(dir, 'index.html'), html, 'utf8');
+  fixtures.push(dir);
+  return dir;
+}
+const fixtures: string[] = [];
+
+const INLINE = '<html><head><script>window.X=1</script></head><body>hi</body></html>';
+
+describe('CSP — 서빙하는 바이트에서 유도한다', () => {
+  /**
+   * **이것이 G2 의 재현물이다.** 빌드 산출물에 안 매달린다.
+   */
+  it('인라인 부트스트랩의 해시가 실려 있다 — 산출물에서 유도한다', async () => {
+    const url = await listen(guiFixture(INLINE));
+    const csp = (await fetch(`${url}/`)).headers.get('content-security-policy') ?? '';
+    expect(csp, csp).toContain("script-src 'self'");
+    expect(csp, csp).toContain(`'sha256-${sha256b64('window.X=1')}'`);
+    expect(csp, csp).toContain("connect-src 'self'");
+    // **`'unsafe-inline'` 으로 도망가지 않는다.** 있으면 해시가 무의미해진다.
+    expect(csp, csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+  });
+
+  /** 인라인이 없으면 해시도 없다 — 없는 것을 지어내지 않는다. */
+  it('인라인이 없으면 해시를 안 붙인다', async () => {
+    const url = await listen(guiFixture('<html><body>hi</body></html>'));
+    const csp = (await fetch(`${url}/`)).headers.get('content-security-policy') ?? '';
+    expect(csp, csp).toContain("script-src 'self'");
+    expect(csp, csp).not.toContain('sha256-');
+  });
+
+  /** 인라인이 둘이면 둘 다. 하나만 열면 나머지가 조용히 막힌다. */
+  it('인라인이 여럿이면 전부 해시를 낸다', async () => {
+    const url = await listen(guiFixture(
+      '<html><script>a()</script><script>b()</script></html>'));
+    const csp = (await fetch(`${url}/`)).headers.get('content-security-policy') ?? '';
+    expect(csp, csp).toContain(`'sha256-${sha256b64('a()')}'`);
+    expect(csp, csp).toContain(`'sha256-${sha256b64('b()')}'`);
+  });
+
+  /** `src=` 가 있는 것은 외부 파일이라 `'self'` 가 덮는다 — 해시를 안 낸다. */
+  it('외부 스크립트에는 해시를 안 낸다', async () => {
+    const url = await listen(guiFixture('<html><script src="./a.js"></script></html>'));
+    const csp = (await fetch(`${url}/`)).headers.get('content-security-policy') ?? '';
+    expect(csp, csp).not.toContain('sha256-');
+  });
+
+  /**
+   * **빌드가 바뀌면 자동으로 다시 뽑는다.** 캐시가 낡으면 다음 빌드에 화면이 죽고,
+   * 그게 이 항목이 해시를 베껴 적지 않기로 한 이유 전부다.
+   */
+  it('파일이 바뀌면 해시도 바뀐다 — 캐시가 안 낡는다', async () => {
+    const dir = guiFixture(INLINE);
+    const url = await listen(dir);
+    const before = (await fetch(`${url}/`)).headers.get('content-security-policy') ?? '';
+    expect(before).toContain(`'sha256-${sha256b64('window.X=1')}'`);
+
+    writeFileSync(join(dir, 'index.html'),
+      '<html><head><script>window.X=2</script></head></html>', 'utf8');
+    const after = (await fetch(`${url}/`)).headers.get('content-security-policy') ?? '';
+    expect(after, after).toContain(`'sha256-${sha256b64('window.X=2')}'`);
+    expect(after, after).not.toContain(`'sha256-${sha256b64('window.X=1')}'`);
+  });
+});
+
+describe.skipIf(!built)('CSP — 실제 산출물', () => {
   it('응답 헤더에 `script-src` 가 있다', async () => {
     const url = await listen();
     const r = await fetch(`${url}/`);
@@ -94,7 +172,7 @@ describe.skipIf(!built)('CSP', () => {
    * `script-src 'self'` 만으로는 그 부트스트랩이 막혀 화면이 안 뜬다. 그 하나만
    * 해시로 연다 — `'unsafe-inline'` 이 아니다.
    */
-  it('인라인 부트스트랩의 해시가 실려 있다 — 산출물에서 유도한다', async () => {
+  it('실제 빌드의 인라인 부트스트랩 해시가 실려 있다', async () => {
     const url = await listen();
     const r = await fetch(`${url}/`);
     const csp = r.headers.get('content-security-policy') ?? '';
