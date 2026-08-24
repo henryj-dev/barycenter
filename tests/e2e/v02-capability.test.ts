@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
+import { appMount } from './mounts.js';
 
 /** **공식 nginx 다.** 여기에는 `stream_realip` 이 있고 lua 는 없다. */
 const IMAGE = process.env['BARY_NGINX_IMAGE'] ?? 'docker.io/library/nginx:alpine';
@@ -99,7 +100,7 @@ beforeAll(async () => {
 
   docker('run', '-d', '--name', DP, '--network', NET,
     '-p', `${API_PORT}:8088`,
-    '-v', `${process.cwd()}:/app:ro`,
+    ...appMount(),
     '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
     '-e', 'BARY_PREFIX=/prefix',
     '-e', 'BARY_LISTEN=0.0.0.0:8088',

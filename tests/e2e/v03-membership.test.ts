@@ -24,6 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
+import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const NET = 'bary-v03-net';
@@ -133,7 +134,7 @@ beforeAll(async () => {
 
   docker('run', '-d', '--name', DP, '--network', NET,
     '-p', `${API_PORT}:8088`, '-p', `${DATA_PORT}:999`,
-    '-v', `${process.cwd()}:/app:ro`,
+    ...appMount(),
     '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
     '-e', 'BARY_PREFIX=/prefix',
     '-e', 'BARY_LISTEN=0.0.0.0:8088',

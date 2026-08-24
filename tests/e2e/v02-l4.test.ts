@@ -25,6 +25,7 @@ import { connect as tlsConnect } from 'node:tls';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
+import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const NET = 'bary-v02-net';
@@ -220,7 +221,7 @@ beforeAll(async () => {
     '-p', `${TCP_PORT}:998`,
     '-p', `${UDP_PORT}:997/udp`,
     '-p', `${SNI_PORT}:996`,
-    '-v', `${process.cwd()}:/app:ro`,
+    ...appMount(),
     '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
     '-e', 'BARY_PREFIX=/prefix',
     '-e', 'BARY_LISTEN=0.0.0.0:8088',

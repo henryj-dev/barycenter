@@ -28,6 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
+import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const NET = 'bary-v01-net';
@@ -173,7 +174,7 @@ beforeAll(async () => {
   // 못한다. 그래서 컨테이너 안에서 별도 프로세스로 :11 을 띄운다.
   docker('run', '-d', '--name', DP, '--network', NET,
     '-p', `${API_PORT}:8088`, '-p', `${DATA_PORT}:999`,
-    '-v', `${process.cwd()}:/app:ro`,
+    ...appMount(),
     '-e', 'BARY_DSN=postgres://postgres:bary@bary-v01-pg:5432/bary',
     '-e', 'BARY_PREFIX=/prefix',
     '-e', 'BARY_LISTEN=0.0.0.0:8088',
@@ -431,7 +432,7 @@ describe('v0.1 완료 판정', () => {
     quiet('rm', '-f', NAME);
     docker('run', '-d', '--name', NAME, '--network', NET,
       '-p', `${API_PORT + 10}:8088`,
-      '-v', `${process.cwd()}:/app:ro`,
+      ...appMount(),
       '-e', 'BARY_DSN=postgres://postgres:bary@bary-v01-pg:5432/bary',
       '-e', 'BARY_PREFIX=/standby-prefix',
       '-e', 'BARY_LISTEN=0.0.0.0:8088',
