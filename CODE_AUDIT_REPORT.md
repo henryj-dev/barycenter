@@ -37,7 +37,8 @@
 | GUI HttpOnly 세션 | 데몬 메모리 세션과 `bary_login`/`bary_session` HttpOnly 쿠키로 처리했다. ID Token·PKCE 자료는 GUI 저장소와 응답 본문에 내보내지 않는다. 다중 인스턴스 공유는 후속 설계다. |
 | DNS-01·인증서 업로드 | `501 no_secret_store`와 파일 기반 DNS-01의 TXT 파일·cleanup·외부 훅 계약을 문서화했다. |
 
-변경은 `e4ec324`, `6c3bf2c`, `75ee736`, `6afbdad`, `89d1053`, `5da0ca7`에 나뉘어 있다.
+변경은 `e4ec324`, `6c3bf2c`, `75ee736`, `6afbdad`, `89d1053`, `5da0ca7`, `ef93650`,
+`a3218c5`에 나뉘어 있다.
 
 ## 요약
 
@@ -339,6 +340,13 @@ $ npx vitest run tests/unit/audit-browser-session.test.ts \
 $ npm run build
   dist/ 90 modules · gui/build 9 screens
 
+$ npx vitest run tests/unit/<filename-shards> --pool=threads --maxWorkers=4
+  a*:       44 files / 280 tests passed
+  b-h*:     25 files / 271 tests passed
+  i-p*:     22 files / 181 tests passed
+  q-z*:     18 files / 247 tests passed
+  합계:    109 files / 979 tests passed
+
 $ npx vitest run tests/unit/audit-manifest-duplicate.test.ts \
                 tests/unit/audit-configtest-fail-open.test.ts \
                 tests/unit/audit-env-numbers.test.ts \
@@ -347,10 +355,9 @@ $ npx vitest run tests/unit/audit-manifest-duplicate.test.ts \
   개별 파일 출력 기준 22 tests passed
 ```
 
-전체 `npm test`를 포함한 `verify:quick` 세션은 unit 단계에서 기존 장시간 테스트가
-20분 이상 진행 신호만 내고 종료하지 않아 중단했다. 따라서 이번 보고서에서는 그 세션을
-전체 초록으로 주장하지 않는다. conformance 전체와 변경된 감사 재현물·타입체크는 위처럼
-완료했고, 남은 전체 unit 게이트는 실행 하네스가 정상 종료되는 환경에서 다시 확인해야 한다.
+단일 `npm test`를 포함한 `verify:quick` 세션은 unit worker가 60초 이상 반환하지 않아
+중단했지만, 같은 109개 파일을 이름 shard 네 묶음으로 독립 실행해 전부 통과시켰다.
+따라서 테스트 실패가 아니라 현재 실행 하네스의 단일 worker 집계 정체로 분리해 기록한다.
 
 대상 커밋 `39fe68b`에서 실행한 기준선:
 
