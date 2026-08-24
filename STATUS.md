@@ -76,21 +76,26 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 ### 스위트
 
-수치는 2026-08-23 전체 게이트의 실측이다. **문서에 옮겨 적은 값은 늘 낡는다** —
-직전 표는 단위를 510 이라고 적어 뒀는데 실측은 595 였다.
+수치는 **2026-08-24** 전체 게이트의 실측이다. **문서에 옮겨 적은 값은 늘 낡는다** —
+직전 표는 단위를 510 이라고 적어 뒀는데 실측은 595 였고, 그 다음 표는 816 이라고 적어
+뒀는데 이번 실측은 948 이다. 이 표는 **그날의 사진**이지 정본이 아니다.
 
 | 스위트 | 명령 | 통과 |
 |---|---|---|
 | typecheck | `npm run typecheck` | — |
-| 표면 | `node scripts/surface.mjs --check` | — |
+| 표면 | `node scripts/surface.mjs --check` | — (숫자는 그 도구가 답한다) |
 | 모델 | `npm run test:model` | 13 |
-| 단위 | `npm test` | **816** |
+| 단위 | `npm test` | **948** |
 | conformance | `npm run test:conformance` | **479** |
-| 골든 | `npm run test:golden` | 65 |
+| 골든 | `npm run test:golden` | **71** (14 파일 · **직렬**) |
 | 엔진 사실 | `npm run test:engine` | 76 (SKIP 1) |
-| e2e | `npm run test:e2e` | 60 |
-| 스파이크 | `spike/*/run.sh` | 100 |
-| 저장소 | `npm run test:store` | 207 |
+| e2e | `npm run test:e2e` | **70** (9 파일) |
+| 스파이크 | `spike/*/run.sh` | **100** (12 개 · SKIP 2) |
+| 저장소 | `npm run test:store` | **234** |
+
+> **골든이 직렬이 됐다** (검수 2026-08-24). `--no-file-parallelism` 이다 —
+> `test:e2e`·`test:store` 가 이미 그랬고 골든만 빠져 있었는데, 파일이 늘자 부하가
+> 다른 테스트의 타이밍을 흔들었다. 게이트 시간이 늘었고 그 대가는 결정성이다.
 
 **검수 목록(①②③)이 코드에 닿아 있는지는 이제 게이트가 답한다** —
 `tests/conformance/goal-coverage.test.ts` 가 한 줄에 한 검사다. 사람이 커밋 로그로 세는
@@ -101,8 +106,15 @@ B(구현된 API·DDL) 드리프트를 둘 다 막는다.
 
 **A 동결은 이 회차에 풀렸다.** 먼저 W3 의 설정 셋(`Pool.healthCheck` · dict 크기 ·
 `GenerationError('path_escape')`)이, 이어서 제안 6·7·8 의 넷(`ProxyLimits` ·
-`HeaderRule` · `HeaderRules` · `RateLimit`)이 `Model` 을 넓혔다. **116 심볼 · 카운터 0 ·
-미선언**이고, **재동결까지 3 회차를 다시 쌓아야 한다.** 푸는 길은
+`HeaderRule` · `HeaderRules` · `RateLimit`)이 `Model` 을 넓혔다.
+
+**여기 숫자를 안 적는다** (2026-08-24). 전에 「116 심볼」이라고 적어 뒀는데 그 사이
+두 번 움직여 **117** 이 됐고, 그 표는 그동안 거짓을 말했다 — `verify.sh` 가 자기
+안에서 같은 실수를 하고 고치며 적어 둔 그대로다: *"도구가 답하는 것을 사람이 베껴
+적으면 그 사본은 반드시 낡는다."* **정본은 `node scripts/surface.mjs --check` 의
+출력이다.**
+
+**재동결까지 3 회차를 다시 쌓아야 한다.** 푸는 길은
 `surface.mjs --unfreeze "<근거>"` 하나뿐이고 근거를 요구한다 — 그 근거는 `SURFACE.txt`
 머리에 남고 `--write` 를 지나서도 안 지워진다.
 
