@@ -168,13 +168,25 @@
 > 명시적으로 놓는다 — 세션을 닫아도 풀리지만 이 커넥션은 안 닫힌다.
 > 잠금을 놓는지도 재현물이 잰다(`pg_locks` 에 granted advisory 가 0).
 
-### ☐ W0-9 · N1 — 새 실행 파일에 실행 권한 `[XS]` (`src/` 밖)
+### ☑ W0-9 · N1 — 새 실행 파일에 실행 권한 `[XS]` (`src/` 밖)
 
-- [ ] `scripts/build.sh:17` — `chmod +x dist/bin/*.js`
-- [ ] `./scripts/build.sh` 를 돌려 `dist/bin/bary-dp-agent.js` 가 `-rwxr-xr-x` 인지 본다
-- [ ] `src/bin/bary-dp-agent.ts` — 다른 두 진입점과 같은 argv 가드를 단다
-      (테스트가 import 할 수 있어야 한다)
-- [ ] 커밋 — `Pinned-by: none — 빌드 스크립트의 chmod 목록. 재현물은 빌드 산출물의 퍼미션이고 게이트가 그것을 안 잰다 (다음 회차에 잴 자리로 남긴다)`
+- [x] `scripts/build.sh:17` — `chmod +x dist/bin/*.js`. **목록을 없앤다** —
+      이름을 손으로 들고 있는 것이 빠뜨린 원인이었다
+- [x] `./scripts/build.sh` 를 돌려 셋 다 `-rwxr-xr-x` 인지 봤다
+      (`bary-dp-agent.js` 포함)
+- [x] `src/bin/bary-dp-agent.ts` — 다른 두 진입점과 같은 argv 가드를 단다
+- [x] 커밋 — `Pinned-by: none — 아래 근거`
+
+> **왜 재현물이 없나.** 둘 다 게이트가 안 재는 자리다.
+> ㉠ 빌드 산출물의 퍼미션 — 어느 스위트도 `dist/` 를 안 본다.
+> ㉡ argv 가드 — 재현물은 이 진입점을 import 해 「서버가 안 뜬다」를 보는 것인데,
+> **고치기 전 트리에서는 그 import 가 `process.exit(1)` 로 러너를 죽인다**(환경변수가
+> 없으면 `main` 이 던지고 `.catch` 가 프로세스를 내린다). 러너가 죽는 것을 「빨갛다」로
+> 세는 것은 `pinned.mjs` 가 이미 한 번 물린 함정이다(`tests/unit/pinned-gate.test.ts`
+> 의 ② — *"아무 테스트도 안 돌았는데 통과한다"*). 그 모양을 재현물로 쓰지 않는다.
+>
+> ㉠ 을 잴 자리는 있다 — `package.json` 의 `bin` 을 읽어 빌드 뒤 퍼미션을 대조하는
+> 게이트. 빌드를 돌려야 해서 `verify:quick` 밖이고, **G7 로 남긴다.**
 
 ### ☐ W0 마무리
 
@@ -489,6 +501,8 @@ D3·D4 는 아직 골든으로 못 박히지 않았다 — 그것을 먼저 만�
       (해시를 `gui/node_modules/.bary-lock` 에 적고 대조)
 - [ ] `bary-dp-agent` 배포 조리법 — `deploy/` 에 원격 모드 예시를 넣거나,
       **안 넣기로 하고 그 근거를 적는다**
+- [ ] **진입점 퍼미션 게이트** (W0-9 가 남겼다) — `package.json` 의 `bin` 을 읽어
+      빌드 뒤 퍼미션을 대조한다. 빌드를 돌려야 해서 `verify:quick` 밖이다
 
 ---
 

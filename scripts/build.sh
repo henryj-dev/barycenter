@@ -14,7 +14,12 @@ rm -rf dist
 npx tsc -p tsconfig.build.json
 mkdir -p dist/store/migrations
 cp src/store/migrations/*.sql dist/store/migrations/
-chmod +x dist/bin/barycenterd.js dist/bin/bary.js
+# **진입점 전부에 건다** (검수 N1). 전에는 이름을 손으로 들고 있었고, `bary-dp-agent`
+# 가 `package.json` 의 `bin` 에 들어온 회차에 이 줄이 안 따라왔다 — 선언은 있는데
+# 실행 권한이 없는 산출물이 나갔다. 이 파일 머리말이 *"빌드가 조용히 반쪽짜리
+# 산출물을 내는 것보다 여기서 명시적으로 챙기는 편이 낫다"* 고 적어 놓고, 챙기는
+# 방법이 목록이라 진입점이 늘 때마다 빠뜨릴 자리가 하나 늘었다. 목록을 없앤다.
+chmod +x dist/bin/*.js
 echo "dist/ 준비됨 — $(find dist -name '*.js' | wc -l | tr -d ' ') 개 모듈, $(ls dist/store/migrations | wc -l | tr -d ' ') 개 마이그레이션"
 
 # ── 화면도 산출물이다 ────────────────────────────────────────────────────

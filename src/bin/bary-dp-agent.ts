@@ -90,7 +90,15 @@ async function main(): Promise<void> {
   process.on('SIGINT', stop);
 }
 
-main().catch((e: unknown) => {
-  process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(1);
-});
+// 진입점으로 실행됐을 때만 돈다 — 테스트가 import 할 수 있어야 한다 (검수 N1).
+//
+// 다른 두 진입점(`barycenterd` · `bary`)은 처음부터 이 가드를 갖고 있었는데 여기만
+// 없었다. 그래서 이 파일을 import 하는 것이 **서버를 띄우거나(환경이 갖춰졌으면)
+// 프로세스를 죽이는 일**(`main` 이 던지면 `process.exit(1)`)이었다.
+if (process.argv[1]?.endsWith('bary-dp-agent.ts') === true
+  || process.argv[1]?.endsWith('bary-dp-agent.js') === true) {
+  main().catch((e: unknown) => {
+    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  });
+}
