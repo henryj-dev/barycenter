@@ -124,6 +124,18 @@ function analyze(order: CompiledRoute[]): CompileWarning[] {
     for (const lo of order) {
       if (CLASS_RANK[hi.matchClass] <= CLASS_RANK[lo.matchClass]) continue;
       if (hi.priority >= lo.priority) continue;
+      /**
+       * **같은 호스트를 잡을 수 있는 쌍만** 겨룬다 (검수 D13).
+       *
+       * 전에는 이 줄이 없어서 `a.example.com`(1) 과 `*.other.net`(5) 처럼 영영 안
+       * 만나는 쌍에도 *"먼저 매칭된다"* 가 붙었다. 경고는 O(n²) 로 늘고 그대로
+       * plan 에 실린다 — `affectedListeners` 가 전부를 싣던 것과 같은 실수다.
+       * 사람이 그 줄을 안 읽게 되고, 정말 걸리는 날에도 안 읽는다.
+       *
+       * **판정을 새로 짓지 않는다.** `planStrictPriority` 가 쓰는 것과 같은
+       * `patternsConflict` 다 — 자리가 둘이면 언젠가 갈린다.
+       */
+      if (!patternsConflict(hi.pattern, lo.pattern)) continue;
       warnings.push({
         kind: 'priority_inversion',
         routes: [hi.key, lo.key],

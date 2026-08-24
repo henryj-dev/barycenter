@@ -96,15 +96,16 @@
 - [x] `npm run verify:quick` — 단위 825 → **829**
 - [x] 커밋 — `Pinned-by: tests/unit/audit-backend-weight.test.ts -t "**`0` 은 저장 단계에서 막힌다** — 엔진이 `invalid parameter` 로 거절한다"`
 
-### ☐ W0-4 · D13 — 겨루는 쌍만 경고한다 `[XS]`
+### ☑ W0-4 · D13 — 겨루는 쌍만 경고한다 `[XS]`
 
-- [ ] `tests/unit/audit-priority-inversion.test.ts` — `a.example.com`(priority 1)과
-      `*.other.net`(priority 5)에 경고가 **안** 붙는가. 진짜 역전에는 붙는가
-- [ ] **빨강 확인**
-- [ ] `src/route/compile.ts:125` — 루프 안에
+- [x] `tests/unit/audit-priority-inversion.test.ts` — `a.example.com`(priority 1)과
+      `*.other.net`(priority 5)에 경고가 **안** 붙는가. 진짜 역전에는 붙는가.
+      **한 라벨 계약**(`*.example.com` 은 `deep.a.example.com` 과 안 겨룬다)도 함께 본다
+- [x] **빨강 확인** (5 중 3 빨강 — 전부 「안 붙어야 하는데 붙는다」 쪽)
+- [x] `src/route/compile.ts:125` — 루프 안에
       `if (!patternsConflict(hi.pattern, lo.pattern)) continue;`
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-priority-inversion.test.ts -t "겨루지 않는 호스트에는 역전 경고가 없다"`
+- [x] `npm run verify:quick` — 단위 829 → **834**
+- [x] 커밋 — `Pinned-by: tests/unit/audit-priority-inversion.test.ts -t "**안 겨루면 경고가 없다** — 도메인이 다르면 순서를 다툴 일이 없다"`
 
 ### ☐ W0-5 · D17 — 영향 폐포에 `onNoSni` `[XS]`
 
