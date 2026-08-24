@@ -1071,6 +1071,7 @@ type SniCertificateBinding = ResourceMeta & {
 | 현재 상태와 충돌하지만 사용자가 해소 가능 (예: 소켓 이미 점유) | **409** |
 | 상태와 무관하게 의미적으로 불가능한 입력 (예: UDP + upstream_tls) | **422** |
 | 타입/구문 오류 | **400** |
+| 인증 실패 제한 초과 | **429** + `Retry-After` |
 
 **changeset 커밋의 전제조건**은 `If-Match` 로 표현하지 않는다. `If-Match` 는 요청 대상
 표현의 precondition 이고, 우리가 걸고 싶은 건 **전역 config head** 다.
@@ -1314,7 +1315,7 @@ apply 경로를 영영 못 잡는다 — 옛 오퍼레이션을 `abort` 하려 �
 
 | 단계 | 뜻 | 다음으로 가는 조건 |
 |---|---|---|
-| `preflight` | 게시 전 검사 | manifest digest 대조 + `nginx -t` 통과 |
+| `preflight` | 게시 전 검사 | manifest digest 대조 + `nginx -t` 통과. 검사를 설정했는데 실행하지 못한 것도 실패 |
 | `publish_intent` | 게시하겠다고 기록함 | `current` 가 목표 세대를 가리킴 (관측) |
 | `published` | 게시됨 | — |
 | `membership_staged` | **전 평면** 슬롯이 올라감 | — |
