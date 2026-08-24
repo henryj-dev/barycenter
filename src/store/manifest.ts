@@ -118,6 +118,7 @@ export function parseManifest(input: unknown): Manifest {
   }
   const raw = obj['resources'];
   if (!Array.isArray(raw)) throw new Error('resources 는 배열이어야 한다');
+  const seen = new Set<string>();
   const resources = raw.map((r, i) => {
     if (r === null || typeof r !== 'object' || Array.isArray(r)) {
       throw new Error(`resources[${i}] 는 객체여야 한다`);
@@ -135,6 +136,11 @@ export function parseManifest(input: unknown): Manifest {
     if (typeof key !== 'string' || key === '') {
       throw new Error(`resources[${i}].key 는 비어 있지 않은 문자열이어야 한다`);
     }
+    const id = `${kind}\0${key}`;
+    if (seen.has(id)) {
+      throw new Error(`resources[${i}] 에 중복된 kind·key 가 있다: ${kind}/${key}`);
+    }
+    seen.add(id);
     if (spec === null || typeof spec !== 'object' || Array.isArray(spec)) {
       throw new Error(`resources[${i}].spec 은 객체여야 한다`);
     }
