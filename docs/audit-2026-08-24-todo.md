@@ -87,14 +87,14 @@
 > `AcmeStore.upsertAccount` 는 **ACME 계정을 만들 제품 경로가 아예 없다**는 뜻이라
 > 표면 결정이 필요하다 — W4-8 로 올렸다(D21, 열림).
 
-### ☐ W0-3 · D6 — 백엔드 가중치 하한 `[XS]`
+### ☑ W0-3 · D6 — 백엔드 가중치 하한 `[XS]`
 
-- [ ] `tests/unit/audit-backend-weight.test.ts` — `weight: 0` 이 `decodeModel` 에서
+- [x] `tests/unit/audit-backend-weight.test.ts` — `weight: 0` 이 `decodeModel` 에서
       거부되는가. 저작 표면(`putBackendPatch`)과 **같은 하한**인가
-- [ ] **빨강 확인**
-- [ ] `src/model/decode.ts:649` — `int(…, 0, …)` → `int(…, 1, …)`
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-backend-weight.test.ts -t "가중치 0 은 저장 단계에서 막힌다"`
+- [x] **빨강 확인** (4 중 2 빨강)
+- [x] `src/model/decode.ts:649` — `int(…, 0, …)` → `int(…, 1, …)`
+- [x] `npm run verify:quick` — 단위 825 → **829**
+- [x] 커밋 — `Pinned-by: tests/unit/audit-backend-weight.test.ts -t "**`0` 은 저장 단계에서 막힌다** — 엔진이 `invalid parameter` 로 거절한다"`
 
 ### ☐ W0-4 · D13 — 겨루는 쌍만 경고한다 `[XS]`
 

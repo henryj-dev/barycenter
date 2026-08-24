@@ -646,7 +646,11 @@ function decodeBackend(iss: Issues, v: unknown, path: string): Backend | undefin
   const pool = required(iss, v, 'pool', path, () => str(iss, v['pool'], `${path}.pool`));
   const host = required(iss, v, 'host', path, () => str(iss, v['host'], `${path}.host`));
   const port = required(iss, v, 'port', path, () => int(iss, v['port'], `${path}.port`, PORT_MIN, PORT_MAX));
-  const weight = required(iss, v, 'weight', path, () => int(iss, v['weight'], `${path}.weight`, 0, 1_000_000));
+  // **하한이 1 이다** (검수 D6). nginx 가 `weight=0` 을 거절한다 — 실측했다:
+  // `[emerg] invalid parameter "weight=0"`. `0` 을 받으면 실패가 사라지는 것이 아니라
+  // **게시 전 `nginx -t` 로 옮겨가고**, 그때 보이는 것은 "설정이 이상하다" 다.
+  // 저작 표면(`putBackendPatch`)은 처음부터 1 을 요구했다 — 문이 둘인데 답이 달랐다.
+  const weight = required(iss, v, 'weight', path, () => int(iss, v['weight'], `${path}.weight`, 1, 1_000_000));
   if (key === undefined || pool === undefined || host === undefined || port === undefined || weight === undefined) {
     return undefined;
   }
