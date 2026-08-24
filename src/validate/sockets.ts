@@ -16,6 +16,54 @@ import type { ListenerProtocol } from '../model/provisional.js';
 
 export type Transport = 'tcp' | 'udp';
 
+/**
+ * `BARY_LISTEN` 같은 `<host>:<port>` 를 쪼갠다 (검수 G7).
+ *
+ * ── 왜 `split(':')` 이 안 되나
+ *
+ * 데몬이 이랬다:
+ *
+ *   const [host, port] = env('BARY_LISTEN', '127.0.0.1:8088').split(':');
+ *
+ * **IPv6 를 표현할 수 없다.** `[::1]:8088` 을 콜론으로 쪼개면 host 가 `[` 가 되고
+ * port 가 `` 가 된다 — `Number('')` 은 `0` 이라 **무작위 포트가 열린다.** 그리고
+ * `127.0.0.1:abc` 는 `NaN` 인데, `listen(NaN)` 도 무작위 포트다.
+ *
+ * 둘 다 **기동이 성공한 것처럼 보이고** 그 뒤로 아무도 못 붙는다. 이 저장소가
+ * 반복해서 잡는 *"경계에 해독기가 없다"* 이고, 실패가 조용한 쪽이라 더 나쁘다.
+ *
+ * `URL` 을 쓴다 — 대괄호 문법을 그것이 이미 안다. 직접 파싱하면 그 규칙을 두 벌로
+ * 두는 셈이고, 이 저장소가 `upstreamName`(D18)에서 그것으로 물렸다.
+ */
+export function parseListen(spec: string): { host: string; port: number } {
+  let url: URL;
+  try {
+    // 스킴이 필요하다. `http` 는 임의이고 여기서 쓰는 것은 호스트·포트뿐이다.
+    url = new URL(`http://${spec}`);
+  } catch {
+    throw new Error(
+      `듣는 주소 모양이 아니다: ${JSON.stringify(spec)} — <host>:<port> 나 [<ipv6>]:<port>`,
+    );
+  }
+  // **포트가 없으면 던진다.** `URL` 은 없는 포트를 빈 문자열로 주는데, 그것을
+  // `Number` 에 넣으면 `0` 이 되고 `listen(0)` 은 무작위 포트다.
+  if (url.port === '') {
+    throw new Error(`듣는 주소에 포트가 없다: ${JSON.stringify(spec)}`);
+  }
+  if (url.hostname === '') {
+    throw new Error(`듣는 주소에 호스트가 없다: ${JSON.stringify(spec)}`);
+  }
+  const port = Number(url.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`포트가 1~65535 가 아니다: ${JSON.stringify(spec)}`);
+  }
+  // `URL` 이 IPv6 를 `[::1]` 로 돌려준다 — 대괄호를 벗겨 `listen()` 이 받는 모양으로.
+  const host = url.hostname.startsWith('[') && url.hostname.endsWith(']')
+    ? url.hostname.slice(1, -1)
+    : url.hostname;
+  return { host, port };
+}
+
 export type BindAddress = {
   family: 'v4' | 'v6';
   addr: string;

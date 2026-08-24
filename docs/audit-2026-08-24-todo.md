@@ -1058,19 +1058,40 @@ CLI·GUI 가 **같은 길**을 쓴다.
 > 객체로 줬는데 창구가 감사에 남기므로 `api.store.audit is not a function` 이 났다.
 > 실물 `ConfigStore` 로 바꿨다 — 가짜가 좁으면 **감사에 남는가**를 못 잰다.
 
-### ☐ W4-7 · G7 — 작은 것 넷 `[S]`
+### ☑ W4-7 · G7 — 작은 것 넷 `[S]`
 
-한 커밋으로 묶어도 된다. 각각 독립이다.
+- [x] `tests/unit/audit-small-four.test.ts` — 16 케이스. **빨강 확인** 다섯
+- [x] **① `readManifest`** 가 `JSON.parse` 를 감싸고 `files`·`digest` 를 검증한다
+- [x] **② `parseListen`** — `URL` 로 바꿔 IPv6 를 표현한다. **데몬이 그것을 쓴다**
+- [x] **③ `build.sh`** 가 `gui/package-lock.json` 의 해시를
+      `gui/node_modules/.bary-lock` 에 적고 대조한다
+- [x] **④ `bary-dp-agent` 배포 조리법** — **안 넣기로 하고 근거를 적었다**
+- [x] **⑤ 진입점 퍼미션 게이트** — `verify.sh` 에 넣었다 (빌드 뒤라 `--quick` 밖)
+- [x] `./scripts/verify.sh --quick` 9/9 (unit 932 → 948)
 
-- [ ] `readManifest` 가 `JSON.parse` 를 감싸고 `files` 를 검증한다 →
-      깨진 manifest 가 `GenerationError('manifest_missing')` 으로 온다
-- [ ] `BARY_LISTEN` 파싱을 `URL` 로 바꿔 IPv6 를 표현할 수 있게 한다
-- [ ] `build.sh` 가 `gui/package-lock.json` 의 변화를 본다
-      (해시를 `gui/node_modules/.bary-lock` 에 적고 대조)
-- [ ] `bary-dp-agent` 배포 조리법 — `deploy/` 에 원격 모드 예시를 넣거나,
-      **안 넣기로 하고 그 근거를 적는다**
-- [ ] **진입점 퍼미션 게이트** (W0-9 가 남겼다) — `package.json` 의 `bin` 을 읽어
-      빌드 뒤 퍼미션을 대조한다. 빌드를 돌려야 해서 `verify:quick` 밖이다
+**① 은 「빈 목록을 대조해 초록」이 진짜 위험이었다.** 스키마 번호만 보면 `{"schema":1}`
+이 통과하고, 그러면 `verifyGeneration` 이 **아무 파일도 안 보고 「맞다」**고 답한다 —
+없는 검사보다 나쁘다. 그리고 raw `SyntaxError` 는 호출자의 `GenerationError` 분기에
+안 걸려 **apply 가 「알 수 없는 오류」로 끝난다.**
+
+**② 는 실패가 조용한 쪽이다.** `[::1]:8088` 을 콜론으로 쪼개면 port 가 `''` 이고
+`Number('')` 은 `0` — **무작위 포트가 열린다.** `127.0.0.1:abc` 는 `NaN` 이고 그것도
+무작위 포트다. 둘 다 **기동이 성공한 것처럼 보이고** 그 뒤로 아무도 못 붙는다.
+`URL` 을 쓰는 이유는 대괄호 문법을 그것이 이미 알기 때문이다 — 직접 파싱하면 규칙이
+두 벌이 되고, 이 저장소가 `upstreamName`(D18)에서 그것으로 물렸다.
+
+**④ 는 안 넣기로 했다.** 이 compose 는 **한 대짜리 데모**다(`demo-backend` 주석이
+*"제품의 일부가 아니다"* 라고 적어 뒀다). 원격 모드는 CP 와 DP 를 **다른 호스트**에
+두는 것인데, 한 compose 에 넣으면 둘이 같은 도커 네트워크에 있게 되고 **그 구성이 재는
+것은 원격이 아니다** — *"흉내로 재면 흉내를 재게 된다"*. 그리고 원격 모드에 정말
+필요한 것은 compose 가 아니라 **인증서 셋**인데, 키 배포는 배포 환경이 정할 일이다.
+**계약은 코드에 있다**: `bary-dp-agent.ts` 머리말의 환경변수 일곱과, 그 구성을
+**실물로 세워 돌리는** `tests/e2e/agent-in-container.test.ts`. 문서가 아니라 도는 것이
+답한다.
+
+> **⑤ 는 「함수만 있고 아무도 안 쓴다」를 안 만드는 것이 핵심이었다.** `parseListen`
+> 을 만들고 데몬이 계속 `split(':')` 을 쓰면 이 검수가 반복해서 잡는 부류를 **새로
+> 만드는 것**이다. 배선까지 하고, 퍼미션 게이트는 `verify.sh` 에 넣어 도는 것으로 만들었다.
 
 ---
 

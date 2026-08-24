@@ -56,7 +56,7 @@ import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
 import { envInt, envIntOpt } from '../validate/env.js';
-import { isLoopbackBind } from '../validate/sockets.js';
+import { isLoopbackBind, parseListen } from '../validate/sockets.js';
 
 const run = promisify(execFile);
 
@@ -216,7 +216,9 @@ function writeBootstrap(prefix: string, adminSocket: string, streamAdminSocket: 
 
 export async function main(): Promise<void> {
   const prefix = env('BARY_PREFIX', '/etc/barycenter');
-  const [host, port] = env('BARY_LISTEN', '127.0.0.1:8088').split(':');
+  // **`split(':')` 이 아니다** (검수 G7). 그러면 IPv6 를 표현할 수 없고, 포트가 비거나
+  // 숫자가 아니면 `listen(0)`·`listen(NaN)` 이 되어 **무작위 포트가 조용히 열린다.**
+  const { host, port } = parseListen(env('BARY_LISTEN', '127.0.0.1:8088'));
   /**
    * **admin 은 유닉스 소켓이다** (검수 S-08b).
    *
@@ -750,7 +752,7 @@ export async function main(): Promise<void> {
       )
     : createApi(apiOpts);
   await new Promise<void>((resolve) => {
-    server.listen(Number(port), host, resolve);
+    server.listen(port, host, resolve);
   });
   log.info('listening', {
     host, port: Number(port), prefix, adminSocket, tokens: auth.size,

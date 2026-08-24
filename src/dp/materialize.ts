@@ -227,11 +227,43 @@ export function readManifest(prefix: string, generation: string): GenerationMani
       `세대 '${generation}' 에 ${MANIFEST_NAME} 이 없다 — 완성되지 않았거나 우리가 만든 것이 아니다`,
     );
   }
-  const parsed = JSON.parse(readFileSync(path, 'utf8')) as GenerationManifest;
-  if (parsed.schema !== MANIFEST_SCHEMA) {
-    throw new GenerationError('manifest_missing', `모르는 manifest 스키마 ${parsed.schema}`);
+  /**
+   * **깨진 manifest 도 세대 이야기다** (검수 G7).
+   *
+   * 전에는 `JSON.parse` 가 raw `SyntaxError` 를 던졌다. 호출자
+   * (`verifyGeneration` → `preflight`)는 `GenerationError` 의 `kind` 로 분기하는데
+   * 그 예외는 거기 안 걸려 **apply 가 「알 수 없는 오류」로 끝난다.** 운영자가 보는
+   * 것은 `Unexpected token` 한 줄이고, 그것이 세대 이야기라는 것이 어디에도 없다.
+   */
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (e) {
+    throw new GenerationError(
+      'manifest_missing',
+      `세대 '${generation}' 의 ${MANIFEST_NAME} 을 못 읽는다: ${(e as Error).message}`,
+    );
   }
-  return parsed;
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new GenerationError('manifest_missing', `${MANIFEST_NAME} 이 객체가 아니다`);
+  }
+  const m = parsed as Partial<GenerationManifest>;
+  if (m.schema !== MANIFEST_SCHEMA) {
+    throw new GenerationError('manifest_missing', `모르는 manifest 스키마 ${String(m.schema)}`);
+  }
+  /**
+   * **`files` 를 검증한다.** 스키마 번호만 보면 `{"schema":1}` 이 통과하고, 그러면
+   * `verifyGeneration` 이 **빈 파일 목록을 대조해 초록**을 낸다 — 아무 파일도 안 보고
+   * 「맞다」고 답하는 것이다. 그건 없는 검사보다 나쁘다.
+   */
+  if (typeof m.files !== 'object' || m.files === null || Array.isArray(m.files)) {
+    throw new GenerationError('manifest_missing',
+      `${MANIFEST_NAME} 의 'files' 가 객체가 아니다 — 대조할 목록이 없다`);
+  }
+  if (typeof m.digest !== 'string' || m.digest === '') {
+    throw new GenerationError('manifest_missing', `${MANIFEST_NAME} 에 'digest' 가 없다`);
+  }
+  return m as GenerationManifest;
 }
 
 /**

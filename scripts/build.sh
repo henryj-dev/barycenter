@@ -41,6 +41,14 @@ echo "dist/ 준비됨 — $(find dist -name '*.js' | wc -l | tr -d ' ') 개 모�
 #
 # 의존성은 **없을 때만** 받는다. 매번 `npm ci` 를 돌리면 로컬 빌드가 분 단위로
 # 길어지고, 길어지면 사람이 빌드를 건너뛴다.
-[ -d gui/node_modules ] || (cd gui && npm ci --no-audit --no-fund >/dev/null)
+# **lock 이 바뀌면 다시 받는다** (검수 G7). 전에는 디렉토리 유무만 봤다 — 그래서
+# `gui/package-lock.json` 이 바뀌어도 옛 의존성으로 빌드했고, 그 차이는 "내 컴퓨터에선
+# 되는데" 로만 드러난다. 해시를 옆에 적어 두고 대조한다.
+gui_lock_stamp=gui/node_modules/.bary-lock
+gui_lock_now=$(shasum -a 256 gui/package-lock.json 2>/dev/null | cut -d' ' -f1)
+if [ ! -d gui/node_modules ] || [ "$(cat "$gui_lock_stamp" 2>/dev/null)" != "$gui_lock_now" ]; then
+  (cd gui && npm ci --no-audit --no-fund >/dev/null)
+  printf '%s' "$gui_lock_now" > "$gui_lock_stamp"
+fi
 (cd gui && npx vite build >/dev/null)
 echo "gui/build 준비됨 — $(find gui/build -name '*.html' | wc -l | tr -d ' ') 개 화면"

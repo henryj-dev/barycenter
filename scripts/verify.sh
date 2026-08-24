@@ -157,6 +157,11 @@ else
     # 번들이 안 서는 상태로 한동안 초록이었다 — `gui/build` 가 없으면 데몬이 조용히
     # GUI 없이 뜨므로 그 사실이 어디에도 안 드러난다.
     run "build (dist·gui)      " ./scripts/build.sh
+    # **진입점 퍼미션** (검수 G7 · W0-9 가 남겼다). `build.sh` 가 진입점 목록을 손으로
+    # 들고 있다가 `bary-dp-agent` 를 빠뜨렸다 — 선언은 있는데 실행 권한이 없는 산출물이
+    # 나갔다. `chmod +x dist/bin/*.js` 로 목록을 없앴는데 **그것이 정말 도는지는 아무도
+    # 안 쟀다.** 빌드 뒤여야 하므로 `--quick` 밖이다.
+    run "진입점 퍼미션        " npx vitest run tests/unit/audit-small-four.test.ts --silent
     run "store (실물 PG)      " npm run test:store --silent
     run "golden (nginx -t)    " npm run test:golden --silent
     run "e2e (실제 nginx)      " npm run test:e2e --silent
