@@ -99,7 +99,7 @@ export type CodeExchange = {
 };
 
 export type CodeExchangeOptions = {
-  /** 시작 때 만든 검증자. 브라우저가 보관했다가 되보낸다. */
+  /** 시작 때 만든 검증자. API의 로그인 세션이 보관했다가 교환에 사용한다. */
   codeVerifier?: string;
   /** 시작 때 보낸 nonce. 주면 `id_token` 이 그것을 담고 있어야 한다. */
   nonce?: string;
