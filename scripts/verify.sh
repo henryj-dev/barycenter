@@ -10,6 +10,11 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# **게이트가 자기 흔들림을 센다** (검수 W4-9). 근거는 그 파일 머리말에 있다.
+# shellcheck source=lib/flake.sh
+. scripts/lib/flake.sh
+FLAKES=0
+
 QUICK=0
 [ "${1:-}" = "--quick" ] && QUICK=1
 
@@ -65,12 +70,22 @@ run() {                      # run <label> <command...>
   start=$(date +%s)
   heartbeat "$label" &
   hb=$!
-  out=$("$@" 2>&1); rc=$?
+  # **실패하면 한 번 더 돈다** (검수 W4-9). ⚠️ 재실행이 **판정을 안 바꾼다** —
+  # 두 번째가 초록이어도 이 스위트는 실패로 세고 게이트는 빨갛다. 재실행이 사는 이유는
+  # 「흔들렸다」를 「깨졌다」와 구분해 **적기** 위해서이지 통과시키기 위해서가 아니다.
+  bary_run_twice "$@"
+  out=$BARY_RUN_OUT; rc=$BARY_RUN_RC
   { kill "$hb"; wait "$hb"; } 2>/dev/null
   elapsed=$(( $(date +%s) - start ))
 
   if [ $rc -eq 0 ]; then
     line="  ok    $label  —  $(summarize "$out")  (${elapsed}초)"
+  elif [ "$BARY_RUN_FLAKE" -eq 1 ]; then
+    # **흔들림도 빨강이다.** 다만 표에서 구분해 보이고 장부에 남는다.
+    line="  FLAKE $label  —  $(summarize "$out")  (${elapsed}초) ← 재실행은 초록"
+    FAILED=1
+    FLAKES=$(( FLAKES + 1 ))
+    bary_record_flake "$label" "$elapsed"
   else
     line="  FAIL  $label  —  $(summarize "$out")  (${elapsed}초)"
     FAILED=1
@@ -137,6 +152,9 @@ run "node 핀 (한 벌인가)  " node scripts/node-pin.mjs
 # 여기서 잰다** — 안 그러면 "있는데 안 도는" 층이 된다.
 run "훅 (pre-commit)      " python3 scripts/git-hooks/test-pre-commit.py
 run "훅 (commit-msg)      " python3 scripts/git-hooks/test-commit-msg.py
+# **계수기 자신도 잰다** (검수 W4-9). 이 게이트가 흔들림을 세는데 세는 쪽이 틀리면
+# 그 숫자가 거짓이 된다 — 훅을 여기서 재는 것과 같은 이유다.
+run "흔들림 계수기        " python3 scripts/lib/test-flake.py
 run "unit                 " npm test --silent
 run "conformance (반례)   " npm run test:conformance --silent
 run "모델 (스케줄 생성)   " npx vitest run tests/model --silent
@@ -203,6 +221,14 @@ if [ $FAILED -eq 0 ]; then
   echo " 구현된 스위트: 전부 통과."
 else
   echo " 실패한 스위트가 있다."
+fi
+
+if [ $FLAKES -gt 0 ]; then
+  echo ""
+  echo " ⚠️  흔들린 스위트 ${FLAKES} 개 — 재실행은 초록이었다. $BARY_FLAKE_LOG 에 적었다."
+  echo "     **이것은 통과가 아니다.** 원인을 찾아 없애는 것이 답이고, 장부는 그것이"
+  echo "     얼마나 자주 일어나는지를 회차를 가로질러 말해 준다."
+  echo "     지금까지: $(wc -l < "$BARY_FLAKE_LOG" 2>/dev/null | tr -d ' ') 건"
 fi
 
 cat <<'GATES'
