@@ -14,5 +14,11 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // **테스트용 가짜를 배포 산출물에서 뺀다** (검수 G5). `CrashClock`·`FaultStore`·
+  // `FakeEffects` 는 호출자가 테스트와 스파이크뿐인데, 여기 들어오면 배포 이미지가
+  // `dist/` 를 통째로 복사하므로 **실서비스 컨테이너에 크래시 주입 기계가 실린다.**
+  //
+  // 스파이크(S12)는 여전히 쓴다 — `tsconfig.testing.json` 이 `dist-testing/` 으로 낸다.
+  "exclude": ["src/testing"]
 }

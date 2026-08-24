@@ -14,8 +14,9 @@
  * 옛 설정으로 계속 돈다.** 그걸 수렴이라고 부를 수 없다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation } from '../../src/dp/operation.js';
 

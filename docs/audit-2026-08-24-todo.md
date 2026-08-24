@@ -980,16 +980,36 @@ FAIL  fail  예외: ACME 400 …:badNonce: JWS has an invalid anti-replay nonce
 > **지터를 양쪽으로 준다.** 화면이 여럿이면 전부 같은 순간에 다시 붙고, 그게 재기동
 > 직후의 데몬에 제일 나쁜 순간이다. 한쪽으로만 주면 평균이 밀린다.
 
-### ☐ W4-6 · G5 — 테스트용 가짜를 `dist` 에서 뺀다 `[M]`
+### ☑ W4-6 · G5 — 테스트용 가짜를 `dist` 에서 뺀다 `[M]`
 
-⚠️ **표면이 움직인다.** `FakeEffects` 등은 `reachable.mjs` 의 `ALLOW` 에 있고,
-옮기면 그 목록도 바뀐다. 카운터가 0 으로 돌아가므로 **W4 의 다른 표면 변경과
-같은 회차에 모은다.**
+- [x] `src/testing/apply-fakes.ts` 로 옮겼다 — `CrashInjected` · `CrashClock` ·
+      `classifyWrite` · `FaultStore` · `FakeEffects`
+- [x] `tsconfig.build.json` 에 `"exclude": ["src/testing"]`
+- [x] `reachable.mjs` — ALLOW 의 심볼 항목을 지우고 **구조로** 갈랐다
+- [x] `node scripts/surface.mjs --check` — **표면 그대로** (117 심볼)
+- [x] 테스트 23 파일의 import 를 옮겼다
+- [x] `./scripts/verify.sh --quick` 9/9 · **스파이크 S12 `PASS=5 FAIL=0`**
 
-- [ ] `src/testing/` 로 옮기고 `tsconfig.build.json` 의 `include` 에서 뺀다
-- [ ] `reachable.mjs` 의 `ALLOW` 에서 그 항목들을 지운다 (더 이상 예외가 아니다)
-- [ ] `node scripts/surface.mjs --check` 로 A 표면이 안 움직였는지 확인
-      (`src/index.ts` 는 이것들을 안 내보내므로 안 움직여야 한다)
+**투두가 예상 못 한 제약이 하나 있었다: `spike/s12/runner.mjs` 가 `dist/dp/apply.js`
+에서 `CrashClock`·`FaultStore` 를 가져온다.** 컨테이너 안에서 도는 **빌드 산출물**을
+쓰기 때문이고(소스를 직접 못 돌린다), 그러니 이 파일들도 어딘가로는 빌드돼야 한다.
+
+`tsconfig.testing.json` 을 새로 두고 `dist-testing/` 으로 낸다. **배포 이미지는
+`dist/` 만 복사하므로**(`deploy/Dockerfile`) 거기 안 실린다 — 목적은 그대로 달성된다.
+
+> **예외를 심볼이 아니라 구조로 바꿨다.** 전에는 `FakeEffects` 하나가 ALLOW 에 있었는데,
+> 옮기고 나니 `FaultStore`·`CrashClock`·`publishedGeneration` 이 함께 걸렸다 —
+> **예외를 심볼로 적으면 형제가 생길 때마다 예외가 는다.** `src/testing/` 을 통째로
+> 뺀다. `tsconfig.build.json` 도 같은 경계를 쓰므로 **한 사실을 두 곳이 같은 말로
+> 말한다.** 도달성 예외가 22 → 21 로 줄었다.
+
+**게이트가 둘을 잡았다.**
+
+1. **도달성**이 옮기고 남은 죽은 import 셋(`AgentState`·`DurableStore`·`StoredState`)을
+   잡았다. 옮기면 원본에서 안 쓰이게 되는데, 그건 눈으로는 안 보인다
+2. **`census-identity`** 가 신원 비교 자리 20 → 19 를 잡았다. 줄어든 이유가 「자리가
+   사라졌다」가 아니라 **「프로덕션이 아니게 됐다」**다 — 그 근거를 코드에 적고 숫자를
+   내렸다. 그 계측기의 머리말이 요구하는 그대로다
 
 ### ☐ W4-8 · D21 — ACME 계정을 만드는 경로 `[M]` ← **W4 에서 제일 크다**
 

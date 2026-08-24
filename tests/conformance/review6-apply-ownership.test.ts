@@ -18,8 +18,9 @@
  *   · `commit` 이 증거를 직접 판정한다 — §3.5 는 Agent 가 최종 심판이라고 말한다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
 
 const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({

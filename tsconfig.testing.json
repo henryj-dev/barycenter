@@ -1,0 +1,16 @@
+{
+  // **스파이크용 산출물** (검수 G5). `dist/` 에서 뺀 테스트용 가짜를 여기로 낸다.
+  //
+  // `spike/s12/runner.mjs` 는 컨테이너 안에서 도는 **빌드 산출물**을 쓴다 — 소스를 직접
+  // 못 돌리기 때문이다(Node 의 타입 제거는 `./x.js` 스펙파이어를 `./x.ts` 로 안 바꾼다).
+  // 그러니 이 파일들도 어딘가로는 빌드돼야 하고, 그 자리가 `dist/` 가 아니면 된다.
+  //
+  // 배포 이미지는 `dist/` 만 복사하므로(`deploy/Dockerfile`) 여기 것은 안 실린다.
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "outDir": "dist-testing",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": []
+}

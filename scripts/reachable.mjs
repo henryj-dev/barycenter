@@ -74,7 +74,6 @@ const ALLOW = new Map([
   // 프로덕션 호출자가 없는 것이 정상이고, 없어지면 그 계약을 잴 방법이 사라진다.
   ['src/dp/agent.ts:MemoryStore', '주입 가능한 store 계약의 참조 구현'],
   ['src/dp/agent.ts:EvidenceRecord', '위 계약의 타입'],
-  ['src/dp/apply.ts:FakeEffects', '주입 가능한 Effects 계약의 참조 구현'],
   ['src/dp/apply.ts:FaultStore', '저장소 실패를 주입하는 이음새'],
   ['src/obs/log.ts:setSink', '로그 sink 주입 — 테스트가 한 줄씩 읽는다'],
   ['src/obs/metrics.ts:counterSnapshot', '카운터 관측 — 테스트가 증가를 잰다'],
@@ -139,7 +138,22 @@ function walk(dir) {
   return out;
 }
 
-const files = walk(SRC).sort();
+/**
+ * **`src/testing/` 은 프로덕션이 아니다** (검수 G5).
+ *
+ * 이 게이트가 묻는 것은 「프로덕션 호출자가 있는가」인데, 저 디렉토리는 정의상 테스트와
+ * 스파이크만 쓴다. 전에는 `FakeEffects` 하나를 `ALLOW` 에 심볼로 적어 뒀는데 —
+ * **예외를 심볼로 적으면 그 옆에 형제가 생길 때마다 예외가 는다.** 실제로 그랬다:
+ * 옮기고 나니 `FaultStore`·`CrashClock`·`publishedGeneration` 이 함께 걸렸다.
+ *
+ * 구조로 가른다. `tsconfig.build.json` 도 같은 경계를 쓰므로(배포 산출물에서 뺀다)
+ * **한 사실을 두 곳이 같은 말로 말한다.**
+ */
+const NOT_PRODUCTION = [join(SRC, 'testing')];
+
+const files = walk(SRC)
+  .filter((f) => !NOT_PRODUCTION.some((d) => f.startsWith(`${d}/`)))
+  .sort();
 const rel = (p) => relative(ROOT, p);
 
 /** 파일별 { exports, imports, used, members } */

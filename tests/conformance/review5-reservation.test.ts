@@ -18,13 +18,14 @@
  * 함께 v0.3 으로, ⑦ 은 blocker 4 로 간다 (§9.1.1).
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import {
   DpAgent,
   DpRejection,
   MemoryStore,
   type OperationTuple,
 } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
 
 const EVIDENCE: ActivationEvidence = { acceptingGeneration: 'gen-1' };

@@ -12,6 +12,7 @@
  * 세대 이름은 무엇을 활성화하는지 말하지 못한다. 내용이 말한다.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -25,7 +26,7 @@ import {
 } from '../../src/dp/materialize.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
 import { CHECKED_TOKEN } from '../../src/dp/operation.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import { FsEffects } from '../../src/dp/effects-fs.js';
 import type { ApplyOperation } from '../../src/dp/operation.js';
 

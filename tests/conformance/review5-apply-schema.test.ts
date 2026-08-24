@@ -12,9 +12,10 @@
  *   멤버십 못지않은 부작용인데(오히려 더 크다 — 프로세스 전체를 바꾼다) 봉투 밖에 있었다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
 import { LocalDataplaneDriver, type DataplaneDriver } from '../../src/dp/driver.js';
-import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
+import { ApplyRunner, recordOf } from '../../src/dp/apply.js';
 import type {
   Checked, ApplyLease } from '../../src/dp/operation.js';
 import {

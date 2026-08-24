@@ -35,8 +35,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const DIST = '/app/dist';
+const TESTING = '/app/dist-testing';
 const { DpAgent } = await import(`${DIST}/dp/agent.js`);
-const { ApplyRunner, CrashClock, FaultStore } = await import(`${DIST}/dp/apply.js`);
+const { ApplyRunner } = await import(`${DIST}/dp/apply.js`);
+// **가짜는 `dist-testing/` 에 있다** (검수 G5). `dist/` 에서 뺀 이유는 배포 이미지가
+// 그것을 통째로 복사하기 때문이다 — 실서비스 컨테이너에 크래시 주입 기계를 안 싣는다.
+const { CrashClock, FaultStore } = await import(`${TESTING}/testing/apply-fakes.js`);
 const { FileStore } = await import(`${DIST}/dp/store-fs.js`);
 const { FsEffects } = await import(`${DIST}/dp/effects-fs.js`);
 

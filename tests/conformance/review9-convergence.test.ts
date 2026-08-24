@@ -15,9 +15,10 @@
  * 그건 테스트할 수 있다 — 그게 이 파일이다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
 import type { Checked } from '../../src/dp/operation.js';
-import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
+import { ApplyRunner, recordOf } from '../../src/dp/apply.js';
 import { publishedByMe } from '../../src/dp/operation.js';
 import type { ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
 

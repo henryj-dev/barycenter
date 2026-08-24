@@ -13,8 +13,9 @@
  * 호출자가 무엇을 아는지와 무관하게 같은 답이 나온다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation } from '../../src/dp/operation.js';
 

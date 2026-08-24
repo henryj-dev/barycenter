@@ -24,8 +24,9 @@
  * 바꾼 것이고(9차), 이 파일은 그 결정이 지금도 성립하는지를 잰다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import type { Checked } from '../../src/dp/operation.js';
 import type { ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
 

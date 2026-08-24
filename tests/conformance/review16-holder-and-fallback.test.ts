@@ -13,8 +13,9 @@
  *      소진 경로에는 넣었는데 여기만 빠졌다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation, PublishedState } from '../../src/dp/operation.js';
 

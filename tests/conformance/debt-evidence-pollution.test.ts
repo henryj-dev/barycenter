@@ -9,8 +9,9 @@
  * 자리다 — 거기서 쓰는 저널은 신임 것이고 토큰도 신임 것이라 agent 층 전부를 통과한다.
  */
 import { expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
 
 const OP = (

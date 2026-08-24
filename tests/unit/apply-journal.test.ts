@@ -9,18 +9,11 @@
  * 그래서 **최종 세대가 정확하고 중복 reload 가 상한 이내**인지를 본다.
  */
 import { describe, expect, it } from 'vitest';
+import { CrashClock, CrashInjected, FakeEffects, FaultStore } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
 import type {
   Checked, ActivationEvidence, ApplyLease, ApplyOperation } from '../../src/dp/operation.js';
-import {
-  ApplyRunner,
-  CrashClock,
-  CrashInjected,
-  FakeEffects,
-  FaultStore,
-  RELOAD_ATTEMPT_LIMIT,
-  type Phase,
-} from '../../src/dp/apply.js';
+import { ApplyRunner, RELOAD_ATTEMPT_LIMIT, type Phase } from '../../src/dp/apply.js';
 
 const TARGET = 'gen-000002';
 

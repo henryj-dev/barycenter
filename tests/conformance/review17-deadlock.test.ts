@@ -24,8 +24,9 @@
  * 호출자가 준 것이 아니다 — 16차가 막으려던 것(호출자를 믿는 것)에 해당하지 않는다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { FakeEffects } from '../../src/dp/apply.js';
+
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation, PublishedState } from '../../src/dp/operation.js';
 

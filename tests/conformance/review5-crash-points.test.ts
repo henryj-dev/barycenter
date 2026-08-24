@@ -25,8 +25,9 @@
  *          그대로 지난다. e2e 의 "롤백도 새 오퍼레이션으로 수렴한다" 가 그걸 본다.
  */
 import { describe, expect, it } from 'vitest';
+import { CrashClock, CrashInjected, FakeEffects, FaultStore } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
-import { ApplyRunner, CrashClock, CrashInjected, FakeEffects, FaultStore } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import type { ApplyOperation } from '../../src/dp/operation.js';
 
 const OP: ApplyOperation = {

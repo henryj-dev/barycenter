@@ -25,9 +25,10 @@
  * 답하는 것**이고, 워커 세대만 쌓는다 (§6.4 admission control).
  */
 import { describe, expect, it } from 'vitest';
+import { CrashClock, FakeEffects } from '../../src/testing/apply-fakes.js';
 
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
-import { ApplyRunner, CrashClock, FakeEffects, RELOAD_ATTEMPT_LIMIT } from '../../src/dp/apply.js';
+import { ApplyRunner, RELOAD_ATTEMPT_LIMIT } from '../../src/dp/apply.js';
 import type { ActivationEvidence, ApplyOperation } from '../../src/dp/operation.js';
 
 const TARGET = 'gen-000002';

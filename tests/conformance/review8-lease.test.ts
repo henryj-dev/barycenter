@@ -18,8 +18,9 @@
  * 스레드라 그 구간에는 아무도 끼어들지 못한다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
+import { ApplyRunner, recordOf } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import type {
   Checked, ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';

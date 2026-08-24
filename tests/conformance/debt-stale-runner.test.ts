@@ -19,8 +19,9 @@
  *      assertLeader 도 writeJournal 도 전부 통과한다.
  */
 import { expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import type {
   ActivationEvidence, ApplyLease, ApplyOperation, Checked, PublishRecord,
 } from '../../src/dp/operation.js';

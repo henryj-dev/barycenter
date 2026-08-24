@@ -20,8 +20,9 @@
  * 정하지 우리가 정하지 않는다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import { LocalDataplaneDriver } from '../../src/dp/driver.js';
 import { provesActivation } from '../../src/dp/operation.js';
 import { GenerationError, materializeGeneration, readManifest } from '../../src/dp/materialize.js';

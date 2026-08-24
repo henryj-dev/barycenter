@@ -18,8 +18,9 @@
  * (§3.3 — 되돌리는 것이 아니라 새 활성화 사건이다).
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, DpRejection, MemoryStore, tupleFor } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects, recordOf } from '../../src/dp/apply.js';
+import { ApplyRunner, recordOf } from '../../src/dp/apply.js';
 import type { ApplyOperation, PublishedState } from '../../src/dp/operation.js';
 
 const OP = (o: Partial<ApplyOperation> = {}): ApplyOperation => ({

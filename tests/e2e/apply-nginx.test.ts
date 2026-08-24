@@ -29,7 +29,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { DpAgent } from '../../src/dp/agent.js';
 import { FileStore } from '../../src/dp/store-fs.js';
-import { ApplyRunner, CrashInjected, type Effects } from '../../src/dp/apply.js';
+import { ApplyRunner, type Effects } from '../../src/dp/apply.js';
+import { CrashInjected } from '../../src/testing/apply-fakes.js';
 import type {
   ActivationEvidence,
   ApplyLease,

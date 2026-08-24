@@ -13,8 +13,9 @@
  * (18차에 "마감의 효과" 대신 경과 시간을 재다가 뮤턴트를 놓친 적이 있다.)
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import type { ApplyOperation } from '../../src/dp/operation.js';
 
 const OP: ApplyOperation = {

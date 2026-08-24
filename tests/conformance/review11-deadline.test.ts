@@ -14,8 +14,9 @@
  * 값이다.
  */
 import { describe, expect, it } from 'vitest';
+import { FakeEffects } from '../../src/testing/apply-fakes.js';
 import { DpAgent, MemoryStore } from '../../src/dp/agent.js';
-import { ApplyRunner, FakeEffects } from '../../src/dp/apply.js';
+import { ApplyRunner } from '../../src/dp/apply.js';
 import type {
   Checked, ApplyLease, ApplyOperation, PublishRecord } from '../../src/dp/operation.js';
 
