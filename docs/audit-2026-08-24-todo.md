@@ -436,17 +436,28 @@
 그리고 그것이 이 결함이 오래 안 보인 이유이기도 하다: **가짜가 실물보다 좁으면 그
 차이만큼 검증이 비고, 비어 있다는 사실 자체가 안 보인다.**
 
-### ☐ W2-3 · G4 — SSE 와 원격 응답의 상한 `[S]`
+### ☑ W2-3 · G4 — SSE 와 원격 응답의 상한 `[S]`
 
-- [ ] `tests/unit/audit-stream-caps.test.ts` — ㉠ 안 읽는 SSE 소비자에 버퍼가
-      임계를 넘으면 끊는가 ㉡ 원격 드라이버가 큰 응답을 상한에서 자르는가
-- [ ] **빨강 확인**
-- [ ] `src/api/events.ts` — `writable()` 이 `res.writableLength` 도 본다.
-      넘으면 `finish()`
-- [ ] `src/dp/remote.ts:112` — 누적에 상한.
-      에이전트 쪽 `readJson` 의 4 MiB 와 **같은 값**을 쓴다
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-stream-caps.test.ts -t "안 읽는 소비자가 버퍼를 무한히 못 키운다"`
+- [x] `tests/unit/audit-stream-caps.test.ts` — 4 케이스. **실물 소켓으로 안 읽는
+      소비자를 만든다** (`sock.pause()`) — 가짜 `res` 로는 이 결함을 못 만든다
+- [x] **빨강 확인** — 둘이 `안 끊겼다`. 64 MiB 를 밀어 넣어도 살아 있다고 봤다
+- [x] `src/api/events.ts` — `writable()` 이 `res.writableLength` 도 본다.
+      `MAX_SSE_BUFFER_BYTES` = 4 MiB
+- [x] `src/api/events.ts` — `finish()` 가 **소켓도 놓는다.** 놓기로 했으면 물고 있는
+      것도 놓아야 한다
+- [x] `src/dp/remote.ts` — 누적에 상한. 에이전트 쪽 `readJson` 의 4 MiB 와 **같은 값**
+- [x] `./scripts/verify.sh --quick` — 9/9 초록 (unit 871 → 875)
+- [x] 커밋 — 핀 **둘**. 두 자리가 서로 독립이라 하나로는 반쪽만 증명된다
+
+**또 가짜가 실물보다 좁았다** (W2-2 에 이어 두 번째). `audit-sse-early-close.test.ts`
+의 `fakeRes` 에 `writableLength` 도 `destroy` 도 없어서 셋이 빨개졌다. 두 자리를 더해
+맞췄다 — 그리고 `writableLength: 0` 이라고 적어 두었다: 그 가짜로는 이 결함을 **만들
+수가 없다**는 것이 요점이라, 안 읽는 소비자는 실물 소켓 쪽에서만 잰다.
+
+> **`finish()` 가 소켓을 안 놓고 있었다.** 투두는 「넘으면 `finish()`」만 적었는데,
+> 그것만으로는 재현물이 안 초록이 됐다 — `finish` 는 구독만 놓고 소켓은 그대로 뒀다.
+> 클라이언트가 끊어서 온 경우에는 맞지만(이미 파괴돼 있다), **우리가 먼저 그만두기로
+> 한 경우**에는 쌓인 바이트가 그대로 남는다.
 
 ### ☐ W2-4 · D8 — SecretStore `put` 원자화 `[M]`
 

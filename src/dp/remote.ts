@@ -60,6 +60,15 @@ export type RemoteDriverOptions = {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * 에이전트 응답 하나의 상한 (검수 G4).
+ *
+ * `agent-server` 의 요청 본문 상한(`DEFAULT_MAX_BODY`)과 **같은 값**이다. 제일 큰
+ * 것이 멤버십 슬롯이고, 그건 양방향으로 같은 크기다 — 두 값을 다르게 둘 이유가 없고,
+ * 다르면 한쪽만 고치는 날이 온다.
+ */
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
 /** 거절 본문. 에이전트가 이 모양으로만 거절한다. */
 type RejectionBody = { kind: RejectionKind; message: string; terminalState?: TerminalKind };
 
@@ -108,9 +117,30 @@ export class RemoteDataplaneDriver implements DataplaneDriver {
           },
         },
         (r) => {
+          /**
+           * **응답에도 상한을 둔다** (검수 G4).
+           *
+           * 에이전트 쪽 창구(`agent-server` 의 `readJson`)는 4 MiB 상한을 갖고 있고 그
+           * 주석이 이유를 적어 뒀다: *"다 받고 나서 거절하면 그 사이 메모리를 먹는다."*
+           * **같은 판단이 반대 방향에는 없었다** — CP 는 에이전트가 주는 것을 무한히
+           * 받았다.
+           *
+           * 방향이 반대라고 위험이 반대인 것이 아니다. CP 는 에이전트보다 **적고**,
+           * 하나가 여럿을 본다. 상한을 넘으면 `RemoteDpUnreachable` 이다 — 우리가
+           * 읽지 못한 것이지 에이전트가 판정한 것이 아니다.
+           */
           let text = '';
+          let size = 0;
           r.setEncoding('utf8');
-          r.on('data', (c: string) => { text += c; });
+          r.on('data', (c: string) => {
+            size += Buffer.byteLength(c);
+            if (size > MAX_RESPONSE_BYTES) {
+              r.destroy();
+              reject(new Error(`응답이 ${MAX_RESPONSE_BYTES}바이트를 넘는다`));
+              return;
+            }
+            text += c;
+          });
           r.on('end', () => resolve({ status: r.statusCode ?? 0, text }));
         },
       );

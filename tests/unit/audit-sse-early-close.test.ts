@@ -43,6 +43,12 @@ function fakeRes(): ServerResponse & { chunks: string[]; destroyed: boolean } {
     chunks: [] as string[],
     destroyed: false,
     writableEnded: false,
+    /**
+     * 쓰기 버퍼에 쌓인 양. **실물에는 늘 있던 값인데 이 가짜에는 없었다** (검수 G4).
+     * 이 가짜는 언제나 `0` 이다 — 안 읽는 소비자를 흉내 내는 것은
+     * `audit-stream-caps.test.ts` 가 실물 소켓으로 한다.
+     */
+    writableLength: 0,
     writeHead() { return res; },
     write(chunk: string) {
       if (res.destroyed) throw new Error('write after destroy');
@@ -50,6 +56,8 @@ function fakeRes(): ServerResponse & { chunks: string[]; destroyed: boolean } {
       return true;
     },
     end() { res.writableEnded = true; return res; },
+    /** `finish()` 가 소켓도 놓는다 (검수 G4). 가짜에도 그 자리가 있어야 한다. */
+    destroy() { res.destroyed = true; return res; },
   };
   return res as unknown as ServerResponse & { chunks: string[]; destroyed: boolean };
 }
