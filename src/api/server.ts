@@ -35,7 +35,7 @@ import {
   drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
 } from '../control/drain.js';
 import { healthRows } from '../control/health.js';
-import { render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
+import { count, render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
@@ -52,6 +52,7 @@ import { newEcKey } from '../acme/der.js';
 import { PATH_SEGMENT_RULE, PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
+import { AuthFailureLimiter } from './auth-rate-limit.js';
 import {
   authorizationRequest, exchangeAuthorizationCode, pkceChallenge, pkceVerifier,
   type OidcRpSettings,
@@ -846,8 +847,9 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
  */
 export function apiHandler(api: ApiOptions): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
+  const authFailures = new AuthFailureLimiter();
   return (req, res) => {
-    void handle(req, res, api, max).catch((e) => {
+    void handle(req, res, api, max, authFailures).catch((e) => {
       /**
        * 여기까지 온 것은 핸들러 밖의 실패다. 조용히 끊지 않는다.
        *
@@ -931,6 +933,7 @@ export function createApi(api: ApiOptions): Server {
 
 async function handle(
   req: IncomingMessage, res: ServerResponse, api: ApiOptions, max: number,
+  authFailures: AuthFailureLimiter,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -1059,10 +1062,20 @@ async function handle(
   const who = api.auth.authenticate(req.headers.authorization)
     ?? principalFromClientCert(peerCertOf(req), api.auth);
   if (who === undefined) {
-    json(res, 401, { code: 'unauthenticated', message: 'Bearer 토큰이나 클라이언트 인증서가 필요하다' },
-      { 'www-authenticate': 'Bearer' });
+    const key = req.socket.remoteAddress ?? 'unknown';
+    count('bary_auth_failures_total');
+    const retryAfter = authFailures.record(key);
+    if (retryAfter !== undefined) {
+      json(res, 429, {
+        code: 'rate_limited', message: '인증 실패가 너무 많다 — 잠시 뒤 다시 시도하라',
+      }, { 'retry-after': String(retryAfter) });
+    } else {
+      json(res, 401, { code: 'unauthenticated', message: 'Bearer 토큰이나 클라이언트 인증서가 필요하다' },
+        { 'www-authenticate': 'Bearer' });
+    }
     return;
   }
+  authFailures.clear(req.socket.remoteAddress ?? 'unknown');
 
   const matched = ROUTES.map((r) => ({ r, m: r.pattern.exec(url.pathname) }))
     .filter((x) => x.m !== null);
