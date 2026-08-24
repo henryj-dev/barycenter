@@ -87,9 +87,37 @@ async function issue(c, domain, http, hooks = {}) {
 // 만들 때 들고 있던 것을 그대로 쓴다 — 제품 코드에는 이 우회가 없다.
 const keys = new WeakMap();
 function accountKeyOf(c) { return keys.get(c); }
+/**
+ * 시나리오용 클라이언트.
+ *
+ * ── **재시도를 넉넉히 준다** (검수 W3-6)
+ *
+ * Pebble 이 `PEBBLE_WFE_NONCEREJECT` 로 nonce 를 20% 거절한다. 제품 기본값
+ * (`nonceRetries: 5`)이면 한 요청이 여섯 번 연속 거절될 확률이 `0.2^6 = 6.4e-5` 인데,
+ * **한 회차에 요청이 수백 개다**(③ 이 상한 300 까지 주문한다). 합치면 **~2%** 이고,
+ * 실제로 게이트가 그 확률로 빨갰다:
+ *
+ *   FAIL  fail  예외: ACME 400 …:badNonce: JWS has an invalid anti-replay nonce
+ *
+ * ③ 의 주석이 이미 같은 것을 적어 뒀다 — *"그러면 시나리오가 무작위로 빨개진다.
+ * 간헐적으로 깨지는 게이트는 없느니만 못하다."* **그 판단이 여기에는 안 적용돼
+ * 있었다.** 나머지 시나리오가 재는 것은 발급·고아·와일드카드·DNS 이지 nonce 내성이
+ * 아니므로, 재시도 예산은 그것들에게 **재는 대상이 아니라 잡음**이다.
+ *
+ * 30 이면 `0.2^31 ≈ 4e-22` 다. 흔한 경우의 비용은 없다 — 기대 재시도가 요청당 0.25 회이고
+ * Pebble 은 같은 호스트에 있다.
+ *
+ * ⚠️ **②·③ 은 이 기본값을 안 쓴다.** 그 둘이 재는 것이 바로 재시도 예산이라,
+ * 각자 값을 명시한다.
+ */
+const SPIKE_NONCE_RETRIES = 30;
+
 function tracked(opts = {}) {
   const key = newEcKey();
-  const c = new AcmeClient({ directoryUrl: DIRECTORY, accountKey: key, ...opts });
+  const c = new AcmeClient({
+    directoryUrl: DIRECTORY, accountKey: key,
+    nonceRetries: SPIKE_NONCE_RETRIES, ...opts,
+  });
   keys.set(c, key);
   return c;
 }
@@ -125,7 +153,9 @@ const scenarios = {
 
   /** ② badNonce 재시도 — RFC 8555 §6.5. */
   async nonce() {
-    const c = tracked();
+    // **제품 기본값을 명시한다.** 이 시나리오가 재는 것이 「그 값이 충분한가」이므로,
+    // 하네스의 넉넉한 기본값(`SPIKE_NONCE_RETRIES`)을 쓰면 재는 대상이 사라진다.
+    const c = tracked({ nonceRetries: 5 });
     await c.register();
     // Pebble 이 `PEBBLE_WFE_NONCEREJECT` 로 일정 비율의 nonce 를 거절한다. 재시도가
     // 없으면 여기서 무작위로 실패한다.
@@ -140,7 +170,12 @@ const scenarios = {
         if (!(e instanceof AcmeHttpError)) throw e;
       }
     }
-    say('nonce', failed === 0, `주문 12 회 중 성공 ${ok} 실패 ${failed} (badNonce 재시도 활성)`);
+    // **남는 거짓 빨강을 드러낸다** (③ 이 하는 것과 같다). 요청 하나가 재시도 5 회를
+    // 소진할 확률이 `0.2^6 = 6.4e-5` 이고 여기서 요청이 열댓 개다 — 합쳐서 ~1e-3.
+    // 그것을 더 낮추려면 재시도를 늘려야 하는데, **이 시나리오가 재는 것이 바로 제품
+    // 기본값의 적정성**이라 그러면 재는 대상이 사라진다. 숨기지 말고 적어 둔다.
+    say('nonce', failed === 0,
+      `주문 12 회 중 성공 ${ok} 실패 ${failed} (badNonce 재시도 5 회 = 제품 기본값, 거짓 빨강 ~1e-3)`);
   },
 
   /** ③ 재시도를 껐을 때 — 대조군. 이게 실패해야 ②가 무언가를 증명한다. */
