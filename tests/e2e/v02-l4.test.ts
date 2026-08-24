@@ -25,6 +25,7 @@ import { connect as tlsConnect } from 'node:tls';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
+import { waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
@@ -241,15 +242,20 @@ beforeAll(async () => {
       'exec node /app/dist/bin/barycenterd.js',
     ].join(' && '));
 
-  const up = await waitFor(async () => {
-    try {
-      return (await fetch(`http://127.0.0.1:${API_PORT}/healthz`,
-        { signal: AbortSignal.timeout(2000) })).ok;
-    } catch {
-      return false;
-    }
-  }, (ok) => ok, 120_000);
-  if (!up) throw new Error(`데몬이 안 떴다:\n${docker('logs', '--tail', '40', DP)}`);
+  // **진단을 한 자리에 모았다** (검수 N4 후속). 전에는 `docker logs` 만 붙였고,
+  // 기동 스크립트가 출력을 지운 탓에 그 로그가 **빈 문자열**이라 원인이 어디에도
+  // 안 드러났다 — N4 를 진단할 때 정확히 그 자리에서 막혔다.
+  await waitForDaemon({
+    container: DP,
+    probe: async () => {
+      try {
+        return (await fetch(`http://127.0.0.1:${API_PORT}/healthz`,
+          { signal: AbortSignal.timeout(2000) })).ok;
+      } catch {
+        return false;
+      }
+    },
+  });
 }, 300_000);
 
 afterAll(() => {
