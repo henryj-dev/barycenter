@@ -2,7 +2,10 @@
  * GUI 정적 파일. API 와 같은 출처에서 내보낸다 — 브라우저 CORS 를 열지 않기 위해.
  */
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import {
+  closeSync, createReadStream, existsSync, fstatSync, openSync, readFileSync, realpathSync,
+  statSync,
+} from 'node:fs';
 import type { ServerResponse } from 'node:http';
 import { extname, join, relative, resolve, sep } from 'node:path';
 
@@ -40,12 +43,29 @@ import { SECURITY_HEADERS } from '../api/headers.js';
 const cspCache = new Map<string, { stamp: string; csp: string }>();
 
 function htmlCsp(path: string): string {
-  const st = statSync(path);
-  const stamp = `${st.mtimeMs}:${st.size}`;
-  const hit = cspCache.get(path);
-  if (hit !== undefined && hit.stamp === stamp) return hit.csp;
+  /**
+   * **같은 fd 로 재고 읽는다** (검수 2026-08-24 SCAN-5).
+   *
+   * `statSync(path)` 로 도장을 찍고 `readFileSync(path)` 로 다시 여는 사이에 파일이
+   * 바뀌면, **새 내용이 옛 도장으로 캐시에 들어간다.** 그 뒤로는 도장이 안 변하니
+   * 영원히 낡은 CSP 를 낸다 — 빌드가 바뀌면 자동으로 다시 뽑는다는 이 캐시의 계약이
+   * 조용히 깨지는 것이고, 깨진 줄 아무도 모른다.
+   *
+   * 파일을 한 번만 열고 그 fd 로 재면 창이 없다. 경로를 두 번 여는 것보다 짧기도 하다.
+   */
+  const fd = openSync(path, 'r');
+  let html: string;
+  let stamp: string;
+  try {
+    const st = fstatSync(fd);
+    stamp = `${st.mtimeMs}:${st.size}`;
+    const hit = cspCache.get(path);
+    if (hit !== undefined && hit.stamp === stamp) return hit.csp;
+    html = readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
 
-  const html = readFileSync(path, 'utf8');
   // `src=` 가 있는 것은 외부 파일이라 `'self'` 가 덮는다.
   const hashes = [...html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)]
     .map((m) => `'sha256-${createHash('sha256').update(m[1] ?? '', 'utf8').digest('base64')}'`);

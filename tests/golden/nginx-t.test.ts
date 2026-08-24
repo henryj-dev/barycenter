@@ -67,7 +67,11 @@ function nginxProbe(conf: string, probe: string): string {
     return execFileSync(
       'docker',
       ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-       'apk add --no-cache curl >/dev/null 2>&1; ' +
+       // **설치 실패를 삼키지 않는다.** 전에는 `2>/dev/null` 뒤에 그냥 진행해서,
+       // apk 가 망 때문에 실패하면 프로브가 `curl: not found` 로 죽었다 — 읽는 사람은
+       // 이미지가 이상한 줄 안다. 실패한 자리에서 실패했다고 말하게 한다.
+       'apk add --no-cache curl >/dev/null 2>&1 || ' +
+       '{ echo "curl 설치 실패 (망?) — 이미지 문제가 아니다" >&2; exit 70; }; ' +
        '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.2; ' +
        'sh /prefix/probe.sh'],
       { stdio: ['ignore', 'pipe', 'pipe'] },

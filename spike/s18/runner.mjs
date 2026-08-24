@@ -15,7 +15,6 @@
  * "한 번은 반드시 재시도" 라고 한 그 경로를 실제로 밟게 하는 유일한 방법이다.
  */
 import { createServer } from 'node:http';
-import { writeFileSync } from 'node:fs';
 
 const DIST = '/app/dist';
 const { AcmeClient, AcmeHttpError, dns01Value, keyAuthorization } =
@@ -145,7 +144,9 @@ const scenarios = {
 
       // 우리가 만든 CSR 의 키와 발급된 인증서가 맞는지. 안 맞으면 그 인증서는 쓸모없다.
       say('happy.key', leaf.checkPrivateKey(out.certKey), '발급된 인증서가 우리 키와 맞는다');
-      writeFileSync('/tmp/s18-cert.pem', out.pem);
+      // `/tmp/s18-cert.pem` 에 쓰던 줄을 **지웠다** (검수 2026-08-24 SCAN-9).
+      // **아무도 안 읽었다** — 남는 것은 예측 가능한 이름의 임시 파일뿐이었고,
+      // 그건 이 저장소가 세는 「도달 불가한 코드」의 산출물 판이다.
     } finally {
       await http.close();
     }

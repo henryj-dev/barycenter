@@ -149,8 +149,12 @@ async function push(patch) {
   return { ok: applied.body?.phase === 'activated', why: applied.body, detail: applied.body?.detail };
 }
 
+// **정규식 메타문자를 전부 벗긴다** (검수 2026-08-24 SCAN-6). 전에는 `{}"` 셋만
+// 벗겼다 — 메트릭 이름에 그 셋 말고는 안 들어와서 동작은 같았지만, 「이 문자만 오면
+// 된다」는 가정이 어디에도 안 적혀 있었다. 같은 사본이 `tests/e2e/v03-membership.test.ts`
+// 에도 있다.
 const metric = (text, name) => {
-  const m = new RegExp(`^${name.replace(/[{}"]/g, '\\$&')} (\\d+)$`, 'm').exec(text);
+  const m = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} (\\d+)$`, 'm').exec(text);
   return m === null ? Number.NaN : Number(m[1]);
 };
 

@@ -241,6 +241,14 @@ const endpoint = (host: string, port: number): string =>
 const MAP_KEYWORDS = new Set(['default', 'hostnames', 'volatile', 'include']);
 
 /** 정규식 메타문자를 이스케이프한다. */
+/**
+ * 정규식 리터럴로 만든다. **정규식을 내는 자리는 전부 이걸 지난다** (검수 2026-08-24 SCAN-4).
+ *
+ * 전에는 정확일치만 이걸 쓰고 와일드카드 접미사는 옆에서 `replace(/\./g, '\\.')` 로
+ * 점만 따로 벗겼다. 검증을 지난 호스트에는 `.` 과 `-` 밖에 없어서 **동작은 같았지만**,
+ * 같은 규칙이 한 파일 안에 두 벌로 있었다 — 이 저장소가 반복해서 물린 모양이고
+ * (*"자리가 둘이면 언젠가 갈린다"*), 갈리는 쪽은 늘 덜 완전한 사본이다.
+ */
 const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** UDP 프리셋 — 값을 틀리면 세션이 안 닫히거나 조기에 닫힌다 (§4.1). */
@@ -550,7 +558,7 @@ function httpServerBlocks(
     const nameArg: ConfValue =
       parsed.value.kind === 'exact'
         ? (lowered ? regex(`~^${reEscape(parsed.value.host)}$`) : lit(parsed.value.host))
-        : regex(`~^[^.]+\\.${parsed.value.suffix.replace(/\./g, '\\.')}$`);
+        : regex(`~^[^.]+\\.${reEscape(parsed.value.suffix)}$`);
 
     // S16 — 인증서와 정책은 **이 server 블록 안**에 낸다. 그래야 SNI 별로 갈린다.
     const tlsBody = tls === undefined ? [] : (() => {
@@ -1255,7 +1263,7 @@ function passthroughNodes(
         : // E21 — SNI 는 대소문자를 구분하지 않으므로 ~* 여야 한다.
           // [^.]+ 로 한 라벨만 매치한다: nginx 와일드카드는 다중 라벨을 삼키지만(E22.2)
           // X.509 와일드카드는 한 라벨만 보장한다. 넓게 잡으면 인증서 오선택이 된다.
-          regex(`~*^[^.]+\\.${c.pattern.suffix.replace(/\./g, '\\.')}$`);
+          regex(`~*^[^.]+\\.${reEscape(c.pattern.suffix)}$`);
     entries.push(entry(match, target));
   }
 

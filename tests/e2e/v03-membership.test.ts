@@ -395,8 +395,10 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
     expect(r.status).toBe(200);
     expect(r.headers.get('content-type')).toContain('text/plain');
     const text = await r.text();
+    // 정규식 메타문자를 전부 벗긴다 (검수 2026-08-24 SCAN-6). 같은 사본이
+    // `scripts/soak.mjs` 에도 있다.
     const val = (name: string): number => {
-      const m = new RegExp(`^${name.replace(/[{}"]/g, '\\$&')} (\\d+)$`, 'm').exec(text);
+      const m = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} (\\d+)$`, 'm').exec(text);
       return m === null ? Number.NaN : Number(m[1]);
     };
 

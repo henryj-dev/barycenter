@@ -209,7 +209,10 @@ describe.skipIf(!built)('CSP — 실제 산출물', () => {
    */
   it('산출물이 참조하는 외부 출처만 열려 있다', async () => {
     const html = readFileSync(`${GUI}/index.html`, 'utf8');
-    const usesGoogleFonts = html.includes('fonts.googleapis.com');
+    // **부분문자열이 아니라 출처 자리에서 본다** (검수 2026-08-24 SCAN-7).
+    // `includes` 는 `https://evil.test/fonts.googleapis.com/…` 도 참이라, 재는 것이
+    // "구글 폰트를 쓰는가" 가 아니라 "그 글자가 어딘가 있는가" 가 된다.
+    const usesGoogleFonts = /\bhttps:\/\/fonts\.googleapis\.com[/"']/.test(html);
     const url = await listen();
     const csp = (await fetch(`${url}/`)).headers.get('content-security-policy') ?? '';
 

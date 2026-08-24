@@ -43,7 +43,15 @@ describe('죽은 소켓 파일을 치운다 (검수 S-08b 후속)', () => {
       s.listen(path, () => s.close(() => resolve()));
     });
     // 닫으면서 지워졌을 수 있으니 확실히 남겨 둔다.
-    if (!existsSync(path)) writeFileSync(path, '');
+    //
+    // **`existsSync` 로 보고 쓰지 않는다** (검수 2026-08-24 SCAN-8). 보는 것과 쓰는 것
+    // 사이에 파일이 생기면 소켓 파일을 일반 파일로 덮어쓴다 — 이 검사가 만들려는
+    // 상태의 반대다. `wx` 는 「없을 때만 만든다」를 커널이 한 번에 판정하게 한다.
+    try {
+      writeFileSync(path, '', { flag: 'wx' });
+    } catch {
+      // 이미 남아 있다 — 그것이 이 검사가 원하는 상태다.
+    }
 
     await clearStaleSockets([path]);
     expect(existsSync(path)).toBe(false);

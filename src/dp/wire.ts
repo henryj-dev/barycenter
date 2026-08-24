@@ -104,15 +104,30 @@ export function decodePlane(v: unknown, what = 'plane'): Plane {
  */
 export function decodeSlots(v: unknown, what = 'slots'): Record<string, string[]> {
   if (!isObject(v)) return reject(what, `객체여야 한다 (받은 것: ${typeName(v)})`);
-  const out: Record<string, string[]> = {};
+  /**
+   * **`out[name] = …` 으로 쓰지 않는다** (검수 2026-08-24 SCAN-1).
+   *
+   * `name` 은 원격이 준 키다. 평범한 `{}` 에 `out['__proto__'] = […]` 를 하면 그 대입은
+   * 속성을 만들지 않고 **프로토타입 설정자를 때린다** — 키가 조용히 사라진다. 이 표는
+   * `lua_shared_dict` 로 밀려 `balancer_by_lua_block` 이 읽으므로, 사라진 키는
+   * **트래픽이 안 가는 백엔드**다.
+   *
+   * 이름을 정규식으로 거르는 길도 있었지만 `__proto__` 는 `[A-Za-z0-9_]+` 를 통과한다 —
+   * upstream 이름 문법으로는 못 막는다. `Object.fromEntries` 는 정의(define) 의미라
+   * 설정자를 안 타고, **동적 속성 쓰기 자체가 사라진다.**
+   *
+   * 이 파일의 다른 해독기는 전부 "모양이 아니면 거절한다" 다. 여기만 조용히 삼키고
+   * 있었다 — 해독기가 입력을 소리 없이 바꾸면 그건 해독이 아니다.
+   */
+  const pairs: [string, string[]][] = [];
   for (const [name, list] of Object.entries(v)) {
     if (!Array.isArray(list)) {
       reject(`${what}.${name}`, `배열이어야 한다 (받은 것: ${typeName(list)})`);
       continue;
     }
-    out[name] = list.map((x, i) => str(x, `${what}.${name}[${i}]`));
+    pairs.push([name, list.map((x, i) => str(x, `${what}.${name}[${i}]`))]);
   }
-  return out;
+  return Object.fromEntries(pairs);
 }
 
 function decodeCoordinate(v: unknown, what: string): Coordinate {

@@ -26,7 +26,7 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { SecureContextOptions } from 'node:tls';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore } from '../control/acme-store.js';
@@ -36,6 +36,7 @@ import {
 } from '../control/drain.js';
 import { healthRows } from '../control/health.js';
 import { render as renderMetrics } from '../obs/metrics.js';
+import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
 import type { Db } from '../store/pg.js';
@@ -833,9 +834,30 @@ export function apiHandler(api: ApiOptions): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
   return (req, res) => {
     void handle(req, res, api, max).catch((e) => {
-      // 여기까지 온 것은 핸들러 밖의 실패다. 조용히 끊지 않는다.
-      if (!res.headersSent) json(res, 500, { code: 'internal', message: String(e) });
-      else res.end();
+      /**
+       * 여기까지 온 것은 핸들러 밖의 실패다. 조용히 끊지 않는다.
+       *
+       * **문장을 그대로 내보내지 않는다** (검수 2026-08-24 SCAN-2). 여기 오는 것은
+       * *예상 못 한* 오류라 무엇이 들었는지 우리가 모른다 — PG 오류는 쿼리문을, 파일
+       * 오류는 절대경로를 담는다. 그리고 이 그물은 **인증 앞에도 있다**: `/readyz` 나
+       * 본문 읽기에서 터지면 토큰 없이도 닿는다.
+       *
+       * ⚠️ **진단을 버리는 것이 아니다.** 문장만 지우면 운영자가 "500 이 났다" 만
+       * 들고 서버 로그를 뒤지게 되는데, 그건 이 저장소가 W3-4 에서 없앤 바로 그
+       * 모양이다. `ref` 로 잇는다 — 호출자는 `ref` 를, 운영자는 같은 `ref` 가 붙은
+       * 로그 한 줄을 본다. 버리는 것이 아니라 **읽을 사람을 가른다.**
+       */
+      const ref = randomUUID();
+      log.error('api.internal', {
+        ref,
+        method: req.method,
+        path: req.url,
+        error: e instanceof Error ? e.message : String(e),
+        ...(e instanceof Error && e.stack !== undefined ? { stack: e.stack } : {}),
+      });
+      if (!res.headersSent) {
+        json(res, 500, { code: 'internal', message: '내부 오류다 — ref 로 서버 로그를 찾는다', ref });
+      } else res.end();
     });
   };
 }

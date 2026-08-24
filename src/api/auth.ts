@@ -204,20 +204,31 @@ function verifyJwtSig(
   alg: string | undefined, input: string, sigB64: string, key: string | KeyObject,
 ): boolean {
   const sig = b64urlDecode(sigB64);
-  if (alg === 'HS256') {
-    if (typeof key !== 'string') return false;
+  /**
+   * **알고리즘은 키가 정한다. 토큰은 그것과 맞기만 하면 된다** (검수 2026-08-24 SCAN-3).
+   *
+   * 전에는 `if (alg === 'HS256')` · `if (alg === 'RS256')` 로 **토큰 헤더가 분기를
+   * 골랐다.** 헤더는 서명 밖이라 공격자가 쓴다 — JWT 알고리즘 혼동(algorithm
+   * confusion)이 바로 그 모양이고, 이 저장소가 `oidcKeyFrom` 을 만든 이유(구현은
+   * 있는데 안 타던 RS256)와 같은 가족의 문제다.
+   *
+   * 실제로 뚫리지는 않았다: 각 분기가 키 종류를 다시 봤기 때문이다. 그래서 이것은
+   * **동작 변경이 아니라 같은 판정을 옳은 순서로 다시 쓴 것**이다 — 진리표가 같다.
+   * 그래도 다시 쓰는 이유는, 방어가 「두 분기가 각자 키 종류를 확인한다」에 매달려
+   * 있으면 분기가 하나 늘 때 그 확인이 빠질 자리가 하나 늘기 때문이다. 이 저장소가
+   * 목록으로 관리하다 물린 자리(N1 · N3 · N4-b)와 같은 종류다.
+   */
+  const expected = typeof key === 'string' ? 'HS256' : 'RS256';
+  if (alg !== expected) return false;
+  if (typeof key === 'string') {
     const mac = createHmac('sha256', key).update(input).digest();
     return mac.length === sig.length && timingSafeEqual(mac, sig);
   }
-  if (alg === 'RS256') {
-    if (typeof key === 'string') return false;
-    try {
-      return createVerify('RSA-SHA256').update(input).verify(key, sig);
-    } catch {
-      return false;
-    }
+  try {
+    return createVerify('RSA-SHA256').update(input).verify(key, sig);
+  } catch {
+    return false;
   }
-  return false;
 }
 
 /** OpenID Connect Core — 서명 · iss · aud · exp · sub. 실패하면 없음 (401). */

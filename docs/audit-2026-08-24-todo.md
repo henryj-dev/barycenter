@@ -1266,6 +1266,105 @@ W4-7 이 넣은 gui lock 감시가 `shasum -a 256 … 2>/dev/null` 이었다. al
 > 돌려도 「고쳤다」의 근거가 안 된다. 기전은 컨테이너 안에서 쟀지만(0700 거부 · 0755
 > 통과), 스파이크 전체가 리눅스에서 초록인지는 **푸시한 뒤 CI 표가 답한다.**
 
+## 코드 스캐닝 · 도구가 짚은 것을 사람이 판정한다
+
+> **또 투두에 없던 블록이다.** GitHub code scanning 이 열린 경보 34 건을 들고 있었다 —
+> CodeQL 26 · Scorecard 8. 게이트는 그동안 전부 초록이었다.
+>
+> **경보는 판정이 아니다.** 26 건 중 실제로 새는 것은 둘이었고, 다섯은 「동작은 같은데
+> 규칙이 갈린」 자리였고, 나머지는 도구가 증명하지 못하는 것을 우리가 증명할 수 있는
+> 자리였다. **셋을 갈라 적는다** — 안 가르고 전부 고치면 이 저장소가 세는
+> *"도달 불가한 방어는 방어가 아니라 죽은 코드"* 를 스무 줄 심게 된다.
+
+### ☑ SCAN-1 · 원격 슬롯표의 키가 프로토타입으로 샌다 `[S]` — **진짜 결함**
+
+`js/remote-property-injection` · `src/dp/wire.ts:113`
+
+- [x] 재현물 — `{"__proto__":[…],"pool_a":[…]}` 를 넣으면 슬롯이 **하나만 남는다**
+- [x] `Object.fromEntries` 로 동적 속성 쓰기 자체를 없앴다
+
+`decodeSlots` 가 원격이 준 키를 평범한 `{}` 에 그대로 썼다. `out['__proto__'] = […]` 는
+속성을 만들지 않고 **프로토타입 설정자를 때린다** — 키가 조용히 사라진다. 이 표는
+`lua_shared_dict` 로 밀려 `balancer_by_lua_block` 이 읽으므로 **사라진 슬롯은 트래픽이
+안 가는 백엔드**다.
+
+이름을 정규식으로 거르는 길은 안 통한다 — `__proto__` 는 upstream 이름 문법
+(`[A-Za-z0-9_]+`)을 통과한다. `Object.fromEntries` 는 정의(define) 의미라 설정자를 안 탄다.
+
+> 이 파일의 다른 해독기는 전부 "모양이 아니면 거절한다" 인데 **여기만 조용히 삼켰다.**
+> 해독기가 입력을 소리 없이 바꾸면 그건 해독이 아니다.
+
+### ☑ SCAN-2 · 500 이 내부 문장을 인증 앞에서 내보낸다 `[S]` — **진짜 결함**
+
+`js/stack-trace-exposure` · `src/api/server.ts:837`
+
+- [x] 재현물 — `/readyz` 를 때리면 응답 본문에 `EACCES` 와 절대경로가 실려 나왔다
+- [x] `ref`(UUID)만 내보내고 상세는 `log.error('api.internal', …)` 로 보낸다
+
+`apiHandler` 의 마지막 그물이다. 여기 오는 것은 **예상 못 한** 오류라 문장에 무엇이
+들었는지 우리가 모른다 — PG 오류는 쿼리문을, 파일 오류는 절대경로를 담는다. 그리고
+이 그물은 **인증 앞에도 있다**: `/readyz`·본문 읽기에서 터지면 토큰 없이도 닿는다.
+
+> ⚠️ **진단을 버린 것이 아니다.** 문장만 지우면 운영자가 "500 이 났다" 만 들고 로그를
+> 뒤지게 되는데, 그건 W3-4 가 없앤 바로 그 모양이다. `ref` 로 잇는다 — 호출자는 `ref`
+> 를, 운영자는 같은 `ref` 가 붙은 로그 한 줄을 본다. **읽을 사람을 가르는** 것이다.
+
+### ☑ SCAN-3~9 · 동작은 같은데 규칙이 갈려 있던 자리 `[S]`
+
+**재현물이 없다.** 전부 「검증을 지난 값에는 그 문자가 안 온다」라 고치기 전에도 초록이고,
+없는 빨강을 지어내면 그건 이 회차가 두 번 물린 가짜 재현물(W2-4 · W4-4)이다. 그래도
+고치는 이유는 **방어가 「멀리 있는 다른 검사」에 매달려 있으면 그 검사가 움직일 때 같이
+무너지기** 때문이다.
+
+| ID | 자리 | 무엇이 갈려 있었나 |
+|---|---|---|
+| SCAN-3 | `src/api/auth.ts:207` | JWT `alg` 를 **토큰 헤더가** 골랐다 → 키가 고르게 했다 |
+| SCAN-4 | `src/conf/render.ts:553·1258` | 정확일치는 `reEscape`, 접미사는 손 이스케이프 |
+| SCAN-5 | `src/web/serve-gui.ts:48` | `statSync`→`readFileSync` 사이에 창 → 같은 fd |
+| SCAN-6 | `soak.mjs` · `v03-membership` | 메트릭 이름에서 `{}"` 셋만 벗겼다 (사본 둘) |
+| SCAN-7 | `audit-csp.test.ts` | `includes('fonts.googleapis.com')` → 출처 자리로 |
+| SCAN-8 | `audit-stale-socket.test.ts` | `existsSync` 보고 쓰기 → `wx` 플래그 |
+| SCAN-9 | `spike/s18/runner.mjs` | **아무도 안 읽는** `/tmp/s18-cert.pem` 쓰기 → 지움 |
+
+**SCAN-3 이 이 표에서 제일 무겁다.** JWT 알고리즘 혼동의 정확한 모양이다 — 헤더는 서명
+밖이라 공격자가 쓴다. 뚫리지는 않았다(각 분기가 키 종류를 다시 봤다). 그래서 진리표가
+같고, **그래서 재현물이 없다.** 그래도 다시 쓴 이유는 방어가 「두 분기가 각자 확인한다」
+에 매달려 있으면 분기가 하나 늘 때 빠질 자리가 하나 늘기 때문이다 — N1 · N3 · N4-b 와
+같은 종류다.
+
+### ☑ SCAN-X · 기각 — 도구가 증명 못 하는 것을 우리가 증명한다
+
+**11 건을 기각했다.** 근거를 각각 GitHub 에 적어 둔다 — 기각을 근거 없이 하면 다음 회차에
+같은 경보가 다시 뜨고, 그때 사람은 "전에 누가 봤겠지" 로 넘긴다.
+
+| 경보 | 자리 | 왜 아닌가 |
+|---|---|---|
+| `prototype-polluting-assignment` ×3 | `agent.ts:1544·1990·2056` | 키가 `^[0-9]+$` 검증을 지났거나(`activationEpoch`) `:` 로 이어 붙인 합성 키다 — `__proto__` 가 **될 수 없다** |
+| `remote-property-injection` | `agent.ts:1912` | `op.plane` 은 `decodePlane` 이 두 값으로 가둔 열거다 |
+| `indirect-command-line-injection` ×2 | `effects-boot.ts:90·109` | **환경변수 자체가 명령**이다 (`BARY_RELOAD_CMD`). 끼워 넣는 `{generation}` 은 `PATH_SEGMENT_SYNTAX` 를 지난다 — `src/validate/syntax.ts` 의 머리말이 이 흐름을 그대로 적어 두고 있다 |
+| `file-access-to-http` | `remote.ts:151` | CP 가 **자기가 만든** 세대를 자기 에이전트에 mTLS 로 미는 것이 이 시스템이다 |
+| `http-to-file-access` | `bin/bary.ts:560` | `bary backup <파일>` — 사용자가 명령줄에 적은 경로에 받은 것을 쓰는 것이 그 명령의 일이다 |
+| `stack-trace-exposure` | `agent-server.ts:205` | 청중이 mTLS + 인증서 허용목록을 지난 **CP 하나**다. 같은 신뢰 구역이고, 여기서 문장을 지우면 W3-4 가 만든 진단이 사라진다 |
+| `disabling-certificate-validation` ×3 | `v02-l4.test.ts` ×2 · `s18/runner.mjs` | e2e·스파이크뿐이다. `probeSni` 는 **어느 인증서가 오는지 보는 것이 목적**이라 검증을 켜면 핸드셰이크가 끊겨 재려는 것을 못 잰다. S18 은 Pebble 자체서명 루트다 |
+| `indirect-command-line-injection` | `s12/runner.mjs:51` | 컨테이너 안에서 `run.sh` 가 고정 인자로 부르는 스파이크 하네스다 |
+
+### ☐ SCAN-S · Scorecard 8 건 — **코드가 아니라 저장소 설정이다**
+
+여기는 손대지 않았다. 판단이 필요하고, 그 판단은 이 저장소의 작업 방식과 정면으로 만난다.
+
+| 경보 | 무엇을 요구하나 | 이 저장소의 사정 |
+|---|---|---|
+| `BranchProtectionID` `[H]` | `main` 브랜치 보호 | CLAUDE.md 가 **사람은 메인에서 직접 커밋**한다고 적어 뒀다 |
+| `CodeReviewID` `[H]` | 모든 변경이 PR 리뷰를 지날 것 | 위와 같은 이유로 지금은 직접 push 다 |
+| `VulnerabilitiesID` `[H]` | 알려진 취약점 0 | 무엇이 남았는지 확인이 필요하다 |
+| `MaintainedID` `[H]` | 최근 활동 | 활발하다 — 도구가 아직 못 본 것으로 보인다 |
+| `PinnedDependenciesID` ×3 `[M]` | Dockerfile 이미지를 digest 로 고정 | 세 줄이다. **가장 값싸고 실제 값이 있다** |
+| `FuzzingID` `[M]` | 퍼징 | conformance 가 반례 탐색을 하지만 퍼저는 아니다 |
+| `CIIBestPracticesID` `[L]` | OpenSSF 배지 | 등록 절차다 |
+
+> **`PinnedDependencies` 말고는 전부 사람이 정할 일이다.** 브랜치 보호를 켜는 것은
+> 이 저장소의 작업 흐름을 바꾸는 결정이라 에이전트가 혼자 할 자리가 아니다.
+
 ## 진행 요약
 
 검수 문서의 ID 가 전부 어느 블록에 들어갔는지. **빠진 것이 없어야 한다.**
