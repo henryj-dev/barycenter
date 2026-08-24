@@ -11,15 +11,28 @@
 # 세대 게시는 원자적 링크 교체이고(§7.2) 그게 안 보이면 아무것도 성립하지 않는다.
 # 그래서 사이드카로 쪼개는 구성은 이 설계에 없다.
 
+# ── 베이스 이미지는 digest 로 고정한다 (검수 2026-08-24 SCAN-P) ─────────────
+#
+# 태그는 **움직인다.** `node:24-alpine` 은 어제와 오늘이 다른 바이트일 수 있고, 그러면
+# 「같은 커밋을 빌드했는데 다른 이미지가 나온다」 — 이 저장소가 게이트에 들이는 값
+# 전체가 그 지점에서 샌다. Scorecard 의 `Pinned-Dependencies` 가 짚은 것도 그것이다.
+#
+# **대신 사람이 올려야 한다.** 보안 패치가 자동으로 안 따라오므로, 올릴 때는:
+#
+#   docker buildx imagetools inspect docker.io/library/node:24-alpine \
+#     --format '{{.Manifest.Digest}}'
+#
+# 여기 적는 것은 **index digest** 다 — 특정 아키텍처가 아니라 매니페스트 목록이라
+# arm64·amd64 가 그대로 갈린다.
 # 런타임 의존성만 따로 준비한다. 런타임 이미지에 `npm` 을 넣지 않기 위해서다 —
 # 처음엔 거기서 `npm ci` 를 돌리려다 `exit 127` 로 죽었다(openresty 이미지에는 `nodejs`
 # 는 넣어도 `npm` 은 없다). 도구를 프로덕션 이미지에 끌어들이지 않는 편이 낫다.
-FROM docker.io/library/node:24-alpine AS deps
+FROM docker.io/library/node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS deps
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-FROM docker.io/library/node:24-alpine AS build
+FROM docker.io/library/node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
 # 빌드에는 devDependency(typescript)가 필요하다.
@@ -38,7 +51,7 @@ COPY src ./src
 COPY gui ./gui
 RUN ./scripts/build.sh
 
-FROM docker.io/openresty/openresty:alpine
+FROM docker.io/openresty/openresty:alpine@sha256:99b32fe3e411c98033114dd471440fb702992d0953ce8b6e6b5c016285ac2ab9
 
 # 엔진 이미지 위에 Node 를 얹는다. 반대로(node 이미지에 openresty 를 얹기) 하면
 # OpenResty 를 소스에서 빌드해야 한다 — alpine 저장소에 패키지가 없다.

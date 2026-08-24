@@ -1348,7 +1348,7 @@ W4-7 이 넣은 gui lock 감시가 `shasum -a 256 … 2>/dev/null` 이었다. al
 | `disabling-certificate-validation` ×3 | `v02-l4.test.ts` ×2 · `s18/runner.mjs` | e2e·스파이크뿐이다. `probeSni` 는 **어느 인증서가 오는지 보는 것이 목적**이라 검증을 켜면 핸드셰이크가 끊겨 재려는 것을 못 잰다. S18 은 Pebble 자체서명 루트다 |
 | `indirect-command-line-injection` | `s12/runner.mjs:51` | 컨테이너 안에서 `run.sh` 가 고정 인자로 부르는 스파이크 하네스다 |
 
-### ☐ SCAN-S · Scorecard 8 건 — **코드가 아니라 저장소 설정이다**
+### ☑ SCAN-S · Scorecard 8 건 — **코드가 아니라 저장소 설정이다**
 
 여기는 손대지 않았다. 판단이 필요하고, 그 판단은 이 저장소의 작업 방식과 정면으로 만난다.
 
@@ -1364,6 +1364,23 @@ W4-7 이 넣은 gui lock 감시가 `shasum -a 256 … 2>/dev/null` 이었다. al
 
 > **`PinnedDependencies` 말고는 전부 사람이 정할 일이다.** 브랜치 보호를 켜는 것은
 > 이 저장소의 작업 흐름을 바꾸는 결정이라 에이전트가 혼자 할 자리가 아니다.
+
+- [x] `PinnedDependencies` ×3 — `deploy/Dockerfile` 의 `FROM` 셋을 **index digest** 로
+      고정했다. 태그는 움직이므로 「같은 커밋을 빌드했는데 다른 이미지가 나온다」가
+      되고, 그러면 게이트에 들이는 값 전체가 그 지점에서 샌다
+- [x] digest 로 이미지가 실제로 선다 (`docker build -f deploy/Dockerfile`)
+- [ ] 나머지 다섯은 **사용자 결정** — 브랜치 보호·PR 리뷰·퍼징·OpenSSF 배지
+
+> ⚠️ **digest 고정은 값을 하나 내주고 얻는다.** 보안 패치가 자동으로 안 따라오므로
+> 사람이 올려야 한다. 올리는 명령을 Dockerfile 머리말에 적어 뒀다 — *"도구가 답하는
+> 것을 사람이 베껴 적으면 그 사본은 반드시 낡는다"* 라, 베낀 값 옆에 **다시 뽑는
+> 방법**을 함께 둔다.
+
+### ☑ SCAN-D · 기각 13 건을 GitHub 에 근거와 함께 닫았다
+
+`false positive` 9 · `used in tests` 4. 각 경보에 왜 아닌지를 한 줄로 적었다 —
+근거 없이 닫으면 다음 회차에 같은 경보가 다시 뜨고, 그때 사람은 "전에 누가 봤겠지"
+로 넘긴다. 되돌리기는 GitHub 에서 한 번에 된다.
 
 ## 진행 요약
 
