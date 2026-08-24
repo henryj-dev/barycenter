@@ -44,6 +44,88 @@ export type Slots = Record<string, string[]>;
  * **렌더된 upstream 이름을 키로 쓴다.** 풀 키를 그대로 쓰면 밸런서가 보는 이름과
  * 달라진다 — 렌더러가 nginx 식별자로 바꾸면서 단사성을 위해 다이제스트를 붙일 수 있다.
  */
+/**
+ * 확장 상한 (검수 D2 · DESIGN §7.3.1).
+ *
+ * 해독기가 `weight` 를 **1..1,000,000** 으로 받는다. 그 범위를 안 좁히는 이유는
+ * `modelAt` 이 옛 리비전을 같은 해독기로 읽기 때문이다 — 좁히면 그런 값이 든 리비전이
+ * 해독 불가가 되고 **롤백이 막힌다**(검수 D7). 그러니 막을 자리는 여기다.
+ *
+ * 256 은 dict 값 길이와 선택 비용의 균형이다. peer 하나가 `10.0.0.1:80` 쯤이라
+ * 256 칸이면 값이 4 KB 남짓이고, `pickExpression` 의 `least_conn` 이 목록을 두 번
+ * 훑으므로 그만큼이 요청당 비용이다.
+ */
+const SLOT_EXPANSION_CAP = 256;
+
+const gcd2 = (a: number, b: number): number => (b === 0 ? a : gcd2(b, a % b));
+
+/**
+ * 가중치를 **슬롯 칸 수**로 편다 (검수 D2 · DESIGN §7.3.1).
+ *
+ * ── 왜 반복인가
+ *
+ * 슬롯에 가중치를 실으면(`host:port|w`) admin 와이어가 넓어지고, 더 나쁘게는 **peer
+ * 문자열이 `in:<peer>` 카운터와 `/membership/inflight` 의 질의 키와 갈린다** —
+ * 접미사를 벗기는 자리가 넷이 된다. 반복은 와이어를 안 건드린다.
+ *
+ * ── 셋을 지킨다
+ *
+ *   ① **GCD 로 나눈다.** `2:4` 와 `1:2` 는 같은 뜻이고, 안 나누면 dict 를 두 배 먹는다
+ *   ② **상한을 넘으면 비율을 유지한 채 줄이되 모두가 최소 한 칸**을 갖는다 —
+ *      줄이다가 백엔드를 조용히 빼면 그건 밸런싱이 아니라 장애다
+ *   ③ **사본을 고르게 섞는다.** 뭉쳐 두면 `round_robin` 의 순차 순회가 무거운 peer
+ *      에게 연속으로 몰아준다. 비율은 맞고 버스트가 생긴다
+ *
+ * **가중치가 전부 1 이면 산출물이 정렬된 목록 그대로다** — GCD 가 1 이고 사본이 하나씩
+ * 이라 ③ 의 정렬 키가 전부 같고 peer 이름으로 갈린다. 안 쓰는 배포의 거동이 안 바뀐다.
+ *
+ * 결정적이어야 한다 — 이 목록이 `payloadDigest` 로 들어간다.
+ */
+function weightedSlots(peers: readonly { peer: string; weight: number }[]): string[] {
+  const sorted = [...peers].sort((a, b) => (a.peer < b.peer ? -1 : a.peer > b.peer ? 1 : 0));
+  // ① 약분.
+  const g = sorted.reduce((acc, p) => gcd2(acc, Math.max(1, p.weight)), 0) || 1;
+  let counts = sorted.map((p) => Math.max(1, Math.floor(Math.max(1, p.weight) / g)));
+
+  /**
+   * ② 상한. **먼저 한 칸씩 떼어 놓고 남은 예산만 비례 배분한다.**
+   *
+   * 처음엔 그냥 `max(1, round(c * CAP / total))` 로 뒀는데 **상한을 넘겼다** —
+   * `1:1000000` 에서 무거운 쪽이 256 으로 반올림되고 가벼운 쪽이 하한 1 을 받아
+   * 합이 257 이 됐다. 「모두 최소 한 칸」과 비례 축소가 서로 민 것이다.
+   *
+   * peer 수가 상한보다 많으면 **상한을 포기하고 한 칸씩 준다.** 백엔드를 빼는 것보다
+   * dict 를 조금 더 쓰는 편이 낫다 — 빼는 것은 장애이고 쓰는 것은 비용이다.
+   */
+  const total = counts.reduce((a, b) => a + b, 0);
+  const n = counts.length;
+  if (total > SLOT_EXPANSION_CAP && n < SLOT_EXPANSION_CAP) {
+    const budget = SLOT_EXPANSION_CAP - n;          // 한 칸씩 떼고 남은 것
+    const excess = counts.map((c) => c - 1);
+    const excessTotal = excess.reduce((a, b) => a + b, 0);
+    counts = excess.map((e) => 1 + Math.floor((e * budget) / excessTotal));
+    // 내림이 남긴 칸을 **무거운 것부터** 채운다. 결정적이어야 하므로 동점은 인덱스로 가른다.
+    let left = SLOT_EXPANSION_CAP - counts.reduce((a, b) => a + b, 0);
+    const order = counts.map((_, i) => i)
+      .sort((a, b) => (excess[b]! - excess[a]!) || (a - b));
+    for (let i = 0; left > 0; i = (i + 1) % order.length, left -= 1) {
+      counts[order[i]!] = (counts[order[i]!] ?? 1) + 1;
+    }
+  } else if (total > SLOT_EXPANSION_CAP) {
+    counts = counts.map(() => 1);
+  }
+
+  // ③ 고르게 섞는다. 사본 k(0부터)의 자리를 `(k + 0.5) / w` 로 잡는다 — 같은 비율이면
+  //    같은 간격으로 퍼지는 표준적인 방법이고, 동점은 peer 이름으로 갈라 결정성을 지킨다.
+  const marks: { key: number; peer: string }[] = [];
+  sorted.forEach((p, i) => {
+    const w = counts[i] ?? 1;
+    for (let k = 0; k < w; k += 1) marks.push({ key: (k + 0.5) / w, peer: p.peer });
+  });
+  marks.sort((a, b) => (a.key !== b.key ? a.key - b.key : (a.peer < b.peer ? -1 : 1)));
+  return marks.map((m) => m.peer);
+}
+
 export function slotsOf(
   model: Model, caps: RenderCapabilities, discovery?: DiscoveryIntake,
 ): Record<Plane, Slots> {
@@ -52,10 +134,10 @@ export function slotsOf(
   // 렌더는 풀의 upstream 이름을 읽기 위한 것이다. 광고가 비면 백엔드가 없어
   // validate 가 막으므로 이름은 정적 모델에서 읽고, peer 만 발견한 집합에서 온다.
   const conf = render(model, caps).conf;
-  const byPool = new Map<string, string[]>();
+  const byPool = new Map<string, { peer: string; weight: number }[]>();
   for (const b of used.backends) {
     const list = byPool.get(b.pool) ?? [];
-    list.push(`${b.host}:${b.port}`);
+    list.push({ peer: `${b.host}:${b.port}`, weight: b.weight });
     byPool.set(b.pool, list);
   }
   for (const pool of used.pools) {
@@ -66,7 +148,7 @@ export function slotsOf(
     const name = upstreamNameIn(conf, pool.key);
     if (name === undefined) continue;        // 렌더에 안 쓰인 풀이다
     const plane: Plane = pool.protocolClass === 'http' ? 'http' : 'stream';
-    out[plane][name] = [...peers].sort();
+    out[plane][name] = weightedSlots(peers);
   }
   return out;
 }
