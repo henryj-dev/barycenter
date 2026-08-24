@@ -122,25 +122,57 @@ export function probeHttp(
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
     const req = httpRequest({ host, port, path: opts.path, method: 'GET', timeout: timeoutMs }, (res) => {
+      /**
+       * **판정이 나면 그 자리에서 끊는다** (검수 D10).
+       *
+       * 전에는 `'end'` 안에서 전부 판정했고, 그 위에서 본문을 무조건 모았다:
+       *
+       *   const chunks = []; res.on('data', (c) => chunks.push(c));
+       *
+       * `expectBody` 가 없으면 그 배열은 **한 번도 안 읽힌다.** 그리고 `expectBody` 는
+       * 옵트인이라 안 적은 배포가 기본이다 — 프로버는 백엔드가 주는 것을 전부 받아서
+       * 버렸다. 백엔드마다, `BARY_PROBE_INTERVAL_MS`(기본 2 초)마다.
+       *
+       * 그런데 메모리보다 먼저 드러나는 것은 **판정이 틀리는 것**이었다. 상태 코드를
+       * `'end'` 에서 봤으므로 **본문을 안 끝내는 백엔드**(SSE·스트리밍·청크를 흘리다
+       * 멈춘 앱)는 헤더에 `200` 을 주고도 타임아웃으로 `unhealthy` 가 됐다.
+       * 기본 프로브 경로가 `/` 라 그런 응답은 드물지 않다.
+       */
+      const done = (reason: string | undefined): void => {
+        res.destroy();
+        resolve(reason);
+      };
+
+      const status = res.statusCode ?? 0;
+      const want = opts.expectStatus;
+      const statusOk = want === undefined ? status >= 200 && status < 300 : want.includes(status);
+      if (!statusOk) {
+        return done(want === undefined
+          ? `${status} 다 (2xx 가 아니다)`
+          : `${status} 다 (기대: ${want.join(', ')})`);
+      }
+
+      const expect = opts.expectBody;
+      // 본문을 안 볼 것이면 **읽지도 않는다.** 헤더가 이미 답을 줬다.
+      if (expect === undefined) return done(undefined);
+
+      /**
+       * 볼 것이면 **기대 길이까지만** 읽는다.
+       *
+       * 판정이 정확일치(`body === expect`)이므로 한 바이트만 넘어도 답은 이미
+       * 「다르다」다. 여유를 두는 것은 그 여유만큼 더 모으는 것일 뿐 판정을 안 바꾼다.
+       */
+      const cap = Buffer.byteLength(expect, 'utf8');
       const chunks: Buffer[] = [];
-      res.on('data', (c: Buffer) => { chunks.push(c); });
+      let size = 0;
+      res.on('data', (c: Buffer) => {
+        size += c.length;
+        if (size > cap) return done('본문이 기대와 다르다');
+        chunks.push(c);
+      });
       res.on('end', () => {
-        const status = res.statusCode ?? 0;
-        const want = opts.expectStatus;
-        const statusOk = want === undefined ? status >= 200 && status < 300 : want.includes(status);
-        if (!statusOk) {
-          resolve(want === undefined
-            ? `${status} 다 (2xx 가 아니다)`
-            : `${status} 다 (기대: ${want.join(', ')})`);
-          return;
-        }
-        const expect = opts.expectBody;
-        if (expect !== undefined) {
-          const body = Buffer.concat(chunks).toString('utf8');
-          resolve(body === expect ? undefined : (body === '' ? '본문이 비어 있다' : '본문이 기대와 다르다'));
-          return;
-        }
-        resolve(undefined);
+        const body = Buffer.concat(chunks).toString('utf8');
+        resolve(body === expect ? undefined : (body === '' ? '본문이 비어 있다' : '본문이 기대와 다르다'));
       });
     });
     req.on('timeout', () => {
