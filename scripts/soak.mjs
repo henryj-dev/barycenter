@@ -24,6 +24,33 @@
 import { execFileSync } from 'node:child_process';
 import { connect as netConnect } from 'node:net';
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
+
+/**
+ * 저장소를 `/app` 에 올리는 `docker run` 인자 (검수 N4).
+ *
+ * ⚠️ **`tests/e2e/mounts.ts` 의 사본이다.** 저쪽 머리말이 전말을 적어 뒀다 — 워크트리의
+ * `node_modules` 는 메인 체크아웃을 가리키는 심볼릭 링크이고, 그 절대경로는 컨테이너
+ * 안에 없어서 `ERR_MODULE_NOT_FOUND: Cannot find package 'pg'` 가 난다.
+ *
+ * 사본이 둘인 것은 **모듈 경계 때문이다**: 저쪽은 `.ts` 이고 여기는 `.mjs` 라, 한
+ * 벌로 두려면 빌드 설정을 건드려야 한다. 그 값이 두 줄짜리 인자 배열보다 크지 않다고
+ * 판단했다. 대신 **사본이 있다는 사실을 여기 적어 둔다** — 이 저장소가 목록으로
+ * 관리하다 물린 자리가 이미 셋이다(`build.sh` 의 진입점 N1,
+ * `assertDirectiveStrings` 의 필드 N3, 그리고 **N4 를 고치면서 이 파일을 빠뜨린 것**).
+ *
+ * ⚠️ 그리고 **이 파일은 게이트가 안 돌린다.** `verify.sh` 에 소크가 없으므로, 여기가
+ * 깨지면 사람이 손으로 돌릴 때까지 아무도 모른다. 그래서 N4 를 고친 회차에 e2e 는
+ * 초록이 됐는데 여기는 그대로였다.
+ */
+function appMount(cwd = process.cwd()) {
+  return [
+    '-v', `${cwd}:/app:ro`,
+    // `realpathSync` 가 링크를 실체로 편다. 링크가 아니면 자기 자신이라 결과가 같다.
+    '-v', `${realpathSync(join(cwd, 'node_modules'))}:/app/node_modules:ro`,
+  ];
+}
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -73,7 +100,7 @@ async function up() {
   const hash = createHash('sha256').update(TOKEN).digest('hex');
   docker('run', '-d', '--name', DP, '--network', NET,
     '-p', `${API}:8088`, '-p', `${DATA}:999`,
-    '-v', `${process.cwd()}:/app:ro`,
+    ...appMount(),
     '-e', `BARY_DSN=postgres://postgres:bary@${PG}:5432/bary`,
     '-e', 'BARY_PREFIX=/prefix', '-e', 'BARY_LISTEN=0.0.0.0:8088',
     '-e', 'BARY_ADMIN_PORT=19999', '-e', 'BARY_STREAM_ADMIN_PORT=19998',
