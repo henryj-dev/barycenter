@@ -493,17 +493,32 @@ tmp 는 **mtime 이 제일 커서** 보호 자리를 차지하고, 그만큼 진
 > 고쳤다. 재현물이 초록인 것과 방어가 있는 것은 다르고, **그 차이를 사람이 보는
 > 방법은 게이트뿐이다.**
 
-### ☐ W2-5 · D9 — 종료 경로 `[S]`
+### ☑ W2-5 · D9 — 종료 경로 `[S]`
 
-- [ ] `tests/unit/audit-shutdown-sse.test.ts` — SSE 를 하나 붙여 둔 채 SIGTERM 을
-      보냈을 때 **유한 시간에** 락이 반납되는가
-- [ ] **빨강 확인**
-- [ ] `src/bin/barycenterd.ts:676` — `server.close()` 뒤에
-      `server.closeAllConnections()`. 정리 전체에 마감을 씌우고 `process.exit`.
-      `bary-dp-agent.ts:84` 가 이미 그 모양이다 — **같은 모양으로 맞춘다**
-- [ ] 열린 SSE 는 `res.end()` 로 먼저 닫는다 (화면이 「끊겼다」를 안다)
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-shutdown-sse.test.ts -t "화면이 붙어 있어도 종료가 끝난다"`
+- [x] `tests/unit/audit-shutdown-sse.test.ts` — 4 케이스. **데몬을 안 띄운다** (PG 가
+      필요해지고 그러면 이 판정이 도커에 매달린다). 대신 **같은 기계 부품**을 쓴다:
+      진짜 `http.Server` · 진짜 `openEventStream` · 진짜 SSE 클라이언트
+- [x] **빨강 확인** — `expected false to be true`. `server.close()` 가 5 초 안에 안 끝난다
+- [x] `src/api/events.ts` — `EventHub.onShutdown` · `closeAll()`.
+      `finish(graceful)` 이 종료 때는 `res.end()`, 나머지는 `res.destroy()`
+- [x] `src/bin/barycenterd.ts` — ① `events.closeAll()` ② `server.closeAllConnections()`
+      ③ `SHUTDOWN_DEADLINE_MS`(10 초) 마감. `bary-dp-agent` 와 같은 모양이다
+- [x] `./scripts/verify.sh --quick` — 9/9 초록 (unit 883 → 887)
+- [x] 커밋 — `Pinned-by: tests/unit/audit-shutdown-sse.test.ts -t "화면이 붙어 있어도 종료가 끝난다"`
+
+> **빨강을 두 번 봤다** (W0-7 · W2-2 에 이어 세 번째). 처음에는
+> `hub.closeAll is not a function` 이었다 — 메서드가 없다는 말이지 종료가 안 끝난다는
+> 말이 아니다. **빈 `closeAll()` 을 먼저 넣고** 다시 재서 `expected false to be true`
+> 를 본 뒤에 구현했다.
+
+> **종료 등록을 스냅샷보다 앞에 뒀다** — B-06 이 `req.on('close')` 를 앞으로 옮긴 것과
+> 같은 이유다. 스냅샷은 DB 를 두 번 치므로 그 사이에 종료가 시작될 수 있고, 그때
+> 등록이 아직 없으면 **그 스트림만 종료에서 빠진다.**
+
+> **왜 `res.end()` 이고 `destroy()` 가 아닌가.** 소켓을 그냥 끊으면 브라우저가
+> 재연결을 시도한다(SSE 의 기본 동작). 우리가 내려가는 중이면 그 재연결은 실패하고,
+> 화면은 「끊겼다」가 아니라 **「멎었다」**로 보인다. 반대로 버퍼 상한·쓰기 실패(G4)는
+> **우리가 그만두기로 한** 경우라 물고 있는 바이트도 놓아야 한다 — 그래서 두 길이 갈린다.
 
 ### ☐ W2 마무리
 

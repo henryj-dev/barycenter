@@ -19,6 +19,7 @@ export type SseEvent = {
 export class EventHub {
   #n = 0;
   readonly #subs = new Set<(e: SseEvent) => void>();
+  readonly #closers = new Set<() => void>();
 
   subscribe(fn: (e: SseEvent) => void): () => void {
     this.#subs.add(fn);
@@ -27,8 +28,37 @@ export class EventHub {
     };
   }
 
+  /**
+   * 스트림이 **자기 닫는 법**을 맡긴다 (검수 D9).
+   *
+   * 구독(`subscribe`)과 갈라 둔 이유: 구독은 「이벤트를 받겠다」이고 이건 「내려갈 때
+   * 나를 닫아라」다. 하나로 묶으면 이벤트에 `__close__` 같은 특수값이 생기고, 그
+   * 특수값은 언젠가 데이터로 새어 나간다.
+   */
+  onShutdown(fn: () => void): () => void {
+    this.#closers.add(fn);
+    return () => {
+      this.#closers.delete(fn);
+    };
+  }
+
   get size(): number {
     return this.#subs.size;
+  }
+
+  /**
+   * **열린 스트림을 전부 닫는다** (검수 D9).
+   *
+   * `server.close()` 의 콜백은 모든 연결이 끝난 뒤에 온다. SSE 는 끝나지 않는 연결이라,
+   * GUI 가 한 탭이라도 열어 두면 **종료 정리가 통째로 안 돈다** — 리더 락도 durable
+   * store 락도 안 놓이고, 프로세스는 오케스트레이터의 `SIGKILL` 유예가 다 지나야 죽는다.
+   * 그리고 그 뒤에 뜨는 인스턴스는 죽은 주인을 가려내는 `/proc` 폴백에 기댄다.
+   * **깨끗한 종료가 안 되는 것이 다음 기동의 위험이다.**
+   *
+   * 사본을 떠서 돈다 — 닫는 쪽이 `onShutdown` 의 해제를 부르므로 순회 중에 집합이 준다.
+   */
+  closeAll(): void {
+    for (const fn of [...this.#closers]) fn();
   }
 
   publish(event: string, data: unknown): SseEvent {
@@ -82,24 +112,30 @@ export async function openEventStream(opts: {
   });
 
   let drop: (() => void) | undefined;
+  let dropCloser: (() => void) | undefined;
   let tick: NodeJS.Timeout | undefined;
   let closed = false;
-  let finish = (): void => {};
+  let finish = (_graceful?: boolean): void => {};
   const done = new Promise<void>((resolve) => {
-    finish = () => {
+    /**
+     * `graceful` 이 참이면 **정상 종료**한다 (검수 D9).
+     *
+     * 우리가 내려가는 중일 때는 소켓을 그냥 끊으면 안 된다 — 브라우저가 재연결을
+     * 시도하고, 그 재연결은 실패하며, 화면은 「끊겼다」가 아니라 **「멎었다」**로
+     * 보인다. 스트림을 끝내 주면 그 차이가 생긴다.
+     *
+     * 나머지 경우(클라이언트가 끊었다 · 쓰기가 실패했다 · 버퍼가 상한을 넘었다)는
+     * 파괴가 맞다 — 앞엣것은 이미 파괴돼 있고, 뒤 둘은 **우리가 그만두기로 한**
+     * 경우라 물고 있는 바이트도 놓아야 한다 (검수 G4).
+     */
+    finish = (graceful = false) => {
       if (closed) return;
       closed = true;
       if (tick !== undefined) clearInterval(tick);
       drop?.();
-      /**
-       * **소켓도 놓는다** (검수 G4).
-       *
-       * 전에는 구독만 놓고 소켓은 그대로 뒀다. 클라이언트가 끊어서 온 경우에는 그게
-       * 맞다(이미 파괴돼 있다). 그런데 **우리가 먼저 그만두기로 한 경우** — 쓰기가
-       * 실패했거나 버퍼가 상한을 넘었거나 — 소켓을 안 놓으면 그 안에 쌓인 바이트가
-       * 그대로 남는다. 놓기로 했으면 물고 있는 것도 놓아야 한다.
-       */
-      res.destroy();
+      dropCloser?.();
+      if (graceful && !res.destroyed && !res.writableEnded) res.end();
+      else res.destroy();
       resolve();
     };
   });
@@ -112,7 +148,15 @@ export async function openEventStream(opts: {
    * 뒤다 — **나중에 건 리스너는 영영 안 불린다.** 그러면 이 Promise 가 resolve 되지
    * 않아 핸들러가 안 끝나고, `drop()` 도 안 불려 죽은 구독이 허브에 영구히 쌓인다.
    */
-  opts.req.on('close', finish);
+  opts.req.on('close', () => finish());
+  /**
+   * **종료 등록도 스냅샷보다 먼저다** (검수 D9 · B-06 과 같은 이유).
+   *
+   * `server.close()` 는 열린 연결을 기다리고 SSE 는 끝나지 않는 연결이라, 이 등록이
+   * 없으면 종료 정리가 통째로 안 돈다. 스냅샷은 DB 를 두 번 치므로 그 사이에 종료가
+   * 시작될 수 있고, 그때 등록이 아직 없으면 **이 스트림만 종료에서 빠진다.**
+   */
+  dropCloser = hub.onShutdown(() => finish(true));
 
   const data = await snapshot();
   // 스냅샷을 만드는 동안 끊겼으면 쓸 곳이 없다. `finish` 는 이미 돌았다.
@@ -120,14 +164,14 @@ export async function openEventStream(opts: {
   writeSse(res, { event: 'snapshot', data });
 
   /**
-   * **쓰기 실패는 그 구독자만의 일이다.**
+   * 이 구독자에게 아직 써도 되는가.
    *
-   * `publish` 는 apply·헬스 투영 같은 경로 안에서 불린다. 여기서 던지면 SSE 구독자
-   * 하나 때문에 그 경로가 실패한다. 그리고 파괴된 소켓에 `res.write` 하는 것은 Node 에서
-   * 던지지 않고 **비동기 'error' 이벤트**로 오므로, 상태를 먼저 본다.
-   */
-  /**
-   * **안 읽는 소비자를 살아 있다고 안 본다** (검수 G4).
+   * **쓰기 실패는 그 구독자만의 일이다.** `publish` 는 apply·헬스 투영 같은 경로 안에서
+   * 불린다. 여기서 던지면 SSE 구독자 하나 때문에 그 경로가 실패한다. 그리고 파괴된
+   * 소켓에 `res.write` 하는 것은 Node 에서 던지지 않고 **비동기 'error' 이벤트**로
+   * 오므로, 상태를 먼저 본다.
+   *
+   * **그리고 안 읽는 소비자를 살아 있다고 안 본다** (검수 G4).
    *
    * 전에는 `!res.destroyed && !res.writableEnded` 뿐이었다. 소켓이 **살아는 있는데
    * 안 읽는** 소비자(얼어붙은 탭, 느린 망 뒤, 일부러 안 읽는 클라이언트)는 그 판정을

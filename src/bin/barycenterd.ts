@@ -71,6 +71,12 @@ const MINUTE = 60_000;
 const DAY_MS = 86_400_000;
 
 /**
+ * 종료 마감 (검수 D9). `bary-dp-agent` 의 5 초보다 넉넉하다 — 이쪽은 락 반납과
+ * DB 닫기가 더 있고, 그 둘은 망을 지난다.
+ */
+const SHUTDOWN_DEADLINE_MS = 10_000;
+
+/**
  * **숫자 설정을 한 자리에서, 한 번만 읽는다** (검수 G3).
  *
  * ── 왜 `Number(env(...))` 가 아닌가
@@ -769,7 +775,35 @@ export async function main(): Promise<void> {
     });
   }
 
+  /**
+   * 종료 (검수 D9).
+   *
+   * ── `server.close()` 만으로는 안 끝난다
+   *
+   * 그 콜백은 **모든 연결이 끝난 뒤에** 온다. SSE 는 끝나지 않는 연결이라, GUI 가 한
+   * 탭이라도 열려 있으면 아래 정리가 통째로 안 돈다 — 리더 락도 durable store 락도
+   * 안 놓이고, 프로세스는 오케스트레이터의 `SIGKILL` 유예가 다 지나야 죽는다.
+   * 그리고 그 뒤에 뜨는 인스턴스는 **죽은 주인을 가려내는 `/proc` 폴백**에 기댄다
+   * (`agentStore.release` 의 주석이 그 폴백의 실패 모드를 이미 적어 뒀다).
+   * **깨끗한 종료가 안 되는 것이 다음 기동의 위험이다.**
+   *
+   * 순서가 셋이다:
+   *
+   *   ① 화면에 **정상 종료**를 알린다. 그냥 끊으면 브라우저가 재연결을 시도하고,
+   *      그 재연결은 실패하며, 화면은 「끊겼다」가 아니라 「멎었다」로 보인다
+   *   ② 새 연결을 안 받고, 남은 연결도 끊는다
+   *   ③ 그래도 안 끝나면 마감에서 나간다 — `bary-dp-agent` 가 이미 그 모양이다
+   */
   const stop = (): void => {
+    events.closeAll();
+    /**
+     * **마감을 씌운다.** ①·② 로 안 끝나는 경우가 남는다 — 느린 클라이언트, 우리가 아직
+     * 모르는 keep-alive. 나가는 길이 막히는 것보다 덜 깨끗하게 나가는 편이 낫다.
+     */
+    setTimeout(() => {
+      log.warn('shutdown.deadline', { ms: SHUTDOWN_DEADLINE_MS });
+      process.exit(0);
+    }, SHUTDOWN_DEADLINE_MS).unref();
     server.close(() => {
       // **물러난 것을 적고 나간다.** 락은 세션 종료로 어차피 풀리지만, 깨끗하게 물러난
       // 것과 죽은 것을 나중에 구분할 수 있어야 한다.
@@ -793,6 +827,12 @@ export async function main(): Promise<void> {
         .then(() => db.close())
         .then(() => process.exit(0));
     });
+    /**
+     * **남은 연결도 끊는다.** `close()` 는 새 연결만 막는다 — 이미 열린 keep-alive 는
+     * 그대로 산다. ① 이 SSE 를 닫았으므로 여기 남는 것은 평범한 요청 소켓이고,
+     * 그것들은 응답을 이미 받았거나 곧 받는다.
+     */
+    server.closeAllConnections?.();
   };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
