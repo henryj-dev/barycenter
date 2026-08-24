@@ -26,6 +26,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { TLSSocket } from 'node:tls';
 
 import { DpRejection } from './agent.js';
+import {
+  decodeApplyOperation, decodeEpoch, decodeLeaderToken, decodePlane, decodeSlots,
+} from './wire.js';
 import type { DataplaneDriver } from './driver.js';
 
 export type DpAgentServerOptions = {
@@ -130,24 +133,38 @@ async function handle(
   }
 }
 
-/** 이름 → 드라이버 호출. **인자를 여기서 편다** — 클라이언트가 보낸 모양이 계약이다. */
+/**
+ * 이름 → 드라이버 호출. **인자를 여기서 편다** — 클라이언트가 보낸 모양이 계약이다.
+ *
+ * ── 편기 전에 **읽는다** (검수 N2)
+ *
+ * 전에는 `a['op'] as never` 였다. `as never` 는 타입 검사기에게 "그만 봐" 라고 말한
+ * 것이지 값이 그 모양이라는 증거가 아니다. mTLS 는 *누가* 말하는지를 말하지 *무엇을*
+ * 말하는지는 말하지 않는다 — 인증서가 맞는 CP 도 낡거나 버그가 있을 수 있고, 그때
+ * 이 창구는 아무 모양이나 상태기계 한복판에 넣었다.
+ *
+ * 해독기가 던지는 것은 `DpRejection('malformed_request')` 라, 위의 `catch` 가 그대로
+ * **409** 로 낸다. 500 이면 CP 가 "못 물었다" 로 읽고 영원히 재시도한다.
+ */
 function invoke(
   driver: DataplaneDriver, name: MethodName, a: Record<string, unknown>,
 ): Promise<unknown> {
   switch (name) {
     case 'fence':
-      return driver.fence(String(a['leaderToken']));
+      return driver.fence(decodeLeaderToken(a['leaderToken']));
     case 'applyConfig':
-      return driver.applyConfig(a['op'] as never);
+      return driver.applyConfig(decodeApplyOperation(a['op']));
     case 'recoverConfig':
       return driver.recoverConfig();
     case 'abortConfig':
-      return driver.abortConfig(a['op'] as never);
+      return driver.abortConfig(decodeApplyOperation(a['op']));
     case 'applyMembership':
-      return driver.applyMembership(a['op'] as never, a['plane'] as never, a['slots'] as never);
+      return driver.applyMembership(
+        decodeApplyOperation(a['op']), decodePlane(a['plane']), decodeSlots(a['slots']),
+      );
     case 'pushMembershipDirect':
       return driver.pushMembershipDirect(
-        a['plane'] as never, String(a['epoch']), a['slots'] as never,
+        decodePlane(a['plane']), decodeEpoch(a['epoch']), decodeSlots(a['slots']),
       );
     case 'reconcileConfig':
       return driver.reconcileConfig();

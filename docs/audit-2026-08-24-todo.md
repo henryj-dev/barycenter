@@ -222,26 +222,42 @@
 > 이제 넷이다. 디렉티브로 나가는 필드가 늘 때마다 이 자리를 빠뜨리므로,
 > W1-2 와 묶어 「디렉티브에 닿는 필드 목록」을 한 곳에 적고 적합성이 그것을 대조하게 한다.
 
-### ☐ W1-2 · N2 — 원격 창구에 해독기 `[M]`
+### ☑ W1-2 · N2 — 원격 창구에 해독기 `[M]`
 
-- [ ] `tests/unit/audit-remote-decode.test.ts` — 세 가지를 본다:
-      ㉠ `targetGeneration` 이 세대 이름 문법 밖이면 **거절**
-      ㉡ `planes` 에 모르는 키가 있으면 거절
-      ㉢ 거절은 **409(`DpRejection`)** 이지 500 이 아니다
-- [ ] **빨강 확인**
-- [ ] `src/dp/agent-server.ts` — `invoke` 의 `as never` 를 지우고
-      `decodeApplyOperation(a['op'])` 을 지난다. **`src/index.ts` 에 안 내보낸다**
-      (표면이 안 움직인다)
-- [ ] 세대 이름 문법은 `KEY_SYNTAX` 와 **같은 규칙**을 쓴다 —
-      `^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`. 두 벌로 두지 않는다
-- [ ] `src/dp/remote.ts:143` — 응답도 같은 대접. 최소한 `phase` 가 `ALL_APPLY_PHASES`
-      안인지 본다
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-remote-decode.test.ts -t "세대 이름이 경로 조각이 되기 전에 막힌다"`
+- [x] `tests/unit/audit-remote-decode.test.ts` — 13 케이스. 타입 드라이버가 절대 안
+      만드는 요청을 **원시 mTLS 로 직접** 던진다 (드라이버를 지나면 "타입이 타입을
+      지킨다" 를 재게 된다)
+- [x] **빨강 확인** — 10 개가 `expected 200 to be 409`. *통과해 버리는* 빨강이다
+- [x] `src/dp/wire.ts` (새 파일) — `invoke` 의 `as never` 다섯을 전부 해독기로 바꿨다.
+      **`src/index.ts` 에 안 내보낸다**
+- [x] `src/validate/syntax.ts` (새 파일) — `PATH_SEGMENT_SYNTAX` 한 벌.
+      `config-store` 의 `KEY_SYNTAX` 가 이제 이걸 가리킨다
+- [x] `src/dp/remote.ts` — `applyConfig` · `recoverConfig` 응답의 `phase` 가
+      `ALL_APPLY_PHASES` 안인지 본다
+- [x] `./scripts/verify.sh --quick` — 9/9 초록 (unit 838 → 851)
+- [x] 커밋 — `Pinned-by: tests/unit/audit-remote-decode.test.ts -t "세대 이름이 경로 조각이 되기 전에 막힌다"`
 
 > ⚠️ 지금 `verifyGeneration` 이 앞에 서서 fail-closed 다. **그것이 이 항목을 미룰
 > 이유가 아니다** — 방어가 검사 순서 하나에 매달려 있고, 그 검사의 일은 manifest
 > 무결성이지 셸 안전이 아니다(`BARY_CONFIGTEST_CMD` 가 `{generation}` 을 `sh -c` 에 넣는다).
+
+**계획과 달라진 것 둘.**
+
+1. **`RejectionKind` 에 `'malformed_request'` 를 더했다 — A 표면이 움직였다.**
+   투두는 "표면이 안 움직인다" 를 `decodeApplyOperation` 을 안 내보내는 것으로만
+   적었는데, ㉢(거절은 409 `DpRejection`)을 지키려면 `kind` 가 있어야 한다. 있는 것을
+   빌려 쓰는 길(`envelope_mismatch` 등)은 진짜 진단을 흐린다. 동결 카운터가 0 이라
+   쌓아 놓은 것을 잃지는 않았다 — `surface.mjs --write` 로 기준을 옮겼다.
+   표면 diff 는 그 한 줄뿐이다.
+2. **정규식을 `validate/strings.ts` 에 안 넣고 `validate/syntax.ts` 를 새로 만들었다.**
+   `strings.ts` 는 `./ip.js` 와 `../model/provisional.js` 를 끌어오는데 **`src/dp/` 는
+   모델 층을 안 본다** (§3.1 — DP 에이전트는 별도 배포다). 규칙 하나를 나눠 쓰려고 그
+   경계를 무르는 것은 값이 안 맞아서, 아무것도 import 하지 않는 잎으로 갈랐다.
+
+> **응답 쪽에서 `kind` 는 일부러 안 좁혔다.** 버전 스큐의 대가가 두 방향에서 다르다 —
+> 모르는 `phase` 를 받아들이면 전환이 **조용히 멈추고**(어느 분기에도 안 걸린다),
+> 모르는 `kind` 를 거절하면 **판정을 장애로 오해해서 재시도한다.** 앞엣것은 안 보이고
+> 뒤엣것은 보인다. `remote.ts` 의 `checkedPhase` 주석에 그 근거를 적어 뒀다.
 
 ### ☐ W1-3 · D19 — CA 가 준 이름을 대조한다 `[S]`
 

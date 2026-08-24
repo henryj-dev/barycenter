@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 117 심볼 · sha256:14d37a5f313b80b664fdcece66583939612edde910fa4e37cf1d576c022302a2
+# 117 심볼 · sha256:036f50727880cb109f5b8247b014a9e898286e951953df006242b4475b304b34
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -548,7 +548,7 @@ export type ReconcileResult = {
     found: PublishedState;
 };
 ── RejectionKind
-export type RejectionKind = 'stale_leader' | 'terminal' | 'slot_taken' | 'not_reserved' | 'tuple_mismatch' | 'stale_state' | 'coordinate_mismatch' | 'digest_mismatch' | 'epoch_not_monotonic' | 'not_staged' | 'operation_in_flight' | 'journal_conflict' | 'invalid_coordinate' | 'empty_envelope' | 'envelope_mismatch' | 'not_activated';
+export type RejectionKind = 'stale_leader' | 'terminal' | 'slot_taken' | 'not_reserved' | 'tuple_mismatch' | 'stale_state' | 'coordinate_mismatch' | 'digest_mismatch' | 'epoch_not_monotonic' | 'not_staged' | 'operation_in_flight' | 'journal_conflict' | 'invalid_coordinate' | 'empty_envelope' | 'envelope_mismatch' | 'not_activated' | 'malformed_request';
 ── RenderCapabilities
 export type RenderCapabilities = {
     streamRealip: boolean;

@@ -35,7 +35,8 @@ import {
   DpRejection, type PlaneAck, type RejectionKind, type TerminalKind,
 } from './agent.js';
 import type { DataplaneDriver, DriverStatus, ReconcileResult } from './driver.js';
-import type { ApplyOperation, ApplyResult, Plane } from './operation.js';
+import { ALL_APPLY_PHASES } from './operation.js';
+import type { ApplyOperation, ApplyPhase, ApplyResult, Plane } from './operation.js';
 
 /** 에이전트에 **못 물었다.** 세계에 대해 아무 주장도 하지 않는다. */
 export class RemoteDpUnreachable extends Error {
@@ -147,12 +148,12 @@ export class RemoteDataplaneDriver implements DataplaneDriver {
     return this.#call('fence', { leaderToken });
   }
 
-  applyConfig(op: ApplyOperation): Promise<ApplyResult> {
-    return this.#call('applyConfig', { op });
+  async applyConfig(op: ApplyOperation): Promise<ApplyResult> {
+    return checkedPhase('applyConfig', await this.#call('applyConfig', { op }));
   }
 
-  recoverConfig(): Promise<ApplyResult> {
-    return this.#call('recoverConfig', {});
+  async recoverConfig(): Promise<ApplyResult> {
+    return checkedPhase('recoverConfig', await this.#call('recoverConfig', {}));
   }
 
   abortConfig(op: ApplyOperation): Promise<void> {
@@ -188,4 +189,31 @@ export class RemoteDataplaneDriver implements DataplaneDriver {
 function safeJson(text: string): unknown {
   if (text === '') return {};
   try { return JSON.parse(text) as unknown; } catch { return undefined; }
+}
+
+/**
+ * 돌아온 `phase` 가 **우리가 아는 것인가** (검수 N2).
+ *
+ * `#call` 은 200 본문을 `parsed as T` 로 넘긴다. 들어오는 쪽에 해독기를 세우면서
+ * 나가는 쪽을 그냥 두면 방어가 반쪽이다 — 우리가 못 믿는 것은 *상대 프로세스*이지
+ * *방향* 이 아니다.
+ *
+ * 모르는 `phase` 는 CP 상태기계의 분기 어디에도 안 걸린다. `TERMINAL_PHASES` 에도
+ * 없으므로 러너는 "아직 진행 중" 으로 읽고, 그 오퍼레이션은 **조용히 아무 데도 안
+ * 간다.** 이 저장소가 여러 번 물린 그 모양이다 — 필드는 있는데 아무도 안 읽는다.
+ *
+ * ⚠️ **버전 스큐의 대가를 안다.** DP 가 우리보다 새로워서 모르는 단계를 답하면, 이
+ * 검사는 그것을 "못 물었다" 로 만들고 CP 는 재시도한다. 그래도 이쪽을 고른다:
+ * 재시도는 **보인다**, 조용히 멈춘 전환은 안 보인다. 반대로 `kind`(거절 이유)는
+ * 일부러 안 좁혔다 — 새 거절 이유를 못 알아들어 재시도하는 것은 **판정을 장애로
+ * 오해하는 것**이라, 같은 대가가 아니다.
+ */
+function checkedPhase(method: string, v: unknown): ApplyResult {
+  const phase = (v as { phase?: unknown } | null)?.phase;
+  if (typeof phase !== 'string' || !ALL_APPLY_PHASES.includes(phase as ApplyPhase)) {
+    throw new RemoteDpUnreachable(
+      method, `모르는 단계를 답했다: ${JSON.stringify(phase)}`, 200,
+    );
+  }
+  return v as ApplyResult;
 }

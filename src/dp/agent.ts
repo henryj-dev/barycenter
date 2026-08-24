@@ -110,7 +110,15 @@ export type RejectionKind =
   /** 봉투의 `affectedPlanes` 와 실린 목표가 어긋난다. */
   | 'envelope_mismatch'
   /** 증거가 활성화를 증명하지 못한다 (§6.3). */
-  | 'not_activated';
+  | 'not_activated'
+  /**
+   * 원격 창구가 봉투를 **읽지 못했다** (검수 N2).
+   *
+   * 왜 500 이 아니라 거절인가: 500 은 CP 에서 `RemoteDpUnreachable` 이 되고, 그건
+   * "못 물었다" 라 CP 가 **영원히 재시도한다.** 못 읽는 봉투는 다시 보내도 못 읽는다.
+   * 이건 에이전트가 내린 판정이므로 판정 자리에 둔다 — `invalid_coordinate` 와 같다.
+   */
+  | 'malformed_request';
 
 /** 전환이 끝나는 방식. **셋은 상호 배타적**이다 — 하나에 들어가면 다른 곳으로 못 간다. */
 export type TerminalKind = 'activated' | 'failed' | 'aborted';

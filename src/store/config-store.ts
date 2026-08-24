@@ -22,6 +22,7 @@ import { certCoversHost } from '../dp/certinfo.js';
 import {
   normalizeHost, validateBackendHost, validateHeaderValue, validatePathPrefix,
 } from '../validate/strings.js';
+import { PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { ModelValidationError } from '../validate/model.js';
 import type {
@@ -74,8 +75,12 @@ export const ENGINE_KEY = 'engine';
  *
  * 선두를 영숫자로 제한하는 것은 `.`·`..`·`-flag` 를 한 번에 막기 위해서다.
  * 63 자는 DNS 라벨과 같은 한도다 — 이름이 그보다 길면 읽는 사람이 없다.
+ *
+ * **정규식은 여기 없다** (검수 N2). 원격 창구의 `targetGeneration` 이 같은 종류의
+ * 자리라 같은 규칙을 쓰는데, 사본을 둘로 두면 언젠가 갈린다. `validate/syntax.ts`
+ * 가 한 벌을 들고 있고 그 파일이 왜 거기 있는지도 적어 놨다.
  */
-const KEY_SYNTAX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+const KEY_SYNTAX = PATH_SEGMENT_SYNTAX;
 
 /**
  * **쓰기 경계에서만** 문법을 본다.
