@@ -2949,6 +2949,12 @@ capability 패키지이지 apply 구현이 아니다.
   있다(§12.0 S2). 못 읽으면 숫자를 안 짓고 `no_new_traffic` 에 머문다.
 - **GUI 는 changeset 위에서 편집한다.** "저장"=commit, "적용"=apply 를 시각적으로 분리한다.
 
+인증은 같은 데몬이 서빙하는 세션 경계를 지난다. OIDC 교환 전의 state·PKCE verifier·nonce는
+데몬 메모리의 짧은 수명 로그인 세션에 있고, 브라우저에는 opaque `bary_login` 쿠키만 간다.
+교환 뒤 ID Token은 응답 본문에 내보내지 않고 `bary_session` HttpOnly·SameSite=Lax 쿠키로
+바꾼다(HTTPS에서는 Secure). 세션은 인스턴스 메모리라 재시작·다중 인스턴스 사이에 공유되지
+않는다. 다중 인스턴스가 필요해지는 배포는 외부 세션 저장소와 폐기 계약을 별도로 정한다.
+
 ---
 
 ## 11. 배포 형태

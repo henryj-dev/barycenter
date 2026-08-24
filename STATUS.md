@@ -55,10 +55,11 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 
 쓰기는 changeset 을 지나 **commit 까지** 한다. apply 는 영향 화면만 한다.
 
-인증은 현재 Bearer 토큰을 요청 헤더에 붙이는 정적 SPA 방식이다. OIDC의 state·PKCE
-verifier·nonce는 사용 후 제거하지만, 브라우저 저장소의 토큰을 XSS로 읽을 수 있는 잔여
-위험이 있다. HttpOnly/Secure/SameSite 세션은 BFF 또는 데몬 세션 저장소와 다중 인스턴스
-세션 계약이 필요한 별도 로드맵이다.
+인증은 정적 SPA와 같은 출처의 데몬 세션을 사용한다. OIDC 교환 전의 state·PKCE
+verifier·nonce는 데몬 메모리의 짧은 수명 로그인 세션에 있고 브라우저에는 opaque
+`bary_login` 쿠키만 간다. 교환 뒤 ID Token은 응답 본문에 내보내지 않고
+`bary_session` HttpOnly·SameSite=Lax 쿠키로 바꾼다(HTTPS에서는 Secure). 세션은 인스턴스
+메모리라 재시작·다중 인스턴스 사이에 공유되지 않는다.
 
 | 쓰기 | 계약 |
 |---|---|

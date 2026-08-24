@@ -34,10 +34,10 @@
 | 인증 실패 제한 부재 | 인스턴스 메모리에서 peer 주소별 1024개·10분 TTL로 제한한다. 5회 실패 뒤 429/Retry-After를 내고, 성공하면 상태를 지운다. 실패 카운터도 낸다. |
 | manifest 중복 | 같은 `(kind,key)`를 파서에서 즉시 거부하고 리소스 인덱스를 오류에 포함한다. |
 | SecretStore 운영 오인 | FsSecretStore가 암호화되지 않았음과 디렉터리 권한을 `secrets.posture` 기동 로그로 드러낸다. KMS/Vault 드라이버 자체는 로드맵이다. |
-| GUI HttpOnly 세션 | 현재 정적 SPA 구조에서 토큰을 HttpOnly 세션으로 바꾸지는 않았다. XSS 잔여 위험과 BFF/세션 저장소 선행 결정은 `DESIGN.md`와 `STATUS.md`에 명시했다. |
+| GUI HttpOnly 세션 | 데몬 메모리 세션과 `bary_login`/`bary_session` HttpOnly 쿠키로 처리했다. ID Token·PKCE 자료는 GUI 저장소와 응답 본문에 내보내지 않는다. 다중 인스턴스 공유는 후속 설계다. |
 | DNS-01·인증서 업로드 | `501 no_secret_store`와 파일 기반 DNS-01의 TXT 파일·cleanup·외부 훅 계약을 문서화했다. |
 
-변경은 `e4ec324`, `6c3bf2c`, `75ee736`, `6afbdad`, `89d1053`에 나뉘어 있다.
+변경은 `e4ec324`, `6c3bf2c`, `75ee736`, `6afbdad`, `89d1053`, `5da0ca7`에 나뉘어 있다.
 
 ## 요약
 
@@ -45,11 +45,9 @@
 최종 검증 수치는 아래 「검증 결과」에 실행 출력과 함께 갱신한다. 1차 보고서가 최우선으로 지목한 SSE backpressure·SSE
 종료 문제는 재현되지 않으며, 기술 전제 자체도 성립하지 않는다 (「반증된 지적」 참조).
 
-수정 전 실제 문제는 네 가지 성격으로 나뉘었고, 현재 남는 것은 두 가지다.
+수정 전 실제 문제는 네 가지 성격으로 나뉘었고, 현재 남는 것은 하나다.
 
-1. **GUI 인증의 구조적 잔여 위험** — 정적 SPA가 토큰을 브라우저 저장소에 보관한다. BFF 또는
-   데몬 세션 저장소가 필요한 별도 설계 항목이다.
-2. **FsSecretStore의 평문 저장** — 파일 권한과 기동 자세 표시는 추가했지만 KMS/Vault
+1. **FsSecretStore의 평문 저장** — 파일 권한과 기동 자세 표시는 추가했지만 KMS/Vault
    드라이버는 아직 없다.
 
 ## 발견 사항
@@ -292,10 +290,10 @@ SecretStore가 주입되지 않으면 `POST /api/v1/certificates/material`이 `5
 파일: `gui/src/lib/desk.svelte.ts:39`, `gui/src/lib/desk.svelte.ts:293`,
 `gui/src/routes/login/+page.svelte:35-52`
 
-토큰과 OIDC 검증값(state·code_verifier·nonce)을 `sessionStorage`에 저장한다. CSP와
-state·PKCE·nonce 검증은 존재하며 검증값은 사용 후 `removeItem`으로 지운다. 그래도 브라우저
-XSS가 발생하면 토큰이 읽힌다. 장기 운영 환경에서는 BFF와 HttpOnly/Secure/SameSite 쿠키가
-더 안전하다.
+**현재 상태: 해결됨.** 데몬이 OIDC state·PKCE verifier·nonce를 짧은 수명의 메모리 세션에
+보관하고, 브라우저에는 `bary_login`과 `bary_session` HttpOnly 쿠키만 준다. ID Token은
+응답 본문에 내보내지 않으며 GUI 소스에는 `sessionStorage` 사용이 없다. 세션은 단일 인스턴스
+범위라 재시작·다중 인스턴스 간 공유는 남은 운영 설계다.
 
 ## 정상 확인 항목
 
@@ -331,6 +329,16 @@ $ npx vitest run tests/unit/audit-auth-ratelimit.test.ts --reporter=dot
   Test Files  1 passed (1)
   Tests       4 passed (4)
 
+$ npx vitest run tests/unit/audit-browser-session.test.ts \
+                tests/unit/audit-oidc-pkce.test.ts \
+                tests/unit/oidc-code.test.ts \
+                tests/unit/audit-auth-ratelimit.test.ts --reporter=dot
+  Test Files  4 passed (4)
+  Tests       23 passed (23)
+
+$ npm run build
+  dist/ 90 modules · gui/build 9 screens
+
 $ npx vitest run tests/unit/audit-manifest-duplicate.test.ts \
                 tests/unit/audit-configtest-fail-open.test.ts \
                 tests/unit/audit-env-numbers.test.ts \
@@ -344,7 +352,7 @@ $ npx vitest run tests/unit/audit-manifest-duplicate.test.ts \
 전체 초록으로 주장하지 않는다. conformance 전체와 변경된 감사 재현물·타입체크는 위처럼
 완료했고, 남은 전체 unit 게이트는 실행 하네스가 정상 종료되는 환경에서 다시 확인해야 한다.
 
-대상 커밋 `39fe68b`에서 실행:
+대상 커밋 `39fe68b`에서 실행한 기준선:
 
 ```
 $ npx vitest run tests/unit
@@ -372,8 +380,8 @@ $ npx vitest run tests/unit/audit-stream-caps.test.ts \
 
 ## 후속 우선순위
 
-1. GUI 인증을 HttpOnly 세션 방식으로 전환 — BFF/데몬 세션 저장소와 다중 인스턴스 계약 필요
-2. KMS/Vault SecretStore 드라이버 추가 — 현재 `FsSecretStore`는 평문 저장이며 자세를 로그로 드러냄
+1. KMS/Vault SecretStore 드라이버 추가 — 현재 `FsSecretStore`는 평문 저장이며 자세를 로그로 드러냄
+2. 다중 인스턴스 배포가 필요해질 경우 외부 세션 저장소·세션 폐기 계약 추가
 3. 전체 unit 게이트가 장시간 테스트를 정상 종료하는지 실행 환경에서 재검증
 
 ## 정정 이력

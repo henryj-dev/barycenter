@@ -1119,6 +1119,7 @@ S11 하네스의 교훈이다.
 | `tests/unit/audit-plaintext-exposed.test.ts` | 외부 평문 바인드의 명시적 허용과 metrics 노출 |
 | `tests/unit/audit-auth-ratelimit.test.ts` | 인증 실패 카운터·429·Retry-After·성공 해제·TTL |
 | `tests/unit/audit-secret-store-posture.test.ts` | FsSecretStore가 암호화되지 않음을 기동 자세로 표시 |
+| `tests/unit/audit-browser-session.test.ts` | PKCE 자료의 서버 보관·HttpOnly 쿠키·ID Token 비노출·쿠키 인증 |
 
 ## 11. 열린 결정
 
