@@ -12,7 +12,9 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
-import { ACME_DICT, render, MEMBERSHIP_DICT, type RenderCapabilities } from '../conf/render.js';
+import {
+  ACME_DICT, render, upstreamName, MEMBERSHIP_DICT, type RenderCapabilities,
+} from '../conf/render.js';
 
 import { applyDiscoveredEndpoints, type DiscoveryIntake } from './discovery.js';
 import { log } from '../obs/log.js';
@@ -88,16 +90,28 @@ export function slotsForEligible(
 }
 
 /**
- * 렌더된 conf 에서 풀의 upstream 이름을 읽는다.
+ * 이 풀이 렌더에 upstream 을 가지면 그 이름, 아니면 `undefined`.
  *
- * 렌더러의 `upstreamName` 을 여기서 다시 구현하고 싶어지는데, 그러면 **이름을 정하는
- * 자리가 둘**이 되고 단사성 보정(다이제스트 접미)이 붙는 순간 갈린다.
- * 산출물에서 읽는 편이 한 자리를 유지한다.
+ * ── 이름은 **렌더러가 정한다** (검수 D18)
+ *
+ * 전에는 여기서 산출물을 정규식으로 훑었다. 취지는 옳았다 — *"이름을 정하는 자리가
+ * 둘이 되면 갈린다"*. 그런데 **방법이 틀렸다.** 그 정규식은
+ * `pool_<ident>(_<hex>)?` 였고 다이제스트 접미가 **선택**이었는데, `ident` 는
+ * 비영숫자를 `_` 로 접으므로 `a-b` 와 `a_b` 가 같은 `ident` 를 만든다. 렌더러는 그
+ * 비단사성을 접미로 푸는데 정규식은 그 접미를 안 요구하니, 둘이 **서로의 upstream 에
+ * 매치됐다.**
+ *
+ * 그러면 멤버십이 엉뚱한 슬롯에 실리고, 제 슬롯이 빈 풀은 `balancer_by_lua` 가
+ * `ngx.exit(ngx.ERROR)` 를 타 **그 풀의 모든 요청이 끊긴다**(§6.5-3). 슬롯은
+ * 이름으로만 갈리므로 어느 쪽이 어느 쪽을 먹었는지 밖에서 안 보인다.
+ *
+ * 규칙을 두 번 구현하지 않는 방법은 산출물을 파싱하는 것이 아니라 **같은 함수를
+ * 쓰는 것**이다. 산출물은 이제 *"그 이름이 정말 거기 있는가"* 에만 쓴다 — 어떤
+ * 리스너·라우트에도 안 걸린 풀은 렌더에 upstream 이 없고, 그 판정은 여기 남아야 한다.
  */
 export function upstreamNameIn(conf: string, poolKey: string): string | undefined {
-  const ident = poolKey.replace(/[^A-Za-z0-9_]/g, '_');
-  const re = new RegExp(`^\\s*upstream (pool_${ident}(?:_[0-9a-f]+)?) \\{`, 'm');
-  return re.exec(conf)?.[1];
+  const name = upstreamName(poolKey);
+  return conf.includes(`upstream ${name} {`) ? name : undefined;
 }
 
 /**

@@ -221,7 +221,15 @@ function ident(key: string): string {
   const digest = createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 8);
   return `${safe}_${digest}`;
 }
-const upstreamName = (poolKey: string): string => `pool_${ident(poolKey)}`;
+/**
+ * 풀 키 → upstream 이름. **이름을 정하는 유일한 자리다** (검수 D18).
+ *
+ * 멤버십 평면이 슬롯을 이 이름으로 갈므로 두 자리에서 계산하면 갈린다.
+ * 전에는 `membership.ts` 가 산출물을 정규식으로 훑어 되읽었는데, 그 정규식은
+ * 단사성 보정(다이제스트 접미)을 **선택**으로 뒀다 — `a-b` 와 `a_b` 가 같은 `ident`
+ * 를 만들므로 서로의 upstream 에 매치될 수 있었다.
+ */
+export const upstreamName = (poolKey: string): string => `pool_${ident(poolKey)}`;
 
 /** nginx 는 IPv6 업스트림에 대괄호를 요구한다 (E34). 없으면 `invalid port` 로 거부된다. */
 const endpoint = (host: string, port: number): string =>

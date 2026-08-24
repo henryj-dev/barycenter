@@ -134,16 +134,23 @@
 > *정말* 모양이 틀린 스냅샷(`pools: "nope"`)만 `corrupt_revision` 으로 거절한다 —
 > 그 경우를 따로 못 박아 둘을 안 섞는다.
 
-### ☐ W0-7 · D18 — upstream 이름을 한 자리로 `[S]`
+### ☑ W0-7 · D18 — upstream 이름을 한 자리로 `[S]`
 
-- [ ] `tests/unit/audit-upstream-name.test.ts` — 풀 `a-b` 와 `a_b` 를 함께 두고
+- [x] `tests/unit/audit-upstream-name.test.ts` — 풀 `a-b` 와 `a_b` 를 함께 두고
       각자의 슬롯 이름이 서로 안 섞이는가
-- [ ] **빨강 확인**
-- [ ] `src/conf/render.ts` — `upstreamName` 을 export
-- [ ] `src/control/membership.ts:97` — `upstreamNameIn` 의 정규식 대신 `upstreamName` 을
+- [x] **빨강 확인** — 먼저 `upstreamName` 만 export 해 **거동으로** 빨간지 봤다:
+      `a-b` 의 슬롯이 `10.0.0.2:80`(= `a_b` 의 peer)을 받았다. 두 풀이 슬롯을 서로 바꿔 썼다
+- [x] `src/conf/render.ts` — `upstreamName` 을 export
+- [x] `src/control/membership.ts:97` — `upstreamNameIn` 의 정규식 대신 `upstreamName` 을
       쓴다. **산출물에 그 이름이 실제로 있는지**는 그대로 확인한다(안 쓰인 풀 판정)
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-upstream-name.test.ts -t "이름이 겹치는 두 풀이 슬롯을 안 바꿔 쓴다"`
+- [x] `npm run verify:quick` — 단위 834 → **838**. `npm run test:golden` **65** 초록
+      (렌더 산출물은 안 바뀐다 — `const` 를 `export const` 로 바꾼 것뿐이다)
+- [x] 커밋 — `Pinned-by: tests/unit/audit-upstream-name.test.ts -t "**슬롯을 안 바꿔 쓴다** — 각 풀의 peer 가 자기 이름 아래 있다"`
+
+> **재현물의 빨강을 두 번 봤다.** 처음에는 `upstreamName is not a function` 이었는데
+> 그건 export 가 없다는 말이지 거동이 틀렸다는 말이 아니다. export 만 먼저 넣고
+> 다시 재서 **슬롯이 뒤바뀌는 것**을 눈으로 본 뒤에 고쳤다 — 컴파일 모양의 빨강을
+> 재현물로 세면 그 자리는 검증되지 않는다.
 
 ### ☐ W0-8 · D15 — 기동 마이그레이션 잠금 `[S]`
 
