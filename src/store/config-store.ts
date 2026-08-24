@@ -1590,6 +1590,11 @@ function listenerClosure(model: Model, l: Listener): string {
     parts.push(routes);
     for (const r of routes) if (r.action.kind === 'proxy') addPool(r.action.pool);
     if (typeof l.onUnmatchedSni === 'object') addPool(l.onUnmatchedSni.pool);
+    // **SNI 없음 폴백도 폐포다** (검수 D17). S9 가 이 필드를 열 때 여기를 같이 안 봤다.
+    // 리스너 자체는 통째로 들어가므로 필드를 고치는 것은 잡혔다 — 안 잡히던 것은
+    // 그 필드가 가리키는 **풀의 멤버십**이 바뀌는 경우다. 폴백 풀은 SNI 를 안 보내는
+    // 클라이언트가 가는 곳이라, 거기 백엔드가 빠지면 그 트래픽이 통째로 끊긴다.
+    if (typeof l.onNoSni === 'object') addPool(l.onNoSni.pool);
   }
   if (l.protocol === 'tcp' || l.protocol === 'udp') addPool(l.defaultPool);
 

@@ -107,14 +107,15 @@
 - [x] `npm run verify:quick` — 단위 829 → **834**
 - [x] 커밋 — `Pinned-by: tests/unit/audit-priority-inversion.test.ts -t "**안 겨루면 경고가 없다** — 도메인이 다르면 순서를 다툴 일이 없다"`
 
-### ☐ W0-5 · D17 — 영향 폐포에 `onNoSni` `[XS]`
+### ☑ W0-5 · D17 — 영향 폐포에 `onNoSni` `[XS]`
 
-- [ ] `tests/store/audit-nosni-closure.test.ts` — 패스스루의 `onNoSni` 폴백 풀에
-      백엔드를 더했을 때 그 리스너가 `affectedListeners` 에 뜨는가 (**실물 PG**)
-- [ ] **빨강 확인**
-- [ ] `src/store/config-store.ts:1592` 아래 — `onNoSni` 도 `addPool`
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/store/audit-nosni-closure.test.ts -t "no-SNI 폴백 풀도 폐포에 든다"`
+- [x] `tests/store/audit-nosni-closure.test.ts` — 패스스루의 `onNoSni` 폴백 풀에
+      백엔드를 더했을 때 그 리스너가 `affectedListeners` 에 뜨는가 (**실물 PG**).
+      `onUnmatchedSni`(원래 되던 쪽)와 무관한 풀도 함께 본다
+- [x] **빨강 확인** (3 중 1 빨강 — `[]` 인데 `['pt']` 를 기대한다)
+- [x] `src/store/config-store.ts:1592` 아래 — `onNoSni` 도 `addPool`
+- [x] `npm run verify:quick` · `npm run test:store` — 저장소 **210** 전부 초록
+- [x] 커밋 — `Pinned-by: tests/store/audit-nosni-closure.test.ts -t "**`onNoSni` 풀에 백엔드를 더하면 그 리스너가 영향받는다**"`
 
 ### ☐ W0-6 · D7 — `rollbackTo` 가 스냅샷을 해독한다 `[S]`
 
