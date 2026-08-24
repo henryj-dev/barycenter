@@ -117,17 +117,22 @@
 - [x] `npm run verify:quick` · `npm run test:store` — 저장소 **210** 전부 초록
 - [x] 커밋 — `Pinned-by: tests/store/audit-nosni-closure.test.ts -t "**`onNoSni` 풀에 백엔드를 더하면 그 리스너가 영향받는다**"`
 
-### ☐ W0-6 · D7 — `rollbackTo` 가 스냅샷을 해독한다 `[S]`
+### ☑ W0-6 · D7 — `rollbackTo` 가 스냅샷을 해독한다 `[S]`
 
-- [ ] `tests/store/audit-rollback-decode.test.ts` — `config_revisions.model` 에
-      **컬렉션이 빠진** 옛 모양 스냅샷을 직접 넣고 그 리비전으로 롤백 →
-      `undefined.map` 이 아니라 해독 오류로 답하는가 (**실물 PG**)
-- [ ] **빨강 확인**
-- [ ] `src/store/config-store.ts:1303` — 캐스팅 대신 `decodeModel`.
-      실패는 `modelAt` 과 같은 `corrupt_revision`
-- [ ] `:1376` (`getPlan`) 도 같은 자리다 — 함께 본다
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/store/audit-rollback-decode.test.ts -t "옛 모양 스냅샷 롤백이 500 이 아니다"`
+- [x] `tests/store/audit-rollback-decode.test.ts` — `config_revisions.model` 에
+      **컬렉션이 빠진** 옛 모양 스냅샷을 직접 넣고 그 리비전으로 롤백 (**실물 PG**)
+- [x] **빨강 확인** (4 중 3 빨강 — 전부 `TypeError: … reading 'map'`)
+- [x] `src/store/config-store.ts:1303` — 캐스팅 대신 `decodeModel`
+- [x] `:1393` (`getPlan`) 도 같은 자리라 함께 고쳤다 — `corrupt_plan`
+- [x] `npm run verify:quick` · `npm run test:store` — 저장소 210 → **214**
+- [x] 커밋 — `Pinned-by: tests/store/audit-rollback-decode.test.ts -t "**컬렉션이 없는 옛 리비전으로 롤백된다** — `undefined.map` 이 아니다"`
+
+> **계획과 달라진 것.** 투두는 *"해독 오류로 답하는가"* 였는데, 재현물을 쓰다 보니
+> 그 기대가 틀렸다. 해독기는 **없는 컬렉션을 빈 배열로 채운다** — `modelAt` 의 주석이
+> *"그게 옛 리비전의 정확한 의미다"* 라고 적어 둔 그대로다. 그러니 옳은 답은
+> 「잘 거절한다」가 아니라 **「그냥 된다」** 이고, 단언을 그쪽으로 바꿨다.
+> *정말* 모양이 틀린 스냅샷(`pools: "nope"`)만 `corrupt_revision` 으로 거절한다 —
+> 그 경우를 따로 못 박아 둘을 안 섞는다.
 
 ### ☐ W0-7 · D18 — upstream 이름을 한 자리로 `[S]`
 

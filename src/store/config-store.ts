@@ -1300,7 +1300,24 @@ export class ConfigStore {
         throw new StoreError(409, 'not_past',
           `r${revision} 은 과거가 아니다 (head=r${head}) — 롤백은 뒤로만 간다`);
       }
-      const model = src['model'] as Model;
+      /**
+       * **캐스팅하지 않고 해독한다** (검수 D7).
+       *
+       * `modelAt` 이 이미 같은 이유로 캐스팅을 버렸다 — v0.6 이 컬렉션 셋을 더하자
+       * 그 이전 리비전으로 롤백하면 `undefined.map` 으로 500 이 났다. 그런데 그 수정이
+       * **읽기 경로에만** 들어갔고, 여기는 같은 컬럼을 캐스팅해 곧바로 `opsOf` 에
+       * 넣었다. `opsOf` 는 여덟 컬렉션에 `.map` 을 건다 — 고친 것과 같은 병이 옆자리에
+       * 남아 있었다.
+       *
+       * 해독기는 없는 컬렉션을 **빈 배열로 채운다.** 그게 옛 리비전의 정확한 의미다.
+       * 모양이 정말 틀렸으면 여기서 말한다 — 읽기 경로와 같은 이름으로.
+       */
+      const decoded = decodeModel(src['model']);
+      if (!decoded.ok) {
+        throw new StoreError(500, 'corrupt_revision',
+          `리비전 ${revision} 의 스냅샷을 해독할 수 없다`, decoded.issues);
+      }
+      const model = decoded.model;
 
       // **테이블을 그 시점 모델로 되돌린다.** 지우고 다시 넣는다 — 부분 갱신으로는
       // "그 시점에 없던 리소스" 를 없앨 수 없다.
@@ -1368,12 +1385,27 @@ export class ConfigStore {
          FROM plans WHERE id=$1`, [planId],
     )).rows[0];
     if (r === undefined) throw new StoreError(404, 'unknown_plan', `plan ${planId} 이 없다`);
+    /**
+     * **여기도 해독한다** (검수 D7 — 세 번째 자리).
+     *
+     * `plans.model` 도 JSONB 스냅샷이고 같은 성질을 갖는다. 지금 코드가 쓰는 것은
+     * `readModel` 을 지나므로 언제나 완전하지만, 그건 *지금* 의 사실이지 이 컬럼을
+     * 읽는 코드가 기댈 계약이 아니다 — `modelAt` 이 캐스팅을 버린 이유와 같다.
+     *
+     * 여기서 나간 모델은 `ControlPlane.apply` 가 렌더하고 멤버십 슬롯을 뽑는 데 쓴다.
+     * 반쪽짜리가 지나가면 그 실패는 apply 한가운데서 난다.
+     */
+    const decoded = decodeModel(r['model']);
+    if (!decoded.ok) {
+      throw new StoreError(500, 'corrupt_plan',
+        `plan ${planId} 의 모델 스냅샷을 해독할 수 없다`, decoded.issues);
+    }
     return {
       id: text(r, 'id'),
       // 롤백 plan 에는 changeset 이 없다 (003 마이그레이션).
       changesetId: maybeText(r, 'changeset_id') ?? null,
       state: text(r, 'state'),
-      baseRevision: text(r, 'base_revision'), model: r['model'] as Model,
+      baseRevision: text(r, 'base_revision'), model: decoded.model,
       impact: r['impact'] as Impact, renderDigest: text(r, 'render_digest'),
       rendererVersion: text(r, 'renderer_version'),
       expiresAt: new Date(String(r['expires_at'])).toISOString(),
