@@ -625,17 +625,45 @@ e2e 쪽 주석이 그 이유를 이미 적어 뒀다:
       **의도한 변경인지 diff 로 눈으로 본다**
 - [ ] 커밋 — `Pinned-by: tests/golden/next-upstream.test.ts -t "재시도가 inflight 를 안 남긴다"`
 
-### ☐ W3-2 · D5 — 활성화 음성 신호를 수준으로 좁힌다 `[S]`
+### ☑ W3-2 · D5 — 활성화 음성 신호를 수준으로 좁힌다 `[S]`
 
-- [ ] `tests/e2e/audit-error-log-noise.test.ts` — apply 창 동안 **무관한 upstream
-      오류**가 error log 에 찍히게 해 놓고 apply 가 `activated` 로 끝나는가
-- [ ] **빨강 확인**
-- [ ] `src/dp/effects-fs.ts:257` — 줄 수가 아니라 `[emerg]`·`[alert]`·`[crit]` 만 센다.
-      `errorLogGrowth` 의 뜻이 바뀌므로 `src/dp/operation.ts:98` 의 주석도 함께 고친다
-- [ ] S7 이 잡은 것(포트 점유 = `[emerg]`)이 **여전히 잡히는지** 확인한다 —
-      그것이 이 신호의 존재 이유다
-- [ ] `npm run test:e2e`
-- [ ] 커밋 — `Pinned-by: tests/e2e/audit-error-log-noise.test.ts -t "트래픽 오류가 apply 를 안 죽인다"`
+- [x] `tests/unit/audit-error-log-noise.test.ts` — 6 케이스. **`tests/e2e/` 가 아니다**
+      (아래 근거). 실물 파일에 실물 nginx 가 적는 것과 **같은 줄**을 적는다
+- [x] **빨강 확인** — `expected 5 to be +0`. 트래픽 줄 다섯이 전부 음성 신호였다
+- [x] `src/dp/effects-fs.ts` — `FATAL_LEVEL` 로 `[emerg]`·`[alert]`·`[crit]` 만 센다
+- [x] **옵션 이름도 바꿨다** — `probeErrorLogLines` → `probeFatalLogLines`.
+      표면이 그 한 줄 움직였고 기준을 옮겼다
+- [x] `src/dp/operation.ts` — `errorLogGrowth` 의 뜻이 바뀌었으므로 주석을 고쳤다.
+      **이름은 그대로다** (아래 근거)
+- [x] **S7 이 잡은 것이 여전히 잡힌다** — 스파이크 S7 `PASS=9 FAIL=0`.
+      재현물도 `bind() … Address already in use`(`[emerg]`)를 직접 판다
+- [x] `./scripts/verify.sh` 전체 — 아래 「게이트가 잡은 것 둘」 참조
+- [x] 커밋 — `Pinned-by: tests/unit/audit-error-log-noise.test.ts -t "트래픽 오류가 apply 를 안 죽인다"`
+
+**왜 e2e 가 아니라 unit 인가.** e2e 로는 **원하는 순간에 원하는 줄을 만들 수가 없다** —
+백엔드를 죽여 `[error]` 를 유도해도 그것이 HUP 창 안에 들어갈지는 타이밍이 정한다.
+그러면 재현물이 「가끔 빨간」 것이 되고, 이 저장소가 그 부류로 이미 여러 번 데였다.
+여기서 재는 것은 `FsEffects` 가 **그 줄을 어떻게 세는가**이고, 그건 파일 하나면 충분하다.
+
+**이름을 바꾼 것과 안 바꾼 것.** `probeFatalLogLines` 는 **주입 이음매**라, 옛 이름을
+보고 「줄 수를 세면 되는구나」 하고 구현하면 그 순간 D5 가 조용히 되살아난다 — 계약이
+바뀌었으면 이름도 바뀌어야 잘못 구현하는 것이 어려워진다. typecheck 가 즉시 기존
+테스트 두 곳을 잡아 줬고, 그게 이름을 바꾼 값이다.
+
+반면 `errorLogGrowth` 는 `AgentState.lastEvidence` 로 **`agent.json` 에 영속된다.**
+바꾸면 업그레이드 직후 옛 파일의 값이 안 읽히고 사라지는데, 「관측 못 함」과 「0」을
+섞지 않는 것이 이 층의 규칙이고 **이름 바꾸기가 그 규칙을 깨는 셈이다.**
+
+**게이트가 잡은 것 둘.**
+
+1. **e2e `v03-membership` 이 빨개졌다 — 내 페일오버 수정(N5)의 결과다.**
+   `expected 'healthy' to be 'unhealthy'`. 그 테스트는 「B12 만 보인다」를 기다렸는데,
+   전에는 그것이 곧 「프로버가 내렸다」였다 — 죽은 peer 로 간 요청이 **502 였기
+   때문**이다. 페일오버가 생기자 그 기다림이 **판정 전에도 참**이 되어 그냥 지나갔고,
+   뒤의 판정 단언이 경합했다. **판정 자체를 기다리도록** 고쳤다. 11/11 초록.
+   > 좋은 수정이 테스트의 숨은 전제를 깬 자리다. 테스트가 재던 것(「빠졌는가」)은
+   > 그대로이고, **추론 경로**가 더 이상 성립하지 않게 됐을 뿐이다.
+2. **스파이크 S18 이 빨갰다 — 확률적 flake 다** (→ W3-6). 단독 재실행 `PASS=8 FAIL=0`.
 
 ### ☐ W3-3 · D4 — 퇴역 epoch 의 슬롯을 회수한다 `[L]`
 
@@ -678,6 +706,23 @@ e2e 쪽 주석이 그 이유를 이미 적어 뒀다:
 - [ ] 재현물 — 오퍼레이션 N 회 뒤 `agent.json` 크기가 상한 안인가
 - [ ] 이 파일은 **오퍼레이션마다 통째로 읽고 쓴다.** 크기가 곧 지연이다
 - [ ] 외삽: 시간당 ~1.4 MB · 하루 ~34 MB
+
+### ☐ W3-6 · 스파이크 S18 이 ~2% 확률로 빨갛다 `[S]`
+
+> W3-2 의 전체 게이트에서 나왔다. 단독 재실행은 `PASS=8 FAIL=0`.
+
+```
+FAIL  fail  예외: ACME 400 …:badNonce: JWS has an invalid anti-replay nonce
+```
+
+- [ ] Pebble 은 nonce 를 **20% 거부**하도록 세워져 있고 `nonceRetries` 는 5 다.
+      한 요청이 여섯 번 연속 거절될 확률은 `0.2^6 = 6.4e-5` 인데, 한 회차에 요청이
+      **수백 개**다(`nonce.control` 이 상한 300 까지 주문한다) — 합치면 **~2%**
+- [ ] 고칠 자리는 둘 중 하나이고 **먼저 정해야 한다**:
+      ㉠ 스파이크의 Pebble 거부율을 낮춘다 (재는 것이 바뀐다 — ② 가 그 거부율을 쓴다)
+      ㉡ `fail`·`orphan` 처럼 nonce 를 재지 **않는** 케이스만 재시도를 넉넉히 준다
+- [ ] ⚠️ **이건 우리 코드의 결함이 아니다.** 그래도 ~2% 로 빨간 게이트는
+      *"가끔 깨진다"* 를 가르치고, 이 저장소는 그것을 이미 여러 번 대가로 치렀다
 
 ### ☐ W3 마무리
 

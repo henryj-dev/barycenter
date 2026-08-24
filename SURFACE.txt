@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 117 심볼 · sha256:036f50727880cb109f5b8247b014a9e898286e951953df006242b4475b304b34
+# 117 심볼 · sha256:9e5bc3fcc426a5141cbcf62db1bddfe4f1f730cdaf9a82dda50fa49fef0f2ee7
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -214,7 +214,7 @@ export type FsEffectsOptions = {
     reload: () => Promise<void>;
     probeAccepting: () => Promise<string | undefined>;
     probeConfigTest?: () => Promise<boolean>;
-    probeErrorLogLines?: () => Promise<number>;
+    probeFatalLogLines?: () => Promise<number>;
     configTest?: (generation: string) => Promise<boolean>;
     pushMembership?: (plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>) => Promise<void>;
 };

@@ -94,7 +94,20 @@ export type ActivationEvidence = {
   acceptingGeneration: string | undefined;
   /** `nginx -t` 가 통과했는가. 관측 못 했으면 undefined. */
   configTestPassed?: boolean;
-  /** 신호를 보낸 뒤 error log 가 몇 줄 늘었는가. 0 보다 크면 음성 신호다. */
+  /**
+   * 신호를 보낸 뒤 error log 의 **치명 줄**이 몇 줄 늘었는가 — `[emerg]` · `[alert]` ·
+   * `[crit]`. 0 보다 크면 음성 신호다.
+   *
+   * ⚠️ **전에는 「몇 줄 늘었는가」였다** (검수 D5). 그러면 `upstream timed out` 같은
+   * 트래픽이 만든 `[error]` 한 줄이 HUP 창에 들어올 때 멀쩡한 reload 가 실패했다.
+   * 겨눈 것은 설정이 만든 실패이고 그건 언제나 위 셋이다 — S7 이 잡은 포트 점유도
+   * `[emerg]` 다.
+   *
+   * **이름은 안 바꿨다.** 이 필드는 `AgentState.lastEvidence` 로 `agent.json` 에
+   * 영속되므로, 이름을 바꾸면 업그레이드 직후 옛 파일의 값이 **안 읽히고 사라진다** —
+   * 「관측 못 함」과 「0」을 섞지 않는 것이 이 층의 규칙인데 그 규칙을 이름 바꾸기가
+   * 깨는 셈이다. 주입 이음매(`probeFatalLogLines`)는 영속되지 않으므로 거기는 바꿨다.
+   */
   errorLogGrowth?: number;
   /** 마스터 프로세스. 바뀌었으면 reload 가 아니라 재시작이다. */
   masterPid?: string;

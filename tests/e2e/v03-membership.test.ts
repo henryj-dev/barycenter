@@ -272,7 +272,27 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
       "sed -i 's/listen 11;/listen 111;/' /backend/nginx.conf"
       + ' && /usr/local/openresty/bin/openresty -p /backend -c /backend/nginx.conf -s reload');
 
-    // 프로버가 내리고 리듀서가 반영할 때까지.
+    /**
+     * **판정을 트래픽으로 추론하지 않는다** (검수 N5 이후).
+     *
+     * 전에는 「B12 만 보인다」를 기다렸다. 그때는 그것이 곧 「프로버가 내렸다」였다 —
+     * 멤버십 평면에 페일오버가 없어서 죽은 peer 로 간 요청은 **502 였기 때문**이다.
+     *
+     * N5 를 고친 뒤에는 죽은 peer 로 배정된 요청도 살아 있는 쪽으로 재시도된다. 그래서
+     * 「B12 만 보인다」가 **프로버가 판정하기 전에도 참**이 되고, 이 기다림이 그냥
+     * 지나가 버린다. 그러면 아래 판정 단언이 경합한다 — 실제로 그렇게 빨개졌다.
+     *
+     * 재는 것이 「슬롯에서 빠졌는가」이므로 **판정 자체를 기다린다.**
+     */
+    const healthOf = async (): Promise<Record<string, string>> => {
+      const r = await api('GET', '/api/v1/health/backends');
+      return Object.fromEntries(
+        (r.body as { backendKey: string; state: string }[]).map((x) => [x.backendKey, x.state]));
+    };
+    const judged = await waitFor(healthOf, (m) => m['b11'] === 'unhealthy', 60_000);
+    expect(judged['b11'], '프로버가 죽은 백엔드를 안 내렸다').toBe('unhealthy');
+
+    // 그리고 슬롯에서 빠졌다 — 트래픽이 한쪽으로만 간다.
     const only12 = await waitFor(async () => {
       const seen = new Set<string>();
       for (let i = 0; i < 10; i += 1) seen.add(await hit());
@@ -288,9 +308,7 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
     expect(after.generations, '세대가 생겼다').toBe(before.generations);
 
     // 판정이 API 로 보인다 — `unknown` 을 숨기지 않는다.
-    const health = await api('GET', '/api/v1/health/backends');
-    const byKey = Object.fromEntries(
-      (health.body as { backendKey: string; state: string }[]).map((r) => [r.backendKey, r.state]));
+    const byKey = await healthOf();
     expect(byKey['b11']).toBe('unhealthy');
     expect(byKey['b12']).toBe('healthy');
   }, 300_000);

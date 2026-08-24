@@ -108,23 +108,26 @@ describe('관측', () => {
     expect((await fx.observeActivation())?.acceptingGeneration).toBe('gen-7');
   });
 
-  it('config test 와 error log 증가분도 증거에 실린다 (§6.3)', async () => {
+  it('config test 와 치명 줄 증가분도 증거에 실린다 (§6.3)', async () => {
+    // **`probeErrorLogLines` 였다** (검수 D5). 이름이 바뀐 이유는 계약이 바뀌었기
+    // 때문이다 — 이제 세는 것은 모든 줄이 아니라 `[emerg]`·`[alert]`·`[crit]` 이다.
+    // 옛 이름을 그대로 뒀으면 이 테스트는 초록인 채로 D5 를 다시 들여왔을 것이다.
     let lines = 5;
     const fx = effects({
       probeAccepting: async () => 'gen-7',
       probeConfigTest: async () => true,
-      probeErrorLogLines: async () => lines,
+      probeFatalLogLines: async () => lines,
     });
     // 신호를 보내면 그 시점이 워터마크가 된다.
     await fx.signalReload(LEASE);
     lines = 8;
     const e = await fx.observeActivation();
     expect(e?.configTestPassed).toBe(true);
-    expect(e?.errorLogGrowth, '신호 이후 늘어난 줄 수').toBe(3);
+    expect(e?.errorLogGrowth, '신호 이후 늘어난 치명 줄 수').toBe(3);
   });
 
   it('신호 전에는 증가분을 말하지 않는다 — 기준선이 없다', async () => {
-    const fx = effects({ probeAccepting: async () => 'gen-7', probeErrorLogLines: async () => 9 });
+    const fx = effects({ probeAccepting: async () => 'gen-7', probeFatalLogLines: async () => 9 });
     expect((await fx.observeActivation())?.errorLogGrowth).toBeUndefined();
   });
 

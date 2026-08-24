@@ -35,6 +35,17 @@ import type {
   Checked,
 } from './operation.js';
 
+/**
+ * **설정이 만든 실패**의 로그 수준 (검수 D5).
+ *
+ * nginx 의 수준은 `debug < info < notice < warn < error < crit < alert < emerg` 다.
+ * 기동·설정 실패는 언제나 위쪽 셋이고, 트래픽이 만드는 것(`upstream timed out` ·
+ * `no live upstreams` · `SSL_do_handshake() failed`)은 `[error]` 아래에 있다.
+ *
+ * **`[error]` 를 일부러 뺐다.** 그 한 칸이 이 신호의 오탐 전부였다.
+ */
+const FATAL_LEVEL = /\[(emerg|alert|crit)\]/;
+
 export type FsEffectsOptions = {
   /** `/etc/barycenter` 에 해당. `generations/` 와 `current` 가 여기 있다. */
   prefix: string;
@@ -50,12 +61,21 @@ export type FsEffectsOptions = {
    */
   probeConfigTest?: () => Promise<boolean>;
   /**
-   * error log 의 현재 줄 수. 기본값은 `<prefix>/logs/error.log` 를 센다.
+   * error log 에 쌓인 **치명 줄**의 수 — `[emerg]` · `[alert]` · `[crit]` (검수 D5).
    *
    * S7 이 실증한 것: 세대 리터럴만 보면 포트가 점유된 실패를 4027ms 동안 못 잡았는데,
    * 이 워터마크를 음성 신호로 넣자 71ms 에 잡혔다.
+   *
+   * ⚠️ **이 옵션의 이름이 `probeErrorLogLines` 였다.** 그때는 정말 *모든* 줄을 셌고,
+   * 그래서 `upstream timed out` 같은 **트래픽이 만든 `[error]` 한 줄**이 HUP 창에
+   * 들어오면 멀쩡한 reload 가 「관측되지 않음」이 되어 apply 가 실패했다. 바쁜 배포일수록
+   * 자주 걸렸고, 바쁜 배포일수록 apply 가 실패하면 안 된다.
+   *
+   * 이름을 함께 바꾼 이유: 이건 **주입 이음매**라, 옛 이름을 보고 「줄 수를 세면 되는구나」
+   * 하고 구현하면 그 순간 D5 가 조용히 되살아난다. 계약이 바뀌었으면 이름도 바뀌어야
+   * 잘못 구현하는 것이 어려워진다.
    */
-  probeErrorLogLines?: () => Promise<number>;
+  probeFatalLogLines?: () => Promise<number>;
   /**
    * `nginx -t` 상당. 세대 경로를 받아 엔진이 그 설정을 받아들이는지 답한다.
    *
@@ -246,7 +266,7 @@ export class FsEffects implements Effects {
 
   async signalReload(lease: ApplyLease): Promise<Checked> {
     // **신호 전에** 워터마크를 찍는다. 뒤에 찍으면 신호가 만든 오류를 놓친다.
-    this.watermark = await this.errorLogLines();
+    this.watermark = await this.fatalLogLines();
     const checked = lease.assertValid();
     // ⚠️ 표는 "불렀는가" 를 강제할 뿐 "언제 불렀는가" 를 강제하지 못한다. 아래 `await`
     // 안에서 리더가 바뀌면 신호는 그대로 나간다 — 9차에 재현했고 아직 남아 있다.
@@ -254,13 +274,25 @@ export class FsEffects implements Effects {
     return checked;
   }
 
-  private async errorLogLines(): Promise<number | undefined> {
+  /**
+   * **치명 줄만 센다** (검수 D5).
+   *
+   * nginx 는 `upstream timed out` · `no live upstreams` · `SSL_do_handshake() failed`
+   * 를 전부 `[error]` 로 적는다. 전부 **클라이언트와 백엔드가 만드는 것**이지 우리
+   * 설정이 만드는 것이 아니다. 줄 수를 세면 그 한 줄이 멀쩡한 reload 를 실패로 만든다.
+   *
+   * 겨눈 것은 **설정이 만든 실패**이고, 그건 언제나 `[emerg]` · `[alert]` · `[crit]`
+   * 이다 — S7 이 잡은 포트 점유(`bind() … Address already in use`)도 `[emerg]` 다.
+   * 그 셋만 세면 검출력은 그대로이고 오탐이 사라진다.
+   */
+  private async fatalLogLines(): Promise<number | undefined> {
     try {
-      if (this.opts.probeErrorLogLines !== undefined) return await this.opts.probeErrorLogLines();
+      if (this.opts.probeFatalLogLines !== undefined) return await this.opts.probeFatalLogLines();
       const path = join(this.opts.prefix, 'logs', 'error.log');
       if (!existsSync(path)) return 0;
       const text = readFileSync(path, 'utf8');
-      return text.length === 0 ? 0 : text.trimEnd().split('\n').length;
+      if (text.length === 0) return 0;
+      return text.trimEnd().split('\n').filter((l) => FATAL_LEVEL.test(l)).length;
     } catch {
       return undefined;
     }
@@ -291,7 +323,7 @@ export class FsEffects implements Effects {
     }
 
     // 워터마크가 없으면(아직 신호를 안 보냈으면) 증가분을 말할 수 없다.
-    const now = await this.errorLogLines();
+    const now = await this.fatalLogLines();
     const growth =
       this.watermark === undefined || now === undefined ? undefined : Math.max(0, now - this.watermark);
 
