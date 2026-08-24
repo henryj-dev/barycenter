@@ -35,6 +35,8 @@
 import { chmodSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { VERSION_DIR } from './secrets.js';
+
 export type SecretSweepResult = {
   kept: string[];
   removed: string[];
@@ -92,6 +94,19 @@ function scan(root: string): Entry[] {
         try {
           const st = statSync(dir);
           if (!st.isDirectory()) continue;
+          /**
+           * **버전 이름이 아닌 것은 버전이 아니다** (검수 D8).
+           *
+           * `FsSecretStore.put` 이 `<version>.tmp-<nonce>` 를 잠깐 만들고, 크래시가
+           * 그것을 남길 수 있다. 여기서 걸러내지 않으면 그 tmp 가 **mtime 이 제일
+           * 커서** `keepPerName` 의 보호 자리를 차지하고, 그만큼 **진짜 최신 버전이
+           * 보호 밖으로 밀려난다.** 지켜야 할 것이 안 지켜지는 쪽이라 조용하다.
+           *
+           * 걸러낸 tmp 는 이 목록에 안 들어가므로 **여기서 안 지운다.** 지우는 것은
+           * 다음 `put` 의 `finally` 이고, 그것으로 충분하다 — 남아 있어도 아무도 그것을
+           * 참조로 읽지 않는다.
+           */
+          if (!VERSION_DIR.test(version)) continue;
           out.push({ ref: `${scheme}://${name}@${version}`, dir, mtime: st.mtimeMs, name });
         } catch {
           /* 그 사이 사라졌으면 그만 */

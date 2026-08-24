@@ -17,8 +17,11 @@
  * 그래도 §4.8 의 요구 중 지키는 것: 개인키가 PG 에 안 들어가고, 참조가 버전 고정이고,
  * 자료의 digest 를 함께 든다.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import {
+  chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync,
+  renameSync, rmSync, writeFileSync,
+} from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
 import { createPrivateKey } from 'node:crypto';
@@ -120,6 +123,89 @@ export function parseRef(ref: string): { name: string; version: string } {
   return { name: m[1]!, version: m[2]! };
 }
 
+/**
+ * 버전 디렉토리의 이름 모양 (검수 D8).
+ *
+ * `put` 이 만드는 것은 sha256 앞 32 자다. **이것을 대조하는 이유는 tmp 때문이다** —
+ * `replaceDir` 이 `<version>.tmp-<nonce>` 를 잠깐 만들고, 크래시가 그것을 남길 수
+ * 있다. 그 이름을 버전으로 읽으면 두 가지가 조용히 틀어진다:
+ *
+ *   `listRefs`          없는 참조를 GC 의 root 넓히기에 흘린다
+ *   `secret-gc` 의 `keepPerName`  방금 만들어진 tmp 가 mtime 이 제일 커서
+ *                       **진짜 최신 버전의 보호 자리를 뺏는다**
+ *
+ * 뒤엣것이 실제 위험이다 — 지켜야 할 것이 안 지켜진다.
+ */
+export const VERSION_DIR = /^[a-f0-9]{32}$/;
+
+/**
+ * **버전 디렉토리를 통째로 갈아 끼운다** (검수 D8).
+ *
+ * ── 왜 제자리 쓰기로는 안 되나
+ *
+ * 전에는 이랬다:
+ *
+ *   const dir = join(root, name, version);
+ *   if (!existsSync(dir)) { mkdir; write fullchain; write key; write facts; chmod }
+ *
+ * `put` 의 주석이 옳은 절반을 말했다 — *"중간에 죽으면 key 가 없는 디렉토리가 남고
+ * `get` 이 던진다. 반쪽짜리를 조용히 쓰는 것보다 낫다."* 조용히 쓰는 것보다 나은 건
+ * 맞다. **그런데 거기서 끝나지 않는다.**
+ *
+ * 버전이 **내용 주소**라 같은 바이트를 다시 올리면 같은 `version` 이 나온다. 그러면
+ * `existsSync(dir)` 이 참이라 쓰기를 통째로 건너뛴다 — **반쪽으로 죽은 디렉토리는
+ * 재업로드로 못 고친다.** 그리고 재업로드는 운영자가 제일 먼저 할 일이다. 나가는 길은
+ * 손으로 그 디렉토리를 지우는 것뿐이고, 자료 디렉토리는 `0500` 이라 그것도 한 단계가
+ * 더 있다.
+ *
+ * ── 모양은 `materializeGeneration` 과 같다
+ *
+ * 임시 이름에 전부 쓰고 · fsync 하고 · rename 한다. rename 은 같은 파일시스템 안에서
+ * 원자적이라, 최종 이름으로 보이는 순간 안은 이미 완성돼 있다. 이 저장소가 세대에
+ * 쓰는 그 방법이고, **같은 자리에 같은 방어가 없던 것뿐이다.**
+ *
+ * `complete` 가 필요한 이유: rename 은 비어 있지 않은 디렉토리 위로 못 간다. 온전한
+ * 것이 이미 있으면 아무것도 안 하고(멱등), 반쪽이면 **치우고** 갈아 끼운다.
+ */
+function replaceDir(
+  finalDir: string,
+  files: readonly { name: string; body: string; mode: number }[],
+): void {
+  const complete = existsSync(finalDir)
+    && files.every((f) => existsSync(join(finalDir, f.name)));
+  if (complete) return;
+
+  const staging = `${finalDir}.tmp-${randomBytes(6).toString('hex')}`;
+  try {
+    mkdirSync(staging, { recursive: true, mode: 0o700 });
+    for (const f of files) {
+      const path = join(staging, f.name);
+      writeFileSync(path, f.body, { mode: f.mode });
+      // **바이트가 디스크에 닿은 뒤에 이름을 바꾼다.** 안 그러면 rename 만 살아남고
+      // 내용이 빈 파일이 남는 크래시가 있다.
+      const fd = openSync(path, 'r');
+      try { fsyncSync(fd); } finally { closeSync(fd); }
+    }
+    chmodSync(staging, 0o500);
+    // 반쪽이 남아 있으면 치운다 — rename 이 그 위로 못 간다. 이미 깨진 것이라
+    // 지우는 것이 손해가 아니고, 새 내용은 staging 에 이미 완성돼 있다.
+    if (existsSync(finalDir)) {
+      chmodSync(finalDir, 0o700);
+      rmSync(finalDir, { recursive: true, force: true });
+    }
+    renameSync(staging, finalDir);
+  } finally {
+    // 어디서 던졌든 임시 디렉토리를 안 남긴다 — 남으면 `listRefs` 와 GC 가 그것을
+    // 버전으로 읽는다.
+    if (existsSync(staging)) {
+      try {
+        chmodSync(staging, 0o700);
+        rmSync(staging, { recursive: true, force: true });
+      } catch { /* 이미 옮겨졌거나 사라졌으면 그만 */ }
+    }
+  }
+}
+
 export class FsSecretStore implements SecretStore {
   constructor(private readonly root: string) {}
 
@@ -137,19 +223,16 @@ export class FsSecretStore implements SecretStore {
     const version = createHash('sha256')
       .update(`${chainDigest}|${keyDigest}`, 'utf8').digest('hex').slice(0, 32);
 
-    const dir = join(this.root, name, version);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      // **fullchain 을 먼저 쓰고 key 를 마지막에 쓴다.** 중간에 죽으면 key 가 없는
-      // 디렉토리가 남고, `get` 이 그걸 읽으려다 던진다 — 반쪽짜리를 조용히 쓰는 것보다
-      // 낫다.
-      writeFileSync(join(dir, 'fullchain.pem'), material.fullchain, { mode: 0o400 });
-      writeFileSync(join(dir, 'privkey.pem'), material.privkey, { mode: 0o400 });
+    // **버전 디렉토리를 통째로 갈아 끼운다** (검수 D8). 전에는 제자리에 셋을 차례로
+    // 썼고, 중간에 죽으면 재업로드로도 못 고쳤다 — 내용 주소라 `existsSync` 가 참이라
+    // 쓰기를 건너뛰기 때문이다. `replaceDir` 머리말이 전말을 적어 뒀다.
+    replaceDir(join(this.root, name, version), [
+      { name: 'fullchain.pem', body: material.fullchain, mode: 0o400 },
+      { name: 'privkey.pem', body: material.privkey, mode: 0o400 },
       // 사실은 **자료가 아니다.** 0444 로 둔다 — 만료를 보는 데 키 권한이 필요하면
       // 만료를 안 보게 된다.
-      writeFileSync(join(dir, 'facts.json'), JSON.stringify(facts, null, 2), { mode: 0o444 });
-      chmodSync(dir, 0o500);
-    }
+      { name: 'facts.json', body: JSON.stringify(facts, null, 2), mode: 0o444 },
+    ]);
     return {
       ref: `store://${name}@${version}`,
       name, version,
@@ -185,12 +268,9 @@ export class FsSecretStore implements SecretStore {
     const keyDigest = sha256(privkey);
     const version = createHash('sha256').update(keyDigest, 'utf8').digest('hex').slice(0, 32);
     // **인증서 자료와 다른 디렉토리다.** 같은 곳에 두면 `get` 이 반쪽짜리를 만난다.
-    const dir = join(this.root, 'keys', name, version);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      writeFileSync(join(dir, 'privkey.pem'), privkey, { mode: 0o400 });
-      chmodSync(dir, 0o500);
-    }
+    replaceDir(join(this.root, 'keys', name, version), [
+      { name: 'privkey.pem', body: privkey, mode: 0o400 },
+    ]);
     return { ref: `key://${name}@${version}`, name, version, keyDigest };
   }
 
@@ -242,7 +322,10 @@ export class FsSecretStore implements SecretStore {
         } catch {
           continue;                       // 파일이거나 그 사이 사라졌다
         }
-        for (const version of versions) out.push(`${scheme}://${name}@${version}`);
+        for (const version of versions) {
+          if (!VERSION_DIR.test(version)) continue;
+          out.push(`${scheme}://${name}@${version}`);
+        }
       }
     };
     walk(this.root, 'store');

@@ -459,15 +459,39 @@
 > 클라이언트가 끊어서 온 경우에는 맞지만(이미 파괴돼 있다), **우리가 먼저 그만두기로
 > 한 경우**에는 쌓인 바이트가 그대로 남는다.
 
-### ☐ W2-4 · D8 — SecretStore `put` 원자화 `[M]`
+### ☑ W2-4 · D8 — SecretStore `put` 원자화 `[M]`
 
-- [ ] `tests/unit/audit-secret-put-atomic.test.ts` — mkdir 과 첫 write 사이에서
-      죽인 뒤 **같은 바이트를 다시 올리면** 자료가 온전한가
-- [ ] **빨강 확인**
-- [ ] `src/dp/secrets.ts:128` — `.tmp-<nonce>/` 에 셋을 쓰고 fsync 한 뒤 rename.
-      `materializeGeneration` 과 같은 모양이다. `putKey` 도 같은 자리
-- [ ] `npm run verify:quick`
-- [ ] 커밋 — `Pinned-by: tests/unit/audit-secret-put-atomic.test.ts -t "반쪽으로 죽은 자료는 재업로드가 고친다"`
+- [x] `tests/unit/audit-secret-put-atomic.test.ts` — 8 케이스. **죽는 순간을 흉내
+      내지 않는다** — 죽었을 때 디스크에 남는 모양을 그대로 만들어 놓고 `put` 을
+      부른다. 재려는 것은 죽는 순간이 아니라 **죽은 뒤에 복구가 되는가**다
+- [x] **빨강 확인** — 넷. 세 단계(mkdir 직후 · fullchain 만 · key 까지) 전부와
+      `putKey` 까지
+- [x] `src/dp/secrets.ts` — `replaceDir()` 하나로 `put` 과 `putKey` 를 같이 덮는다.
+      staging 에 전부 쓰고 **fsync 한 뒤** rename
+- [x] `./scripts/verify.sh --quick` — 9/9 초록 (unit 875 → 883)
+- [x] 커밋 — 핀 셋
+
+**주석이 옳은 절반만 말하고 있었다.** `put` 의 주석은 *"중간에 죽으면 key 가 없는
+디렉토리가 남고 `get` 이 던진다 — 반쪽짜리를 조용히 쓰는 것보다 낫다"* 였다. 조용히
+쓰는 것보다 나은 건 맞다. **거기서 끝나지 않는 것이 문제였다:** 버전이 내용 주소라
+같은 바이트를 다시 올리면 같은 `version` 이 나오고, `existsSync(dir)` 이 참이라 쓰기를
+통째로 건너뛴다 — **재업로드로 못 고친다.** 그리고 재업로드가 운영자가 제일 먼저 할
+일이다. 나가는 길은 손으로 지우는 것뿐인데 자료 디렉토리는 `0500` 이라 그것도 한 단계
+더 있다.
+
+**계획에 없던 것 하나 — 수정이 만든 위험을 같이 닫았다.** tmp+rename 으로 바꾸면
+크래시가 `<version>.tmp-<nonce>` 를 남길 수 있고, 그것을 **버전으로 읽는 쪽이 둘**이다:
+`listRefs`(GC 의 root 넓히기)와 `secret-gc` 의 `keepPerName`. 뒤엣것이 실제 위험이다 —
+tmp 는 **mtime 이 제일 커서** 보호 자리를 차지하고, 그만큼 진짜 최신 버전이 보호 밖으로
+밀려난다. `VERSION_DIR` 한 벌을 두고 양쪽이 대조하게 했다. 재현물도 붙였다
+(`keepPerName: 1` 로 진짜 자료가 지워지는지 본다).
+
+> ⚠️ **그 재현물 하나가 처음엔 가짜였고, `pinned.mjs` 가 잡았다.**
+> `FAIL … -t "GC 도 그것을 버전으로 안 센다" — **수정 전에도 초록이다. 아무것도 안
+> 지킨다.**` 두 디렉토리의 mtime 이 **같은 밀리초**라 정렬이 안 갈렸고, `readdirSync`
+> 순서상 진짜 버전이 먼저 와서 보호 자리를 지켰다. `utimesSync` 로 시간을 벌려
+> 고쳤다. 재현물이 초록인 것과 방어가 있는 것은 다르고, **그 차이를 사람이 보는
+> 방법은 게이트뿐이다.**
 
 ### ☐ W2-5 · D9 — 종료 경로 `[S]`
 
