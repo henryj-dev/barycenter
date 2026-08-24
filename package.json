@@ -19,7 +19,7 @@
     "test:model": "vitest run tests/model",
     "mutate": "node scripts/mutate.mjs",
     "test:watch": "vitest tests/unit",
-    "test:golden": "vitest run tests/golden",
+    "test:golden": "vitest run tests/golden --no-file-parallelism",
     "test:e2e": "vitest run tests/e2e --no-file-parallelism",
     "test:engine": "./tests/engine/run.sh",
     "typecheck": "tsc --noEmit",

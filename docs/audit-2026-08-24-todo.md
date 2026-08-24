@@ -589,14 +589,29 @@ D3·D4 는 아직 골든으로 못 박히지 않았다 — 그것을 먼저 만�
 > 한다** — `set_more_tries` 를 부르는 순간 D3 이 잠복에서 깨어난다. 아래 항목의 원문은
 > 그 뒤에 그대로 둔다.
 
-- [ ] `src/conf/render.ts` — `balancer_by_lua_block` 이 `balancer.set_more_tries(n)` 를
-      부른다. `n` 은 **남은 peer 수**여야 한다 — 상수로 박으면 풀 크기가 바뀔 때 갈린다
-- [ ] 같은 커밋에서 D3 — `ngx.ctx` 에 **고른 peer 전부**를 쌓고 `log_by_lua` 가 그
-      목록을 전부 내린다
-- [ ] `tests/golden/next-upstream.test.ts` 의 검사 **셋이 다 초록**이어야 한다.
-      셋째(누수 감시자)가 빨개지면 페일오버만 고치고 누수를 안 고친 것이다
-- [ ] stream 평면도 같은 자리다 (`render.ts:1520~`)
-- [ ] 커밋 — `Pinned-by: tests/golden/next-upstream.test.ts -t "죽은 백엔드가 있어도 모든 요청이 성공한다"`
+- [x] `src/conf/render.ts` — `balancer_by_lua_block` 이 `balancer.set_more_tries(#all - 1)`
+      를 **첫 호출에만** 부른다. 두 번 부르면 남은 횟수가 다시 설정돼 재시도가 안 끝난다
+- [x] **이미 시도한 peer 를 뺀다.** 재시도가 같은 죽은 peer 로 다시 가면 그건 재시도가
+      아니라 같은 실패를 반복하는 것이다 (`ngx.ctx.bary_tried`)
+- [x] 같은 커밋에서 D3 — `ngx.ctx.bary_peers` 에 **고른 peer 전부**를 쌓고
+      `log_by_lua` 가 그 목록을 전부 내린다
+- [x] `tests/golden/next-upstream.test.ts` 의 검사 **셋이 다 초록**
+- [x] stream 평면도 같이 고쳤다
+- [x] 커밋 — `Pinned-by: tests/golden/next-upstream.test.ts -t "죽은 백엔드가 있어도 모든 요청이 성공한다"`
+
+**계획에 없던 것 — 골든 스위트를 직렬로 돌린다.**
+
+새 파일을 넣자 `ciphers.test.ts` 가 빨개졌다(`tls12=거절`). 단독으로 돌리면 초록이다 —
+**부하가 늘어 타이밍 민감성이 드러난 것**이고, 내 변경이 원인이 아니라 그 자리가 원래
+아슬아슬했다.
+
+`test:e2e` 와 `test:store` 는 **이미** `--no-file-parallelism` 이다. 골든만 빠져 있었고,
+e2e 쪽 주석이 그 이유를 이미 적어 뒀다:
+
+> vitest 는 파일을 동시에 돌리므로 … 실제로 깨졌고, **단독으로 돌리면 초록이라 원인을
+> 찾기 전에 "가끔 깨진다" 로 넘어가기 쉽다.**
+
+같은 교훈이 골든에는 안 적용돼 있었다. 붙였다.
 
 ### ☐ W3-1(원문) · D3 — `in:` 누수를 막는다 `[M]`
 

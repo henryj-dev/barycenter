@@ -348,14 +348,37 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
             local d = ngx.shared.${dict}
             local peers = d:get("${slotKey}" .. (_G.BARY_EPOCH or "0"))
             if not peers or peers == "" then return ngx.exit(ngx.ERROR) end
+            local all = {}
+            for hp in peers:gmatch("[^,]+") do all[#all + 1] = hp end
+
+            local tried = ngx.ctx.bary_tried
+            if not tried then
+                tried = {}
+                ngx.ctx.bary_tried = tried
+                ngx.ctx.bary_peers = {}
+                -- **한 번만 부른다** (검수 N5). 두 번 부르면 남은 횟수가 다시 설정돼
+                -- 재시도가 끝나지 않는다. 값은 **남은 peer 수**다 — 상수로 박으면
+                -- 풀 크기가 바뀔 때 갈린다.
+                if #all > 1 then balancer.set_more_tries(#all - 1) end
+            end
+
+            -- **이미 시도한 peer 는 뺀다.** 재시도가 같은 죽은 peer 로 다시 가면
+            -- 그건 재시도가 아니라 같은 실패를 반복하는 것이다.
             local list = {}
-            for hp in peers:gmatch("[^,]+") do list[#list + 1] = hp end
+            for i = 1, #all do
+                if not tried[all[i]] then list[#list + 1] = all[i] end
+            end
             local n = #list
+            if n == 0 then return ngx.exit(ngx.ERROR) end
             ${pickExpression(pool)}
             local peer = list[idx]
             local h, p = peer:match("^(.*):(%d+)$")
             assert(balancer.set_current_peer(h, tonumber(p)))
-            ngx.ctx.bary_peer = peer
+            tried[peer] = true
+            -- **고른 것을 전부 쌓는다** (검수 D3). 하나만 들면 재시도한 요청에서
+            -- 먼저 고른 peer 의 \`in:\` 이 영영 안 내려간다.
+            local chosen = ngx.ctx.bary_peers
+            chosen[#chosen + 1] = peer
             d:incr("in:" .. peer, 1, 0)
         `),
   ]);
@@ -1408,13 +1431,19 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).
     if (caps.httpLua === true) {
       children.unshift(lua('log_by_lua_block', `
-            local peer = ngx.ctx.bary_peer
-            if not peer then return end
+            -- **고른 것을 전부 내린다** (검수 D3). 전에는 \`ngx.ctx.bary_peer\` 하나였고,
+            -- 그건 **마지막** peer 다 — 재시도한 요청에서 먼저 고른 peer 의 \`in:\` 이
+            -- 영영 안 내려갔다. 그 누수는 N5(페일오버 없음)를 고치는 순간 살아난다.
+            local chosen = ngx.ctx.bary_peers
+            if not chosen then return end
             local d = ngx.shared.${MEMBERSHIP_DICT.http}
-            local n = d:incr("in:" .. peer, -1)
-            -- 0 이하면 0 으로 고정하고 **만료를 건다** (검수 B-12). 지우지는 않는다 —
-            -- 키가 없으면 드레인이 "관측 없음" 으로 읽어 quiesced 를 영영 못 판정한다.
-            if not n or n <= 0 then d:set("in:" .. peer, 0, ${INFLIGHT_IDLE_TTL}) end
+            for i = 1, #chosen do
+                local peer = chosen[i]
+                local n = d:incr("in:" .. peer, -1)
+                -- 0 이하면 0 으로 고정하고 **만료를 건다** (검수 B-12). 지우지는 않는다 —
+                -- 키가 없으면 드레인이 "관측 없음" 으로 읽어 quiesced 를 영영 못 판정한다.
+                if not n or n <= 0 then d:set("in:" .. peer, 0, ${INFLIGHT_IDLE_TTL}) end
+            end
         `));
       children.unshift(directive('lua_shared_dict',
         [lit(MEMBERSHIP_DICT.http), lit(dictSize(model.engine?.membershipDictKb, DEFAULT_MEMBERSHIP_KB))]));
@@ -1518,12 +1547,16 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
       children.push(directive('lua_shared_dict',
         [lit(MEMBERSHIP_DICT.stream), lit(dictSize(model.engine?.membershipDictKb, DEFAULT_MEMBERSHIP_KB))]));
       children.push(lua('log_by_lua_block', `
-            local peer = ngx.ctx.bary_peer
-            if not peer then return end
+            -- 검수 D3 — http 평면과 같은 규칙이다. **고른 것을 전부 내린다.**
+            local chosen = ngx.ctx.bary_peers
+            if not chosen then return end
             local d = ngx.shared.${MEMBERSHIP_DICT.stream}
-            local n = d:incr("in:" .. peer, -1)
-            -- 검수 B-12 — http 평면과 같은 규칙이다.
-            if not n or n <= 0 then d:set("in:" .. peer, 0, ${INFLIGHT_IDLE_TTL}) end
+            for i = 1, #chosen do
+                local peer = chosen[i]
+                local n = d:incr("in:" .. peer, -1)
+                -- 검수 B-12 — http 평면과 같은 규칙이다.
+                if not n or n <= 0 then d:set("in:" .. peer, 0, ${INFLIGHT_IDLE_TTL}) end
+            end
         `));
       // stream 에도 세대별 admin 조각을 끌어들인다 — epoch 리터럴이 거기 산다.
       children.push(directive('include', [lit('stream-admin/*.conf')]));
