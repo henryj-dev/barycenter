@@ -65,6 +65,25 @@ which is why the recommended v1 deployment is a dedicated VM with host networkin
 `./scripts/quickstart.sh` runs exactly these steps and checks the result, so the instructions
 above cannot rot silently.
 
+### Installing on one machine
+
+For that dedicated VM, `deploy/install.sh` does the whole thing on a single host — packages
+(OpenResty, Node 22), a non-root service user holding `cap_net_bind_service`, the build, the
+service unit, and — optionally — a local PostgreSQL reached over a unix socket, so no password
+is written anywhere:
+
+```sh
+sudo deploy/install.sh --with-postgres                 # or --dsn postgres://…
+```
+
+It ends by proving the thing it installed: it waits for `/readyz` — engine attached, driver
+answering — and runs `bary status` against the token it just minted. Debian · Ubuntu · RHEL 9
+derivatives · Amazon Linux 2023 · Alpine. `./tests/install/run.sh` runs the script inside a
+real container of each, boots the service under systemd (OpenRC on Alpine), and asserts the
+daemon answers — **including after a restart**, which is the only way to know the bootstrap
+generation does not roll the active one back, and that `apply` can open port 80, which is the
+only way to know the file capability landed.
+
 What `apply` did, in order: opened a changeset on the current head, accumulated the patch,
 **sealed** it into a plan (showing which sockets it would open — that is where a bind failure
 would surface), committed it (reserving revision *and* a fresh activation epoch), rendered it,
@@ -85,6 +104,7 @@ Run all the checks with `./scripts/verify.sh` (or `--quick` to skip the Docker-b
 | `npm run test:golden` | 10 | rendered output must pass `nginx -t` **on the real engine** |
 | `npm run test:e2e` | 35 | the whole chain on real nginx — HTTP, TCP, UDP and SNI pass-through |
 | `npm run test:engine` | 65 | nginx/OpenResty behaviours the design takes for granted |
+| `./tests/install/run.sh` | 5 | `deploy/install.sh` on real Debian · Ubuntu · Rocky · Amazon Linux · Alpine |
 | `./spike/s1-s5/run.sh` | 8 | reload-free membership changes across HTTP/TCP/UDP |
 | `./spike/s7/run.sh` | 9 | proving a reload actually took effect |
 | `./spike/s8/run.sh` | 11 | rolling a certificate back to an earlier generation |
