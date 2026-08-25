@@ -24,6 +24,11 @@
 #                                             `--with-postgres` 만 돌면 실배포에서 더 흔한
 #                                             쪽(외부 PG)이 한 번도 안 돌아 본 채 나간다.
 #                                             재설치를 견디는지도 여기서 같이 드러난다
+#   8. 대화형으로 깔아도 같은 것이 서는가   — **ubuntu 판에서만** 잰다. 답을 파이프로
+#                                             넣고 `--interactive` 로 강제한다. 프롬프트가
+#                                             도는 것과 그 답이 **env 파일까지 가는 것**은
+#                                             다른 사실이라, `--env` 로 받은 키가 파일에
+#                                             있는지까지 본다
 #
 # **안 재는 것도 적어 둔다** (조용한 상한을 안 만든다): 나머지 네 판의 재설치, 실제
 # 트래픽(백엔드는 일부러 죽은 것을 가리킨다), 그리고 재부팅 뒤 기동 — 유닛의
@@ -38,7 +43,7 @@ if [ "${1:-}" = "--keep" ]; then KEEP=1; shift; fi
 # 이름|베이스 이미지|초기화 시스템|추가 검사
 ALL_PLANES="
 debian|debian:12|systemd|dsn
-ubuntu|ubuntu:24.04|systemd|-
+ubuntu|ubuntu:24.04|systemd|interactive
 rocky|rockylinux/rockylinux:9|systemd|-
 amazon|amazonlinux:2023|systemd|-
 alpine|alpine:3.21|openrc|-
@@ -229,6 +234,25 @@ JSON' >/dev/null 2>&1
     else
       printf '    NO   --dsn 재설치가 실패했다 — 마지막 15줄:\n'
       tail -n 15 "/tmp/bary-install-$name-dsn.log" | sed 's/^/         /'
+      rc=1
+    fi
+  fi
+
+  # ⑧ 대화형 경로 — 답을 파이프로 넣는다.
+  #
+  #    답의 순서가 곧 프롬프트의 순서다: PG 선택(2=DSN) · DSN · API 주소 · prefix ·
+  #    app-dir · 유저 · 추가 설정 한 줄 · 빈 줄(끝) · 진행 확인.
+  #    빈 줄은 "기본값을 쓴다" 이고, 그래서 이 파이프는 **기본값 경로도 같이 잰다.**
+  if [ "$extra" = interactive ]; then
+    if printf '2\npostgres:///bary?host=/run/postgresql\n\n\n\n\nBARY_PROBE_INTERVAL_MS=3000\n\n\n' \
+       | docker exec -i "$c" sh /repo/deploy/install.sh --interactive \
+           > "/tmp/bary-install-$name-int.log" 2>&1 \
+       && wait_ready "$c" \
+       && docker exec "$c" grep -q "^BARY_PROBE_INTERVAL_MS='3000'$" /etc/barycenter/env; then
+      printf '    ok   대화형으로 깔아도 선다 (--env 가 env 파일까지 간다)\n'
+    else
+      printf '    NO   대화형 설치가 실패했다 — 마지막 15줄:\n'
+      tail -n 15 "/tmp/bary-install-$name-int.log" | sed 's/^/         /'
       rc=1
     fi
   fi

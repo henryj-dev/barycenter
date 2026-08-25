@@ -28,6 +28,21 @@ NO_SERVICE=0
 SKIP_PACKAGES=0
 TLS_CERT=
 TLS_KEY=
+INTERACTIVE=auto
+ASSUME_YES=0
+EXTRA_ENV=
+
+# **옵션으로 준 것과 기본값을 가른다.** 둘을 못 가르면 대화가 "이미 정한 것"을 다시
+# 묻게 되고, 그러면 옵션이 뜻을 잃는다.
+LISTEN_SET=0
+PREFIX_SET=0
+APP_DIR_SET=0
+USER_SET=0
+
+# 이 스크립트가 스스로 정하는 키들. `--env` 로 덮어쓰지 못하게 한다 — 같은 키가 두 줄
+# 들어가면 어느 쪽이 이기는지 형식(systemd·sh)마다 다르고, 그건 나중에 찾기 나쁘다.
+MANAGED_ENV_KEYS="BARY_DSN BARY_PREFIX BARY_LISTEN BARY_TOKENS_FILE BARY_ENGINE_BIN
+BARY_GUI BARY_CONFIGTEST_CMD BARY_RELOAD_CMD BARY_TLS_CERT_FILE BARY_TLS_KEY_FILE"
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -35,9 +50,9 @@ usage() {
   cat <<'EOF'
 barycenter 단일 인스턴스 설치
 
-  deploy/install.sh (--dsn <DSN> | --with-postgres) [옵션]
+  deploy/install.sh [--dsn <DSN> | --with-postgres] [옵션]
 
-필수 (택일)
+PostgreSQL (택일 — 터미널에서는 안 주면 물어본다)
   --dsn <postgres://...>   이미 있는 PostgreSQL 을 쓴다
   --with-postgres          같은 호스트에 PostgreSQL 을 설치하고 role·db 를 만든다
                            (유닉스 소켓 + peer 인증 — 비밀번호를 만들지 않는다)
@@ -49,9 +64,19 @@ barycenter 단일 인스턴스 설치
   --listen <host:port>     컨트롤 플레인 API (기본 127.0.0.1:8088)
   --tls-cert <경로>        API 서버 인증서 — 루프백 밖으로 열려면 필요하다
   --tls-key <경로>         그 개인키
+  --env KEY=VALUE          env 파일에 넣을 BARY_* 설정. 여러 번 줄 수 있다
+                           (예: --env BARY_ACME=1 --env BARY_PROBE_INTERVAL_MS=3000)
   --no-service             유닛 파일만 쓰고 enable·start 는 하지 않는다
   --skip-packages          패키지 설치를 건너뛴다 (이미 준비된 이미지)
   -h, --help               이 도움말
+
+대화
+  --interactive            빈 칸을 물어본다 (TTY 이고 PostgreSQL 을 안 골랐으면 자동)
+  --non-interactive        절대 안 묻는다. 빈 칸이 있으면 죽는다 (CI 에서 쓴다)
+  -y, --yes                마지막 확인을 건너뛴다
+
+  **옵션으로 준 값은 안 묻는다.** 대화는 다른 모드가 아니라 빈 칸을 채우는 절차다 —
+  그래서 같은 스크립트가 사람 앞에서도 CI 에서도 같은 뜻이다.
 
 지원 배포판: Debian 11+ · Ubuntu 20.04+ · RHEL 계열 9 (Rocky·Alma·CentOS Stream)
              · Amazon Linux 2023 · Alpine 3.19+
@@ -64,16 +89,64 @@ ok()   { printf '  OK    %s\n' "$*"; }
 warn() { printf '  WARN  %s\n' "$*" >&2; }
 die()  { printf '  FAIL  %s\n' "$*" >&2; exit 1; }
 
+# 값에 작은따옴표를 두르는 것은 취향이 아니라 **양쪽을 만족시키기 위해서다** —
+# systemd 의 `EnvironmentFile` 도 sh 의 `.` 도 이 형식을 읽는다(OpenRC 쪽 init
+# 스크립트가 이 파일을 그대로 source 한다).
+#
+# **값 안의 작은따옴표는 못 담는다.** `'\''` 로 이어 붙이는 셸의 관용구를 systemd 의
+# 파서가 같은 뜻으로 읽는다는 보장이 없고, 두 파서가 다르게 읽는 설정 파일은 조용히
+# 갈린다. 그래서 담을 수 없다고 **말하고** 죽는다 — 몰래 망가뜨리지 않는다.
+env_line() {                    # env_line <KEY> <VALUE>
+  case "$2" in
+    *\'*) die "$1 의 값에 작은따옴표가 있다 — 이 env 파일 형식이 못 담는다 (값을 바꾸거나 설치 뒤 $ENV_FILE 을 직접 고친다)" ;;
+  esac
+  printf "%s='%s'\n" "$1" "$2"
+}
+
+extra_env_add() {               # extra_env_add <KEY=VALUE>
+  case "$1" in
+    BARY_*=*) : ;;
+    *) die "--env 는 BARY_ 로 시작하는 KEY=VALUE 여야 한다 (받은 것: $1)" ;;
+  esac
+  _k=${1%%=*}
+  _v=${1#*=}
+  case " $MANAGED_ENV_KEYS " in
+    *" $_k "*) die "$_k — 이 스크립트가 정하는 값이다. 해당 옵션을 쓴다 (--help)" ;;
+  esac
+  EXTRA_ENV="$EXTRA_ENV$(env_line "$_k" "$_v")
+"
+}
+
+# 한 줄 물어본다. **프롬프트는 stderr 로 낸다** — 답을 `$(...)` 로 받기 때문이다.
+ask() {                         # ask <질문> <기본값>
+  if [ -n "$2" ]; then printf '  %s [%s]: ' "$1" "$2" >&2
+  else                 printf '  %s: ' "$1" >&2
+  fi
+  if ! IFS= read -r _ans; then
+    printf '\n' >&2
+    die "입력이 끝났다 — 비대화형으로 돌리려면 옵션으로 준다 (--help)"
+  fi
+  # 답이 파이프로 오면 개행이 안 따라온다 — 그러면 프롬프트들이 한 줄에 붙어
+  # 로그가 읽히지 않는다. TTY 면 사람이 친 Enter 가 이미 그 개행이다.
+  [ -t 0 ] || printf '%s\n' "$_ans" >&2
+  [ -z "$_ans" ] && _ans=$2
+  printf '%s' "$_ans"
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --dsn)            DSN=${2:?--dsn 에 값이 필요하다}; shift 2 ;;
     --with-postgres)  WITH_PG=1; shift ;;
-    --prefix)         PREFIX=${2:?--prefix 에 값이 필요하다}; shift 2 ;;
-    --app-dir)        APP_DIR=${2:?--app-dir 에 값이 필요하다}; shift 2 ;;
-    --user)           SVC_USER=${2:?--user 에 값이 필요하다}; shift 2 ;;
-    --listen)         LISTEN=${2:?--listen 에 값이 필요하다}; shift 2 ;;
+    --prefix)         PREFIX=${2:?--prefix 에 값이 필요하다}; PREFIX_SET=1; shift 2 ;;
+    --app-dir)        APP_DIR=${2:?--app-dir 에 값이 필요하다}; APP_DIR_SET=1; shift 2 ;;
+    --user)           SVC_USER=${2:?--user 에 값이 필요하다}; USER_SET=1; shift 2 ;;
+    --listen)         LISTEN=${2:?--listen 에 값이 필요하다}; LISTEN_SET=1; shift 2 ;;
     --tls-cert)       TLS_CERT=${2:?--tls-cert 에 값이 필요하다}; shift 2 ;;
     --tls-key)        TLS_KEY=${2:?--tls-key 에 값이 필요하다}; shift 2 ;;
+    --env)            extra_env_add "${2:?--env 에 KEY=VALUE 가 필요하다}"; shift 2 ;;
+    --interactive)    INTERACTIVE=1; shift ;;
+    --non-interactive) INTERACTIVE=0; shift ;;
+    -y|--yes)         ASSUME_YES=1; shift ;;
     --no-service)     NO_SERVICE=1; shift ;;
     --skip-packages)  SKIP_PACKAGES=1; shift ;;
     -h|--help)        usage; exit 0 ;;
@@ -83,16 +156,112 @@ done
 
 [ "$(id -u)" = 0 ] || die "root 로 돌려야 한다 (sudo deploy/install.sh ...)"
 
+if [ -n "$DSN" ] && [ "$WITH_PG" = 1 ]; then
+  die "--dsn 과 --with-postgres 는 같이 못 쓴다 — 어느 PG 를 쓸지 하나만 정한다"
+fi
+
+# ── ⓪ 대화형 설정 ───────────────────────────────────────────────────────
+#
+# **자동으로 물어보는 것은 두 조건이 같이 참일 때뿐이다**: PostgreSQL 을 안 골랐고,
+# stdin 이 TTY 다.
+#
+#   PG 를 골랐으면  이미 뜻을 밝힌 것이다. 나머지는 기본값으로 간다 — 여기서 더
+#                   물으면 `--with-postgres` 한 줄로 끝나던 설치가 갑자기 대화가 된다
+#   TTY 가 아니면   프롬프트는 대화가 아니라 **멎은 것**이다. CI 가 정확히 그렇게
+#                   걸리므로, 빈 칸이 있으면 지금처럼 사용법을 내고 죽는다
+#
+# `--interactive` 는 그 판단을 덮어 강제로 묻고, `--non-interactive` 는 절대 안 묻는다.
+if [ "$INTERACTIVE" = auto ]; then
+  if [ -z "$DSN" ] && [ "$WITH_PG" = 0 ] && [ -t 0 ]; then INTERACTIVE=1; else INTERACTIVE=0; fi
+fi
+
+if [ "$INTERACTIVE" = 1 ]; then
+  step "⓪ 설정"
+  say "  빈 칸으로 두면 대괄호 안의 기본값을 쓴다. 옵션으로 준 값은 안 묻는다."
+  say ""
+
+  if [ -z "$DSN" ] && [ "$WITH_PG" = 0 ]; then
+    say "  PostgreSQL — 정본이 사는 곳이다 (§11.2)."
+    say "    1) 이 호스트에 설치한다 (유닉스 소켓 + peer 인증 — 비밀번호를 안 만든다)"
+    say "    2) 이미 있는 것을 쓴다 (DSN 을 입력한다)"
+    while [ -z "$DSN" ] && [ "$WITH_PG" = 0 ]; do
+      choice=$(ask "고른다" "1")
+      case "$choice" in
+        1) WITH_PG=1 ;;
+        2) DSN=$(ask "DSN" "") ;;
+        *) warn "1 이나 2 를 고른다" ;;
+      esac
+    done
+    say ""
+  fi
+
+  [ "$LISTEN_SET"  = 0 ] && LISTEN=$(ask "컨트롤 플레인 API 주소 (GUI 도 같은 자리)" "$LISTEN")
+  [ "$PREFIX_SET"  = 0 ] && PREFIX=$(ask "세대·상태·소켓이 살 곳" "$PREFIX")
+  [ "$APP_DIR_SET" = 0 ] && APP_DIR=$(ask "산출물이 살 곳" "$APP_DIR")
+  [ "$USER_SET"    = 0 ] && SVC_USER=$(ask "서비스 유저" "$SVC_USER")
+
+  case "$LISTEN" in
+    127.*|localhost:*|\[::1\]:*) : ;;
+    *)
+      if [ -z "$TLS_CERT" ] || [ -z "$TLS_KEY" ]; then
+        say ""
+        warn "$LISTEN 은 루프백이 아니다 — 이 API 로 개인키와 Bearer 토큰이 지나간다."
+        TLS_CERT=$(ask "TLS 인증서 경로" "$TLS_CERT")
+        TLS_KEY=$(ask "TLS 개인키 경로" "$TLS_KEY")
+      fi ;;
+  esac
+
+  say ""
+  say "  env 에 더 넣을 설정이 있으면 KEY=VALUE 로 한 줄씩 준다. 빈 줄이면 끝."
+  say "  예: BARY_ACME=1 · BARY_PROBE_INTERVAL_MS=3000 · BARY_OIDC_ISSUER=https://..."
+  while : ; do
+    kv=$(ask "추가 설정" "")
+    if [ -z "$kv" ]; then break; fi
+    extra_env_add "$kv"
+  done
+
+  # **바꾸기 전에 무엇을 바꿀지 보여 준다.** 이 스크립트는 패키지를 깔고 유저를 만들고
+  # 서비스를 띄운다 — 되돌리는 값이 싸지 않다.
+  say ""
+  say "  ── 이대로 세운다 ─────────────────────────────"
+  if [ "$WITH_PG" = 1 ]; then
+    say "    PostgreSQL   이 호스트에 설치한다"
+  else
+    say "    PostgreSQL   $DSN"
+  fi
+  say "    API          $LISTEN$([ -n "$TLS_CERT" ] && printf ' (TLS)')"
+  say "    prefix       $PREFIX"
+  say "    산출물       $APP_DIR"
+  say "    유저         $SVC_USER"
+  if [ -n "$EXTRA_ENV" ]; then
+    say "    추가 설정    $(printf '%s' "$EXTRA_ENV" | sed 's/=.*//' | tr '\n' ' ')"
+  fi
+  say "  ──────────────────────────────────────────────"
+
+  if [ "$ASSUME_YES" = 0 ]; then
+    yn=$(ask "진행할까? (y/n)" "y")
+    case "$yn" in
+      y|Y|yes|YES|ye) : ;;
+      *) die "중단했다 — 아무것도 안 바꿨다" ;;
+    esac
+  fi
+fi
+
 # **둘 다 안 주면 세운다.** 기본값으로 로컬 PG 를 깔아 주면 "관리형 PG 를 쓰려던
 # 호스트에 쓰지 않을 PG 가 깔린다" 가 되고, 기본값으로 DSN 을 요구하면서 조용히
 # 넘어가면 데몬이 기동 시점에 `환경변수 BARY_DSN 이 필요하다` 로 죽는다 —
 # 그 메세지는 설치가 어디서 갈렸는지 말하지 않는다.
-if [ -n "$DSN" ] && [ "$WITH_PG" = 1 ]; then
-  die "--dsn 과 --with-postgres 는 같이 못 쓴다 — 어느 PG 를 쓸지 하나만 정한다"
-fi
 if [ -z "$DSN" ] && [ "$WITH_PG" = 0 ]; then
   usage >&2
-  die "--dsn 이나 --with-postgres 중 하나가 필요하다"
+  die "--dsn 이나 --with-postgres 중 하나가 필요하다 (터미널이면 물어봤을 것이다)"
+fi
+
+# DSN 은 **여기서** 본다. 대화로 받았든 옵션으로 받았든 같은 검사를 지난다.
+if [ -n "$DSN" ]; then
+  case "$DSN" in
+    postgres://*|postgresql://*) : ;;
+    *) die "DSN 이 postgres:// 로 시작하지 않는다: $DSN" ;;
+  esac
 fi
 
 # **루프백 밖이면 TLS 를 먼저 요구한다.**
@@ -657,35 +826,38 @@ printf '[{"name":"ops","scopes":["read","write","apply"],"hash":"%s"}]\n' "$TOKE
 chown root:"$SVC_USER" "$TOKENS_FILE"
 chmod 0640 "$TOKENS_FILE"
 
-# 값에 작은따옴표를 두르는 것은 systemd 취향이 아니라 **양쪽을 만족시키기 위해서다** —
-# systemd 의 `EnvironmentFile` 도 sh 의 `.` 도 이 형식을 읽는다. OpenRC 쪽 init
-# 스크립트가 이 파일을 그대로 source 한다.
+# 한 줄 한 줄을 `env_line` 이 만든다 — 인용 규칙이 한 자리에만 있게 하려는 것이다.
+# heredoc 으로 늘어놓던 때는 값에 따옴표가 든 경우(암호를 담은 DSN)가 조용히 깨졌다.
 ENV_FILE="$PREFIX/env"
-cat > "$ENV_FILE" <<EOF
-BARY_DSN='$DSN'
-BARY_PREFIX='$PREFIX'
-BARY_LISTEN='$LISTEN'
-BARY_TOKENS_FILE='$TOKENS_FILE'
-BARY_ENGINE_BIN='$ENGINE_BIN'
-BARY_GUI='$APP_DIR/gui/build'
-BARY_CONFIGTEST_CMD='$ENGINE_BIN -p $PREFIX -c $PREFIX/generations/{generation}/nginx.conf -t'
-EOF
-# **pid 가 기본 자리에 없을 때만 적는다.** 기본이면 데몬이 `$PREFIX/logs/nginx.pid` 를
-# 읽어 직접 HUP 을 보낸다(`effects-boot.ts`) — 같은 값을 두 자리에 두지 않는다.
-if [ "$ENGINE_PID_FILE" != "$PREFIX/logs/nginx.pid" ]; then
-  cat >> "$ENV_FILE" <<EOF
-BARY_RELOAD_CMD='kill -HUP \$(cat $ENGINE_PID_FILE)'
-EOF
-fi
-if [ -n "$TLS_CERT" ]; then
-  cat >> "$ENV_FILE" <<EOF
-BARY_TLS_CERT_FILE='$TLS_CERT'
-BARY_TLS_KEY_FILE='$TLS_KEY'
-EOF
-fi
+{
+  env_line BARY_DSN "$DSN"
+  env_line BARY_PREFIX "$PREFIX"
+  env_line BARY_LISTEN "$LISTEN"
+  env_line BARY_TOKENS_FILE "$TOKENS_FILE"
+  env_line BARY_ENGINE_BIN "$ENGINE_BIN"
+  env_line BARY_GUI "$APP_DIR/gui/build"
+  env_line BARY_CONFIGTEST_CMD \
+    "$ENGINE_BIN -p $PREFIX -c $PREFIX/generations/{generation}/nginx.conf -t"
+  # **pid 가 기본 자리에 없을 때만 적는다.** 기본이면 데몬이 `$PREFIX/logs/nginx.pid` 를
+  # 읽어 직접 HUP 을 보낸다(`effects-boot.ts`) — 같은 값을 두 자리에 두지 않는다.
+  if [ "$ENGINE_PID_FILE" != "$PREFIX/logs/nginx.pid" ]; then
+    env_line BARY_RELOAD_CMD "kill -HUP \$(cat $ENGINE_PID_FILE)"
+  fi
+  if [ -n "$TLS_CERT" ]; then
+    env_line BARY_TLS_CERT_FILE "$TLS_CERT"
+    env_line BARY_TLS_KEY_FILE "$TLS_KEY"
+  fi
+  # `--env` 와 대화로 받은 것들. **끝에 둔다** — 위의 관리 키와 겹치는 것은 이미
+  # `extra_env_add` 가 거절했으므로, 여기 오는 것은 데몬이 읽는 다른 설정들뿐이다.
+  [ -n "$EXTRA_ENV" ] && printf '%s' "$EXTRA_ENV"
+} > "$ENV_FILE"
 chown root:"$SVC_USER" "$ENV_FILE"
 chmod 0640 "$ENV_FILE"
-ok "$ENV_FILE · $TOKENS_FILE"
+if [ -n "$EXTRA_ENV" ]; then
+  ok "$ENV_FILE · $TOKENS_FILE (추가 설정 $(printf '%s' "$EXTRA_ENV" | grep -c .) 줄)"
+else
+  ok "$ENV_FILE · $TOKENS_FILE"
+fi
 
 # ── ⑪ 서비스 ────────────────────────────────────────────────────────────
 #

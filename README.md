@@ -74,7 +74,14 @@ is written anywhere:
 
 ```sh
 sudo deploy/install.sh --with-postgres                 # or --dsn postgres://…
+sudo deploy/install.sh                                 # a terminal gets asked instead
 ```
+
+Run it bare on a terminal and it walks through the same settings and shows what it will do
+before touching anything; every answer has a flag, and a flag given is never asked about, so
+the identical script fits a config-management run. `--env BARY_ACME=1` (repeatable) carries
+any other daemon setting into the environment file. Under a pipe it never prompts — it prints
+the usage and exits, because a prompt no one can answer is a hang, not a question.
 
 It ends by proving the thing it installed: it waits for `/readyz` — engine attached, driver
 answering — and runs `bary status` against the token it just minted. Debian · Ubuntu · RHEL 9
