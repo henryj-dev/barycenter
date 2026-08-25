@@ -27,7 +27,9 @@ export function markerArgv(mark) {
   if (m === null) return { argv: [mark] };
   const file = m[1];
   if (m[2] === undefined) return { argv: [file] };
-  return { argv: [file, '-t', escapeRegExp(m[2])] };
+  // 사람 손으로 쓴 표식의 띄어쓰기는 테스트 이름의 의미가 아니다. 특히 한국어
+  // 조사 앞뒤의 선택적 띄어쓰기 때문에 핀 자체가 0건이 되지 않도록 허용한다.
+  return { argv: [file, '-t', escapeRegExp(m[2]).replace(/\s+/g, '\\s*')] };
 }
 
 /** 정규식 메타문자를 리터럴로. */
@@ -74,7 +76,11 @@ export function verdictOf({ threw, text }) {
   // ③ 고른 테스트가 0 건. **`no tests` 를 함께 본다** — `-t` 가 아무것도 안 고르면
   //    vitest 는 이 문구를 찍고 **성공으로** 끝낸다. 옛 가드는 `Tests +0 …` 만 봐서
   //    그냥 지나갔고, 게이트가 멀쩡한 재현물을 "수정 전에도 초록" 으로 판정했다.
-  if (/No test files found|Tests +0 (passed|failed)|Tests +no tests/.test(text)) return 'empty';
+  if (
+    /No test files found|Tests +0 (passed|failed)|Tests +no tests/.test(text)
+    || (/Tests +\d+ skipped \(\d+\)/.test(text)
+      && !/Tests +\d+ (?:passed|failed)/.test(text))
+  ) return 'empty';
 
   return threw ? 'red' : 'green';
 }

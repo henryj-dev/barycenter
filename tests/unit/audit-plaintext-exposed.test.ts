@@ -5,7 +5,7 @@ import { plaintextExposureMetric } from '../../src/api/server.js';
 import { render } from '../../src/obs/metrics.js';
 
 describe('외부 평문 제어 API', () => {
-  it('TLS가 없고 루프백 밖이면 플래그 없이는 안 뜬다', () => {
+  it('TLS 가 없고 루프백 밖이면 플래그 없이는 안 뜬다', () => {
     expect(plaintextExposureError('0.0.0.0', false, false)).toMatch(/BARY_ALLOW_PLAINTEXT_EXPOSED/);
   });
 

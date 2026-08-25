@@ -22,7 +22,8 @@
  * **이 게이트가 못 잡는 것**: 산문의 정확성("이주는 불가능하다" 같은 전칭 서술).
  * 그건 원래 검수로만 잡히는 축이고, 카운터와 분리한 현행 구조가 맞다 — 48차 판정이다.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import ts from 'typescript';
 
 import { markerArgv, verdictOf } from './pinned-lib.mjs';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
@@ -68,7 +69,7 @@ function checkCommit(sha) {
   const parent = `${sha}^`;
   const subject = git('log', '-1', '--format=%s', sha);
 
-  if (git('diff', '--name-only', `${parent}..${sha}`, '--', 'src/').length === 0) {
+  if (!hasSemanticSrcChange(parent, sha)) {
     console.log(`건너뜀 ${short} — src 변경 없음 (${subject})`);
     return true;
   }
@@ -87,6 +88,45 @@ function checkCommit(sha) {
     return false;
   }
   return checkMarks(sha, parent, marks, short);
+}
+
+/**
+ * src 경로의 주석/공백만 바꾼 커밋은 동작 재현물 핀 대상이 아니다.
+ *
+ * `src/` 아래 문서 주석을 보강하는 커밋도 게이트의 범위에는 잡혔는데, 실제
+ * 실행 토큰은 바뀌지 않았으므로 그 커밋에 이미 통과하던 테스트를 억지로
+ * 연결하게 됐다. TypeScript scanner는 trivia(공백·주석)를 건너뛰므로 토큰
+ * 흐름을 비교하면 이 경계를 기계적으로 확인할 수 있다.
+ */
+function hasSemanticSrcChange(parent, sha) {
+  const files = git('diff', '--name-only', `${parent}..${sha}`, '--', 'src/')
+    .split('\n').map((x) => x.trim()).filter(Boolean);
+  return files.some((file) => {
+    const before = sourceTokens(parent, file);
+    const after = sourceTokens(sha, file);
+    return before !== after;
+  });
+}
+
+function sourceTokens(ref, file) {
+  let source = '';
+  try {
+    source = execFileSync('git', ['show', `${ref}:${file}`], { encoding: 'utf8' });
+  } catch {
+    return '<missing>';
+  }
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith('.tsx') || file.endsWith('.jsx')
+      ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard,
+    source,
+  );
+  const tokens = [];
+  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+    tokens.push(`${kind}:${scanner.getTokenText()}`);
+  }
+  return tokens.join('\u0000');
 }
 
 /**
@@ -151,14 +191,11 @@ function checkMarks(sha, parent, marks, short) {
         { cwd: w.tree, stdio: 'pipe' });
       let threw = false;
       let text = '';
-      try {
-        text = execFileSync('npx', ['vitest', 'run', ...argv], {
-          cwd: w.tree, encoding: 'utf8',
-        });
-      } catch (e) {
-        threw = true;
-        text = `${e.stdout ?? ''}${e.stderr ?? ''}`;
-      }
+      const result = spawnSync('npx', ['vitest', 'run', ...argv], {
+        cwd: w.tree, encoding: 'utf8',
+      });
+      threw = result.status !== 0;
+      text = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       const verdict = verdictOf({ threw, text });
       if (verdict === 'red') {
         console.log(`ok    ${short} ${mark} — 수정 전에 빨갛다`);

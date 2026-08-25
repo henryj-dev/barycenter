@@ -37,19 +37,24 @@ describe('핀 게이트 — 표식 해석', () => {
       .toEqual({ argv: ['tests/unit/a.test.ts', '-t', '이름'] });
   });
 
+  it('표식의 선택적 띄어쓰기가 테스트 선택을 비우지 않는다', () => {
+    const { argv } = markerArgv('tests/unit/a.test.ts -t "TLS 가 없다"');
+    expect(new RegExp(argv[2]!).test('TLS가 없다')).toBe(true);
+  });
+
   it('**정규식 메타문자를 이스케이프한다** — `-t` 는 정규식이다', () => {
     /**
      * 괄호를 그대로 넘기면 캡처 그룹이 되고, 괄호를 리터럴로 가진 테스트 이름과 안
      * 맞는다. 고른 테스트가 0 건이 되고 vitest 는 그걸 성공으로 끝낸다.
      */
     const { argv } = markerArgv('tests/unit/a.test.ts -t "레이트리밋 (제안 #6)"');
-    expect(argv[2]).toBe('레이트리밋 \\(제안 #6\\)');
+    expect(argv[2]).toBe('레이트리밋\\s*\\(제안\\s*#6\\)');
   });
 
   it('`*` 도 이스케이프한다 — 안 하면 러너가 기동에서 죽는다', () => {
     // `**실제로**` 는 `Nothing to repeat` 으로 vitest 가 SyntaxError 를 던진다.
     const { argv } = markerArgv('tests/unit/a.test.ts -t "**실제로 막는다**"');
-    expect(argv[2]).toBe('\\*\\*실제로 막는다\\*\\*');
+    expect(argv[2]).toBe('\\*\\*실제로\\s*막는다\\*\\*');
     expect(() => new RegExp(argv[2]!)).not.toThrow();
   });
 
@@ -86,6 +91,13 @@ describe('핀 게이트 — 판정', () => {
      */
     expect(verdictOf({ threw: false, text: ' Test Files  1 passed (1)\n      Tests  no tests\n' }))
       .toBe('empty');
+  });
+
+  it('모든 테스트가 건너뛰어져도 0건으로 판정한다', () => {
+    expect(verdictOf({
+      threw: false,
+      text: ' Test Files  1 skipped (1)\n      Tests  5 skipped (5)\n',
+    })).toBe('empty');
   });
 
   it('**러너가 기동에서 죽으면 빨강이 아니다** — 아무 테스트도 안 돌았다', () => {
