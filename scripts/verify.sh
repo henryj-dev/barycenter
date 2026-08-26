@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # barycenter — 전체 검증. 지금 어디까지 확인됐는지 한 번에 본다.
 #
-#   ./scripts/verify.sh          전부
-#   ./scripts/verify.sh --quick  도커가 필요 없는 것만 (단위 + 타입)
+#   ./scripts/verify.sh              전부
+#   ./scripts/verify.sh --quick      도커가 필요 없는 것만 (단위 + 타입)
+#   ./scripts/verify.sh --group e2e  조각 하나만 (CI 가 병렬로 돌리는 단위)
+#   ./scripts/verify.sh --list-groups  조각 이름 목록
+#   ./scripts/verify.sh --verbose    통과한 단위의 출력도 전부 낸다
 #
 # 도커가 필요한 묶음(골든·엔진·스파이크)은 도커가 없으면 **건너뛰지 않고 실패**한다.
 # 조용히 건너뛰면 통과 신호를 위조하게 된다. 굳이 빼려면 --quick 을 명시한다.
+#
+# **조각의 정의도 여기 있다.** 이 스크립트는 873초를 직렬로 돌았고, 단위 열여덟이
+# 서로를 안 기다리는데도 그랬다. 나누면 임계 경로가 가장 긴 단위 하나로 줄어든다.
+# 그 목록을 CI 에 적으면 로컬과 갈라지고, 갈라지면 어느 쪽이 계약인지 아무도 모른다 —
+# 이 저장소가 문서와 코드에서 이미 겪은 병이다. 그래서 CI 는 `--list-groups` 로
+# **이름만** 받아 매트릭스를 만들고, 무엇이 어느 조각인지는 아래 `group` 이 정한다.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -15,8 +24,57 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 . scripts/lib/flake.sh
 FLAKES=0
 
+# 조각. 순서는 CI 매트릭스에 그대로 나가므로 **긴 것을 앞에** 둔다 —
+# 러너가 순서대로 집으면 가장 늦게 끝날 것이 가장 먼저 시작한다.
+# ⚠️ `GROUPS` 라는 이름은 쓸 수 없다 — bash 내장 배열(현재 사용자의 그룹 ID)이라
+#    대입이 먹지 않고 GID 목록이 튀어나온다. 실제로 한 번 그렇게 나왔다.
+VERIFY_GROUPS=(e2e engine render spikes unit)
+# 이 중 도커가 필요한 것들. `unit` 만 도커 없이 돈다.
+VERIFY_DOCKER_GROUPS=(e2e engine render spikes)
+
 QUICK=0
-[ "${1:-}" = "--quick" ] && QUICK=1
+GROUP=""
+VERBOSE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --quick)       QUICK=1 ;;
+    --verbose|-v)  VERBOSE=1 ;;
+    --group)       shift; GROUP="${1:-}" ;;
+    --group=*)     GROUP="${1#--group=}" ;;
+    --list-groups) printf '%s\n' "${VERIFY_GROUPS[@]}"; exit 0 ;;
+    *) echo "알 수 없는 인자: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [ -n "$GROUP" ]; then
+  case " ${VERIFY_GROUPS[*]} " in
+    *" $GROUP "*) ;;
+    *) echo "알 수 없는 조각: $GROUP (있는 것: ${VERIFY_GROUPS[*]})" >&2; exit 2 ;;
+  esac
+fi
+
+# 지금 어느 조각을 적고 있는가. `run` 이 이걸 보고 자기가 돌 차례인지 판단한다.
+CURRENT_GROUP=""
+RAN=0
+
+group() {
+  local g="$1"
+  # 오타로 조각을 새로 만들지 못하게 한다. 없는 이름으로 묶으면 그 단위는 어느
+  # 매트릭스 칸에서도 안 돌면서 **아무도 그 사실을 모른다** — 나누기의 대표적 사고다.
+  case " ${VERIFY_GROUPS[*]} " in
+    *" $g "*) ;;
+    *) echo "  FAIL  알 수 없는 조각: $g" >&2; exit 2 ;;
+  esac
+  CURRENT_GROUP="$g"
+}
+
+# 지금 고른 조각이 도커를 필요로 하는가.
+needs_docker() {
+  [ $QUICK -eq 1 ] && return 1
+  [ -z "$GROUP" ] && return 0
+  case " ${VERIFY_DOCKER_GROUPS[*]} " in *" $GROUP "*) return 0 ;; *) return 1 ;; esac
+}
 
 RESULTS=()
 FAILED=0
@@ -61,6 +119,20 @@ heartbeat() {                # heartbeat <label>
 run() {                      # run <label> <command...>
   local label="$1"; shift
   local out rc hb start elapsed line
+
+  # **조각에 배정되지 않은 단위는 없다.** 나누면서 조용히 빠뜨리는 것이 이 구조에서
+  # 가장 비싼 사고다 — 검사가 사라진 것이 초록으로 보이기 때문이다. 스파이크를 하나
+  # 더 넣고 `group` 뒤에 두는 것을 잊으면 여기서 즉시 빨개진다.
+  if [ -z "$CURRENT_GROUP" ]; then
+    printf '  FAIL  %s — 어느 조각에도 없다 (`group <이름>` 뒤에 두어라)\n' "$label" >&2
+    FAILED=1
+    return
+  fi
+  # 조각 하나만 도는 중이면 남의 것은 건너뛴다.
+  if [ -n "$GROUP" ] && [ "$CURRENT_GROUP" != "$GROUP" ]; then
+    return 0
+  fi
+  RAN=$(( RAN + 1 ))
   if [ $TTY -eq 1 ]; then
     printf '  ..    %s  —  ' "$label"
   else
@@ -96,6 +168,28 @@ run() {                      # run <label> <command...>
   [ $TTY -eq 1 ] && printf '\r\033[K'
   printf '%s\n' "$line"
 
+  # **통과한 단위의 출력도 볼 수 있어야 한다.**
+  #
+  # 이 스크립트는 자식의 출력을 삼켜 표 하나로 보여 준다(머리말 참조). 그 값은
+  # 그대로지만, 실패했을 때만 원문이 나오면 **"왜 통과했는지" 를 되짚을 수 없다** —
+  # 스위트가 0 건을 돌고 초록인 경우가 표에서는 통과와 똑같이 보인다.
+  #
+  # CI 에서는 접힌 그룹으로 낸다. 표는 그대로 읽히고, 궁금한 줄만 펼치면 원문이 있다.
+  # 로컬에서는 `--verbose` 로 같은 것을 낸다.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    # ⚠️ 자식의 출력에 `::error::` 같은 줄이 섞이면 GitHub 이 그걸 **명령으로 실행**해
+    #    가짜 주석이 달린다. 원문을 내는 동안 명령 해석을 끈다. 토큰은 매번 달라야
+    #    출력이 그것을 흉내 내 다시 켜는 것을 막는다.
+    local tok="verify-$$-${RANDOM}${RANDOM}"
+    printf '::group::%s  (%s초)\n' "$label" "$elapsed"
+    printf '::stop-commands::%s\n' "$tok"
+    printf '%s\n' "$out"
+    printf '::%s::\n' "$tok"
+    printf '::endgroup::\n'
+  elif [ $VERBOSE -eq 1 ]; then
+    printf '\n----- %s (전문) -----\n%s\n' "$label" "$out"
+  fi
+
   if [ $rc -ne 0 ]; then
     # **꼬리 25 줄로는 모자란다.** 스파이크는 실패한 회차의 진단을 **인라인**으로 찍고
     # 요약을 맨 뒤에 찍는다 — 꼬리만 보면 요약만 남고 원인은 잘린다. S12 가 게이트
@@ -125,6 +219,9 @@ summarize() {
 echo "═══════════════════════════════════════════════════════════════"
 echo " barycenter verify"
 echo "═══════════════════════════════════════════════════════════════"
+
+# 도커 없이 도는 것 전부. 이 조각만 도커가 필요 없다.
+group unit
 
 run "typecheck            " npx tsc --noEmit
 run "표면 (계약 고정)     " node scripts/surface.mjs --check
@@ -161,6 +258,10 @@ run "모델 (스케줄 생성)   " npx vitest run tests/model --silent
 
 if [ $QUICK -eq 1 ]; then
   echo "  (--quick: 도커가 필요한 묶음은 실행하지 않았다)"
+elif ! needs_docker; then
+  # `--group unit` 이다. 도커를 요구하지 않는다 — 없다고 실패시키면 그 조각은
+  # 도커 없는 러너에서 못 돈다.
+  :
 else
   if ! docker info >/dev/null 2>&1; then
     echo "  FAIL  도커가 필요하다. 골든·엔진·스파이크는 실제 nginx 로 판정한다."
@@ -174,22 +275,38 @@ else
     # **화면도 여기서 선다.** 전에는 게이트 어디에도 `vite build` 가 없어서, 브라우저
     # 번들이 안 서는 상태로 한동안 초록이었다 — `gui/build` 가 없으면 데몬이 조용히
     # GUI 없이 뜨므로 그 사실이 어디에도 안 드러난다.
+    # **빌드는 조각이 아니라 선결 조건이다.** `dist/` 를 돌리는 단위가 여럿이다 —
+    # 진입점 퍼미션 · e2e · S12 · S18. 어느 도커 조각을 고르든 먼저 서야 하므로
+    # 조각을 가리지 않고 한 번 돈다. 판정은 지금 도는 조각에 기록된다.
+    group "${GROUP:-e2e}"
     run "build (dist·gui)      " ./scripts/build.sh
     # **진입점 퍼미션** (검수 G7 · W0-9 가 남겼다). `build.sh` 가 진입점 목록을 손으로
     # 들고 있다가 `bary-dp-agent` 를 빠뜨렸다 — 선언은 있는데 실행 권한이 없는 산출물이
     # 나갔다. `chmod +x dist/bin/*.js` 로 목록을 없앴는데 **그것이 정말 도는지는 아무도
     # 안 쟀다.** 빌드 뒤여야 하므로 `--quick` 밖이다.
+    # 가장 긴 단위(e2e 242초)가 임계 경로다. 같은 조각에 붙는 것은 `dist/` 를 함께
+    # 쓰는 진입점 퍼미션뿐이다.
+    group e2e
     run "진입점 퍼미션        " npx vitest run tests/unit/audit-small-four.test.ts --silent
+    run "e2e (실제 nginx)      " npm run test:e2e --silent
+
+    # 렌더 결과를 실물로 재는 둘. 서로 컨테이너를 따로 세운다.
+    group render
     run "store (실물 PG)      " npm run test:store --silent
     run "golden (nginx -t)    " npm run test:golden --silent
-    run "e2e (실제 nginx)      " npm run test:e2e --silent
+
+    # 엔진 사실과, 혼자 144초를 쓰는 S12 를 함께 둔다 — 둘이 합쳐야 e2e 와 길이가 맞는다.
+    group engine
     run "engine facts         " ./tests/engine/run.sh
+    run "spike S12            " ./spike/s12/run.sh
+
+    # 나머지 스파이크. 하나하나는 짧아서 모아 놓아야 조각 하나가 된다.
+    group spikes
     run "spike S1/S5          " ./spike/s1-s5/run.sh
     run "spike S7             " ./spike/s7/run.sh
     run "spike S8             " ./spike/s8/run.sh
     run "spike S9             " ./spike/s9/run.sh
     run "spike S11            " ./spike/s11/run.sh
-    run "spike S12            " ./spike/s12/run.sh
     run "spike S13            " ./spike/s13/run.sh
     run "spike S15            " ./spike/s15/run.sh
     run "spike S16            " ./spike/s16/run.sh
@@ -207,6 +324,14 @@ else
     # 충돌 사실 자체는 h3 클라이언트 없이도 재지므로 **엔진 사실 E65 로 갈라 넣었고**,
     # 그건 위의 `engine facts` 안에서 초록으로 산다. `./spike/s20/run.sh` 로 직접 돌린다.
   fi
+fi
+
+# **고른 조각이 비어 있으면 실패한다.** 이름은 살아 있는데 아무것도 안 도는 상태는
+# 초록으로 보이지만 실제로는 검사가 없어진 것이다 — 조각을 지우거나 이름을 바꾸고
+# CI 매트릭스만 안 고친 경우가 정확히 여기 걸린다.
+if [ -n "$GROUP" ] && [ $RAN -eq 0 ]; then
+  echo "  FAIL  조각 '$GROUP' 에서 아무 단위도 돌지 않았다 — 이름만 남고 내용이 없다."
+  FAILED=1
 fi
 
 echo ""
