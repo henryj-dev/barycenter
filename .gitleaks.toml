@@ -1,0 +1,14 @@
+# gitleaks 설정 — **예외는 좁게, 근거와 함께**
+#
+# 기본 규칙 묶음을 그대로 쓰고(`useDefault`), 여기서 빼는 것만 적는다. 규칙을 끄는
+# 대신 **파일과 값을 둘 다 지정해서** 빼는 이유는, 넓게 뚫어 둔 예외가 나중에 진짜를
+# 삼키기 때문이다. 새 예외가 필요하면 왜 필요한지를 여기 적는다.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "OIDC 서명 경로를 재는 테스트의 고정 문자열. HS256 은 값이 있어야 서명이 되고, 그 값은 코드에 적힌 그대로가 전부다 — 어디에도 붙지 않는다."
+condition = "AND"
+paths = ['''^tests/unit/oidc-.*\.test\.ts$''']
+regexes = ['''oidc-hs256-secret''']
