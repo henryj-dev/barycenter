@@ -37,7 +37,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          # **태그로 도는 워크플로는 캐시를 믿지 않는다.** 캐시는 브랜치 빌드가 채우고,
+          # 그 자리는 이 잡보다 권한이 낮은 곳이다 — 릴리스가 거기서 온 바이트를
+          # 그대로 싣는 경로를 만들지 않는다.
+          package-manager-cache: false
       - run: npm ci
 
       # **태그와 `package.json` 이 다른 것을 말하면 릴리스가 거짓말을 한다.**
@@ -65,6 +68,13 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # **여기부터 되돌릴 수 없다.** 태그를 미는 것은 사람이 하는 일이지만, 그것만으로는
+    # "누가 언제 무엇을 내보냈는가" 가 남지 않는다. 환경 뒤에 두면 승인이 한 번 더
+    # 걸리고, 배포 기록이 Deployments 에 쌓이고, 릴리스용 자격증명을 이 잡에서만
+    # 볼 수 있게 좁힐 수 있다.
+    environment:
+      name: release
+      url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     permissions:
       # 릴리스를 만들고 파일을 붙인다.
       contents: write
@@ -79,7 +89,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          # **태그로 도는 워크플로는 캐시를 믿지 않는다.** 캐시는 브랜치 빌드가 채우고,
+          # 그 자리는 이 잡보다 권한이 낮은 곳이다 — 릴리스가 거기서 온 바이트를
+          # 그대로 싣는 경로를 만들지 않는다.
+          package-manager-cache: false
       - run: npm ci
       - run: npm run build
 

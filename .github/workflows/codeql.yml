@@ -71,3 +71,28 @@ jobs:
         uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           category: /language:${{ matrix.language }}
+
+  # **브랜치 규칙이 거는 이름은 이것 하나다.**
+  #
+  # 매트릭스 잡의 체크 이름에는 매트릭스 값이 붙는다(`analyze (actions)`). 언어를 하나
+  # 늘리거나 이름을 고치는 날 규칙에 적어 둔 이름과 어긋나고, 그러면 보호는 조용히
+  # 사라진다. 여기서 모아 받으면 언어가 바뀌어도 규칙은 그대로다.
+  #
+  # ⚠️ **이 체크가 묻는 것은 "분석이 돌았는가" 이지 "경고가 없는가" 가 아니다.**
+  # 위 머리말대로 경고는 Security 탭에 쌓이고 머지를 막지 않는다 — 그건 그대로다.
+  # 여기서 막는 것은 질의가 깨져 **아무것도 훑지 않은 채로 초록이 되는** 경우다.
+  codeql:
+    name: codeql
+    needs: [analyze]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 분석이 돌았는가
+        env:
+          RESULT: ${{ needs.analyze.result }}
+        run: |
+          set -euo pipefail
+          echo "analyze: $RESULT"
+          test "$RESULT" = "success" \
+            || { echo "::error::CodeQL 분석이 끝까지 돌지 않았다 ($RESULT)"; exit 1; }
