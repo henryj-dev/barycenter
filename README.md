@@ -13,7 +13,6 @@ before any coordinate moves.
 [![verify](https://github.com/henryj-dev/barycenter/actions/workflows/verify.yml/badge.svg)](https://github.com/henryj-dev/barycenter/actions/workflows/verify.yml)
 [![codeql](https://github.com/henryj-dev/barycenter/actions/workflows/codeql.yml/badge.svg)](https://github.com/henryj-dev/barycenter/actions/workflows/codeql.yml)
 [![scorecard](https://github.com/henryj-dev/barycenter/actions/workflows/scorecard.yml/badge.svg)](https://github.com/henryj-dev/barycenter/actions/workflows/scorecard.yml)
-[![dependency-review](https://github.com/henryj-dev/barycenter/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/henryj-dev/barycenter/actions/workflows/dependency-review.yml)
 
 <br/>
 
@@ -188,7 +187,7 @@ If any of that fails, the coordinates do not move and `bary` exits non-zero with
 
 ## How it fits together
 
-```
+```text
   Web GUI ─┐
   CLI ─────┼─→ REST API ─→ Model + ConfigRevision (PostgreSQL) ─→ Reconciler (single leader)
   IaC ─────┘                                                        │            │
@@ -319,10 +318,6 @@ Run all the checks with `./scripts/verify.sh` (or `--quick` to skip the Docker-b
 
 ## Status & limitations
 
-> [!WARNING]
-> **It runs, and it is a draft.** The API and DB schema are **not frozen** (§9.1.1). They get
-> fixed *with* the implementation, and the implementation is not finished.
-
 **What works.** `docker compose up` gives you a control plane you can drive over REST: a change
 goes through a changeset, gets planned, committed, rendered, published as an immutable generation,
 and activated on real nginx — with the activation *proven* before any coordinate moves. The
@@ -344,7 +339,10 @@ monotonic fencing tokens, and a non-leader serves reads but answers `503 not_lea
 but **failover is not automatic**: each data plane carries its own nginx, so extra instances are
 cold standbys, and moving traffic is still DNS or an upstream L4's job (§11.4).
 
-**Where the rest is written down.** The design lives in [`DESIGN.md`](./DESIGN.md) and the test
+**Not frozen.** It runs, and it is a draft. The API and DB schema are not frozen (§9.1.1) —
+they get fixed *with* the implementation, and the implementation is not finished.
+
+The design lives in [`DESIGN.md`](./DESIGN.md) and the test
 cases derived from it in [`TESTS.md`](./TESTS.md) (both written in Korean). What is true *now* is
 in [`STATUS.md`](./STATUS.md). The review-round diary is in
 [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md).
