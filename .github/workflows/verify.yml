@@ -121,10 +121,40 @@ jobs:
           echo "기준: $BASE"
           node scripts/pinned.mjs "$BASE"
 
-  verify:
+  # **조각 목록은 스크립트가 말한다.** 여기에 이름을 적으면 로컬과 갈라지고, 갈라지면
+  # 어느 쪽이 계약인지 아무도 모른다 — 그래서 CI 는 `--list-groups` 로 받아 매트릭스를
+  # 만든다. 조각을 늘리거나 줄이는 것은 `verify.sh` 한 군데서 끝난다.
+  groups:
     runs-on: ubuntu-latest
-    # 스파이크 다섯 개가 각각 컨테이너를 세우고 e2e 가 nginx·PG 를 띄운다.
-    timeout-minutes: 60
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 조각 목록
+        id: list
+        run: |
+          set -euo pipefail
+          names="$(./scripts/verify.sh --list-groups)"
+          test -n "$names" || { echo "::error::조각 목록이 비었다"; exit 1; }
+          echo "$names"
+          echo "list=$(printf '%s\n' "$names" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  # **조각마다 러너 하나.** 전에는 열여덟 단위가 한 잡에서 873초를 직렬로 돌았다.
+  # 서로 기다릴 이유가 없는 것들이라, 나누면 임계 경로가 가장 긴 단위 하나로 줄어든다.
+  verify:
+    name: verify (${{ matrix.group }})
+    needs: groups
+    runs-on: ubuntu-latest
+    # 한 조각이 빨개도 나머지는 끝까지 본다 — 한 번에 무엇이 깨졌는지 다 보는 편이
+    # 다시 밀어 보는 것보다 싸다.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.groups.outputs.list) }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -139,13 +169,19 @@ jobs:
       - run: npm ci
 
       # 이미지를 미리 받아 둔다. 안 그러면 첫 스파이크의 타임아웃 안에 pull 이 들어가
-      # 느린 날 거짓 실패가 난다.
+      # 느린 날 거짓 실패가 난다. `unit` 조각은 도커를 안 쓰므로 건너뛴다.
       - name: 엔진·DB 이미지 준비
+        if: matrix.group != 'unit'
         run: |
           docker pull docker.io/openresty/openresty:alpine
           docker pull docker.io/library/postgres:17-alpine
 
-      - run: ./scripts/verify.sh
+      # `${{ }}` 를 `run:` 본문에 박지 않는다. 여기 오는 값은 우리 스크립트가 낸
+      # 이름이지만 — **안전한 것은 값이지 자리가 아니다.**
+      - name: verify
+        env:
+          GROUP: ${{ matrix.group }}
+        run: ./scripts/verify.sh --group "$GROUP"
 
       # 실패했을 때 남은 컨테이너의 로그를 남긴다. CI 의 실패는 재현이 어려우므로
       # 그때 손에 있는 것을 다 챙긴다.
@@ -290,7 +326,7 @@ jobs:
   # 모아 받으면 잡을 늘리고 줄이는 것이 `needs:` 한 줄로 끝나고, 보호 규칙은 안 건드린다.
   gate:
     name: gate
-    needs: [quick, verify, quickstart, secret-scan, workflow-audit, dependency-review]
+    needs: [quick, groups, verify, quickstart, secret-scan, workflow-audit, dependency-review]
     # 선행 잡이 빨개도 이 잡은 돌아야 한다. 안 그러면 "돌지 않은 체크" 가 되어
     # 규칙이 기다리기만 하고, 무엇이 깨졌는지는 아무 데도 안 적힌다.
     if: always()
