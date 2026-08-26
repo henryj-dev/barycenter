@@ -32,11 +32,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # 앞엣것을 취소하지 않는다. 야간은 하루 한 번이고, 취소하면 그날의 판정이 없어진다.
-  group: nightly
-  cancel-in-progress: false
-
 jobs:
   # **어제 초록이던 것이 오늘도 초록인가.** 커밋은 그대로, 이미지만 새로 받는다.
   drift:
