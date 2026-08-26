@@ -69,10 +69,29 @@ export function startPg(pg: PgHandle): void {
 
   // **고정 sleep 은 거짓 실패를 만든다.** `pg_isready` 는 초기화 중에도 한 번 참을
   // 돌려줄 수 있어서(초기 부팅의 임시 서버), 실제 접속으로 확인한다.
+  //
+  // ★`-h 127.0.0.1` 이 핵심이다 — 빼면 안 된다(2026-08-26 실사고).
+  //
+  //  임시 서버는 **유닉스 소켓만** 연다. 그래서 소켓으로 물으면 초기화가 끝나기 전에
+  //  "준비됐다" 가 나오고, 그 직후 임시 서버가 내려가면서 바깥에서 붙어 있던 연결이
+  //  끊긴다 — `Connection terminated unexpectedly` 로 스위트가 깨진다. 컨테이너 로그가
+  //  그 순서를 그대로 보여 준다:
+  //
+  //      [91] listening on Unix socket ...              ← 임시 서버
+  //      [91] database system is ready to accept connections
+  //      [92] shutting down
+  //           PostgreSQL init process complete
+  //      [1]  listening on IPv4 address "0.0.0.0"       ← 진짜 서버
+  //
+  //  로컬에서 잰 두 시점의 간격은 103ms 였다. 러너가 느린 날에는 그만큼 넓어진다 —
+  //  그래서 "가끔 깨진다" 로 보이고 재실행하면 초록이라 원인을 안 찾게 된다.
+  //
+  //  TCP 로 물으면 임시 서버는 답할 수 없다. **테스트가 붙는 것과 같은 경로로 묻는
+  //  것**이 준비 판정의 유일하게 정직한 형태다.
   const deadline = Date.now() + 60_000;
   for (;;) {
     try {
-      docker('exec', pg.name, 'psql', '-U', 'postgres', '-d', 'bary', '-c', 'SELECT 1');
+      docker('exec', pg.name, 'psql', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'bary', '-c', 'SELECT 1');
       return;
     } catch (e) {
       if (Date.now() > deadline) throw new Error(`PG 기동 실패: ${String(e)}`);
