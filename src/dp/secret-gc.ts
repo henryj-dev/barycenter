@@ -71,7 +71,53 @@ export const DEFAULT_KEEP_PER_NAME = 2;
 /** 갓 만든 자료를 지우지 않는다 — 주문이 아직 참조를 DB 에 안 적었을 수 있다. */
 export const DEFAULT_MIN_AGE_MS = 3600_000;
 
-type Entry = { ref: string; dir: string; mtime: number; name: string };
+/**
+ * 청소 정책이 보는 자료 하나 (§4.8.1).
+ *
+ * **저장소가 무엇이든 정책은 하나다.** 파일시스템은 디렉토리 mtime 을, PG 는
+ * `created_at` 을 낸다 — 정책이 두 벌이 되면 드라이버를 바꾸는 것이 곧 보존 규칙을
+ * 바꾸는 것이 되고, 그 차이는 개인키가 사라진 뒤에야 보인다.
+ */
+export type SweepEntry = { ref: string; name: string; scheme: string; mtime: number };
+
+type Entry = SweepEntry & { dir: string };
+
+/**
+ * 지울 것과 남길 것을 가른다. **여기가 유일한 정책 자리다.**
+ *
+ * 남기는 쪽으로 틀린다 — root · 이름당 안전망 · 최소 나이 셋 중 하나라도 걸리면 남는다.
+ */
+export function partitionForSweep(
+  all: readonly SweepEntry[],
+  opts: { roots: Iterable<string>; keepPerName?: number; minAgeMs?: number; now?: number },
+): { keep: SweepEntry[]; sweep: SweepEntry[] } {
+  const keepPerName = opts.keepPerName ?? DEFAULT_KEEP_PER_NAME;
+  const minAge = opts.minAgeMs ?? DEFAULT_MIN_AGE_MS;
+  const now = opts.now ?? Date.now();
+  const roots = new Set(opts.roots);
+
+  // 이름별로 최신 것부터. `keepPerName` 안전망이 여기 걸린다.
+  const byName = new Map<string, SweepEntry[]>();
+  for (const e of all) {
+    const k = `${e.scheme}:${e.name}`;
+    const list = byName.get(k) ?? [];
+    list.push(e);
+    byName.set(k, list);
+  }
+  const protectedByAge = new Set<string>();
+  for (const list of byName.values()) {
+    list.sort((a, b) => b.mtime - a.mtime);
+    for (const e of list.slice(0, keepPerName)) protectedByAge.add(e.ref);
+  }
+
+  const keep: SweepEntry[] = [];
+  const sweep: SweepEntry[] = [];
+  for (const e of all) {
+    if (roots.has(e.ref) || protectedByAge.has(e.ref) || now - e.mtime < minAge) keep.push(e);
+    else sweep.push(e);
+  }
+  return { keep, sweep };
+}
 
 /** `store://` 와 `key://` 자료를 전부 훑는다. */
 function scan(root: string): Entry[] {
@@ -107,7 +153,7 @@ function scan(root: string): Entry[] {
            * 참조로 읽지 않는다.
            */
           if (!VERSION_DIR.test(version)) continue;
-          out.push({ ref: `${scheme}://${name}@${version}`, dir, mtime: st.mtimeMs, name });
+          out.push({ ref: `${scheme}://${name}@${version}`, dir, mtime: st.mtimeMs, name, scheme });
         } catch {
           /* 그 사이 사라졌으면 그만 */
         }
@@ -127,35 +173,24 @@ function scan(root: string): Entry[] {
  * 물렸다. 권한을 되돌리는 것 자체가 이 모듈이 하는 일의 일부다.
  */
 export function sweepSecrets(opts: SecretSweepOptions): SecretSweepResult {
-  const keepPerName = opts.keepPerName ?? DEFAULT_KEEP_PER_NAME;
-  const minAge = opts.minAgeMs ?? DEFAULT_MIN_AGE_MS;
-  const now = opts.now?.() ?? Date.now();
-  const roots = new Set(opts.roots);
-
   const all = scan(opts.root);
-  // 이름별로 최신 것부터. `keepPerName` 안전망이 여기 걸린다.
-  const byName = new Map<string, Entry[]>();
-  for (const e of all) {
-    const list = byName.get(`${e.ref.split('://')[0]}:${e.name}`) ?? [];
-    list.push(e);
-    byName.set(`${e.ref.split('://')[0]}:${e.name}`, list);
-  }
-  const protectedByAge = new Set<string>();
-  for (const list of byName.values()) {
-    list.sort((a, b) => b.mtime - a.mtime);
-    for (const e of list.slice(0, keepPerName)) protectedByAge.add(e.ref);
-  }
+  const { keep, sweep } = partitionForSweep(all, {
+    roots: opts.roots,
+    ...(opts.keepPerName === undefined ? {} : { keepPerName: opts.keepPerName }),
+    ...(opts.minAgeMs === undefined ? {} : { minAgeMs: opts.minAgeMs }),
+    now: opts.now?.() ?? Date.now(),
+  });
 
-  const result: SecretSweepResult = { kept: [], removed: [], failed: [] };
-  for (const e of all) {
-    if (roots.has(e.ref) || protectedByAge.has(e.ref) || now - e.mtime < minAge) {
-      result.kept.push(e.ref);
-      continue;
-    }
+  const dirOf = new Map(all.map((e) => [e.ref, e.dir]));
+  const result: SecretSweepResult = {
+    kept: keep.map((e) => e.ref), removed: [], failed: [],
+  };
+  for (const e of sweep) {
     try {
       // 0500 을 풀고 지운다. 파일도 0400 이라 디렉토리 권한만으로는 부족하다.
-      chmodSync(e.dir, 0o700);
-      rmSync(e.dir, { recursive: true, force: true });
+      const dir = dirOf.get(e.ref)!;
+      chmodSync(dir, 0o700);
+      rmSync(dir, { recursive: true, force: true });
       result.removed.push(e.ref);
     } catch (err) {
       result.failed.push({ ref: e.ref, reason: (err as Error).message });

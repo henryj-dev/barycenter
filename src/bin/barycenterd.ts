@@ -24,7 +24,8 @@ import { promisify } from 'node:util';
 import { apiHandler, apiTlsOptions, createApi } from '../api/server.js';
 import { JwksCache } from '../api/jwks.js';
 import { EventHub } from '../api/events.js';
-import { FsSecretStore } from '../dp/secrets.js';
+import { FsSecretStore, type SecretStore } from '../dp/secrets.js';
+import { PgSecretStore, readKek } from '../dp/secrets-pg.js';
 import {
   TokenAuth, oidcKeyFrom, parseTokenSpecs, type OidcSettings, type TokenSpec,
 } from '../api/auth.js';
@@ -39,6 +40,7 @@ import { FileDns01 } from '../control/dns01.js';
 import { publishIssued } from '../control/acme-publish.js';
 import { collectSecretRoots } from '../control/secret-roots.js';
 import { sweepSecrets } from '../dp/secret-gc.js';
+import { sweepSecretsPg } from '../dp/secret-gc-pg.js';
 import { ControlPlane, defaultStreamSocket } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
 import { bootDrivers, readDriverBootSource } from '../dp/boot.js';
@@ -132,7 +134,7 @@ function readTimings(): {
   healthEventDays: number; dbRetentionMs: number;
   acmeMs: number; acmeRenewDays: number; acmePublishMs: number;
   secretGcMs: number; acmeOrphanMs: number; acmeOrphanAgeS: number;
-  oidcJwksMs: number;
+  oidcJwksMs: number; secretFactsMs: number;
 } {
   return {
     electionMs: envInt('BARY_ELECTION_INTERVAL_MS', 5_000, { min: 100, max: DAY_MS }),
@@ -150,6 +152,9 @@ function readTimings(): {
     acmeOrphanMs: envInt('BARY_ACME_ORPHAN_INTERVAL_MS', 900_000, { min: MINUTE, max: DAY_MS }),
     acmeOrphanAgeS: envInt('BARY_ACME_ORPHAN_AGE_S', 3_600, { min: 60, max: 86_400 * 30 }),
     oidcJwksMs: envInt('BARY_OIDC_JWKS_INTERVAL_MS', 300_000, { min: MINUTE, max: DAY_MS }),
+    // 사실 캐시 재적재 (§4.8.1). `pg` 드라이버에서만 쓴다. 짧게 둘 이유가 없다 —
+    // 놓친 사실은 「모른다」로 안전하게 흐르고, 자기 인스턴스가 넣은 것은 즉시 반영된다.
+    secretFactsMs: envInt('BARY_SECRET_FACTS_INTERVAL_MS', 60_000, { min: 1_000, max: DAY_MS }),
   };
 }
 
@@ -323,18 +328,42 @@ export async function main(): Promise<void> {
   }
 
   /**
-   * 인증서 자료 저장소 (§4.8).
+   * 인증서 자료 저장소 (§4.8 · §4.8.1).
    *
-   * **평문 파일이다.** 보호는 파일 권한과 "메인 DB 가 아니다" 뿐이고 암호화가 아니다 —
-   * KMS·Vault 드라이버는 같은 인터페이스 뒤에 따로 붙는다. 지금 없는 것을 있다고
-   * 적지 않는다.
+   * **드라이버 선택은 배포의 것이다.** 기본은 `fs` 다 — 전용 VM 한 대(§11.3 의 v1 권장
+   * 배포)에서는 KEK 를 어디 둘지가 새 문제이고, 그 결정을 안 한 배포를 조용히 바꾸지
+   * 않는다. `pg` 는 봉투 암호화로 PG 에 넣으므로 인스턴스 사이에 공유된다.
    *
    * `ConfigStore` 보다 먼저 만든다 — 저장소가 SAN 커버리지를 보려면 사실을 읽을 창구가
    * 있어야 한다 (검수 B-05).
    */
-  const secretsRoot = env('BARY_SECRETS', `${prefix}/secrets`);
-  const secrets = new FsSecretStore(secretsRoot);
-  log.warn('secrets.posture', fsSecretStorePosture(secretsRoot));
+  const secretBackend = env('BARY_SECRET_BACKEND', 'fs');
+  let secrets: SecretStore;
+  let refreshSecretFacts: (() => Promise<number>) | undefined;
+  if (secretBackend === 'pg') {
+    // **KEK 가 없으면 안 뜬다** (§4.8.1). 없는 것을 지어내면 「암호화된 줄 알았다」가
+    // 그대로 돌아온다 — 아직 아무 자료도 안 들어간 지금 죽는 편이 정직하다.
+    const pgSecrets = new PgSecretStore({
+      db,
+      kek: readKek(env('BARY_SECRET_KEK', '')),
+      ...(env('BARY_SECRET_KEK_ID', '') === '' ? {} : { kekId: env('BARY_SECRET_KEK_ID', '') }),
+    });
+    // 동기 창구(`facts`)의 뒷받침을 기동에서 채운다. **자료를 복호화하지 않는다** —
+    // `facts` 는 평문 열이다.
+    const loaded = await pgSecrets.refreshFacts();
+    secrets = pgSecrets;
+    refreshSecretFacts = () => pgSecrets.refreshFacts();
+    log.warn('secrets.posture', {
+      backend: 'postgres', encrypted: true, kekId: env('BARY_SECRET_KEK_ID', 'env'), facts: loaded,
+    });
+  } else if (secretBackend === 'fs') {
+    const secretsRoot = env('BARY_SECRETS', `${prefix}/secrets`);
+    secrets = new FsSecretStore(secretsRoot);
+    log.warn('secrets.posture', fsSecretStorePosture(secretsRoot));
+  } else {
+    throw new Error(
+      `BARY_SECRET_BACKEND 가 아는 값이 아니다: ${JSON.stringify(secretBackend)} — fs | pg`);
+  }
 
   // **사실 창구를 넘긴다** (검수 B-05). 안 넘기면 바인딩된 인증서가 그 호스트를
   // 덮는지 아무도 안 본다 — `certCoversHost` 가 구현돼 있는데 호출자가 없었다.
@@ -515,6 +544,26 @@ export async function main(): Promise<void> {
   const stopDbRetention = (): void => clearInterval(dbRetentionTimer);
 
   /**
+   * **사실 캐시를 다시 읽는다** (§4.8.1). `pg` 드라이버에서만 돈다.
+   *
+   * 동기 창구(`facts`)는 캐시가 뒷받침하고, 다른 인스턴스가 넣은 자료는 이 틱에
+   * 들어온다. **리더만 도는 것이 아니다** — 이것은 부작용이 아니라 읽기이고, 스탠바이의
+   * `GET /certificates` 도 만료를 말해야 한다.
+   *
+   * 그 사이의 miss 는 「사실을 모른다」다. 없는 사실을 0 으로 채우지 않는다.
+   */
+  let stopSecretFacts = (): void => {};
+  if (refreshSecretFacts !== undefined) {
+    const factsTimer = setInterval(() => {
+      void refreshSecretFacts!().catch((e: unknown) => {
+        log.error('secrets.facts_refresh_failed', { error: String(e) });
+      });
+    }, t.secretFactsMs);
+    factsTimer.unref?.();
+    stopSecretFacts = (): void => clearInterval(factsTimer);
+  }
+
+  /**
    * ACME 갱신 러너 (§8.2 · ADR-ACME).
    *
    * **`httpLua` 가 있어야 돈다.** 챌린지는 shared dict 에서 서빙되고(ADR-ACME ①), 그게
@@ -602,7 +651,11 @@ export async function main(): Promise<void> {
           // 넓혔는데, 넘긴 목록이 *이미 root 인 것들*이라 넓히기가 아무것도 안 했다 —
           // 디스크의 세대가 참조하는 자료가 조용히 보호 밖이었다.
           const roots = await collectSecretRoots({ db, prefix, secrets });
-          const out = sweepSecrets({ root: secretsRoot, roots });
+          // **드라이버가 정한다.** 정책은 한 자리(`partitionForSweep`)이고 여기서
+          // 갈리는 것은 어디를 훑고 무엇을 지우느냐뿐이다 (§4.8.1).
+          const out = secretBackend === 'pg'
+            ? await sweepSecretsPg({ db, roots })
+            : sweepSecrets({ root: env('BARY_SECRETS', `${prefix}/secrets`), roots });
           if (out.removed.length > 0 || out.failed.length > 0) {
             log.info('secrets.swept', {
               removed: out.removed.length, kept: out.kept.length,
@@ -849,6 +902,7 @@ export async function main(): Promise<void> {
       stopSecretGc();
       stopOrphans();
       stopDbRetention();
+      stopSecretFacts();
       stopJwks();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은
       // 주인을 가려내는 `/proc` 폴백에 기댄다 — 그 파일을 못 읽는 플랫폼에서는

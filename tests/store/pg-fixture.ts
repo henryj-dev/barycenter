@@ -144,6 +144,11 @@ export async function reset(db: Db): Promise<void> {
                            -- 트리거가 정상 경로를 덮지만, 픽스처의 TRUNCATE 는 트리거를
                            -- 안 태운다 — 여기 안 적으면 앞 테스트의 판정이 살아남는다.
                            backend_drain, backend_health,
+                           -- **시크릿 자료도** (023 · §4.8.1). PgSecretStore 는 내용
+                           -- 주소라 같은 자료가 같은 PK 를 내고, 앞 테스트의 행이
+                           -- 살아남으면 다음 테스트의 put 이 조용히 그것을 재사용한다.
+                           -- (백틱을 쓰면 이 템플릿이 끊긴다 — 바로 위 문단 참조.)
+                           secret_materials,
                            -- **헬스 이벤트와 그 커서도** (검수 B-08). 여기 없어서 seq 가
                            -- 테스트 사이에 넘어갔고, health_events 에 직접 쓰는 테스트가
                            -- 앞 테스트의 번호와 PK 로 충돌했다. engine_settings 때와
