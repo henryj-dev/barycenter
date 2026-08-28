@@ -214,7 +214,7 @@ export class AcmeRunner {
     // 계정 키는 인증서가 없는 키다 — `key://` 참조로 산다.
     return {
       directoryUrl: row.directoryUrl,
-      key: createPrivateKey(this.#o.secrets.getKey(row.accountKeyRef)),
+      key: createPrivateKey(await this.#o.secrets.getKey(row.accountKeyRef)),
       accountUrl: row.accountUrl,
     };
   }
@@ -293,13 +293,13 @@ export class AcmeRunner {
       // **키를 먼저 durable 하게 둔다.** 여기서 죽으면 발급된 인증서가 짝을 잃고, 그러면
       // 새 주문을 내야 한다 — CA 의 레이트리밋이 그걸 센다. 인증서가 아직 없으므로
       // `key://` 참조로 둔다 (§7.2 의 "한 쌍" 계약을 안 깨면서).
-      const ref = this.#o.secrets.putKey(
+      const ref = await this.#o.secrets.putKey(
         `acme-${order.certificateKey}`,
         certKey.export({ type: 'pkcs8', format: 'pem' }).toString());
       certKeyRef = ref.ref;
       await this.#o.store.setCertKeyRef(order.id, ref.ref);
     } else {
-      certKey = createPrivateKey(this.#o.secrets.getKey(order.certKeyRef));
+      certKey = createPrivateKey(await this.#o.secrets.getKey(order.certKeyRef));
     }
 
     const current = await client.fetchOrder(order.orderUrl);
@@ -313,7 +313,7 @@ export class AcmeRunner {
     // **받은 것을 검증한다.** 200 을 받은 것과 쓸 수 있는 인증서를 받은 것은 다르다
     // (S18 이 같은 이유로 발급 인증서와 CSR 키의 짝을 확인한다).
     inspectMaterial(pem, privkey, this.#now());
-    const ref = this.#o.secrets.put(`acme-${order.certificateKey}`, { fullchain: pem, privkey });
+    const ref = await this.#o.secrets.put(`acme-${order.certificateKey}`, { fullchain: pem, privkey });
 
     // `issuedRef` 는 인증서 자료(체인+키), `certKeyRef` 는 주문이 쓴 키다. 둘을 같은
     // 값으로 두면 "어느 키로 CSR 을 만들었나" 를 잃는다.

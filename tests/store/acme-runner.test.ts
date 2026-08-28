@@ -174,7 +174,7 @@ beforeEach(async () => {
   await reset(db);
   await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
   const accountKey = newEcKey();
-  const ref = secrets.putKey('acct', accountKey.export({ type: 'pkcs8', format: 'pem' }).toString());
+  const ref = await secrets.putKey('acct', accountKey.export({ type: 'pkcs8', format: 'pem' }).toString());
   accountId = await store.upsertAccount({
     key: 'le', directoryUrl: 'https://ca.test/dir', accountKeyRef: ref.ref, by: 't',
   });
@@ -207,7 +207,7 @@ describe('scan — 언제 주문을 여는가', () => {
 
   it('**만료가 멀면 안 연다**', async () => {
     const pair = mintPair();
-    const ref = secrets.put('manual', { fullchain: pair.pem, privkey: pair.key });
+    const ref = await secrets.put('manual', { fullchain: pair.pem, privkey: pair.key });
     const runner = runnerWith({ orderStatus: ['pending'] }, new FakePlacer(),
       { renewBeforeDays: 30 });
     expect(await runner.scan([{
@@ -218,7 +218,7 @@ describe('scan — 언제 주문을 여는가', () => {
 
   it('만료가 가까우면 연다 — 30 일 창 (§8.2)', async () => {
     const pair = mintPair();
-    const ref = secrets.put('soon', { fullchain: pair.pem, privkey: pair.key });
+    const ref = await secrets.put('soon', { fullchain: pair.pem, privkey: pair.key });
     // 인증서는 90 일짜리다. 70 일 뒤로 시각을 밀면 20 일 남는다.
     const later = new Date(Date.now() + 70 * 86_400_000);
     const runner = runnerWith({ orderStatus: ['pending'] }, new FakePlacer(),
@@ -301,7 +301,7 @@ describe('step — 한 틱에 한 걸음', () => {
     expect(row?.certKeyRef).toMatch(/^key:\/\/acme-cert-a@/);
 
     // 자료가 실제로 저장됐고 짝이 맞는다.
-    const material = secrets.get(row!.issuedRef!);
+    const material = await secrets.get(row!.issuedRef!);
     expect(material.fullchain).toContain('BEGIN CERTIFICATE');
 
     // **발급하면 챌린지 자료를 치운다** (§8.2 — 성공/실패와 무관하게).
@@ -322,7 +322,7 @@ describe('step — 한 틱에 한 걸음', () => {
     // 실패했어도 **키는 남아 있다.** 다음 시도가 같은 키로 이어 간다.
     const row = await store.get(r!.order!);
     expect(row?.certKeyRef).toMatch(/^key:\/\//);
-    expect(secrets.getKey(row!.certKeyRef!)).toContain('PRIVATE KEY');
+    expect(await secrets.getKey(row!.certKeyRef!)).toContain('PRIVATE KEY');
   });
 
   it('**원하는 챌린지가 없으면 무엇이 있었는지 말한다** — 와일드카드가 그렇다 (S18)', async () => {

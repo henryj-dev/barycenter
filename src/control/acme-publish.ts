@@ -93,7 +93,7 @@ export async function publishIssued(opts: PublisherOptions): Promise<PublishResu
     try {
       // 자료의 digest 는 **저장소에서 읽는다.** 주문이 기억한 값을 믿으면, 자료가 그
       // 사이에 바뀌었을 때 세대 결박이 거짓말이 된다 (§7.2).
-      const ref = opts.secrets.describe(p.issuedRef);
+      const ref = await opts.secrets.describe(p.issuedRef);
 
       const head = await opts.store.head();
       const csId = await opts.store.createChangeset(head.revision, by);

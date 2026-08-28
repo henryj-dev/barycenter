@@ -92,43 +92,43 @@ function halfWritten(
 describe('반쪽으로 죽은 자료', () => {
   it.each([0, 1, 2] as const)(
     '반쪽으로 죽은 자료는 재업로드가 고친다 (%i 번째 쓰기 뒤에 죽었을 때)',
-    (stage) => {
+    async (stage) => {
       const m = mintPair();
       // 먼저 정상 경로로 버전을 알아낸다 — 내용 주소라 값이 정해져 있다.
       const probe = new FsSecretStore(mkdtempSync(join(tmpdir(), 'bary-probe-')));
-      const version = probe.put('cert-a', m).version;
+      const version = (await probe.put('cert-a', m)).version;
 
       halfWritten('cert-a', version, m, stage);
 
       // **운영자가 제일 먼저 할 일.** 같은 바이트를 다시 올린다.
-      const ref = store.put('cert-a', m);
+      const ref = await store.put('cert-a', m);
       expect(ref.version).toBe(version);
 
       // 그리고 읽힌다.
-      const got = store.get(ref.ref);
+      const got = await store.get(ref.ref);
       expect(got.fullchain).toBe(m.fullchain);
       expect(got.privkey).toBe(m.privkey);
       // 사실도 있다 — 없으면 만료를 영영 모른다.
       expect(store.facts(ref.ref)?.notAfter).toBeTruthy();
     });
 
-  it('온전한 자료는 다시 안 쓴다 — 내용 주소의 멱등이 안 깨졌다', () => {
+  it('온전한 자료는 다시 안 쓴다 — 내용 주소의 멱등이 안 깨졌다', async () => {
     const m = mintPair();
-    const a = store.put('cert-a', m);
-    const b = store.put('cert-a', m);
+    const a = await store.put('cert-a', m);
+    const b = await store.put('cert-a', m);
     expect(b.version).toBe(a.version);
     expect(b.ref).toBe(a.ref);
-    expect(store.get(b.ref).privkey).toBe(m.privkey);
+    expect((await store.get(b.ref)).privkey).toBe(m.privkey);
   });
 
-  it('임시 디렉토리를 안 남긴다 — GC 가 그것을 버전으로 읽으면 안 된다', () => {
+  it('임시 디렉토리를 안 남긴다 — GC 가 그것을 버전으로 읽으면 안 된다', async () => {
     const m = mintPair();
-    store.put('cert-a', m);
+    await store.put('cert-a', m);
     const versions = readdirSync(join(root, 'cert-a'));
     expect(versions).toHaveLength(1);
     expect(versions[0]).toMatch(/^[a-f0-9]{32}$/);
     // `listRefs` 도 그 하나만 본다.
-    expect(store.listRefs().filter((r) => r.startsWith('store://cert-a@'))).toHaveLength(1);
+    expect((await store.listRefs()).filter((r) => r.startsWith('store://cert-a@'))).toHaveLength(1);
   });
 });
 
@@ -142,9 +142,9 @@ describe('남은 임시 디렉토리', () => {
    * 그만큼 진짜 최신 버전이 보호 밖으로 밀려난다. 지켜야 할 것이 안 지켜지는 쪽이라
    * 조용하다.
    */
-  it('크래시가 남긴 임시 디렉토리를 버전으로 안 읽는다', () => {
+  it('크래시가 남긴 임시 디렉토리를 버전으로 안 읽는다', async () => {
     const m = mintPair();
-    const ref = store.put('cert-a', m);
+    const ref = await store.put('cert-a', m);
 
     // 크래시가 남긴 모양을 그대로 만든다 — 진짜 버전보다 **나중에** 생긴다.
     const leftover = join(root, 'cert-a', `${ref.version}.tmp-deadbeefcafe`);
@@ -153,14 +153,14 @@ describe('남은 임시 디렉토리', () => {
 
     expect(readdirSync(join(root, 'cert-a'))).toHaveLength(2);
     // 그래도 참조는 하나다.
-    expect(store.listRefs().filter((r) => r.startsWith('store://cert-a@')))
+    expect((await store.listRefs()).filter((r) => r.startsWith('store://cert-a@')))
       .toEqual([ref.ref]);
   });
 
   it('GC 도 그것을 버전으로 안 센다 — 보호 자리를 안 뺏는다', async () => {
     const { sweepSecrets } = await import('../../src/dp/secret-gc.js');
     const m = mintPair();
-    const ref = store.put('cert-a', m);
+    const ref = await store.put('cert-a', m);
 
     const leftover = join(root, 'cert-a', `${ref.version}.tmp-deadbeefcafe`);
     mkdirSync(leftover, { recursive: true, mode: 0o700 });
@@ -184,18 +184,18 @@ describe('남은 임시 디렉토리', () => {
 });
 
 describe('반쪽으로 죽은 키', () => {
-  it('`putKey` 도 같은 자리다 — 빈 디렉토리를 재업로드가 고친다', () => {
+  it('`putKey` 도 같은 자리다 — 빈 디렉토리를 재업로드가 고친다', async () => {
     const m = mintPair();
     const probe = new FsSecretStore(mkdtempSync(join(tmpdir(), 'bary-probe2-')));
-    const version = probe.putKey('acct', m.privkey).version;
+    const version = (await probe.putKey('acct', m.privkey)).version;
 
     const dir = join(root, 'keys', 'acct', version);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     chmodSync(dir, 0o500);
     expect(existsSync(join(dir, 'privkey.pem'))).toBe(false);
 
-    const ref = store.putKey('acct', m.privkey);
+    const ref = await store.putKey('acct', m.privkey);
     expect(ref.version).toBe(version);
-    expect(store.getKey(ref.ref)).toBe(m.privkey);
+    expect(await store.getKey(ref.ref)).toBe(m.privkey);
   });
 });

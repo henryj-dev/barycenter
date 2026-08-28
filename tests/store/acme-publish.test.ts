@@ -46,8 +46,8 @@ function mintPair(cn: string): { pem: string; key: string } {
 /** 발급이 끝난 주문 하나를 만든다. */
 async function issuedOrder(certKey: string, cn: string): Promise<{ orderId: string; ref: string }> {
   const pair = mintPair(cn);
-  const material = secrets.put(`acme-${certKey}`, { fullchain: pair.pem, privkey: pair.key });
-  const keyRef = secrets.putKey(`acme-${certKey}`, pair.key);
+  const material = await secrets.put(`acme-${certKey}`, { fullchain: pair.pem, privkey: pair.key });
+  const keyRef = await secrets.putKey(`acme-${certKey}`, pair.key);
   const o = await acme.openOrder({ accountId, certificateId: certId, domains: [cn] });
   await acme.setCertKeyRef(o.id, keyRef.ref);
   await acme.markIssued(o.id, material.ref, keyRef.ref);
@@ -78,7 +78,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await reset(db);
   await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
-  const ref = secrets.putKey('acct', newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString());
+  const ref = await secrets.putKey('acct', newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString());
   accountId = await acme.upsertAccount({
     key: 'le', directoryUrl: 'https://ca.test/dir', accountKeyRef: ref.ref, by: 't',
   });
@@ -195,8 +195,8 @@ describe('게시', () => {
 
     // ② 멀쩡한 주문.
     const pair = mintPair('b.test');
-    const material = secrets.put('acme-web2', { fullchain: pair.pem, privkey: pair.key });
-    const keyRef = secrets.putKey('acme-web2', pair.key);
+    const material = await secrets.put('acme-web2', { fullchain: pair.pem, privkey: pair.key });
+    const keyRef = await secrets.putKey('acme-web2', pair.key);
     const good = await acme.openOrder({ accountId, certificateId: otherId, domains: ['b.test'] });
     await acme.setCertKeyRef(good.id, keyRef.ref);
     await acme.markIssued(good.id, material.ref, keyRef.ref);
