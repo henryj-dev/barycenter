@@ -39,6 +39,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 동결 | B(구현된 OpenAPI · DDL). **A 는 이 회차에 풀렸다** — W3 설정 셋을 들이려고. 근거가 `SURFACE.txt` 머리에 남는다 | 미구현 계약 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
+| 시크릿 | 드라이버 **둘**. `fs`(기본, 평문 0400)와 `pg`(봉투 암호화 AES-256-GCM · KEK 는 DB 밖). 참조는 두 드라이버가 같은 값을 낸다. GC 정책은 한 자리(`partitionForSweep`) | KMS·Vault 드라이버 |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
 | CLI | `bary-dp-agent`(원격 DP 창구). `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status. **리스너 옵션 플래그**(`--rate`·`--header`·`--max-body`·타임아웃) | — |
 | GUI | Kit 경로(로그인 포함). 폴링하지 않는다. **리스너 옵션 폼**·**왜 트래픽을 안 받나**·패스스루 두 폴백(`on_no_sni` 포함) | 아래 §2 |
@@ -143,6 +144,19 @@ A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이�
 백업은 `GET /backup`, 복구는 `POST /restore` (`admin`). SPOF 런북은
 `docs/runbook-spof.md` 다. RTO/RPO 는 ADR-SPOF 가 v1 운영 정책으로 확정한다
 (랩 SLA 아님). OIDC 는 ID Token Bearer 와 Authorization Code 로그인이다.
+
+**시크릿 저장소는 이제 둘이다** (2026-08-28 · §4.8.1). `BARY_SECRET_BACKEND=fs|pg` 이고
+기본은 `fs` 다 — 전용 VM 한 대 배포에서는 KEK 를 어디 둘지가 새 문제라, 그 결정을 안 한
+배포를 조용히 바꾸지 않는다. `pg` 는 **KEK 없이 안 뜬다**(`BARY_SECRET_KEK`, 32 바이트
+base64/hex). 자료마다 DEK 를 뽑아 AES-256-GCM 으로 감싸고 그것을 KEK 로 다시 감싸므로
+**DB 덤프 하나로는 키가 안 나온다.** AAD 가 참조라 행을 옮기면 안 열린다.
+
+⚠️ 그 대가는 백업 절차에 있다 — `pg` 에서 **KEK 를 잃으면 자료를 영영 못 연다.**
+KEK 는 덤프와 다른 곳에 둔다(`docs/runbook-spof.md`). 설정은 안 잃는다.
+
+`facts()` 만 동기로 남았다. 그것을 읽는 자리 둘(커밋 앞 SAN 커버 검증기 · plan 의
+임팩트 계산)이 동기라서다. `pg` 드라이버는 그 값을 캐시로 들고 기동과 틱에서 다시 읽는다 —
+**자료를 복호화하지 않는다**(`facts` 는 평문 열이다). miss 는 「사실을 모른다」다.
 
 로드맵 v0.1~v1.0 은 전부 코드에 있다. 검수의 제안 6·7·8·9·10 이 닫혔고 **저작 표면
 (CLI 플래그·GUI 폼)까지 갔다.** S6 `least_conn` 과 mTLS 신원 매핑도 이 회차다.

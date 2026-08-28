@@ -11,8 +11,18 @@
  * ── 이 구현이 무엇이고 무엇이 아닌가 ───────────────────────────────────
  *
  * `FsSecretStore` 는 DP 호스트의 파일시스템에 **평문으로** 쓴다. 보호는 파일 권한(0400)과
- * "메인 DB 가 아니다" 뿐이다. **암호화가 아니다** — KMS·Vault 드라이버는 이 인터페이스
- * 뒤에 별도로 붙는다. 지금 없는 것을 있다고 적지 않는다.
+ * "메인 DB 가 아니다" 뿐이다. **암호화가 아니다.** 지금 없는 것을 있다고 적지 않는다.
+ *
+ * **두 번째 드라이버는 `secrets-pg.ts` 다** (§4.8.1). 봉투 암호화로 PG 에 넣으므로
+ * 평문 금지 조항을 지키면서 인스턴스 사이에 공유된다. KMS·Vault 는 여전히 이 인터페이스
+ * 뒤에 붙을 자리로 남는다.
+ *
+ * ── 왜 `facts` 만 동기인가 (§4.8.1)
+ *
+ * 원격 저장소가 생기면서 자료 바이트를 만지는 여섯은 async 가 됐다. `facts` 는 안 넘겼다 —
+ * 그것을 읽는 자리 둘(`ConfigStore` 의 SAN 커버 검증기 · plan 의 `certificateChanges`)이
+ * 동기이고, 거기를 async 로 물들이면 커밋 앞 검증과 임팩트 계산이 통째로 바뀐다.
+ * 그리고 `facts` 가 다루는 값은 비밀이 아니다.
  *
  * 그래도 §4.8 의 요구 중 지키는 것: 개인키가 PG 에 안 들어가고, 참조가 버전 고정이고,
  * 자료의 digest 를 함께 든다.
@@ -73,18 +83,17 @@ export function parseKeyRef(ref: string): { name: string; version: string } {
   return { name: m[1]!, version: m[2]! };
 }
 
-export interface SecretStore {
-  /**
-   * 자료를 넣고 **새 버전**을 받는다.
-   *
-   * 같은 이름에 같은 바이트를 다시 넣으면 **같은 버전**을 돌려준다 — 내용 주소이므로
-   * 중복 저장이 없고, 멱등 업로드가 새 버전을 만들어 세대를 무의미하게 늘리지 않는다.
-   */
-  put(name: string, material: CertMaterial): SecretRef;
-  /** 버전 고정 참조로 읽는다. 없으면 던진다 — 조용히 옛 것을 주지 않는다. */
-  get(ref: string): CertMaterial;
-  /** 참조를 해석만 한다 (자료를 안 읽는다). */
-  describe(ref: string): SecretRef;
+/**
+ * **동기로 남는 창구** (§4.8.1).
+ *
+ * `facts` 가 다루는 값은 **비밀이 아니다** — 만료·SAN·발급자다. 그리고 이것을 읽는
+ * 자리 둘이 동기다: `ConfigStore` 의 SAN 커버 검증기와 plan 의 `certificateChanges`.
+ * 저장소가 원격(PG)이 되면서 나머지는 async 로 갔지만 이 선은 안 넘긴다 — 넘기면
+ * 커밋 앞 검증기와 임팩트 계산이 통째로 물든다.
+ *
+ * 그래서 원격 드라이버는 이 값을 **캐시로 든다.** miss 는 「사실을 모른다」다.
+ */
+export interface CertFactsView {
   /**
    * 바이트에서 뽑아 둔 사실 (§7.2 · §4.6). 없으면 `undefined`.
    *
@@ -93,10 +102,24 @@ export interface SecretStore {
    * 주소이므로 사실도 불변이다.
    */
   facts(ref: string): CertFacts | undefined;
+}
+
+export interface SecretStore extends CertFactsView {
+  /**
+   * 자료를 넣고 **새 버전**을 받는다.
+   *
+   * 같은 이름에 같은 바이트를 다시 넣으면 **같은 버전**을 돌려준다 — 내용 주소이므로
+   * 중복 저장이 없고, 멱등 업로드가 새 버전을 만들어 세대를 무의미하게 늘리지 않는다.
+   */
+  put(name: string, material: CertMaterial): Promise<SecretRef>;
+  /** 버전 고정 참조로 읽는다. 없으면 던진다 — 조용히 옛 것을 주지 않는다. */
+  get(ref: string): Promise<CertMaterial>;
+  /** 참조를 해석만 한다 (자료를 안 읽는다). */
+  describe(ref: string): Promise<SecretRef>;
   /** 인증서 없는 개인키를 둔다 (ACME 주문 진행 중). */
-  putKey(name: string, privkey: string): KeyRef;
+  putKey(name: string, privkey: string): Promise<KeyRef>;
   /** 키만 읽는다. `store://` 참조를 주면 던진다. */
-  getKey(ref: string): string;
+  getKey(ref: string): Promise<string>;
   /**
    * 저장소에 **실재하는 참조 전부** — `store://` 와 `key://` 를 섞어서 (검수 D1).
    *
@@ -108,7 +131,7 @@ export interface SecretStore {
    * 그래서 root 수집이 넓힐 재료를 못 얻었고, 부류 ②(디스크의 세대가 참조하는 자료)가
    * 조용히 무효였다. 이름을 모르는 쪽에 이름을 묻던 것이 문제였다.
    */
-  listRefs(): string[];
+  listRefs(): Promise<string[]>;
 }
 
 const sha256 = (s: string): string =>
@@ -209,7 +232,7 @@ function replaceDir(
 export class FsSecretStore implements SecretStore {
   constructor(private readonly root: string) {}
 
-  put(name: string, material: CertMaterial): SecretRef {
+  async put(name: string, material: CertMaterial): Promise<SecretRef> {
     if (!/^[A-Za-z0-9._-]+$/.test(name)) {
       throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
     }
@@ -241,7 +264,7 @@ export class FsSecretStore implements SecretStore {
     };
   }
 
-  get(ref: string): CertMaterial {
+  async get(ref: string): Promise<CertMaterial> {
     const { name, version } = parseRef(ref);
     const dir = join(this.root, name, version);
     // **없으면 던진다.** 최신 버전으로 물러나면 롤백이 거짓말이 된다 (§8.3).
@@ -251,15 +274,15 @@ export class FsSecretStore implements SecretStore {
     };
   }
 
-  describe(ref: string): SecretRef {
+  async describe(ref: string): Promise<SecretRef> {
     const { name, version } = parseRef(ref);
-    const material = this.get(ref);
+    const material = await this.get(ref);
     const chainDigest = sha256(material.fullchain);
     const keyDigest = sha256(material.privkey);
     return { ref, name, version, sha256: sha256(`${chainDigest}|${keyDigest}`), chainDigest, keyDigest };
   }
 
-  putKey(name: string, privkey: string): KeyRef {
+  async putKey(name: string, privkey: string): Promise<KeyRef> {
     if (!/^[A-Za-z0-9._-]+$/.test(name)) {
       throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
     }
@@ -274,7 +297,7 @@ export class FsSecretStore implements SecretStore {
     return { ref: `key://${name}@${version}`, name, version, keyDigest };
   }
 
-  getKey(ref: string): string {
+  async getKey(ref: string): Promise<string> {
     const { name, version } = parseKeyRef(ref);
     return readFileSync(join(this.root, 'keys', name, version, 'privkey.pem'), 'utf8');
   }
@@ -304,7 +327,7 @@ export class FsSecretStore implements SecretStore {
    * 못 읽는 것은 **건너뛴다.** 목록이 반쪽이면 GC 가 덜 지킬 뿐이지만, 던지면 GC 가
    * 아예 안 돈다 — 남기는 쪽으로 틀리는 것이 이 모듈의 규칙이다.
    */
-  listRefs(): string[] {
+  async listRefs(): Promise<string[]> {
     const out: string[] = [];
     const walk = (base: string, scheme: 'store' | 'key'): void => {
       let names: string[];
@@ -351,14 +374,14 @@ export class FsSecretStore implements SecretStore {
  * 그래서 여기서는 자료를 읽어 **바이트를 반환한다.** 참조가 버전 고정이므로(§4.8) 롤백된
  * 모델은 옛 버전을 가리키고, 그 바이트가 새 세대에 그대로 들어간다.
  */
-export function certificateFiles(
+export async function certificateFiles(
   certificates: readonly { key: string; materialRef: string; chainDigest: string; keyDigest: string }[],
   store: SecretStore,
-): { files: Record<string, string>; modes: Record<string, number> } {
+): Promise<{ files: Record<string, string>; modes: Record<string, number> }> {
   const files: Record<string, string> = {};
   const modes: Record<string, number> = {};
   for (const c of certificates) {
-    const material = store.get(c.materialRef);
+    const material = await store.get(c.materialRef);
     // **digest 를 대조한다.** 참조가 가리키는 자료가 DB 가 기억하는 것과 같은지 여기서
     // 본다 — 안 보면 SecretStore 쪽이 조용히 바뀌어도 세대가 그대로 나간다.
     const chain = `sha256:${createHash('sha256').update(material.fullchain, 'utf8').digest('hex')}`;

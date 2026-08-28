@@ -119,7 +119,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await reset(db);
   await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
-  const ref = secrets.putKey(
+  const ref = await secrets.putKey(
     `acct-${Math.random().toString(36).slice(2)}`,
     newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString(),
   );

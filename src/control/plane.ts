@@ -293,7 +293,9 @@ export class ControlPlane {
    * 인증서가 없으면 빈 맵이고, 그건 v0.1~v0.5 의 모든 모델이다 — TLS 를 안 쓰는 배포에
    * SecretStore 를 요구하지 않는다.
    */
-  private certificateFiles(model: Model): { files: Record<string, string>; modes?: Record<string, number> } {
+  private async certificateFiles(
+    model: Model,
+  ): Promise<{ files: Record<string, string>; modes?: Record<string, number> }> {
     // **자료가 있는 것만 세대에 넣는다.** ACME 발급 전 인증서는 넣을 바이트가 없고,
     // 바인딩도 안 돼 있으므로(검증기) 세대가 그걸 참조하지도 않는다.
     const withMaterial = model.certificates.filter(
@@ -379,7 +381,7 @@ export class ControlPlane {
       }
     }
 
-    const certFiles = this.certificateFiles(plan.model);
+    const certFiles = await this.certificateFiles(plan.model);
 
     const manifest = materializeGeneration({
       prefix: this.opts.prefix,

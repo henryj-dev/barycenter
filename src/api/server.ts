@@ -456,7 +456,7 @@ const ROUTES: Route[] = [
       : [];
 
     // 계정 키는 **인증서가 없는 키**라 `key://` 참조로 산다 (§4.8).
-    const ref = secrets.putKey(`acme-${key}`,
+    const ref = await secrets.putKey(`acme-${key}`,
       newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString());
     const id = await new AcmeStore(api.db).upsertAccount({
       key, directoryUrl, accountKeyRef: ref.ref, contact, by: c.who.name,
@@ -792,7 +792,7 @@ const ROUTES: Route[] = [
     }
 
     try {
-      const ref = store.put(name, { fullchain, privkey });
+      const ref = await store.put(name, { fullchain, privkey });
       // **자료를 안 돌려준다.** 참조·digest 와 **바이트에서 뽑은 사실**만 나간다.
       //
       // 이 사실들을 changeset 으로 받지 않는 이유가 있다 — 클라이언트가 만료일을

@@ -64,9 +64,9 @@ function mint(cn: string): { pem: string; key: string } {
 }
 
 /** 자료 하나를 넣고 참조를 돌려준다. 최소 나이 보호를 풀어 둔다. */
-function put(name: string, cn: string): string {
+async function put(name: string, cn: string): Promise<string> {
   const p = mint(cn);
-  const ref = store.put(name, { fullchain: p.pem, privkey: p.key });
+  const ref = await store.put(name, { fullchain: p.pem, privkey: p.key });
   const dir = join(root, name, ref.version);
   const past = (Date.now() - 86_400_000) / 1000;
   utimesSync(dir, past, past);
@@ -111,9 +111,9 @@ describe('GC root 배선 — 디스크의 세대가 참조하는 자료', () => 
   it('**세대에만 있는 버전은 안 지운다** — 부류 ② 가 실제로 걸린다', async () => {
     // 같은 이름에 셋. `keepPerName` 기본값 2 가 **최신 둘**을 지키므로, 세대가 가리키는
     // 것을 제일 오래된 것으로 둔다 — 그러면 남는 보호가 ② 하나뿐이다.
-    const oldest = put('web', 'a.test');
-    put('web', 'b.test');
-    put('web', 'c.test');
+    const oldest = await put('web', 'a.test');
+    await put('web', 'b.test');
+    await put('web', 'c.test');
 
     // 인증서 키(`edge`)와 시크릿 이름(`web`)이 **다르다.** 그것이 정상이고,
     // 세대에서 이름을 못 읽는 이유다.
@@ -129,9 +129,9 @@ describe('GC root 배선 — 디스크의 세대가 참조하는 자료', () => 
   });
 
   it('세대가 안 가리키는 옛 버전은 지운다 — 보호가 넓기만 한 것이 아니다', async () => {
-    const orphan = put('web', 'a.test');
-    put('web', 'b.test');
-    put('web', 'c.test');
+    const orphan = await put('web', 'a.test');
+    await put('web', 'b.test');
+    await put('web', 'c.test');
 
     // 세대는 **다른 버전**을 가리킨다.
     stageGeneration('r7-e3', 'edge', 'f'.repeat(32));
@@ -145,7 +145,7 @@ describe('GC root 배선 — 디스크의 세대가 참조하는 자료', () => 
   });
 
   it('`@` 자리표는 결과에 안 남는다 — sweep 이 그것을 참조로 읽으면 안 된다', async () => {
-    const ref = put('web', 'a.test');
+    const ref = await put('web', 'a.test');
     stageGeneration('r7-e3', 'edge', versionOf(ref));
 
     const roots = await collectSecretRoots({ db: emptyDb, prefix, secrets: store });
@@ -155,7 +155,7 @@ describe('GC root 배선 — 디스크의 세대가 참조하는 자료', () => 
   });
 
   it('세대가 없으면 부류 ② 도 없다 — 없는 것을 지어내지 않는다', async () => {
-    const ref = put('web', 'a.test');
+    const ref = await put('web', 'a.test');
 
     const roots = await collectSecretRoots({ db: emptyDb, prefix, secrets: store });
 

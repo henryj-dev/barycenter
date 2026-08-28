@@ -40,9 +40,9 @@ function mint(cn: string): { pem: string; key: string } {
 }
 
 /** 자료 하나를 넣고 참조를 돌려준다. `age` 만큼 과거로 밀어 최소 나이 보호를 푼다. */
-function put(name: string, cn: string, ageMs = 86_400_000): string {
+async function put(name: string, cn: string, ageMs = 86_400_000): Promise<string> {
   const p = mint(cn);
-  const ref = store.put(name, { fullchain: p.pem, privkey: p.key });
+  const ref = await store.put(name, { fullchain: p.pem, privkey: p.key });
   const dir = join(root, name, ref.version);
   const past = (Date.now() - ageMs) / 1000;
   utimesSync(dir, past, past);
@@ -69,9 +69,9 @@ afterEach(() => {
 });
 
 describe('안 지우는 것들', () => {
-  it('**root 는 안 지운다** — 하나라도 놓치면 개인키를 지운다', () => {
-    const keep = put('web', 'a.test');
-    const drop = put('web', 'b.test');
+  it('**root 는 안 지운다** — 하나라도 놓치면 개인키를 지운다', async () => {
+    const keep = await put('web', 'a.test');
+    const drop = await put('web', 'b.test');
     const out = sweepSecrets({ root, roots: [keep], keepPerName: 0, minAgeMs: 0 });
     // **`failed` 도 본다.** `removed` 만 보면 "지우려다 실패한 것" 이 안 보이고, 그건
     // 지워야 할 것을 못 지운 것이거나 **지우면 안 될 것을 건드린 것**이다. 실제로
@@ -83,26 +83,26 @@ describe('안 지우는 것들', () => {
     expect(existsSync(dirOf(drop))).toBe(false);
   });
 
-  it('**갓 만든 것은 안 지운다** — 주문이 아직 참조를 안 적었을 수 있다', () => {
-    const fresh = put('web', 'a.test', 0);
+  it('**갓 만든 것은 안 지운다** — 주문이 아직 참조를 안 적었을 수 있다', async () => {
+    const fresh = await put('web', 'a.test', 0);
     const out = sweepSecrets({ root, roots: [], keepPerName: 0, minAgeMs: 3600_000 });
     expect(out.failed).toEqual([]);
     expect(out.removed).toEqual([]);
     expect(out.kept).toContain(fresh);
   });
 
-  it('**이름당 최소 몇 개는 남긴다** — root 계산이 틀렸을 때의 안전망', () => {
-    const refs = [put('web', 'a.test'), put('web', 'b.test'), put('web', 'c.test')];
+  it('**이름당 최소 몇 개는 남긴다** — root 계산이 틀렸을 때의 안전망', async () => {
+    const refs = [await put('web', 'a.test'), await put('web', 'b.test'), await put('web', 'c.test')];
     const out = sweepSecrets({ root, roots: [], minAgeMs: 0 });
     expect(out.failed).toEqual([]);
     // 기본 안전망이 최신 둘을 잡는다. 0 으로 두면 root 버그 한 번에 전부 사라진다.
     expect(out.removed.length).toBe(refs.length - DEFAULT_KEEP_PER_NAME);
   });
 
-  it('키 자료(`key://`)도 함께 훑는다 — 인증서만 보면 계정 키가 영원히 쌓인다', () => {
+  it('키 자료(`key://`)도 함께 훑는다 — 인증서만 보면 계정 키가 영원히 쌓인다', async () => {
     const p = mint('k.test');
-    const k1 = store.putKey('acct', p.key);
-    const k2 = store.putKey('acct2', mint('k2.test').key);
+    const k1 = await store.putKey('acct', p.key);
+    const k2 = await store.putKey('acct2', mint('k2.test').key);
     const past = (Date.now() - 86_400_000) / 1000;
     utimesSync(dirOf(k1.ref), past, past);
     utimesSync(dirOf(k2.ref), past, past);
@@ -113,9 +113,9 @@ describe('안 지우는 것들', () => {
     expect(existsSync(dirOf(k1.ref))).toBe(true);
   });
 
-  it('**인증서와 키를 안 섞는다** — 같은 이름이어도 스킴이 다르면 다른 것이다', () => {
-    const cert = put('web', 'a.test');
-    const key = store.putKey('web', mint('k.test').key);
+  it('**인증서와 키를 안 섞는다** — 같은 이름이어도 스킴이 다르면 다른 것이다', async () => {
+    const cert = await put('web', 'a.test');
+    const key = await store.putKey('web', mint('k.test').key);
     const past = (Date.now() - 86_400_000) / 1000;
     utimesSync(dirOf(key.ref), past, past);
 
@@ -128,17 +128,17 @@ describe('안 지우는 것들', () => {
 });
 
 describe('실제로 지운다', () => {
-  it('**0500 디렉토리를 풀고 지운다** — 안 풀면 ENOTEMPTY 로 실패한다', () => {
-    const drop = put('web', 'a.test');
+  it('**0500 디렉토리를 풀고 지운다** — 안 풀면 ENOTEMPTY 로 실패한다', async () => {
+    const drop = await put('web', 'a.test');
     const out = sweepSecrets({ root, roots: [], keepPerName: 0, minAgeMs: 0 });
     expect(out.failed).toEqual([]);
     expect(out.removed).toEqual([drop]);
     expect(existsSync(dirOf(drop))).toBe(false);
   });
 
-  it('갱신을 여러 번 해도 **유계다** — 자동 갱신이 채우는 부채가 이것이다', () => {
+  it('갱신을 여러 번 해도 **유계다** — 자동 갱신이 채우는 부채가 이것이다', async () => {
     const refs: string[] = [];
-    for (let i = 0; i < 12; i += 1) refs.push(put('web', `r${i}.test`));
+    for (let i = 0; i < 12; i += 1) refs.push(await put('web', `r${i}.test`));
     // 최근 리비전이 참조하는 것 하나 + 안전망.
     const out = sweepSecrets({ root, roots: [refs[11]!], minAgeMs: 0 });
     expect(out.failed).toEqual([]);
@@ -149,7 +149,7 @@ describe('실제로 지운다', () => {
 });
 
 describe('세대에서 뽑은 버전 root 를 넓힌다', () => {
-  it('**버전이 같으면 남긴다** — 세대는 인증서 키로 갈려 시크릿 이름을 모른다', () => {
+  it('**버전이 같으면 남긴다** — 세대는 인증서 키로 갈려 시크릿 이름을 모른다', async () => {
     const v = 'a'.repeat(32);
     const out = expandVersionRoots(
       new Set([`@${v}`, 'key://acct@bbb']),

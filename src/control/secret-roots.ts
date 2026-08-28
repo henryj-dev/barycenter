@@ -104,7 +104,7 @@ export async function collectSecretRoots(opts: RootsOptions): Promise<Set<string
     }
   }
   // ② 의 자리표를 실제 참조로 넓힌다. **저장소에게 묻는다** — 세대는 이름을 모른다.
-  return expandVersionRoots(roots, opts.secrets.listRefs());
+  return expandVersionRoots(roots, await opts.secrets.listRefs());
 }
 
 /**
