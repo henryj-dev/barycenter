@@ -241,6 +241,13 @@ Driver interfaces keep organization-specific concerns out of the core, so you ne
 `DataplaneDriver` · `DNSProvider` (ACME DNS-01) · `BackendDiscovery` · `AuthProvider` ·
 `SecretStore` · `AuditSink` / `Notifier`
 
+`SecretStore` ships with two drivers. `BARY_SECRET_BACKEND=fs` (the default) writes certificate
+material to the data plane host as plaintext files protected only by mode `0400`; `pg` stores it
+in PostgreSQL under envelope encryption (a per-material AES-256-GCM key, itself wrapped by a KEK
+that lives outside the database in `BARY_SECRET_KEK`), so a database dump alone yields nothing —
+and losing that KEK means the material cannot be recovered. KMS and Vault drivers slot in behind
+the same interface.
+
 Each interface is frozen just before the release that first consumes it, not all at once.
 Drivers ship as npm packages and are loaded at runtime from a pinned allowlist with integrity
 and API-version checks — no recompilation or forking of the core, though they still have to be
