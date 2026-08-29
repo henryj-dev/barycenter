@@ -31,6 +31,11 @@ TLS_KEY=
 INTERACTIVE=auto
 ASSUME_YES=0
 EXTRA_ENV=
+# **여기서 미리 정한다** (검수 2026-08-29(2) · C). `env_line` 의 거절 메세지가 이 값을
+# 넣는데, 그 함수는 **인자 파싱 중에** `extra_env_add` 를 거쳐 불린다 — ⑩ 에서야
+# 정하면 그 시점엔 없고, `set -u` 라 안내 대신 셸 오류가 난다. 가드의 오류 경로 자체가
+# 깨져 있던 자리다. `--prefix` 로 바뀔 수 있으므로 ⑩ 에서 다시 정한다.
+ENV_FILE="$PREFIX/env"
 
 # **옵션으로 준 것과 기본값을 가른다.** 둘을 못 가르면 대화가 "이미 정한 것"을 다시
 # 묻게 되고, 그러면 옵션이 뜻을 잃는다.
@@ -821,14 +826,29 @@ TOKEN_PLAIN=$(node -e 'process.stdout.write(require("crypto").randomBytes(24).to
 TOKEN_HASH=$(printf '%s' "$TOKEN_PLAIN" \
   | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>process.stdout.write("sha256:"+require("crypto").createHash("sha256").update(b,"utf8").digest("hex")))')
 
+# **좁은 umask 안에서 만든다** (검수 2026-08-29(2) · B). `>` 는 umask 로 파일을 만들고
+# sudo 의 기본값은 022 다 — 그러면 0644 로 태어나고, `$PREFIX` 가 0755 라 **그 순간
+# 아무나 읽는다.** 뒤따르는 `chmod` 는 이미 열린 뒤다. 서브셸로 감싸 이 블록 밖의
+# umask 를 안 건드린다 (유닛 파일까지 0600 이 되면 그건 다른 문제를 만든다).
 TOKENS_FILE="$PREFIX/tokens.json"
-printf '[{"name":"ops","scopes":["read","write","apply"],"hash":"%s"}]\n' "$TOKEN_HASH" > "$TOKENS_FILE"
+(umask 077; printf '[{"name":"ops","scopes":["read","write","apply"],"hash":"%s"}]\n' \
+  "$TOKEN_HASH" > "$TOKENS_FILE")
 chown root:"$SVC_USER" "$TOKENS_FILE"
 chmod 0640 "$TOKENS_FILE"
 
 # 한 줄 한 줄을 `env_line` 이 만든다 — 인용 규칙이 한 자리에만 있게 하려는 것이다.
 # heredoc 으로 늘어놓던 때는 값에 따옴표가 든 경우(암호를 담은 DSN)가 조용히 깨졌다.
 ENV_FILE="$PREFIX/env"
+# **덮되 덮는다고 말한다** (검수 2026-08-29(2) · E). 이 파일은 매 실행 다시 쓰이는데,
+# `env_line` 의 거절 안내가 *"설치 뒤 이 파일을 직접 고친다"* 를 우회로로 알려 준다 —
+# 알려 준 우회로를 다음 실행이 말없이 지우면 안 된다.
+#
+# 보존하는 쪽은 더 나쁘다: 옛 파일의 관리 키와 새로 계산한 값이 섞이면 어느 쪽이
+# 이기는지가 형식마다 다르고, 그건 `MANAGED_ENV_KEYS` 가 막으려던 바로 그 상태다.
+[ -f "$ENV_FILE" ] && warn "$ENV_FILE 을 다시 쓴다 — 손으로 고친 줄이 있으면 사라진다"
+# 위와 같은 이유로 좁은 umask 안에서 만든다 — DSN 에 비밀번호가 들고, `pg` 시크릿
+# 백엔드를 쓰면 `--env BARY_SECRET_KEK=...` 로 **KEK 가 여기 들어온다** (§4.8.1).
+(umask 077
 {
   env_line BARY_DSN "$DSN"
   env_line BARY_PREFIX "$PREFIX"
@@ -849,8 +869,12 @@ ENV_FILE="$PREFIX/env"
   fi
   # `--env` 와 대화로 받은 것들. **끝에 둔다** — 위의 관리 키와 겹치는 것은 이미
   # `extra_env_add` 가 거절했으므로, 여기 오는 것은 데몬이 읽는 다른 설정들뿐이다.
-  [ -n "$EXTRA_ENV" ] && printf '%s' "$EXTRA_ENV"
-} > "$ENV_FILE"
+  # **`&&` 로 두지 않는다.** 비면 이 리스트가 상태 1 로 끝나고, 그것이 이 블록의
+  # 마지막 상태가 된다. 브레이스 그룹일 때는 `set -e` 의 AND-OR 면제가 걸려 안 죽었지만
+  # **서브셸로 감싸면 부모가 보기엔 실패한 명령 하나**라 거기서 죽는다 —
+  # `tests/install/run.sh` 가 다섯 판에서 그것을 잡았다(검수 2026-08-29(2) 의 회귀).
+  if [ -n "$EXTRA_ENV" ]; then printf '%s' "$EXTRA_ENV"; fi
+} > "$ENV_FILE")
 chown root:"$SVC_USER" "$ENV_FILE"
 chmod 0640 "$ENV_FILE"
 if [ -n "$EXTRA_ENV" ]; then
@@ -890,6 +914,13 @@ Description=barycenter control plane (nginx)
 # (이 주석에 역따옴표를 안 쓰는 것은 취향이 아니다 — 이 heredoc 은 확장되므로
 #  역따옴표가 그대로 명령 치환이 된다.)
 After=network.target postgresql.service
+# **재시도 상한을 끈다.** 기본값(10초에 5번)이면 PG 가 늦게 뜨는 부팅에서 다섯 번
+# 만에 포기하고 failed 로 남는다 — 트래픽은 흐르는데 제어가 없는 그 상태다.
+#
+# **[Unit] 이다** (검수 2026-08-29(2) · A). 전에는 [Service] 에 있었고, systemd 는
+# 그것을 "Unknown key ... ignoring" 으로 **조용히 버린다** — systemd-analyze verify 로
+# 실측했다. 유닛은 뜨고 서비스도 살기 때문에 설치 하네스가 못 잡는 자리였다.
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
@@ -902,9 +933,6 @@ ExecStartPre=$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf
 ExecStart=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js
 Restart=on-failure
 RestartSec=5
-# **재시도 상한을 끈다.** 기본값(10초에 5번)이면 PG 가 늦게 뜨는 부팅에서 다섯 번
-# 만에 포기하고 failed 로 남는다 — 트래픽은 흐르는데 제어가 없는 그 상태다.
-StartLimitIntervalSec=0
 TimeoutStopSec=15
 # NoNewPrivileges 를 켜지 않는다 — 켜면 ⑤ 의 파일 capability 가 무효가 되고
 # 80·443 리스너가 bind 에서 죽는다.
