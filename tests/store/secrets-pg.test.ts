@@ -96,6 +96,20 @@ describe('왕복', () => {
     expect((await db.query('SELECT count(*) c FROM secret_materials')).rows[0]!['c']).toBe('1');
   });
 
+  it('**재업로드가 고친다** — 못 여는 행을 같은 자료로 덮는다 (검수 2026-08-29 · A)', async () => {
+    const m = mintPair('repair.test');
+    // KEK 가 바뀐(또는 다른 환경에서 복원된) 행. 지금 KEK 로는 안 열린다.
+    const stale = new PgSecretStore({ db, kek: randomBytes(32) });
+    const ref = await stale.put('web', { fullchain: m.pem, privkey: m.key });
+    await expect(store.get(ref.ref)).rejects.toThrow(/KEK 가 다르거나/);
+
+    // **운영자가 제일 먼저 할 일**은 같은 자료를 다시 올리는 것이다 —
+    // `FsSecretStore` 는 `replaceDir` 로 그것을 고친다(검수 D8). 여기서 안 고치면
+    // 나가는 길이 손으로 DB 행을 지우는 것뿐이고, 그 사실은 어디에도 안 적혀 있다.
+    await store.put('web', { fullchain: m.pem, privkey: m.key });
+    expect((await store.get(ref.ref)).privkey).toBe(m.key);
+  });
+
   it('**없는 참조는 던진다** — 최신으로 물러나면 롤백이 거짓말이 된다 (§8.3)', async () => {
     const missing = `store://web@${'0'.repeat(32)}`;
     await expect(store.get(missing)).rejects.toThrow(/시크릿이 없다/);
@@ -171,6 +185,17 @@ describe('참조가 드라이버를 안 가린다', () => {
     expect(await store.describe(ref.ref)).toEqual(ref);
   });
 
+  it('**digest 를 자료에서 다시 잰다** — DB 열을 믿지 않는다 (검수 2026-08-29 · B)', async () => {
+    const m = mintPair('i2.test');
+    const ref = await store.put('web', { fullchain: m.pem, privkey: m.key });
+
+    // `FsSecretStore.describe` 는 자료를 읽어 **다시 잰다** — 저장된 값을 안 믿는다.
+    // 그래서 열을 고쳐도 거짓을 못 낸다. PG 드라이버도 같은 계약이어야 한다:
+    // 여기서 갈리면 세대 결박의 근거가 드라이버마다 다른 값이 된다.
+    await db.query("UPDATE secret_materials SET chain_digest = 'sha256:거짓말'");
+    expect(await store.describe(ref.ref)).toEqual(ref);
+  });
+
   it('`listRefs` 가 두 스킴을 섞어서 낸다 — GC 의 root 넓히기가 쓴다', async () => {
     const m = mintPair('j.test');
     const cert = await store.put('web', { fullchain: m.pem, privkey: m.key });
@@ -207,6 +232,23 @@ describe('사실 캐시 — 동기 창구', () => {
     await refreshing;
 
     expect(store.facts(ref.ref)?.domains).toEqual(['race.test']);
+  });
+
+  it('**밖에서 만져도 캐시가 안 썩는다** (검수 2026-08-29 · C)', async () => {
+    const m = mintPair('alias.test');
+    const ref = await store.put('web', { fullchain: m.pem, privkey: m.key });
+
+    // `FsSecretStore.facts` 는 호출마다 파일을 새로 파싱하므로 호출자가 무엇을 하든
+    // 다음 호출이 안 영향받는다. 캐시를 들면 그 성질이 조용히 사라진다 —
+    // 한 호출자의 실수가 **다른 모든 호출자의 만료 판정**을 바꾼다.
+    const first = store.facts(ref.ref)!;
+    try {
+      (first.domains as string[]).push('evil.test');
+      (first as { notAfter: string }).notAfter = '1970-01-01T00:00:00.000Z';
+    } catch { /* 얼려 뒀으면 던진다 — 그것도 답이다 */ }
+
+    expect(store.facts(ref.ref)?.domains).toEqual(['alias.test']);
+    expect(store.facts(ref.ref)?.notAfter).not.toBe('1970-01-01T00:00:00.000Z');
   });
 
   it('miss 는 `undefined` 다 — 던지면 목록 조회가 통째로 죽는다', () => {
