@@ -216,13 +216,15 @@ try {
     const released = exactlyOne(/^# 해제 근거: (.+)$/)?.[1];
     // **회차 근거는 여럿이다** (검수 2026-08-29(3) · C). 카운터가 세는 것이 무엇이었는지
     // 파일이 스스로 말해야 한다 — 안 그러면 그 숫자는 `--round` 를 부른 횟수일 뿐이다.
-    const roundLog = lines
+    const roundMatches = lines
       .map((line) => /^# 회차 (\d+): (.+)$/.exec(line))
-      .filter((m) => m !== null)
-      .map((m) => m[2]);
+      .filter((m) => m !== null);
+    const roundLog = roundMatches.map((m) => m[2]);
+    // 번호도 든다 — 정합성을 재려면 텍스트만으로는 부족하다 (`--freeze-status`).
+    const roundNums = roundMatches.map((m) => Number(m[1]));
     return {
       body: raw.slice(at + MARK.length), rounds: Number(rounds), frozen: freeze[1] === '선언',
-      released, roundLog,
+      released, roundLog, roundNums,
       claimedSymbols: claimed === null ? undefined : Number(claimed[1]), claimedDigest: claimed?.[2],
     };
   };
@@ -360,6 +362,53 @@ try {
     }
     writeFileSync(BASELINE, stamp(previous.rounds, true, previous.released));
     console.log(`A 타입·DP ABI 동결 선언 — ${symbols} 심볼 · ${digest} · ${previous.rounds} 회차`);
+  } else if (mode === '--freeze-status') {
+    /**
+     * **게이트가 매번 재는 것** (검수 2026-08-29(3) C 의 결정).
+     *
+     * `--freeze-check` 는 선언을 요구하므로 미선언 상태에서는 게이트에 못 건다 — 항상
+     * 빨갛다. 그래서 이 자리가 오래 비어 있었고, 그동안 이 파일을 무력화하는 가장 싼
+     * 길은 **손으로 헤더를 고치는 것**이었다. *"손으로 고치지 않는다"* 는 규칙일 뿐
+     * 검사가 아니었다.
+     *
+     * `--round` 가 근거를 남기게 되면서 **미선언 상태에서도 잴 것이 생겼다**:
+     * 카운터와 그 근거가 맞물리는가. 손으로 카운터만 올리면 마지막 회차 번호가 안 맞는다.
+     *
+     * 선언되면 거기에 `--freeze-check` 의 요구(회차 수 · 표면 일치)가 더해진다.
+     * **그래서 선언하는 날 이 자리를 다시 정할 일이 없다.**
+     */
+    if (previous === undefined) {
+      console.error('SURFACE.txt 를 못 읽었다 — 헤더가 깨졌거나 파일이 없다');
+      process.exit(1);
+    }
+    const nums = previous.roundNums;
+    if (nums.length > previous.rounds) {
+      console.error(
+        `회차 근거가 카운터보다 많다 — 근거 ${nums.length} 줄 · 카운터 ${previous.rounds} 회차`);
+      process.exit(1);
+    }
+    if (nums.length > 0) {
+      // 번호는 `stamp` 가 카운터에 맞물려 찍는다: 마지막이 곧 카운터이고 1 씩 는다.
+      const contiguous = nums.every((n, i) => i === 0 || n === nums[i - 1] + 1);
+      if (!contiguous || nums[nums.length - 1] !== previous.rounds) {
+        console.error(
+          `회차 번호가 카운터와 안 맞물린다 — 번호 [${nums.join(', ')}] · 카운터 ${previous.rounds} 회차\n`
+          + '  카운터를 손으로 올렸거나 회차 줄을 지웠다. 올리는 길은 `--round "<근거>"` 하나다.');
+        process.exit(1);
+      }
+    }
+    if (previous.frozen) {
+      if (previous.rounds < FREEZE_ROUNDS) {
+        console.error(`동결 선언이 있는데 카운터가 ${previous.rounds} 회차다 — 기준은 ${FREEZE_ROUNDS} 회차`);
+        process.exit(1);
+      }
+      if (!baselineMatches) {
+        console.error('동결 선언이 있는데 표면이 기준과 다르다');
+        process.exit(1);
+      }
+    }
+    console.log(`ok  동결 상태  ${previous.rounds} 회차 · A ${previous.frozen ? '동결' : '미선언'}`
+      + `${nums.length === 0 ? ' (회차 근거 없음 — 요구 이전에 쌓였다)' : ''}`);
   } else if (mode === '--freeze-check') {
     if (!baselineMatches || !previous.frozen || previous.rounds < FREEZE_ROUNDS) {
       console.error('A 타입·DP ABI 동결 게이트 실패');
