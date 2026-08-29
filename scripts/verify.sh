@@ -6,6 +6,7 @@
 #   ./scripts/verify.sh --group e2e  조각 하나만 (CI 가 병렬로 돌리는 단위)
 #   ./scripts/verify.sh --list-groups  조각 이름 목록
 #   ./scripts/verify.sh --verbose    통과한 단위의 출력도 전부 낸다
+#   ./scripts/verify.sh --no-live    자식의 진행 줄을 안 흘려보낸다 (표만)
 #
 # 도커가 필요한 묶음(골든·엔진·스파이크)은 도커가 없으면 **건너뛰지 않고 실패**한다.
 # 조용히 건너뛰면 통과 신호를 위조하게 된다. 굳이 빼려면 --quick 을 명시한다.
@@ -22,6 +23,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # **게이트가 자기 흔들림을 센다** (검수 W4-9). 근거는 그 파일 머리말에 있다.
 # shellcheck source=lib/flake.sh
 . scripts/lib/flake.sh
+# 진행 표시. **판정을 나르는 코드라** 별도 파일이고, 아래 게이트가 그것을 잰다.
+# shellcheck source=lib/live.sh
+. scripts/lib/live.sh
 FLAKES=0
 
 # 조각. 순서는 CI 매트릭스에 그대로 나가므로 **긴 것을 앞에** 둔다 —
@@ -39,6 +43,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --quick)       QUICK=1 ;;
     --verbose|-v)  VERBOSE=1 ;;
+    --no-live)     BARY_VERIFY_LIVE=0 ;;
     --group)       shift; GROUP="${1:-}" ;;
     --group=*)     GROUP="${1#--group=}" ;;
     --list-groups) printf '%s\n' "${VERIFY_GROUPS[@]}"; exit 0 ;;
@@ -99,6 +104,21 @@ if [ $TTY -eq 1 ]; then BEAT=${BARY_VERIFY_HEARTBEAT:-15}
 else                    BEAT=${BARY_VERIFY_HEARTBEAT:-60}
 fi
 
+# **자식이 무엇을 하고 있는지 흘려보낸다** (`--no-live` 로 끈다).
+#
+# 심장박동은 *"아직 살아 있다"* 만 말한다. 그런데 e2e 가 십 분을 도는 동안 알고 싶은
+# 것은 그것이 아니라 **지금 무엇을 하고 있고 어디까지 됐는가** 다 — 패키지 매니저가
+# 무엇을 받고 무엇을 푸는지 한 줄씩 내는 것과 같은 이유다. 멎은 것과 오래 걸리는 것을
+# 가르는 데는 "60초째" 보다 "지금 이 파일을 돌고 있다" 가 낫다.
+#
+# ⚠️ **fd 3 이 필요하다.** `bary_run_twice` 는 진단을 위해 자식의 출력을 `$(...)` 로
+# 통째로 붙잡는다(그 값은 그대로 둔다 — 실패했을 때 원문이 없으면 아무것도 못 한다).
+# 그 안에서 그냥 찍으면 캡처로 들어가 화면에는 안 나온다. 그래서 캡처 **밖**으로 나가는
+# 통로를 하나 연다.
+exec 3>&1
+BARY_LIVE=${BARY_VERIFY_LIVE:-1}
+export BARY_LIVE
+
 heartbeat() {                # heartbeat <label>
   local label="$1" t=0
   while true; do
@@ -108,7 +128,10 @@ heartbeat() {                # heartbeat <label>
     # 그 함정이다. 시간만 재는 프로세스에 출력은 필요 없다.
     sleep "$BEAT" >/dev/null 2>&1
     t=$(( t + BEAT ))
-    if [ $TTY -eq 1 ]; then
+    # 진행을 흘리는 중이면 같은 모양으로 낸다 — 점만 찍으면 진행 줄 사이에서 뜬다.
+    if [ "$BARY_LIVE" -eq 1 ]; then
+      printf '     │  … %s초째 도는 중\n' "$t"
+    elif [ $TTY -eq 1 ]; then
       printf '.'
     else
       printf '  ..    %s  —  %s초째 도는 중\n' "$label" "$t"
@@ -116,9 +139,12 @@ heartbeat() {                # heartbeat <label>
   done
 }
 
-run() {                      # run <label> <command...>
+run() {                      # run <label> [--what <설명>] <command...>
   local label="$1"; shift
-  local out rc hb start elapsed line
+  local out rc hb start elapsed line what=""
+  # **그 단계가 무엇을 하는지 적는다.** 라벨은 이름일 뿐이라 `typecheck` 가 무엇을
+  # 검사하고 무엇을 안 내는지 말하지 않는다. 설명은 시작 줄에 붙는다.
+  if [ "${1:-}" = --what ]; then shift; what="$1"; shift; fi
 
   # **조각에 배정되지 않은 단위는 없다.** 나누면서 조용히 빠뜨리는 것이 이 구조에서
   # 가장 비싼 사고다 — 검사가 사라진 것이 초록으로 보이기 때문이다. 스파이크를 하나
@@ -133,10 +159,14 @@ run() {                      # run <label> <command...>
     return 0
   fi
   RAN=$(( RAN + 1 ))
-  if [ $TTY -eq 1 ]; then
-    printf '  ..    %s  —  ' "$label"
+  # **진행을 흘릴 때는 줄을 닫는다.** 안 닫으면 아래 진행 줄이 이 줄 뒤에 붙고,
+  # 끝에서 `\r` 로 덮으면 진행 줄까지 함께 지워진다.
+  if [ "$BARY_LIVE" -eq 1 ]; then
+    printf '  ..    %s  —  %s\n' "$label" "${what:-시작}"
+  elif [ $TTY -eq 1 ]; then
+    printf '  ..    %s  —  %s' "$label" "${what:-}"
   else
-    printf '  ..    %s  —  시작\n' "$label"
+    printf '  ..    %s  —  %s\n' "$label" "${what:-시작}"
   fi
 
   start=$(date +%s)
@@ -145,7 +175,7 @@ run() {                      # run <label> <command...>
   # **실패하면 한 번 더 돈다** (검수 W4-9). ⚠️ 재실행이 **판정을 안 바꾼다** —
   # 두 번째가 초록이어도 이 스위트는 실패로 세고 게이트는 빨갛다. 재실행이 사는 이유는
   # 「흔들렸다」를 「깨졌다」와 구분해 **적기** 위해서이지 통과시키기 위해서가 아니다.
-  bary_run_twice "$@"
+  bary_run_twice bary_live "$@"
   out=$BARY_RUN_OUT; rc=$BARY_RUN_RC
   { kill "$hb"; wait "$hb"; } 2>/dev/null
   elapsed=$(( $(date +%s) - start ))
@@ -165,7 +195,8 @@ run() {                      # run <label> <command...>
   RESULTS+=("$line")
 
   # 터미널이면 진행 줄을 지우고 그 자리에 판정을 덮는다.
-  [ $TTY -eq 1 ] && printf '\r\033[K'
+  # 진행을 흘리는 중이면 덮을 것이 없다 — 이미 줄을 닫았다.
+  [ $TTY -eq 1 ] && [ "$BARY_LIVE" -eq 0 ] && printf '\r\033[K'
   printf '%s\n' "$line"
 
   # **통과한 단위의 출력도 볼 수 있어야 한다.**
@@ -213,7 +244,33 @@ summarize() {
   local s
   s=$(echo "$1" | grep -oE 'Tests +[0-9]+ passed \([0-9]+\)|PASS=[0-9]+ +FAIL=[0-9]+( +SKIP=[0-9]+)?' \
       | tail -1 | tr -s ' ')
-  if [ -n "$s" ]; then echo "$s"; else echo "완료"; fi
+  if [ -n "$s" ]; then echo "$s"; return; fi
+
+  # **도구가 낸 마지막 줄을 그대로 쓴다.**
+  #
+  # 전에는 위 두 모양(vitest · 스파이크)만 알고 나머지를 전부 `완료` 로 접었다. 그런데
+  # 그 도구들은 이미 쓸 만한 한 줄을 내고 있었고 그것이 버려지고 있었다:
+  #
+  #   node-pin    node 24 — .nvmrc · deploy/Dockerfile(24, 24) · engines ">=22"
+  #   reachable   도달성 ok — 92 파일, 예외 20 건
+  #   surface     표면 그대로 — 117 심볼 · sha256:… · 동결 카운터 3 회차 · A 미선언
+  #
+  # 도구마다 정규식을 새로 짜는 대신 마지막 의미 있는 줄을 쓴다 — 새 단계를 넣을 때
+  # 여기를 안 고쳐도 되고, 도구가 자기 출력을 좋게 만들면 표도 저절로 좋아진다.
+  #
+  # 배너로 끝나는 도구가 있으면 그 배너가 요약이 된다. 그때 고칠 곳은 **도구의 마지막
+  # 줄**이지 여기가 아니다 — 표가 도구의 출력을 해석하기 시작하면 자리가 둘이 된다.
+  local esc; esc=$(printf '\033')
+  s=$(printf '%s' "$1" \
+      | sed "s/${esc}\[[0-9;]*[A-Za-z]//g" \
+      | grep -vE '^[[:space:]]*$' \
+      | tail -1 \
+      | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+  # **출력이 없는 것도 결과다.** `tsc` 는 통과하면 한 글자도 안 낸다 — 그걸 `완료` 라고
+  # 적으면 무엇을 보고 통과라 했는지가 사라진다.
+  if [ -z "$s" ]; then echo "출력 없음 (조용히 통과)"; return; fi
+  printf '%s\n' "$s" | sed 's/\(.\{56\}\).*/\1…/'
 }
 
 echo "═══════════════════════════════════════════════════════════════"
@@ -223,8 +280,8 @@ echo "════════════════════════�
 # 도커 없이 도는 것 전부. 이 조각만 도커가 필요 없다.
 group unit
 
-run "typecheck            " npx tsc --noEmit
-run "표면 (계약 고정)     " node scripts/surface.mjs --check
+run "typecheck            " --what "tsc --noEmit — src·tests 타입만 본다, 산출물은 안 낸다" npx tsc --noEmit
+run "표면 (계약 고정)     " --what "src/index.ts 의 공개 폐포를 해시로 찍어 SURFACE.txt 와 대조" node scripts/surface.mjs --check
 
 # **동결 상태도 잰다** (검수 2026-08-29(3) C 의 결정). `--freeze-check` 는 선언을
 # 요구하므로 미선언 상태에서는 못 건다 — 항상 빨갛다. 그래서 이 자리가 오래 비어 있었고,
@@ -234,19 +291,19 @@ run "표면 (계약 고정)     " node scripts/surface.mjs --check
 # `--round` 가 근거를 남기게 되면서 미선언 상태에서도 잴 것이 생겼다 — 카운터와 그 근거가
 # 맞물리는가. 선언되면 회차 수와 표면 일치가 여기에 더해지므로, **선언하는 날 이 자리를
 # 다시 정할 일이 없다.**
-run "동결 상태            " node scripts/surface.mjs --freeze-status
+run "동결 상태            " --what "동결 카운터와 회차 근거가 맞물리는가 (선언돼 있으면 표면 일치까지)" node scripts/surface.mjs --freeze-status
 
 # **도달성 게이트** (2026-08-22 검수). 표면 계측기는 "무엇을 내보내는가" 를 재지
 # "그것을 누가 쓰는가" 를 재지 않는다. 구현돼 있고 테스트도 초록인데 프로덕션
 # 호출자가 0 개인 방어가 넷 있었고, 그 셋은 "막는다" 고 주석에 적혀 있었다.
-run "도달성 (배선 검사)   " node scripts/reachable.mjs
+run "도달성 (배선 검사)   " --what "구현된 방어에 프로덕션 호출자가 있는가 — 없으면 그 방어는 없다" node scripts/reachable.mjs
 
 # **node 핀이 한 벌인가.** `.nvmrc`(CI 가 읽는다)와 `deploy/Dockerfile`(배포 이미지가
 # 박는다)이 같은 메이저를 말해야 한다. 사본이 둘인 것은 못 줄인다 — `FROM` 은 파일을
 # 못 읽는다 — 그래서 갈라지는 것만 막는다. `.nvmrc` 를 만든 그날 dependabot 이
 # Dockerfile 만 26 으로 올리는 PR 을 열었다(#1). 이 검사가 없었으면 CI 는 24, 배포는
 # 26 인 상태가 조용히 초록이었을 것이다.
-run "node 핀 (한 벌인가)  " node scripts/node-pin.mjs
+run "node 핀 (한 벌인가)  " --what ".nvmrc 와 deploy/Dockerfile 이 같은 메이저를 말하는가" node scripts/node-pin.mjs
 
 # **재현물 게이트** (48차 처방 B). 39·40차에 규칙을 산문으로 세웠는데 46차에 또 어겼다 —
 # 규칙이 산문이라 안 지켜진다. 로컬 기본은 직전 커밋이다.
@@ -259,21 +316,24 @@ run "node 핀 (한 벌인가)  " node scripts/node-pin.mjs
 # 한 번에 확인하고 싶을 때 `BARY_PINNED_BASE=origin/main ./scripts/verify.sh` 가 된다 —
 # 전에는 그 방법이 스크립트를 고치는 것뿐이었다.
 PINNED_BASE="${BARY_PINNED_BASE:-HEAD~1}"
-[ $QUICK -eq 0 ] && run "재현물 (핀 검사)     " node scripts/pinned.mjs "$PINNED_BASE"
+[ $QUICK -eq 0 ] && run "재현물 (핀 검사)     " --what "src 를 바꾼 커밋마다 표식이 있고 그 테스트가 부모 트리에서 빨간가" node scripts/pinned.mjs "$PINNED_BASE"
 
 # **훅 — 핀 검사의 한 발을 메운다.** 위 검사는 `HEAD~1` 을 보므로 *지금 만들 커밋*을 못
 # 본다. 커밋 전에 게이트를 돌리는 이 저장소의 순서에서는 위반이 **항상 한 사이클 늦게**
 # 잡힌다 (2026-08-18 에 실제로 그렇게 놓쳤다). `commit-msg` 훅이 커밋 시점에 표식을
 # 요구한다. 훅은 커밋되지만 `core.hooksPath` 를 건 클론에서만 도니, **훅 자체가 도는지를
 # 여기서 잰다** — 안 그러면 "있는데 안 도는" 층이 된다.
-run "훅 (pre-commit)      " python3 scripts/git-hooks/test-pre-commit.py
-run "훅 (commit-msg)      " python3 scripts/git-hooks/test-commit-msg.py
+run "훅 (pre-commit)      " --what "메인 트리 쓰기 차단 훅이 실제로 도는가" python3 scripts/git-hooks/test-pre-commit.py
+run "훅 (commit-msg)      " --what "Pinned-by 를 요구하는 훅이 실제로 도는가" python3 scripts/git-hooks/test-commit-msg.py
 # **계수기 자신도 잰다** (검수 W4-9). 이 게이트가 흔들림을 세는데 세는 쪽이 틀리면
 # 그 숫자가 거짓이 된다 — 훅을 여기서 재는 것과 같은 이유다.
-run "흔들림 계수기        " python3 scripts/lib/test-flake.py
-run "unit                 " npm test --silent
-run "conformance (반례)   " npm run test:conformance --silent
-run "모델 (스케줄 생성)   " npx vitest run tests/model --silent
+run "흔들림 계수기        " --what "계수기 자신이 흔들림과 빨강을 옳게 가르는가" python3 scripts/lib/test-flake.py
+# **진행 표시도 잰다.** `bary_live` 는 자식을 파이프라인으로 감싸므로 종료코드가 새면
+# 게이트가 영원히 초록이 된다 — 계수기를 재는 것과 같은 이유다.
+run "진행 표시            " --what "자식의 판정이 새지 않고 그대로 전달되는가" python3 scripts/lib/test-live.py
+run "unit                 " --what "도커 없이 도는 단위 전부" npm test --silent
+run "conformance (반례)   " --what "검수가 낸 반례들이 여전히 막히는가" npm run test:conformance --silent
+run "모델 (스케줄 생성)   " --what "모델에서 스케줄을 생성해 성질을 잰다" npx vitest run tests/model --silent
 
 if [ $QUICK -eq 1 ]; then
   echo "  (--quick: 도커가 필요한 묶음은 실행하지 않았다)"
@@ -298,7 +358,7 @@ else
     # 진입점 퍼미션 · e2e · S12 · S18. 어느 도커 조각을 고르든 먼저 서야 하므로
     # 조각을 가리지 않고 한 번 돈다. 판정은 지금 도는 조각에 기록된다.
     group "${GROUP:-e2e}"
-    run "build (dist·gui)      " ./scripts/build.sh
+    run "build (dist·gui)      " --what "dist 와 gui/build 를 실제로 만든다 — 이미지가 싣는 것" ./scripts/build.sh
     # **진입점 퍼미션** (검수 G7 · W0-9 가 남겼다). `build.sh` 가 진입점 목록을 손으로
     # 들고 있다가 `bary-dp-agent` 를 빠뜨렸다 — 선언은 있는데 실행 권한이 없는 산출물이
     # 나갔다. `chmod +x dist/bin/*.js` 로 목록을 없앴는데 **그것이 정말 도는지는 아무도
@@ -306,32 +366,32 @@ else
     # 가장 긴 단위(e2e 242초)가 임계 경로다. 같은 조각에 붙는 것은 `dist/` 를 함께
     # 쓰는 진입점 퍼미션뿐이다.
     group e2e
-    run "진입점 퍼미션        " npx vitest run tests/unit/audit-small-four.test.ts --silent
-    run "e2e (실제 nginx)      " npm run test:e2e --silent
+    run "진입점 퍼미션        " --what "bin 진입점의 실행 비트" npx vitest run tests/unit/audit-small-four.test.ts --silent
+    run "e2e (실제 nginx)      " --what "실제 nginx 컨테이너에 REST 로 넣고 트래픽까지 몬다" npm run test:e2e --silent
 
     # 렌더 결과를 실물로 재는 둘. 서로 컨테이너를 따로 세운다.
     group render
-    run "store (실물 PG)      " npm run test:store --silent
-    run "golden (nginx -t)    " npm run test:golden --silent
+    run "store (실물 PG)      " --what "실물 PostgreSQL — DB CHECK 와 복합 FK 는 흉내로 못 잰다" npm run test:store --silent
+    run "golden (nginx -t)    " --what "렌더 산출물을 실제 nginx -t 로 검사" npm run test:golden --silent
 
     # 엔진 사실과, 혼자 144초를 쓰는 S12 를 함께 둔다 — 둘이 합쳐야 e2e 와 길이가 맞는다.
     group engine
-    run "engine facts         " ./tests/engine/run.sh
-    run "spike S12            " ./spike/s12/run.sh
+    run "engine facts         " --what "엔진이 정말 그렇게 동작하는가 — 문서가 아니라 실물이 답한다" ./tests/engine/run.sh
+    run "spike S12            " --what "크래시 저널 — 어느 지점에서 죽어도 복구가 정확한가" ./spike/s12/run.sh
 
     # 나머지 스파이크. 하나하나는 짧아서 모아 놓아야 조각 하나가 된다.
     group spikes
-    run "spike S1/S5          " ./spike/s1-s5/run.sh
-    run "spike S7             " ./spike/s7/run.sh
-    run "spike S8             " ./spike/s8/run.sh
-    run "spike S9             " ./spike/s9/run.sh
-    run "spike S11            " ./spike/s11/run.sh
-    run "spike S13            " ./spike/s13/run.sh
-    run "spike S15            " ./spike/s15/run.sh
-    run "spike S16            " ./spike/s16/run.sh
-    run "spike S17            " ./spike/s17/run.sh
-    run "spike S18            " ./spike/s18/run.sh
-    run "spike S19            " ./spike/s19/run.sh
+    run "spike S1/S5          " --what "Lua 동적 peer 변경 · 이중 zone 워커 수렴" ./spike/s1-s5/run.sh
+    run "spike S7             " --what "reload 실패 판정 — 포트 점유를 얼마나 빨리 아는가" ./spike/s7/run.sh
+    run "spike S8             " --what "인증서 세대 롤백 — 옛 key/chain 이 정확히 복원되는가" ./spike/s8/run.sh
+    run "spike S9             " --what "SNI 세 분기(부재·파싱실패·타임아웃) 관측성" ./spike/s9/run.sh
+    run "spike S11            " --what "operation tuple 경합 — 늦은 RPC 와 ABA 가 막히는가" ./spike/s11/run.sh
+    run "spike S13            " --what "마커·워커 레지스트리·GC — 옛 워커 잔존 중 오삭제 0" ./spike/s13/run.sh
+    run "spike S15            " --what "밸런서 품질 — RR 편차 · hash 분포 · 재매핑률" ./spike/s15/run.sh
+    run "spike S16            " --what "SNI 별 TLS policy 가 실제 handshake 에 걸리는가" ./spike/s16/run.sh
+    run "spike S17            " --what "인증서 선택 렌더 — SAN 미커버 인증서 제시 0" ./spike/s17/run.sh
+    run "spike S18            " --what "ACME 상태기계 — 오더·챌린지·재시도·고아 정리" ./spike/s18/run.sh
+    run "spike S19            " --what "롤백 경로 합성 — 세대 결박과 새 epoch 이 함께 서는가" ./spike/s19/run.sh
     # **S20 은 일부러 안 넣는다.** 8 개 중 7 개가 통과하고 하나가 실패하는데, 그 실패는
     # 우리 코드의 결함이 아니라 **h3 를 열기 위한 선결 조건**이었다.
     #
