@@ -39,7 +39,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 동결 | B(구현된 OpenAPI · DDL). **A 는 이 회차에 풀렸다** — W3 설정 셋을 들이려고. 근거가 `SURFACE.txt` 머리에 남는다 | 미구현 계약 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
-| 시크릿 | 드라이버 **둘**. `fs`(기본, 평문 0400)와 `pg`(봉투 암호화 AES-256-GCM · KEK 는 DB 밖). 참조는 두 드라이버가 같은 값을 낸다. GC 정책은 한 자리(`partitionForSweep`) | KMS·Vault 드라이버 |
+| 시크릿 | 드라이버 **둘**. `fs`(기본, 평문 0400)와 `pg`(봉투 암호화 AES-256-GCM · KEK 는 DB 밖). 참조·digest·재업로드 수리 계약을 두 드라이버가 **같이** 낸다 (검수 2026-08-29). GC 정책은 한 자리(`partitionForSweep`) | KMS·Vault 드라이버 · KEK 회전 절차 |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
 | CLI | `bary-dp-agent`(원격 DP 창구). `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status. **리스너 옵션 플래그**(`--rate`·`--header`·`--max-body`·타임아웃) | — |
 | GUI | Kit 경로(로그인 포함). 폴링하지 않는다. **리스너 옵션 폼**·**왜 트래픽을 안 받나**·패스스루 두 폴백(`on_no_sni` 포함) | 아래 §2 |
@@ -124,6 +124,11 @@ B(구현된 API·DDL) 드리프트를 둘 다 막는다.
 **재동결까지 3 회차를 다시 쌓아야 한다.** 푸는 길은
 `surface.mjs --unfreeze "<근거>"` 하나뿐이고 근거를 요구한다 — 그 근거는 `SURFACE.txt`
 머리에 남고 `--write` 를 지나서도 안 지워진다.
+
+**쌓는 것은 저절로 안 된다** (2026-08-29). `--round` 는 **사람이 부르는 모드**이고,
+세는 단위는 「검수 회차」다 — 기능 PR 이 표면을 안 건드렸다고 세지 않는다. 13차 검수가
+준 기준이 *"여러 **적대적** 회차 동안 이 파일이 변하지 않을 것"* 이기 때문이다.
+2026-08-29 의 `PgSecretStore` 검수(`docs/audit-2026-08-29.md`)가 **1 회차**다.
 
 ⚠️ 그래서 **`./scripts/verify.sh --freeze-gate` 는 지금 빨갛다. 회귀가 아니다** —
 A 가 미선언이라는 사실을 그대로 말하는 것이다. 기본 게이트(`verify.sh`)는 `--check` 만
