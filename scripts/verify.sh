@@ -239,8 +239,17 @@ run "도달성 (배선 검사)   " node scripts/reachable.mjs
 run "node 핀 (한 벌인가)  " node scripts/node-pin.mjs
 
 # **재현물 게이트** (48차 처방 B). 39·40차에 규칙을 산문으로 세웠는데 46차에 또 어겼다 —
-# 규칙이 산문이라 안 지켜진다. 기본은 직전 커밋을 본다.
-[ $QUICK -eq 0 ] && run "재현물 (핀 검사)     " node scripts/pinned.mjs HEAD~1
+# 규칙이 산문이라 안 지켜진다. 로컬 기본은 직전 커밋이다.
+#
+# **범위 판정은 CI 의 `quick` 잡이 진다.** 거기서 PR 이면 병합 기준점을, 푸시면
+# `github.event.before` 를 계산해 넘긴다 — `pinned.mjs` 머리말의 *"범위를 받는 도구는
+# 범위를 봐야 한다"* 가 지켜지는 자리가 거기다. 여기 기본값은 **로컬 작업 흐름의 것**이다.
+#
+# 그래서 이 값을 밖에서 줄 수 있게 둔다 (검수 2026-08-29(3)). 로컬에서 커밋 셋을 쌓고
+# 한 번에 확인하고 싶을 때 `BARY_PINNED_BASE=origin/main ./scripts/verify.sh` 가 된다 —
+# 전에는 그 방법이 스크립트를 고치는 것뿐이었다.
+PINNED_BASE="${BARY_PINNED_BASE:-HEAD~1}"
+[ $QUICK -eq 0 ] && run "재현물 (핀 검사)     " node scripts/pinned.mjs "$PINNED_BASE"
 
 # **훅 — 핀 검사의 한 발을 메운다.** 위 검사는 `HEAD~1` 을 보므로 *지금 만들 커밋*을 못
 # 본다. 커밋 전에 게이트를 돌리는 이 저장소의 순서에서는 위반이 **항상 한 사이클 늦게**
