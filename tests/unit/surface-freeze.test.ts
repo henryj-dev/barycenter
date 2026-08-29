@@ -65,6 +65,70 @@ describe('A 표면 동결 게이트', () => {
     expect(run('--freeze').status).toBe(1);
   });
 
+  /**
+   * **카운터는 근거를 요구한다** (검수 2026-08-29(3) · C).
+   *
+   * `--unfreeze` 는 근거를 요구하고 그것을 파일에 남긴다. `--round` 는 아무것도 안
+   * 요구했다 — 그래서 카운터가 세는 것은 **「적대적 회차」가 아니라 「`--round` 를 부른
+   * 횟수」** 였다. 한 자리에서 세 번 부르면 동결 기준을 채운다.
+   *
+   * 13차 검수가 준 기준이 *"여러 적대적 회차 동안 이 파일이 변하지 않을 것"* 이므로,
+   * 그 「회차」가 무엇이었는지가 파일에 남아야 셀 수 있다.
+   */
+  describe('회차 누적', () => {
+    it('**근거 없는 --round 는 거부한다** — 부른 횟수가 회차는 아니다', () => {
+      writeFileSync(baseline, stamp({ rounds: 0, frozen: false }));
+      const r = run('--round');
+      expect(r.status).toBe(1);
+      expect(`${r.stderr}${r.stdout}`).toMatch(/근거/);
+      // 거부했으면 파일도 안 움직인다.
+      expect(readFileSync(baseline, 'utf8')).toContain('동결 카운터: 0 회차');
+    });
+
+    it('근거를 주면 올라가고, **그 근거가 파일에 남는다**', () => {
+      writeFileSync(baseline, stamp({ rounds: 0, frozen: false }));
+      expect(run('--round', 'PgSecretStore 검수 — docs/x.md').status).toBe(0);
+      const after = readFileSync(baseline, 'utf8');
+      expect(after).toContain('동결 카운터: 1 회차');
+      expect(after).toContain('PgSecretStore 검수 — docs/x.md');
+    });
+
+    it('회차 근거는 누적된다 — 세 회차면 세 줄이 남는다', () => {
+      writeFileSync(baseline, stamp({ rounds: 0, frozen: false }));
+      for (const why of ['첫째', '둘째', '셋째']) {
+        expect(run('--round', `회차 ${why}`).status).toBe(0);
+      }
+      const after = readFileSync(baseline, 'utf8');
+      expect(after).toContain('동결 카운터: 3 회차');
+      // **번호가 카운터와 맞물린다.** 자리로 매기면 기록 없는 회차가 앞에 있을 때
+      // 파일이 "3 회차" 와 "회차 1" 을 동시에 말한다.
+      expect(after).toContain('# 회차 1: 회차 첫째');
+      expect(after).toContain('# 회차 2: 회차 둘째');
+      expect(after).toContain('# 회차 3: 회차 셋째');
+    });
+
+    it('**기록 없는 회차가 앞에 있어도 마지막 줄이 카운터와 같다**', () => {
+      // 1·2 회차가 이 요구 전에 올라간 실제 상태를 그대로 만든다.
+      writeFileSync(baseline, stamp({ rounds: 2, frozen: false }));
+      expect(run('--round', '셋째만 기록이 있다').status).toBe(0);
+      const after = readFileSync(baseline, 'utf8');
+      expect(after).toContain('동결 카운터: 3 회차');
+      expect(after).toContain('# 회차 3: 셋째만 기록이 있다');
+      expect(after).not.toContain('# 회차 1:');
+    });
+
+    it('여러 줄 근거를 거부한다 — 헤더가 한 줄에 산다', () => {
+      writeFileSync(baseline, stamp({ rounds: 0, frozen: false }));
+      expect(run('--round', '첫 줄\n둘째 줄').status).toBe(1);
+    });
+
+    it('표면이 움직였으면 근거가 있어도 안 올린다', () => {
+      writeFileSync(baseline, stamp({ rounds: 0, frozen: false }));
+      mutate(/── /, '── 없던심볼\n');
+      expect(run('--round', '근거는 있다').status).toBe(1);
+    });
+  });
+
   it('동결 선언이 없으면 freeze-check 가 거부한다', () => {
     writeFileSync(baseline, stamp({ rounds: 3, frozen: false }));
     expect(run('--freeze-check').status).toBe(1);
@@ -159,10 +223,13 @@ describe('A 표면 동결 게이트', () => {
       expect(run('--unfreeze', '근거').status).toBe(0);
       expect(run('--write').status).toBe(0);
       expect(run('--freeze').status).toBe(1);      // 0 회차
-      expect(run('--round').status).toBe(0);
-      expect(run('--round').status).toBe(0);
+      // **회차마다 근거를 준다** (검수 2026-08-29(3) · C). 근거 없는 `--round` 는
+      // 이제 거절이라, 여기서 빈손으로 부르면 이 테스트가 재동결 경로가 아니라
+      // 그 거절을 재게 된다.
+      expect(run('--round', '첫째 회차').status).toBe(0);
+      expect(run('--round', '둘째 회차').status).toBe(0);
       expect(run('--freeze').status).toBe(1);      // 2 회차 — 아직 모자라다
-      expect(run('--round').status).toBe(0);
+      expect(run('--round', '셋째 회차').status).toBe(0);
       expect(run('--freeze').status).toBe(0);      // 3 회차
       expect(run('--freeze-check').status).toBe(0);
     });
