@@ -247,14 +247,81 @@ describe('▲ staging 과 활성화 사이의 헬스 변화', () => {
     const original = driver.pushMembershipDirect;
     (driver as { pushMembershipDirect: unknown }).pushMembershipDirect =
       () => Promise.reject(new Error('밀기 실패'));
+
+    /**
+     * **감사 쓰기를 늦춘다** (검수 2026-08-29(4)).
+     *
+     * 전에는 그냥 `apply` 뒤에 표를 읽었다. 그러면 이 검사는 **경합**이다 — 기록이
+     * `void` 로 날아가고 있어도 대개 먼저 도착하므로 초록이었다. 2026-08-29 CI 에서
+     * 그 경합에 졌다(`expected 0 to be greater than 0`).
+     *
+     * 늦추면 결정적이 된다: `apply` 가 기록을 기다리면 반환 시점에 행이 있고,
+     * 안 기다리면 없다. **"관측 못 함" 과 "안 일어남" 을 가르는 것**이 이 저장소의
+     * 규칙이고, 그러려면 관측이 흔들리지 않아야 한다.
+     */
+    const auditOf = store.audit.bind(store);
+    (store as { audit: unknown }).audit = async (...args: Parameters<typeof auditOf>) => {
+      await new Promise((r) => { setTimeout(r, 200); });
+      return auditOf(...args);
+    };
     try {
       await commitAndApply();
     } finally {
       (driver as { pushMembershipDirect: unknown }).pushMembershipDirect = original;
+      (store as { audit: unknown }).audit = auditOf;
     }
     const rows = (await db.query(
       `SELECT action FROM audit WHERE action='health.reproject.failed'`,
     )).rows;
     expect(rows.length, '실패가 감사에 안 남았다').toBeGreaterThan(0);
+  }, 240_000);
+
+  /**
+   * **감사 기록이 실패해도 데몬은 산다** (검수 2026-08-29(4)).
+   *
+   * 부수 경로의 기록은 `void` 로 날아가고 있었다. 그 프로미스가 거절하면 처리되지 않은
+   * rejection 이 되고, Node 는 그것으로 **프로세스를 죽인다** — DB 가 잠깐 흔들린 것이
+   * 컨트롤 플레인 정지가 된다. 기록 하나 못 남긴 대가로는 너무 크다.
+   *
+   * 여기서는 `store.audit` 을 통째로 거절시키고 **apply 가 그대로 성공하는지**와
+   * **처리되지 않은 rejection 이 안 나는지**를 함께 본다.
+   */
+  it('감사 기록이 죽어도 apply 는 살고 데몬도 안 죽는다', async () => {
+    await setHealth('a', 'healthy');
+    await setHealth('b', 'healthy');
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+
+    /**
+     * **부수 경로만 거절시킨다.** 통째로 거절시키면 `createChangeset` 이 먼저 죽어
+     * apply 까지 못 간다 — 재려던 자리가 아니다.
+     */
+    const auditOf = store.audit.bind(store);
+    (store as unknown as { audit: unknown }).audit = (
+      ...args: Parameters<typeof auditOf>
+    ): Promise<unknown> => (
+      /^(health\.reproject|generations\.|membership\.slots)/.test(String(args[1]))
+        ? Promise.reject(new Error('감사 표가 죽었다'))
+        : auditOf(...args)
+    );
+    // 재투영도 실패시켜 **부수 경로 둘이 함께** 도는 자리를 만든다.
+    const original = driver.pushMembershipDirect;
+    (driver as { pushMembershipDirect: unknown }).pushMembershipDirect =
+      () => Promise.reject(new Error('밀기 실패'));
+    try {
+      // 던지지 않는 것이 첫째 주장이다.
+      await commitAndApply();
+      // 날아간 프로미스가 거절할 틈을 준다 — 즉시 보면 아직 안 왔을 수 있다.
+      await new Promise((r) => { setTimeout(r, 300); });
+    } finally {
+      (store as { audit: unknown }).audit = auditOf;
+      (driver as { pushMembershipDirect: unknown }).pushMembershipDirect = original;
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    expect(unhandled, `처리되지 않은 rejection: ${JSON.stringify(unhandled.map(String))}`)
+      .toHaveLength(0);
   }, 240_000);
 });
