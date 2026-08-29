@@ -133,7 +133,7 @@ export class PgSecretStore implements SecretStore {
     this.#facts.clear();
     for (const r of rows) {
       this.#facts.set(`store://${String(r['name'])}@${String(r['version'])}`,
-        r['facts'] as CertFacts);
+        frozenFacts(r['facts'] as CertFacts));
     }
     // 질의를 기다리는 동안 들어온 자기 쓰기를 덧씌운다. 위 주석 참조.
     for (const [ref, facts] of this.#mine) this.#facts.set(ref, facts);
@@ -163,20 +163,43 @@ export class PgSecretStore implements SecretStore {
     const ref = `store://${name}@${version}`;
 
     const env = this.#seal(ref, JSON.stringify(material));
-    // **내용 주소라 충돌은 곧 같은 자료다.** 다시 감싸면 암호문 바이트는 달라지지만
-    // 평문은 같다 — 이미 있는 것을 굳이 흔들지 않는다.
+    /**
+     * **충돌하면 덮는다** (검수 2026-08-29 · A).
+     *
+     * 전에는 `DO NOTHING` 이었고, 근거는 *"내용 주소라 충돌은 곧 같은 자료다"* 였다.
+     * 평문이 같다는 것은 맞다. **거기서 끝나지 않는다** — `FsSecretStore` 가 검수 D8 에서
+     * 배운 것과 같은 자리다.
+     *
+     * 열 수 **없는** 행이 있을 수 있다: KEK 를 돌렸거나, 덤프를 다른 KEK 환경에 복원했거나.
+     * 그때 운영자가 제일 먼저 하는 일이 **같은 인증서를 다시 올리는 것**이고, `DO NOTHING`
+     * 은 그것을 조용히 아무것도 안 하는 일로 만든다. 나가는 길은 손으로 DB 행을 지우는
+     * 것뿐인데, 그 사실은 어디에도 안 적혀 있다.
+     *
+     * 덮어도 안전한 이유는 **버전이 내용의 함수**라서다 — 같은 PK 에 도달했다면 평문이
+     * 같다는 것이 증명돼 있다. 새 DEK 로 다시 감싸는 것뿐이다.
+     *
+     * ⚠️ **이것을 KEK 회전이라고 부르지 않는다.** 고칠 수 있는 것은 운영자가 **자료를
+     * 아직 들고 있는** 인증서뿐이다. ACME 가 발급한 것은 개인키가 이 저장소에만 있으므로
+     * 재업로드할 자료가 없다 — 그것까지 옮기려면 옛 KEK 로 읽어 새 KEK 로 다시 감싸는
+     * 별도의 통과가 필요하고, 그건 아직 없다 (§4.8.1).
+     */
     await this.#db.query(
       `INSERT INTO secret_materials
          (scheme, name, version, kek_id, wrapped_dek, nonce, ciphertext,
           sha256, chain_digest, key_digest, facts)
        VALUES ('store', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (scheme, name, version) DO NOTHING`,
+       ON CONFLICT (scheme, name, version) DO UPDATE SET
+         kek_id = EXCLUDED.kek_id, wrapped_dek = EXCLUDED.wrapped_dek,
+         nonce = EXCLUDED.nonce, ciphertext = EXCLUDED.ciphertext,
+         sha256 = EXCLUDED.sha256, chain_digest = EXCLUDED.chain_digest,
+         key_digest = EXCLUDED.key_digest, facts = EXCLUDED.facts`,
       [name, version, env.kekId, env.wrappedDek, env.nonce, env.ciphertext,
         sha256(`${chainDigest}|${keyDigest}`), chainDigest, keyDigest,
         JSON.stringify(facts)],
     );
-    this.#facts.set(ref, facts);
-    this.#mine.set(ref, facts);
+    const frozen = frozenFacts(facts);
+    this.#facts.set(ref, frozen);
+    this.#mine.set(ref, frozen);
     return {
       ref, name, version,
       sha256: sha256(`${chainDigest}|${keyDigest}`),
@@ -190,20 +213,28 @@ export class PgSecretStore implements SecretStore {
     return JSON.parse(plain) as CertMaterial;
   }
 
+  /**
+   * **자료에서 다시 잰다 — 저장된 열을 안 믿는다** (검수 2026-08-29 · B).
+   *
+   * 전에는 `sha256`·`chain_digest`·`key_digest` 열을 그대로 냈다. 그런데
+   * `FsSecretStore.describe` 는 자료를 읽어 **다시 잰다** — 저장된 값을 안 믿는 것이
+   * 그쪽의 계약이다. 갈리면 **세대 결박의 근거가 드라이버마다 다른 값**이 된다.
+   *
+   * 이 값이 흘러가는 곳이 그래서 중요하다: `acme-publish` 가 이것을 인증서 설정의
+   * `chainDigest`·`keyDigest` 로 적고, apply 때 `certificateFiles` 가 실제 바이트와
+   * 대조한다. 열을 믿으면 그 대조는 **DB 를 DB 에 대고 재는 것**에 가까워진다.
+   *
+   * 대가는 복호화 한 번이다. `describe` 는 게시 경로에서 인증서당 한 번 불린다.
+   */
   async describe(ref: string): Promise<SecretRef> {
     const { name, version } = parseRef(ref);
-    const r = (await this.#db.query(
-      `SELECT sha256, chain_digest, key_digest FROM secret_materials
-        WHERE scheme = 'store' AND name = $1 AND version = $2`,
-      [name, version],
-    )).rows[0];
-    // **없으면 던진다.** 최신으로 물러나면 롤백이 거짓말이 된다 (§8.3).
-    if (r === undefined) throw new Error(`시크릿이 없다: ${ref}`);
+    const material = await this.get(ref);
+    const chainDigest = sha256(material.fullchain);
+    const keyDigest = sha256(material.privkey);
     return {
       ref, name, version,
-      sha256: String(r['sha256']),
-      chainDigest: String(r['chain_digest']),
-      keyDigest: String(r['key_digest']),
+      sha256: sha256(`${chainDigest}|${keyDigest}`),
+      chainDigest, keyDigest,
     };
   }
 
@@ -219,7 +250,10 @@ export class PgSecretStore implements SecretStore {
       `INSERT INTO secret_materials
          (scheme, name, version, kek_id, wrapped_dek, nonce, ciphertext, key_digest)
        VALUES ('key', $1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (scheme, name, version) DO NOTHING`,
+       ON CONFLICT (scheme, name, version) DO UPDATE SET
+         kek_id = EXCLUDED.kek_id, wrapped_dek = EXCLUDED.wrapped_dek,
+         nonce = EXCLUDED.nonce, ciphertext = EXCLUDED.ciphertext,
+         key_digest = EXCLUDED.key_digest`,
       [name, version, env.kekId, env.wrappedDek, env.nonce, env.ciphertext, keyDigest],
     );
     return { ref, name, version, keyDigest };
@@ -293,6 +327,22 @@ export class PgSecretStore implements SecretStore {
       throw new Error(`시크릿을 열지 못했다: ${ref} — KEK 가 다르거나 자료가 변조됐다`);
     }
   }
+}
+
+/**
+ * 캐시에 넣기 전에 **얼린다** (검수 2026-08-29 · C).
+ *
+ * `FsSecretStore.facts` 는 호출마다 파일을 새로 파싱하므로 호출자가 돌려받은 것을
+ * 어떻게 만지든 다음 호출이 안 영향받는다. 캐시를 들면 그 성질이 **조용히** 사라진다 —
+ * 한 호출자의 실수가 다른 모든 호출자의 만료 판정을 바꾸고, 그 인과는 스택에 안 남는다.
+ *
+ * 호출마다 복제하지 않는 이유는 `GET /certificates` 가 인증서마다 이걸 부르기 때문이다.
+ * 얼리는 것은 넣을 때 한 번이고 O(1) 이다. `domains` 배열까지 얼려야 한다 — 겉만 얼리면
+ * `push` 가 그대로 먹는다.
+ */
+function frozenFacts(facts: CertFacts): CertFacts {
+  Object.freeze(facts.domains);
+  return Object.freeze(facts);
 }
 
 function assertName(name: string): void {

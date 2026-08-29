@@ -1121,7 +1121,7 @@ S11 하네스의 교훈이다.
 | `tests/unit/audit-secret-store-posture.test.ts` | FsSecretStore가 암호화되지 않음을 기동 자세로 표시 |
 | `tests/unit/audit-browser-session.test.ts` | PKCE 자료의 서버 보관·HttpOnly 쿠키·ID Token 비노출·쿠키 인증 |
 | `tests/unit/secrets-pg-kek.test.ts` | KEK 해독 — 32 바이트가 아닌 것(특히 **32 자 암호 문자열**)을 키로 안 읽고, 빈 값에 던진다 (§4.8.1) |
-| `tests/store/secrets-pg.test.ts` | `PgSecretStore` — 왕복·내용 주소 멱등·**평문 부재**·KEK 불일치·**AAD 참조 결박**·오라클 방지·`FsSecretStore` 와 같은 참조·사실 캐시·GC 정책 공유 (§4.8.1) |
+| `tests/store/secrets-pg.test.ts` | `PgSecretStore` — 왕복·내용 주소 멱등·**평문 부재**·KEK 불일치·**AAD 참조 결박**·오라클 방지·`FsSecretStore` 와 같은 참조·사실 캐시·GC 정책 공유 (§4.8.1). 검수 2026-08-29 로 셋이 더 붙었다: **재업로드가 못 여는 행을 고친다**(A) · **digest 를 자료에서 다시 잰다**(B) · **캐시가 밖에서 안 썩는다**(C) |
 
 ## 11. 열린 결정
 
