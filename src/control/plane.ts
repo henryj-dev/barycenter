@@ -501,16 +501,29 @@ export class ControlPlane {
        * 재투영 실패 다섯. **이 줄을 지우는 변이에 다섯이 전부 죽는다.** 그 전에는
        * "재투영을 빼는 변이가 아무 테스트도 안 깨뜨린다" 가 이 자리의 다른 반쪽이었다.
        */
-      await this.projectHealth().catch((e: unknown) => {
-        // 실패해도 apply 를 실패시키지 않는다 — 활성화는 이미 끝났고, 다음 헬스 변화가
-        // 같은 일을 한다. 대신 조용히 넘기지 않는다.
-        void this.store.audit(by, 'health.reproject.failed', planId, undefined,
-          { error: String(e) });
+      await this.projectHealth().catch(async (e: unknown) => {
+        /**
+         * 실패해도 apply 를 실패시키지 않는다 — 활성화는 이미 끝났고, 다음 헬스 변화가
+         * 같은 일을 한다. 대신 조용히 넘기지 않는다.
+         *
+         * ⚠️ **기다린다** (검수 2026-08-29(4)). 전에는 `void` 로 날려 보냈고, 그러면
+         * *"조용히 넘기지 않는다"* 가 **타이밍이 맞을 때만** 참이었다. `apply()` 는
+         * INSERT 가 날아가는 중에 반환하고, 그 직후에 데몬이 내려가면 그 기록은 아예
+         * 사라진다 — 재투영이 실패한 사실이 어디에도 안 남는다.
+         *
+         * 2026-08-29 CI 가 그 경합에 졌다(`expected 0 to be greater than 0`). 로컬에서는
+         * 대개 먼저 도착하므로 초록이었고, **그래서 이 자리는 오래 거짓을 말했다.**
+         *
+         * 기록이 실패해도 apply 는 살아야 하므로 그쪽은 따로 삼킨다 — 삼키는 것이 여기서
+         * 두 번째다. 첫째(재투영 실패)는 기록으로 남고, 둘째(기록 실패)는 남길 곳이 없다.
+         */
+        await this.store.audit(by, 'health.reproject.failed', planId, undefined,
+          { error: String(e) }).catch(() => undefined);
         return undefined;
       });
       // **활성화가 끝난 뒤에 치운다.** 앞에서 치우면 방금 만든 것을 지울 수 있고,
       // 실패했을 때 치우면 되돌아갈 자리를 지운다.
-      this.sweep(generation, by, plan.model);
+      await this.sweep(generation, by, plan.model);
     }
     return {
       id: op.operationId, planId, revision: plan.targetRevision,
@@ -929,7 +942,7 @@ export class ControlPlane {
    * 실패해도 apply 를 실패시키지 않는다. 치우기는 부수적인 일이고, 그것 때문에 성공한
    * 활성화를 실패로 보고하면 운영자가 잘못된 판단을 한다. 대신 **감사에 남긴다.**
    */
-  private sweep(justMade: string, by: string, model?: Model): void {
+  private async sweep(justMade: string, by: string, model?: Model): Promise<void> {
     const keep = this.opts.keepGenerations ?? DEFAULT_KEEP;
     if (keep <= 0) return;
     try {
@@ -957,13 +970,16 @@ export class ControlPlane {
         ...(linger === undefined ? {} : { workerLingerMs: linger * 2000 }),
       });
       if (out.removed.length > 0 || out.failed.length > 0) {
-        void this.store.audit(by, 'generations.sweep', 'dataplane', undefined, out);
+        await this.audit(by, 'generations.sweep', out);
       }
       // **세대를 지웠으면 그 epoch 의 슬롯도 회수한다** (검수 D4).
-      void this.reclaimSlots(out.removed, by);
+      //
+      // 이건 기다리지 않는다 — 양 평면의 admin 소켓을 부르는 망 작업이라, 소켓이 안
+      // 답하는 배포에서 apply 가 거기 매달리게 된다. 대신 **거절을 삼킨다**: 안 삼키면
+      // 처리되지 않은 rejection 이 되고 그건 데몬을 죽인다 (검수 2026-08-29(4)).
+      void this.reclaimSlots(out.removed, by).catch(() => undefined);
     } catch (e) {
-      void this.store.audit(by, 'generations.sweep.failed', 'dataplane', undefined,
-        { error: String(e) });
+      await this.audit(by, 'generations.sweep.failed', { error: String(e) });
     }
   }
 
@@ -1019,8 +1035,32 @@ export class ControlPlane {
       }
     }
 
-    void this.store.audit(by, 'membership.slots.reclaimed', 'dataplane', undefined,
+    await this.audit(by, 'membership.slots.reclaimed',
       { epochs, ...(failed.length > 0 ? { failed } : {}) });
+  }
+
+  /**
+   * **부수 경로의 감사 기록** (검수 2026-08-29(4)).
+   *
+   * 청소·슬롯 회수처럼 *"실패해도 apply 를 실패시키지 않는다. 대신 감사에 남긴다"* 라고
+   * 적어 둔 자리들이 쓴다. 그 약속에는 두 조건이 있고 전에는 둘 다 안 지켜졌다:
+   *
+   *   ① **기다려야 남는다.** `void` 로 날려 보내면 `apply()` 가 INSERT 중에 반환하고,
+   *      그 직후 데몬이 내려가면 기록이 사라진다. 2026-08-29 CI 가 그 경합에 졌다 —
+   *      로컬에서는 대개 먼저 도착하므로 **오래 거짓을 말했다.**
+   *   ② **거절을 삼켜야 안 죽는다.** `void` 로 둔 프로미스가 거절하면 처리되지 않은
+   *      rejection 이 되고, Node 는 그것으로 **프로세스를 죽인다.** DB 가 잠깐 흔들린
+   *      것이 컨트롤 플레인 정지가 된다 — 기록 하나 못 남긴 대가로는 너무 크다.
+   *
+   * 그래서 **기다리되 삼킨다.** 삼키는 것이 여기서 두 번째다: 첫째(부수 작업의 실패)는
+   * 기록으로 남고, 둘째(기록 자체의 실패)는 남길 곳이 없다.
+   *
+   * ⚠️ **`health.reproject.failed` 는 이 헬퍼를 안 쓴다.** 그쪽은 `apply` 본문의
+   * `catch` 안이라 `by`·`planId` 를 그 자리에서 들고 있고, 같은 규칙을 거기서 직접 쓴다.
+   */
+  private async audit(by: string, action: string, detail: unknown): Promise<void> {
+    await this.store.audit(by, action, 'dataplane', undefined, detail)
+      .catch(() => undefined);
   }
 
   private async recordPhase(id: string, phase: string, detail: unknown): Promise<void> {

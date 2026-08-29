@@ -199,6 +199,72 @@ jobs:
             docker logs --tail 50 "$c" 2>&1 || true
           done
 
+  # **설치 하네스 — `deploy/` 가 바뀔 때만** (검수 2026-08-29(2) D 의 결정).
+  #
+  # `tests/install/run.sh` 는 다섯 배포판 실물 컨테이너에서 설치·기동·재기동·비-root
+  # nginx·특권 포트 apply 까지 본다. 그런데 **`verify.sh` 도 어느 워크플로도 그것을 안
+  # 불렀다** — `package.json` 의 `test:install` 뿐이라 사람이 기억해야 돌았다.
+  #
+  # 그 대가가 실측으로 드러났다: 그 회차에서 `install.sh` 를 고치다 **다섯 판을 전부
+  # 깨뜨렸는데** `npm run verify` 는 초록이었고, 텍스트를 읽는 단위 테스트도 통과했다.
+  # 잡은 것은 사람이 기억해서 손으로 돌린 하네스뿐이었다.
+  #
+  # **모든 PR 에 걸지는 않는다.** 다섯 컨테이너는 임계 경로를 크게 늘리고, #15 가
+  # 873초를 254초로 줄인 직후다. 바뀐 것이 그것일 때만 잰다.
+  #
+  # 워크플로 자신도 경로에 넣는다 — 이 잡을 고치는 PR 이 이 잡을 안 돌리면 고친 것이
+  # 도는지 알 수 없다.
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 기준과 비교하려면 역사가 필요하다.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # **경로 판정은 셸이 한다.** 액션을 하나 더 들이지 않는다 — 이 저장소는 핀으로
+      # 고정한 액션만 쓰고, 하나 늘 때마다 공급망이 한 줄 는다.
+      - name: 대상이 바뀌었나
+        id: changed
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PR_BASE" ]; then
+            BASE="$PR_BASE"
+          elif [ -n "$PUSH_BEFORE" ] \
+            && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            BASE="$PUSH_BEFORE"
+          else
+            BASE="$(git rev-parse "origin/$DEFAULT_BRANCH" 2>/dev/null || git rev-parse HEAD~1)"
+          fi
+          echo "기준: $BASE"
+          # `workflow_dispatch` 는 언제나 돈다 — 손으로 부르는 자리는 재고 싶을 때다.
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE"...HEAD \
+            | grep -Eq '^(deploy/|tests/install/|\.github/workflows/verify\.yml$)'; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=0" >> "$GITHUB_OUTPUT"
+            echo "deploy/ · tests/install/ · 이 워크플로 중 바뀐 것이 없다 — 건너뛴다"
+          fi
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.changed.outputs.run == '1'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+        if: steps.changed.outputs.run == '1'
+      - run: npm run test:install
+        if: steps.changed.outputs.run == '1'
+
   # **문서에 적힌 절차가 정말 도는가.** 문서를 읽어서는 알 수 없고, 손으로 확인하는 한
   # 반드시 썩는다.
   quickstart:
@@ -245,7 +311,7 @@ jobs:
   # 모아 받으면 잡을 늘리고 줄이는 것이 `needs:` 한 줄로 끝나고, 보호 규칙은 안 건드린다.
   gate:
     name: gate
-    needs: [quick, groups, verify, quickstart, policy]
+    needs: [quick, groups, verify, install, quickstart, policy]
     # 선행 잡이 빨개도 이 잡은 돌아야 한다. 안 그러면 "돌지 않은 체크" 가 되어
     # 규칙이 기다리기만 하고, 무엇이 깨졌는지는 아무 데도 안 적힌다.
     if: always()

@@ -129,6 +129,65 @@ describe('A 표면 동결 게이트', () => {
     });
   });
 
+  /**
+   * **게이트가 매번 재는 것** (검수 2026-08-29(3) C 의 결정).
+   *
+   * `--freeze-check` 는 선언을 요구하므로 미선언 상태에서는 게이트에 못 건다 — 항상
+   * 빨갛다. 그런데 `--round` 가 근거를 남기게 되면서 **미선언 상태에서도 잴 것이
+   * 생겼다**: 카운터와 그 근거가 맞물리는가.
+   *
+   * 손으로 카운터를 올리는 것이 이 파일을 무력화하는 가장 싼 길이었고(*"손으로 고치지
+   * 않는다"* 는 규칙일 뿐 검사가 아니었다), 이제 그 길이 막힌다.
+   */
+  describe('freeze-status — 게이트가 매번 재는 것', () => {
+    const withRounds = (rounds: number, lines: string[], frozen = false): void => {
+      const base = stamp({ rounds, frozen });
+      const at = base.indexOf('# 해제 근거:') >= 0
+        ? base.indexOf('# 해제 근거:')
+        : base.indexOf('#\n');
+      writeFileSync(baseline, base.slice(0, at) + lines.map((l) => `${l}\n`).join('') + base.slice(at));
+    };
+
+    it('미선언이어도 통과한다 — 잴 것이 있는 상태다', () => {
+      withRounds(3, ['# 회차 3: 셋째']);
+      expect(run('--freeze-status').status).toBe(0);
+    });
+
+    it('회차 줄이 하나도 없어도 통과한다 — 요구 이전에 쌓인 회차다', () => {
+      withRounds(2, []);
+      expect(run('--freeze-status').status).toBe(0);
+    });
+
+    it('**손으로 카운터만 올리면 걸린다** — 마지막 회차 줄이 안 맞는다', () => {
+      withRounds(5, ['# 회차 3: 셋째']);
+      const r = run('--freeze-status');
+      expect(r.status).toBe(1);
+      expect(`${r.stderr}${r.stdout}`).toMatch(/회차/);
+    });
+
+    it('회차 번호가 건너뛰면 걸린다', () => {
+      withRounds(3, ['# 회차 1: 첫째', '# 회차 3: 셋째']);
+      expect(run('--freeze-status').status).toBe(1);
+    });
+
+    it('근거가 카운터보다 많으면 걸린다', () => {
+      withRounds(1, ['# 회차 1: 첫째', '# 회차 2: 둘째']);
+      expect(run('--freeze-status').status).toBe(1);
+    });
+
+    it('선언돼 있으면 표면 일치까지 요구한다', () => {
+      withRounds(3, ['# 회차 3: 셋째'], true);
+      expect(run('--freeze-status').status).toBe(0);
+      mutate(/── /, '── 없던심볼\n');
+      expect(run('--freeze-status').status).toBe(1);
+    });
+
+    it('선언돼 있는데 회차가 모자라면 걸린다', () => {
+      withRounds(2, ['# 회차 2: 둘째'], true);
+      expect(run('--freeze-status').status).toBe(1);
+    });
+  });
+
   it('동결 선언이 없으면 freeze-check 가 거부한다', () => {
     writeFileSync(baseline, stamp({ rounds: 3, frozen: false }));
     expect(run('--freeze-check').status).toBe(1);
