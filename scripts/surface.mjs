@@ -214,17 +214,29 @@ try {
     // 해제 근거는 **선택**이다 — 동결된 적 없는 기준에는 없는 것이 정상이고,
     // 없다고 파일을 못 읽는 것으로 치면 첫 `--write` 가 막힌다.
     const released = exactlyOne(/^# 해제 근거: (.+)$/)?.[1];
+    // **회차 근거는 여럿이다** (검수 2026-08-29(3) · C). 카운터가 세는 것이 무엇이었는지
+    // 파일이 스스로 말해야 한다 — 안 그러면 그 숫자는 `--round` 를 부른 횟수일 뿐이다.
+    const roundLog = lines
+      .map((line) => /^# 회차 (\d+): (.+)$/.exec(line))
+      .filter((m) => m !== null)
+      .map((m) => m[2]);
     return {
       body: raw.slice(at + MARK.length), rounds: Number(rounds), frozen: freeze[1] === '선언',
-      released,
+      released, roundLog,
       claimedSymbols: claimed === null ? undefined : Number(claimed[1]), claimedDigest: claimed?.[2],
     };
   };
-  const stamp = (rounds, frozen = false, released = undefined) =>
+  const stamp = (rounds, frozen = false, released = undefined, roundLog = []) =>
     `# barycenter v0.1 공개 표면\n`
     + `# ${symbols} 심볼 · ${digest}\n`
     + `# 동결 카운터: ${rounds} 회차 (표면이 안 움직인 검수 회차 수)\n`
     + `# A 동결: ${frozen ? '선언' : '미선언'} (선언 기준 ${FREEZE_ROUNDS} 회차)\n`
+    // **회차마다 한 줄.** 이 줄들이 카운터의 근거다 — 없으면 숫자가 혼자 서 있고,
+    // 혼자 선 숫자는 다음 사람이 믿을 근거가 없다 (`--unfreeze` 와 같은 규칙).
+    // **번호는 카운터에 맞춘다.** 목록의 자리(i+1)로 매기면, 기록이 없는 회차가 앞에
+    // 있을 때 파일이 "3 회차" 와 "회차 1" 을 동시에 말한다 — 마지막 줄이 카운터와
+    // 같아야 읽는 사람이 둘을 같은 것으로 셀 수 있다.
+    + roundLog.map((why, i) => `# 회차 ${rounds - roundLog.length + i + 1}: ${why}\n`).join('')
     // **지난 해제를 지우지 않는다.** 다시 동결해도 남는다 — "한 번 풀린 적 있다" 는
     // 다음 사람이 이 숫자를 얼마나 믿을지 정할 때 쓰는 사실이다.
     + (released === undefined ? '' : `# 해제 근거: ${released}\n`)
@@ -283,7 +295,11 @@ try {
     const at = raw.indexOf(MARK);
     const head = raw.slice(0, at)
       .replace(/^# A 동결: 선언 .*$/m, `# A 동결: 미선언 (선언 기준 ${FREEZE_ROUNDS} 회차)`)
-      .replace(/^# 동결 카운터: \d+ /m, '# 동결 카운터: 0 ');
+      .replace(/^# 동결 카운터: \d+ /m, '# 동결 카운터: 0 ')
+      // **회차 기록도 함께 지운다.** 카운터가 0 이 되는데 그 근거만 남으면 파일이
+      // "세 회차를 쌓았다" 와 "0 회차다" 를 동시에 말한다 — 다음 사람이 어느 쪽을
+      // 믿을지 알 수 없다. 카운터와 그 근거는 짝이다.
+      .replace(/^# 회차 \d+: .*\n/gm, '');
     const withWhy = /^# 해제 근거: /m.test(head)
       ? head.replace(/^# 해제 근거: .*$/m, `# 해제 근거: ${why}`)
       : head.replace(/^# A 동결: .*$/m, (l) => `${l}\n# 해제 근거: ${why}`);
@@ -305,13 +321,34 @@ try {
     writeFileSync(BASELINE, stamp(0, false, previous?.released));
     console.log(`SURFACE.txt 를 갱신했다 — ${symbols} 심볼 · ${digest} · 동결 카운터 0 으로 되돌림`);
   } else if (mode === '--round') {
-    // 검수 한 회차가 표면을 안 건드리고 지나갔다.
+    /**
+     * 검수 한 회차가 표면을 안 건드리고 지나갔다.
+     *
+     * **근거를 요구한다** (검수 2026-08-29(3) · C). 전에는 아무것도 안 요구했고, 그래서
+     * 이 카운터가 세는 것은 「적대적 회차」가 아니라 **「`--round` 를 부른 횟수」** 였다 —
+     * 한 자리에서 세 번 부르면 동결 기준을 채운다. 13차 검수가 준 기준이 *"여러 적대적
+     * 회차 동안 이 파일이 변하지 않을 것"* 이므로, 그 회차가 무엇이었는지가 파일에
+     * 남아야 센 것이 뜻을 갖는다.
+     *
+     * `--unfreeze` 가 이미 같은 규칙이다. 푸는 데 근거가 필요하면 **채우는 데도** 필요하다.
+     */
+    const why = (process.argv[3] ?? '').trim();
+    if (why === '') {
+      console.error('회차에는 근거가 필요하다 — `node scripts/surface.mjs --round "<근거>"`');
+      console.error('  이 줄이 없으면 카운터는 「부른 횟수」이지 「회차」가 아니다.');
+      process.exit(1);
+    }
+    if (why.includes('\n')) {
+      console.error('근거는 한 줄이어야 한다 — 헤더가 한 줄에 산다');
+      process.exit(1);
+    }
     if (!baselineMatches) {
       console.error('표면이 움직인 상태다 — 먼저 --check 로 확인한다');
       process.exit(1);
     }
-    writeFileSync(BASELINE, stamp(previous.rounds + 1, previous.frozen, previous.released));
-    console.log(`동결 카운터: ${previous.rounds} → ${previous.rounds + 1} 회차`);
+    writeFileSync(BASELINE, stamp(previous.rounds + 1, previous.frozen, previous.released,
+      [...previous.roundLog, why]));
+    console.log(`동결 카운터: ${previous.rounds} → ${previous.rounds + 1} 회차 — ${why}`);
   } else if (mode === '--freeze') {
     if (!baselineMatches) {
       console.error('표면이 기준과 다르다 — 동결할 수 없다');
