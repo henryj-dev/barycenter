@@ -21,7 +21,7 @@ import type { AddressInfo } from 'node:net';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { healthCheckOf, inBatches, probeBackend, probeHttp } from '../../src/control/health.js';
+import { inBatches, probeBackend, probePlanOf, probeHttp } from '../../src/control/health.js';
 import type { Model } from '../../src/model/provisional.js';
 
 const servers: { close(): void }[] = [];
@@ -66,15 +66,17 @@ describe('HTTP 헬스 판정 (검수 B-07)', () => {
   it('기대 상태와 본문을 정할 수 있다', async () => {
     const teapot = await serve(418, 'brewing');
     // 기본으로는 죽었다.
-    expect(await probeBackend('http', '127.0.0.1', teapot, 500)).toBeDefined();
+    const http = (o: Record<string, unknown>) =>
+      ({ mode: 'active', protocol: 'http', http: { path: '/', ...o } }) as const;
+    expect(await probeBackend(http({}) as never, '127.0.0.1', teapot, 500)).toBeDefined();
     // 정해 주면 산다.
-    expect(await probeBackend('http', '127.0.0.1', teapot, 500,
-      { path: '/', expectStatus: [418] })).toBeUndefined();
+    expect(await probeBackend(http({ expectStatus: [418] }) as never,
+      '127.0.0.1', teapot, 500)).toBeUndefined();
     // 본문까지 정하면 둘 다 맞아야 한다.
-    expect(await probeBackend('http', '127.0.0.1', teapot, 500,
-      { path: '/', expectStatus: [418], expectBody: 'brewing' })).toBeUndefined();
-    expect(await probeBackend('http', '127.0.0.1', teapot, 500,
-      { path: '/', expectStatus: [418], expectBody: 'other' })).toBeDefined();
+    expect(await probeBackend(http({ expectStatus: [418], expectBody: 'brewing' }) as never,
+      '127.0.0.1', teapot, 500)).toBeUndefined();
+    expect(await probeBackend(http({ expectStatus: [418], expectBody: 'other' }) as never,
+      '127.0.0.1', teapot, 500)).toBeDefined();
   });
 
   it('풀의 healthCheck 가 프로버까지 내려간다', async () => {
@@ -92,14 +94,17 @@ describe('HTTP 헬스 판정 (검수 B-07)', () => {
       backends: [], certificates: [], tlsPolicies: [], sniBindings: [],
     };
 
-    expect(healthCheckOf(model, 'app')).toEqual({
+    expect(probePlanOf(model, 'app').http).toEqual({
       path: '/healthz', expectStatus: [200, 204], expectBody: 'up',
     });
     // 안 정하면 기본값 — 경로 `/`, 2xx.
-    expect(healthCheckOf(model, 'plain')).toEqual({ path: '/' });
-    // stream 풀에는 HTTP 프로브가 없다.
-    expect(healthCheckOf(model, 'l4')).toBeUndefined();
-    expect(healthCheckOf(model, 'nope')).toBeUndefined();
+    expect(probePlanOf(model, 'plain').http).toEqual({ path: '/' });
+    // **옛 거동을 그대로 못 박는다** (§4.3.1 로 넓힌 뒤에도): 안 적으면 stream 풀은
+    // TCP connect 이고 HTTP 프로브가 없다. 넓힌 것이 기본값을 안 흔든다.
+    expect(probePlanOf(model, 'l4').protocol).toBe('tcp_connect');
+    expect(probePlanOf(model, 'l4').http).toBeUndefined();
+    // 모르는 풀도 안 죽고 기본 계획을 낸다.
+    expect(probePlanOf(model, 'nope').protocol).toBe('tcp_connect');
   });
 
   it('한 번에 찌르는 수에 상한이 있다', async () => {

@@ -862,16 +862,27 @@ v1 은 `health.type` 을 `protocol_class` 에 묶었는데, **TCP/UDP 서비스�
 
 | 필드 | 비고 |
 |---|---|
-| `pool_id` / `host` / `port` / `weight` / `max_conns` | `host` 는 §14-6 목적지 정책 검사 대상 |
-| `admin_state` | `enabled` \| `draining` \| `disabled` |
-| `drain.deadline_s` | 관측 목적의 기한. **강제 종료는 별도 capability** |
-| `is_backup` | 전부 죽었을 때만 |
+| `pool_id` / `host` / `port` / `weight` | `host` 는 §14-6 목적지 정책 검사 대상 |
+| ~~`max_conns`~~ → `soft_max_conns` | **이름이 바뀐다** (ADR-MEMBERSHIP-ATTRS §4). 이 평면에서 상한은 **힌트**다 — 전부 초과하면 거절하지 않고 최소인 peer 로 보낸다. nginx 의 `max_conns` 와 뜻이 달라 같은 이름을 쓰면 운영자가 nginx 문서로 우리 거동을 예측하게 된다 |
+| ~~`admin_state`~~ | **안 넣는다** (ADR-MEMBERSHIP-ATTRS §5). `enabled` 는 기본값이라 필드가 필요 없고, `draining` 은 **이미 `backend_drain` 표에 운영 동작으로 있다.** 스펙에 올리면 백엔드 하나 빼는 데 changeset→plan→commit→apply 를 지나야 하고, 그건 이 절이 Spec 과 Status 를 가른 이유와 어긋난다. `disabled` 만 새 뜻인데 그건 "백엔드 삭제와 무엇이 다른가" 부터 답해야 한다 |
+| ~~`drain.deadline_s`~~ | **드레인 동작에 붙는다** (ADR-MEMBERSHIP-ATTRS §6). 기한은 *그 드레인*의 성질이지 백엔드의 성질이 아니다 — 같은 백엔드를 두 번 드레인하며 다른 기한을 줄 수 있어야 한다. `bary backend drain --deadline-s <n>` 이 `backend_drain` 에 함께 쓰고, `drain_started_at` 이 이미 그 표에 있어 `deadline_exceeded` 판정이 한 표에서 끝난다 |
+| `is_backup` | 전부 죽었을 때만. **`server` 줄이 없으므로 Lua 밸런서가 진다** (ADR-MEMBERSHIP-ATTRS) |
 
 > **v0 코드의 `Backend` 는 `key` · `pool` · `host` · `port` · `weight` 뿐이다**
-> (2026-08-23 실사). `max_conns` · `admin_state` · `drain.deadline_s` · `is_backup` 이
-> 없다. 드레인은 **스펙 필드가 아니라 멤버십 평면의 동작**으로 산다 —
+> (2026-08-23 실사). 드레인은 **스펙 필드가 아니라 멤버십 평면의 동작**으로 산다 —
 > `bary backend drain` 이 슬롯에서 빼고 `in:` 으로 관측한다. 그래서 드레인 자체는
 > 되지만 "기한" 과 `deadline_exceeded` 는 표현할 자리가 없다.
+>
+> **그 실사가 2026-08-29 에 결정으로 닫혔다** (`docs/adr-membership-attrs.md`). 위 표의
+> 취소선 셋이 그 결과다 — 「아직 안 한 것」이 「안 하기로 한 것」과 「이름을 바꿔서 할 것」
+> 으로 갈렸다. 드레인이 운영 동작이라는 사실이 그 갈림의 근거이고, 그건 이 문단이 이미
+> 적어 두었던 것이다.
+>
+> ⚠️ **남은 둘(`soft_max_conns` · `is_backup`)은 필드 추가가 아니라 밸런서 작업이다.**
+> 멤버십 평면이 켜지면 upstream 에 `server` 줄이 없다(자리표시 하나뿐) — 이 둘은 그
+> 줄에 붙는 값이라 **렌더할 자리가 없고**, Lua 밸런서가 의미를 직접 구현해야 한다.
+> 가중치가 같은 문제를 **반복**으로 풀었지만(§7.3.1) 상한과 backup 은 횟수로 표현되는
+> 값이 아니라 그 길이 막힌다. ADR 이 속성 채널을 따로 낸 이유다.
 
 **BackendStatus** (관측값, 별도 테이블·별도 리비전, `If-Match` 대상 아님)
 
@@ -892,6 +903,7 @@ v1 은 `health.type` 을 `protocol_class` 에 묶었는데, **TCP/UDP 서비스�
 | 새 연결/세션이 이 백엔드로 가지 않음 | ✅ (멤버십 제외) |
 | peer 별 업스트림 inflight 관측 | ✅ |
 | `quiesced` = inflight 0 && active_sessions 0 | ✅ (관측 기반) |
+| 기한이 지나도 **드레인은 유지** | ✅ (2026-08-30). 기한은 **관측**이지 자동 해제가 아니다 — 지나면 `deadline_exceeded` 로 드러난다 |
 | 기존 TCP 연결·UDP 세션 강제 종료 | ❌ **별도 capability.** 워커별 세션 핸들과 제어 경로 필요 |
 | 클라이언트 HTTP/2 GOAWAY | ❌ **약속하지 않는다** |
 

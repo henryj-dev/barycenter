@@ -103,6 +103,16 @@ function fakeHealthDb(): Db {
       if (text.includes('INSERT INTO health_events')) {
         return { rows: [], rowCount: 1 };
       }
+      // 풀별 주기가 마지막 관측 시각을 본다 (§4.3.1). **가짜도 그 질의를 알아야 한다** —
+      // 모르면 `unexpected sql` 로 죽고, 그건 코드가 아니라 이 이중이 낡은 것이다.
+      if (text.includes('SELECT backend_key, observed_at FROM backend_health')) {
+        return {
+          rows: [...health.keys()].map((backend_key) => ({
+            backend_key, observed_at: new Date(0).toISOString(),
+          })),
+          rowCount: health.size,
+        };
+      }
       if (text.includes('SELECT backend_key, state FROM backend_health')) {
         return {
           rows: [...health.entries()].map(([backend_key, r]) => ({ backend_key, state: r.state })),
@@ -134,11 +144,15 @@ describe('HTTP 본문 프로브', () => {
     expect(await probeTcp('127.0.0.1', empty, 500)).toBeUndefined();
     expect(await probeTcp('127.0.0.1', tcp, 500)).toBeUndefined();
 
-    expect(await probeBackend('http', '127.0.0.1', nope, 500, { path: '/', expectBody: 'ok' }))
+    // 계획으로 찌른다 (§4.3.1). 옛 인자(`protocolClass`)가 정하던 것을 이제 계획이 든다.
+    const HTTP = { mode: 'active', protocol: 'http', http: { path: '/' } } as const;
+    const TCP = { mode: 'active', protocol: 'tcp_connect' } as const;
+    expect(await probeBackend(
+      { ...HTTP, http: { path: '/', expectBody: 'ok' } } as never, '127.0.0.1', nope, 500))
       .toMatch(/기대와 다르다/);
-    expect(await probeBackend('tcp', '127.0.0.1', nope, 500)).toBeUndefined();
-    expect(await probeBackend('http', '127.0.0.1', tcp, 500)).not.toBeUndefined();
-    expect(await probeBackend('tcp', '127.0.0.1', tcp, 500)).toBeUndefined();
+    expect(await probeBackend(TCP as never, '127.0.0.1', nope, 500)).toBeUndefined();
+    expect(await probeBackend(HTTP as never, '127.0.0.1', tcp, 500)).not.toBeUndefined();
+    expect(await probeBackend(TCP as never, '127.0.0.1', tcp, 500)).toBeUndefined();
   });
 
   it('스위퍼는 HTTP 풀에 HTTP 프로브를 쓴다 — TCP 만 열린 서버는 죽는다', async () => {

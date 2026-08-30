@@ -501,13 +501,67 @@ export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash' | 'least_conn'
  * 풀마다 다르게 하려면 프로버가 풀별 스케줄을 들어야 하는데, 그건 다른 크기의 일이다.
  * 없는 것을 있는 척하지 않는다.
  */
+/**
+ * 헬스 프로브 (§4.3.1).
+ *
+ * ── 왜 `probe` 가 아니라 `healthCheck` 인가, 왜 평평한가
+ *
+ * §4.3.1 은 `probe.http.{path, expect_status, ...}` 로 중첩을 그렸다. **그대로 옮기지
+ * 않는다.** `path`·`expectStatus`·`expectBody` 는 이미 이 이름 이 자리에 살고 있고,
+ * 옮기거나 이름을 바꾸면 **그 필드를 쓴 옛 리비전이 `unknown_field` 로 해독 불가**가 된다.
+ * `modelAt` 이 옛 리비전을 같은 해독기로 읽으므로 그건 곧 **롤백이 막히는 것**이다
+ * (검수 D7 이 `weight` 범위에서 같은 판단을 했다).
+ *
+ * 그래서 이름을 지키고 평평하게 넓힌다. 문서의 중첩은 표현 방식이지 계약이 아니다.
+ *
+ * ── 무엇이 데이터 경로와 갈리나
+ *
+ * v1 은 프로브 종류를 `protocolClass` 에 묶었고, 그것이 **TCP/UDP 서비스가 별도 HTTP
+ * 헬스 포트나 사이드카 프로브를 갖는 정당한 구성을 막았다**(§4.3.1). `protocol` 과
+ * `port` 와 `hostOverride` 가 그 매듭을 푼다 — 프로브는 이제 데이터 경로와 무관하게
+ * 정해진다.
+ */
 export type HealthCheck = {
-  /** GET 할 경로. 없으면 `/`. */
+  /**
+   * `none` 이면 이 풀은 프로브하지 않는다 — 백엔드는 늘 `unknown` 이고 멤버십에서 안
+   * 빠진다. 없으면 `active`.
+   *
+   * **`passive` 는 없다.** §4.3.1 이 셋을 그렸지만 이 평면에서 성립하지 않는다 —
+   * upstream 의 `server` 가 자리표시 하나뿐이라 peer 별로 셀 대상이 없고, Lua 로 다시
+   * 만들면 멤버십의 주인이 둘이 된다 (`docs/adr-membership-attrs.md`).
+   */
+  mode?: 'none' | 'active';
+  /**
+   * 무엇으로 찌르는가. **데이터 프로토콜과 무관하다** — TCP 서비스가 HTTP 헬스 포트를
+   * 갖는 구성이 §4.3.1 이 겨눈 자리다. 없으면 풀의 `protocolClass` 가 정하던 그대로다
+   * (http → `http`, 그 외 → `tcp_connect`).
+   *
+   * **`udp_payload` 는 없다.** §13-6 이 드라이버 위임으로 못 박았다 — 페이로드와 기대
+   * 패턴은 프로토콜마다 다르고, 코어가 그것을 알기 시작하면 프로토콜 목록을 코어가 진다.
+   */
+  protocol?: 'tcp_connect' | 'http';
+  /** 별도 헬스 포트. 없으면 백엔드 포트. */
+  port?: number;
+  /** 사이드카 프로브용 — 이 주소로 찌른다. 없으면 백엔드 host. */
+  hostOverride?: string;
+  /** GET 할 경로. 없으면 `/`. `protocol: http` 에서만 뜻이 있다. */
   path?: string;
-  /** 산 것으로 볼 상태 코드. 없으면 2xx. */
+  /** 산 것으로 볼 상태 코드. 없으면 2xx. `protocol: http` 에서만. */
   expectStatus?: number[];
-  /** 본문이 이것과 같아야 한다. 없으면 본문을 안 본다. */
+  /** 본문이 이것과 같아야 한다. 없으면 본문을 안 본다. `protocol: http` 에서만. */
   expectBody?: string;
+  /** 프로브 요청의 `Host` 헤더. 없으면 찌르는 주소. `protocol: http` 에서만. */
+  hostHeader?: string;
+  /**
+   * 주기·타임아웃·연속 판정 — **풀별**.
+   *
+   * 없으면 데몬 전체 기본값(`BARY_PROBE_*`)을 쓴다. 전에는 그 전역값**만** 있었고,
+   * 그래서 느린 백엔드 하나 때문에 전체 주기를 늘려야 했다.
+   */
+  intervalS?: number;
+  timeoutS?: number;
+  rise?: number;
+  fall?: number;
 };
 
 export type Pool = {

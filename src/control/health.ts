@@ -105,6 +105,14 @@ export type HttpProbeOpts = {
   expectStatus?: number[];
   /** 있으면 본문이 이 문자열이어야 산다. 없으면 본문을 안 본다. */
   expectBody?: string;
+  /**
+   * 프로브 요청의 `Host` 헤더 (§4.3.1).
+   *
+   * **없으면 노드가 찌르는 주소로 채운다.** 필요한 이유는 가상호스팅이다 — 백엔드가
+   * `Host` 로 앱을 고르면, IP 로 찌른 프로브는 기본 앱(대개 404)에 닿는다. 그러면
+   * 산 백엔드가 죽은 것으로 보인다.
+   */
+  hostHeader?: string;
 };
 
 /**
@@ -121,7 +129,11 @@ export function probeHttp(
   host: string, port: number, timeoutMs: number, opts: HttpProbeOpts,
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
-    const req = httpRequest({ host, port, path: opts.path, method: 'GET', timeout: timeoutMs }, (res) => {
+    const req = httpRequest({
+      host, port, path: opts.path, method: 'GET', timeout: timeoutMs,
+      // **있을 때만 얹는다.** 빈 값을 넣으면 노드가 채우던 기본이 사라진다.
+      ...(opts.hostHeader === undefined ? {} : { headers: { Host: opts.hostHeader } }),
+    }, (res) => {
       /**
        * **판정이 나면 그 자리에서 끊는다** (검수 D10).
        *
@@ -184,35 +196,73 @@ export function probeHttp(
   });
 }
 
-/** 스위퍼가 풀 `protocolClass` 로 고르는 자리. HTTP 는 본문, 나머지는 TCP 연결. */
+/**
+ * 계획대로 한 번 찌른다.
+ *
+ * **어디를 찌르는지는 계획이 정한다** — 백엔드의 host/port 는 기본값일 뿐이다(§4.3.1).
+ * 그래서 사이드카 프로브(`hostOverride`)와 별도 헬스 포트(`port`)가 성립한다.
+ */
 export function probeBackend(
-  protocolClass: 'http' | 'tcp' | 'udp' | undefined,
-  host: string, port: number, timeoutMs: number, httpOpts?: HttpProbeOpts,
+  plan: ProbePlan, host: string, port: number, timeoutMs: number,
 ): Promise<string | undefined> {
-  if (protocolClass === 'http') {
-    return probeHttp(host, port, timeoutMs, httpOpts ?? { path: HTTP_PROBE_PATH });
+  const at = { host: plan.hostOverride ?? host, port: plan.port ?? port };
+  if (plan.protocol === 'http') {
+    return probeHttp(at.host, at.port, timeoutMs, plan.http ?? { path: HTTP_PROBE_PATH });
   }
-  return probeTcp(host, port, timeoutMs);
+  return probeTcp(at.host, at.port, timeoutMs);
 }
 
 /**
- * 이 풀의 HTTP 헬스체크 설정 (검수 B-07).
+ * 이 풀을 **어떻게 찌를 것인가** (§4.3.1).
  *
- * **`HttpProbeOpts` 는 있는데 `HealthProber` 가 안 넘겼다** — 이 저장소가 반복해서 잡는
- * *"필드는 있는데 아무도 안 읽는다"* 의 한 판이다. 이 함수가 그 다리다.
+ * ── 전에는 `protocolClass` 가 정했다
  *
- * stream 풀(tcp·udp)에는 `undefined` — 거기엔 요청 개념이 없고 프로버는 연결만 본다.
+ * 이 함수의 옛 모양(`healthCheckOf`)은 http 풀이 아니면 `undefined` 를 냈고, 그래서
+ * 프로브 종류가 **데이터 프로토콜에 묶여 있었다.** §4.3.1 이 그것을 문제로 적었다:
+ * *"TCP/UDP 서비스가 별도 HTTP 헬스 포트나 사이드카 프로브를 갖는 정당한 구성을 막았다."*
  *
- * 안 적으면 `GET /` + 2xx 다. 좁히는 것은 옵트인이고, **안 좁힌 배포의 판정이 안 바뀐다.**
+ * 이제 셋이 갈린다 — **무엇으로**(`protocol`) · **어디를**(`port`·`hostOverride`) ·
+ * **얼마나 자주**(`intervalS` 등). 안 적으면 옛 규칙 그대로다: http 풀은 http 프로브,
+ * 나머지는 TCP connect. **안 쓰는 배포의 판정이 안 바뀐다.**
  */
-export function healthCheckOf(model: Model, poolKey: string): HttpProbeOpts | undefined {
+export type ProbePlan = {
+  /** `none` 이면 이 풀은 안 찌른다 — 백엔드가 `unknown` 으로 남고 멤버십에서 안 빠진다. */
+  mode: 'none' | 'active';
+  protocol: 'tcp_connect' | 'http';
+  /** 없으면 백엔드 포트. */
+  port?: number;
+  /** 없으면 백엔드 host. */
+  hostOverride?: string;
+  /** `protocol: http` 일 때만. */
+  http?: HttpProbeOpts;
+  /** 풀별 타이밍. 없으면 데몬 전체 기본값. */
+  intervalS?: number;
+  timeoutS?: number;
+  rise?: number;
+  fall?: number;
+};
+
+export function probePlanOf(model: Model, poolKey: string): ProbePlan {
   const pool = model.pools.find((p) => p.key === poolKey);
-  if (pool === undefined || pool.protocolClass !== 'http') return undefined;
-  const spec = pool.healthCheck;
-  return {
+  const spec = pool?.healthCheck;
+  // **기본은 옛 규칙이다.** `protocolClass` 가 정하던 그것 — 안 적은 배포가 안 바뀐다.
+  const protocol = spec?.protocol ?? (pool?.protocolClass === 'http' ? 'http' : 'tcp_connect');
+  const http: HttpProbeOpts | undefined = protocol === 'http' ? {
     path: spec?.path ?? HTTP_PROBE_PATH,
     ...(spec?.expectStatus === undefined ? {} : { expectStatus: spec.expectStatus }),
     ...(spec?.expectBody === undefined ? {} : { expectBody: spec.expectBody }),
+    ...(spec?.hostHeader === undefined ? {} : { hostHeader: spec.hostHeader }),
+  } : undefined;
+  return {
+    mode: spec?.mode ?? 'active',
+    protocol,
+    ...(spec?.port === undefined ? {} : { port: spec.port }),
+    ...(spec?.hostOverride === undefined ? {} : { hostOverride: spec.hostOverride }),
+    ...(http === undefined ? {} : { http }),
+    ...(spec?.intervalS === undefined ? {} : { intervalS: spec.intervalS }),
+    ...(spec?.timeoutS === undefined ? {} : { timeoutS: spec.timeoutS }),
+    ...(spec?.rise === undefined ? {} : { rise: spec.rise }),
+    ...(spec?.fall === undefined ? {} : { fall: spec.fall }),
   };
 }
 
@@ -269,8 +319,52 @@ export class HealthProber {
     }
 
     // **시작 순번을 먼저 다 발급한다.** 프로브가 끝나는 순서는 시작 순서와 다르다.
-    const classOf = new Map(model.pools.map((p) => [p.key, p.protocolClass]));
-    const runs = model.backends.map((b) => ({ backend: b, seq: this.#next++ }));
+    // **계획을 풀마다 한 번 만든다.** 백엔드마다 만들면 같은 풀을 여러 번 훑는다.
+    const planOf = new Map(model.pools.map((p) => [p.key, probePlanOf(model, p.key)]));
+    /**
+     * **`mode: none` 인 풀은 아예 안 찌른다** (§4.3.1).
+     *
+     * 순번도 안 발급한다 — 발급하면 그 백엔드의 `probe_start_seq` 가 올라가고, 나중에
+     * 다시 켰을 때 **그 사이에 늦게 도착한 옛 프로브가 버려지지 않는다.** 안 찌르기로
+     * 한 것이 판정 순서에 흔적을 남기면 안 된다.
+     */
+    /**
+     * **풀별 주기는 타이머를 쪼개서 만들지 않는다** (§4.3.1).
+     *
+     * 풀마다 `setInterval` 을 두면 타이머 수명·리더 교체·모델 변경마다 그것들을 맞춰
+     * 세우고 걷어야 한다 — 상태가 하나 늘고 그만큼 틀릴 자리가 는다. 대신 **전역 틱을
+     * 상한으로 두고, 자기 주기가 아직 안 된 백엔드를 건너뛴다.** 마지막 관측 시각은
+     * `backend_health.observed_at` 에 이미 있다.
+     *
+     * ⚠️ **전역 틱보다 짧은 주기는 못 만든다.** 전역이 2초인데 풀이 1초를 적으면 2초로
+     * 돈다 — 이 방식이 만드는 상한이고, 늘리는 쪽(느리게)만 정확하다. `BARY_PROBE_INTERVAL_MS`
+     * 가 그 바닥이다.
+     */
+    const lastAt = new Map<string, number>();
+    for (const row of (await this.db.query(
+      'SELECT backend_key, observed_at FROM backend_health')).rows) {
+      const at = new Date(row['observed_at'] as string).getTime();
+      // **못 읽은 시각은 안 싣는다.** 실으면 `NaN` 이 되고, `now - NaN >= x` 는 언제나
+      // 거짓이라 그 백엔드는 **영영 안 찔린다** — 읽기 실패가 조용히 프로브를 끄는 것이다.
+      // 못 읽었으면 「모른다」이고, 모르면 찌르는 쪽이 안전하다.
+      if (Number.isFinite(at)) lastAt.set(String(row['backend_key']), at);
+    }
+    const now = Date.now();
+    const due = (b: { key: string; pool: string }): boolean => {
+      const everyS = planOf.get(b.pool)?.intervalS;
+      if (everyS === undefined) return true;
+      const last = lastAt.get(b.key);
+      return last === undefined || now - last >= everyS * 1000;
+    };
+
+    /**
+     * **건너뛴 것은 순번도 안 받는다.** 위 `mode: none` 과 같은 이유다 — 안 찌른 것이
+     * 판정 순서에 흔적을 남기면, 다시 찌를 때 늦게 도착한 옛 프로브가 안 버려진다.
+     */
+    const targets = model.backends
+      .filter((b) => planOf.get(b.pool)?.mode !== 'none')
+      .filter(due);
+    const runs = targets.map((b) => ({ backend: b, seq: this.#next++ }));
 
     /**
      * **풀의 헬스체크 설정을 넘긴다** (검수 B-07). 전에는 안 넘겨서 옵션 타입이 있어도
@@ -279,10 +373,15 @@ export class HealthProber {
      */
     const results = await inBatches(runs, this.opts.concurrency ?? DEFAULTS.concurrency,
       async ({ backend, seq }) => ({
-        key: backend.key, seq,
+        key: backend.key, seq, pool: backend.pool,
         reason: await probeBackend(
-          classOf.get(backend.pool), backend.host, backend.port, timeoutMs,
-          healthCheckOf(model, backend.pool),
+          planOf.get(backend.pool) ?? { mode: 'active', protocol: 'tcp_connect' },
+          backend.host, backend.port,
+          // **풀별 타임아웃이 있으면 그것을 쓴다.** 없으면 데몬 전체 값이다 —
+          // 느린 백엔드 하나 때문에 전체를 늘려야 하던 자리다 (§4.3.1).
+          (planOf.get(backend.pool)?.timeoutS ?? 0) > 0
+            ? planOf.get(backend.pool)!.timeoutS! * 1000
+            : timeoutMs,
         ),
       }));
 
@@ -307,10 +406,18 @@ export class HealthProber {
         const sameAsLast = row !== undefined && row['last_ok'] === ok;
         const streak = sameAsLast ? Number(row['consecutive']) + 1 : 1;
 
-        // 임계값을 넘어야 판정이 바뀐다. 한 번의 실패로 빼면 흔들림에 멤버십이 요동친다.
+        /**
+         * 임계값을 넘어야 판정이 바뀐다. 한 번의 실패로 빼면 흔들림에 멤버십이 요동친다.
+         *
+         * **풀이 정했으면 그것을 쓴다** (§4.3.1). 전에는 데몬 전체에 하나씩이라, 흔들리는
+         * 백엔드 하나 때문에 **모든 풀의** 임계값을 올려야 했다.
+         */
+        const plan = planOf.get(r.pool);
+        const riseN = plan?.rise ?? rise;
+        const failN = plan?.fall ?? fail;
         let next = prevState;
-        if (ok && prevState !== 'healthy' && streak >= rise) next = 'healthy';
-        if (!ok && prevState !== 'unhealthy' && streak >= fail) next = 'unhealthy';
+        if (ok && prevState !== 'healthy' && streak >= riseN) next = 'healthy';
+        if (!ok && prevState !== 'unhealthy' && streak >= failN) next = 'unhealthy';
 
         await c.query(
           `INSERT INTO backend_health
