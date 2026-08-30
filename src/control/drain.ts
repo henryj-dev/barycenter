@@ -7,7 +7,7 @@
 import { resolvePeer } from './membership.js';
 import type { Db } from '../store/pg.js';
 
-export type DrainCondition = 'no_new_traffic' | 'quiesced';
+export type DrainCondition = 'no_new_traffic' | 'quiesced' | 'deadline_exceeded';
 
 export type DrainStatus = {
   backend: string;
@@ -114,28 +114,44 @@ export async function endDrain(db: Db, backendKey: string): Promise<boolean> {
 /**
  * 지금 빼야 할 백엔드들.
  *
- * **`deadline_at` 을 읽는다** (검수 B-04). 전에는 저장만 하고 아무도 안 봤다 — API 가
- * `deadline_s` 를 받아 적어 두는데 만료돼도 아무 일이 안 일어났다. 이 저장소가 반복해서
- * 잡는 *"필드는 있는데 아무도 안 읽는다"* 의 한 판이다.
+ * ── **기한은 관측이지 자동 해제가 아니다** (2026-08-30 · §4.4 · ADR §6)
  *
- * 만료된 행을 여기서 지우지는 않는다. 읽기 경로가 쓰면 프로버 틱마다 쓰기가 생기고,
- * 리더가 아닌 인스턴스도 이 함수를 부른다. 지우는 것은 `endDrain` 과 백엔드 삭제
+ * 전에는 `deadline_at IS NULL OR deadline_at > now()` 로 걸렀다. 그래서 기한이 지나면
+ * 백엔드가 **멤버십에 도로 들어오고 트래픽이 자동으로 재개**됐다.
+ *
+ * §4.4 는 그것을 *"관측 목적의 기한. 강제 종료는 별도 capability"* 라고 적었고, 그 표의
+ * `drain_condition` 에 `deadline_exceeded` 를 뒀는데 **구현이 그 상태를 만들 수 없었다** —
+ * 기한이 지나면 드레인 자체가 사라지니까. 설계와 구현이 어긋나 있었다.
+ *
+ * 실제 위험이 그 어긋남에 있다: 운영자가 백엔드를 빼고 정비하려고 기한을 주면,
+ * 그 시간 뒤 **정비 중인 백엔드로 트래픽이 조용히 돌아온다.** 드레인 계약표의 첫 줄
+ * (*"새 연결/세션이 이 백엔드로 가지 않음 ✅"*)에 아무도 안 적은 시한이 붙어 있었다.
+ *
+ * **잃는 것도 적어 둔다:** 잊힌 드레인이 용량을 영구히 깎는다. 그 대신 기한을 넘긴 것이
+ * `deadline_exceeded` 로 드러나므로 **보이는 상태**가 됐다 — 전에는 조용히 풀렸다.
+ *
+ * 만료된 행을 여기서 지우지 않는 것은 그대로다. 읽기 경로가 쓰면 프로버 틱마다 쓰기가
+ * 생기고, 리더가 아닌 인스턴스도 이 함수를 부른다. 지우는 것은 `endDrain` 과 백엔드 삭제
  * CASCADE 의 몫이다.
  */
-const LIVE = `deadline_at IS NULL OR deadline_at > now()`;
-
 export async function drainKeys(db: Db): Promise<Set<string>> {
-  const rows = (await db.query(
-    `SELECT backend_key FROM backend_drain WHERE ${LIVE}`)).rows;
+  const rows = (await db.query('SELECT backend_key FROM backend_drain')).rows;
   return new Set(rows.map((r) => String(r['backend_key'])));
 }
 
 export async function isDraining(db: Db, backendKey: string): Promise<boolean> {
   // **`drainKeys` 와 같은 조건이어야 한다.** 갈리면 "드레인 중이라는데 트래픽은 간다" 가 된다.
   const r = (await db.query(
-    `SELECT 1 FROM backend_drain WHERE backend_key=$1 AND (${LIVE})`, [backendKey],
-  )).rows[0];
+    'SELECT 1 FROM backend_drain WHERE backend_key=$1', [backendKey])).rows[0];
   return r !== undefined;
+}
+
+/** 기한을 넘긴 드레인들. **빼는 판단이 아니라 관측이다.** */
+export async function deadlineExceededKeys(db: Db): Promise<Set<string>> {
+  const rows = (await db.query(
+    'SELECT backend_key FROM backend_drain WHERE deadline_at IS NOT NULL AND deadline_at <= now()',
+  )).rows;
+  return new Set(rows.map((r) => String(r['backend_key'])));
 }
 
 /**
@@ -146,6 +162,8 @@ export function drainStatusOf(opts: {
   draining: boolean;
   inflight?: number;
   sessions?: number;
+  /** 기한을 넘겼는가 (§4.4). **드레인이 끝났다는 뜻이 아니다** — 관측이다. */
+  deadlineExceeded?: boolean;
 }): DrainStatus | undefined {
   if (!opts.draining) return undefined;
   const out: DrainStatus & { inflight?: number; active_sessions?: number } = {
@@ -154,6 +172,13 @@ export function drainStatusOf(opts: {
   };
   if (opts.inflight !== undefined) out.inflight = opts.inflight;
   if (opts.sessions !== undefined) out.active_sessions = opts.sessions;
+  // 기한을 넘겼으면 그것을 말한다 — 제 시간에 안 비었다는 사실이다.
+  if (opts.deadlineExceeded === true) out.drain_condition = 'deadline_exceeded';
+  /**
+   * **`quiesced` 가 마지막이다.** 기한을 넘겼어도 실제로 다 빠졌으면 그것이 더 강한
+   * 사실이다 — 운영자가 알고 싶은 것은 "지금 빼도 되는가" 이고 그 답은 `quiesced` 다.
+   * 순서를 뒤집으면 다 빠진 백엔드를 기한 때문에 못 빼는 것으로 읽는다.
+   */
   if (opts.inflight === 0 && opts.sessions === 0) out.drain_condition = 'quiesced';
   return out;
 }

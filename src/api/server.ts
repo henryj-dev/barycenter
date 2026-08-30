@@ -32,7 +32,7 @@ import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.js';
 import {
-  drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
+  deadlineExceededKeys, drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
 } from '../control/drain.js';
 import { healthRows } from '../control/health.js';
 import { count, render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
@@ -404,6 +404,9 @@ const ROUTES: Route[] = [
     const status = drainStatusOf({
       backend: key,
       draining: await isDraining(api.db, key),
+      // **기한은 관측이다** (§4.4). 넘겨도 드레인은 유지되고 조건만 그것을 말한다 —
+      // 안 읽으면 `deadline_at` 이 다시 「저장만 하고 아무도 안 보는」 열이 된다.
+      deadlineExceeded: (await deadlineExceededKeys(api.db)).has(key),
       ...(obs === undefined ? {} : { inflight: obs.inflight, sessions: obs.sessions }),
     });
     if (status === undefined) {

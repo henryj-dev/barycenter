@@ -903,6 +903,7 @@ v1 은 `health.type` 을 `protocol_class` 에 묶었는데, **TCP/UDP 서비스�
 | 새 연결/세션이 이 백엔드로 가지 않음 | ✅ (멤버십 제외) |
 | peer 별 업스트림 inflight 관측 | ✅ |
 | `quiesced` = inflight 0 && active_sessions 0 | ✅ (관측 기반) |
+| 기한이 지나도 **드레인은 유지** | ✅ (2026-08-30). 기한은 **관측**이지 자동 해제가 아니다 — 지나면 `deadline_exceeded` 로 드러난다 |
 | 기존 TCP 연결·UDP 세션 강제 종료 | ❌ **별도 capability.** 워커별 세션 핸들과 제어 경로 필요 |
 | 클라이언트 HTTP/2 GOAWAY | ❌ **약속하지 않는다** |
 

@@ -21,7 +21,7 @@ import { ConfigStore, type PatchOp } from '../../src/store/config-store.js';
 import { ControlPlane } from '../../src/control/plane.js';
 import { TokenAuth } from '../../src/api/auth.js';
 import { LeaderElection } from '../../src/control/leader.js';
-import { drainKeys, isDraining, startDrain } from '../../src/control/drain.js';
+import { deadlineExceededKeys, drainKeys, isDraining, startDrain } from '../../src/control/drain.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
@@ -112,7 +112,7 @@ beforeEach(async () => {
 });
 
 describe('드레인 수명 (검수 B-04 · B-10)', () => {
-  it('드레인을 풀 수 있고 만료되면 저절로 풀린다', async () => {
+  it('드레인을 풀 수 있고, **만료돼도 안 풀린다** — 기한은 관측이다', async () => {
     // ① 시작 — 여기까지는 전에도 됐다.
     expect((await req('POST', '/api/v1/backends/a-11/drain')).status).toBe(200);
     expect(await isDraining(db, 'a-11')).toBe(true);
@@ -123,13 +123,28 @@ describe('드레인 수명 (검수 B-04 · B-10)', () => {
     expect(await isDraining(db, 'a-11')).toBe(false);
     expect([...await drainKeys(db)]).toEqual([]);
 
-    // ③ **만료.** deadline 을 받아 저장만 하고 아무도 안 읽고 있었다.
+    /**
+     * ③ **만료 — 그런데 안 풀린다** (2026-08-30 에 계약을 뒤집었다).
+     *
+     * 전에는 여기서 `drainKeys` 가 비고 `isDraining` 이 false 였다. 즉 **기한이 지나면
+     * 트래픽이 자동으로 재개**됐다. 그게 §4.4 와 어긋나 있었다 — 그 절은 기한을
+     * *"관측 목적"* 이라 적고 `drain_condition` 에 `deadline_exceeded` 를 뒀는데,
+     * 자동 해제면 그 상태를 만들 수가 없다.
+     *
+     * 실제 위험은 이렇다: 백엔드를 빼고 정비하려고 기한을 주면, 그 시간 뒤
+     * **정비 중인 백엔드로 트래픽이 조용히 돌아온다.**
+     *
+     * 잃는 것도 적어 둔다 — 잊힌 드레인이 용량을 깎는다. 대신 그것이
+     * `deadline_exceeded` 로 **보이는 상태**가 됐다.
+     */
     await startDrain(db, 'a-11', 'tester', 3600);
     expect([...await drainKeys(db)]).toEqual(['a-11']);
     await db.query(`UPDATE backend_drain SET deadline_at = now() - interval '1 second'`);
-    expect([...await drainKeys(db)]).toEqual([]);
-    // 만료된 드레인은 "드레인 중" 이 아니다 — 두 판정이 갈리면 안 된다.
-    expect(await isDraining(db, 'a-11')).toBe(false);
+    expect([...await drainKeys(db)], '만료가 드레인을 풀었다 — 트래픽이 돌아온다')
+      .toEqual(['a-11']);
+    expect(await isDraining(db, 'a-11')).toBe(true);
+    // 그리고 그 사실이 상태로 드러난다.
+    expect([...await deadlineExceededKeys(db)]).toEqual(['a-11']);
   });
 
   it('없는 드레인을 푸는 것은 404 다', async () => {

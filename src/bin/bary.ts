@@ -132,7 +132,8 @@ const usage = (): never => {
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
   bary backend delete            --name
   bary backend drain             --name [--deadline 초]. 새 트래픽을 끊는다. apply 가 아니다
-  bary backend undrain           --name. 드레인을 푼다. deadline 이 지나면 저절로도 풀린다
+                                 기한을 넘기면 drain-status 가 deadline_exceeded 로 답한다
+  bary backend undrain           --name. 드레인을 푼다. **deadline 이 지나도 안 풀린다** — 기한은 관측이다
   bary backend drain-status      --name. 관측이 없으면 숫자를 안 싣는다
   bary tls-policy create         --name [--min-version 1.2|1.3]. HSTS 안 켬
   bary tls-policy delete         --name
