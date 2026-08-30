@@ -616,7 +616,34 @@ function decodeHealthCheck(iss: Issues, v: unknown, path: string): HealthCheck |
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['path', 'expectStatus', 'expectBody']);
+  noExtraKeys(iss, v, path, [
+    'mode', 'protocol', 'port', 'hostOverride',
+    'path', 'expectStatus', 'expectBody', 'hostHeader',
+    'intervalS', 'timeoutS', 'rise', 'fall',
+  ]);
+  const mode = optional(v['mode'], () =>
+    oneOf(iss, v['mode'], `${path}.mode`, ['none', 'active'] as const));
+  const protocol = optional(v['protocol'], () =>
+    oneOf(iss, v['protocol'], `${path}.protocol`, ['tcp_connect', 'http'] as const));
+  const port = optional(v['port'], () => int(iss, v['port'], `${path}.port`, PORT_MIN, PORT_MAX));
+  const hostOverride = optional(v['hostOverride'], () =>
+    str(iss, v['hostOverride'], `${path}.hostOverride`));
+  const hostHeader = optional(v['hostHeader'], () =>
+    str(iss, v['hostHeader'], `${path}.hostHeader`));
+  /**
+   * **범위는 넉넉하고 하한은 의미가 있다** (검수 D6·D7 과 같은 판단).
+   *
+   * 하한이 0 이면 안 된다 — `intervalS: 0` 은 쉬지 않고 찌르는 것이고 `rise: 0` 은
+   * "0 번 연속 성공하면 산 것" 이라 판정이 사라진다. 상한이 넉넉한 이유는 `modelAt` 이
+   * 옛 리비전을 같은 해독기로 읽기 때문이다 — 좁히면 그런 값이 든 리비전이 해독 불가가
+   * 되고 롤백이 막힌다.
+   */
+  const intervalS = optional(v['intervalS'], () =>
+    int(iss, v['intervalS'], `${path}.intervalS`, 1, 86_400));
+  const timeoutS = optional(v['timeoutS'], () =>
+    int(iss, v['timeoutS'], `${path}.timeoutS`, 1, 300));
+  const rise = optional(v['rise'], () => int(iss, v['rise'], `${path}.rise`, 1, 100));
+  const fall = optional(v['fall'], () => int(iss, v['fall'], `${path}.fall`, 1, 100));
   const p = optional(v['path'], () => str(iss, v['path'], `${path}.path`));
   const expectBody = optional(v['expectBody'], () => str(iss, v['expectBody'], `${path}.expectBody`));
   const expectStatus = optional(v['expectStatus'], () => {
@@ -629,10 +656,30 @@ function decodeHealthCheck(iss: Issues, v: unknown, path: string): HealthCheck |
     }
     return list;
   });
+  /**
+   * **`timeoutS` 가 `intervalS` 보다 크면 막는다.**
+   *
+   * 통과시키면 앞 프로브가 안 끝났는데 다음 주기가 오고, 그러면 한 백엔드에 프로브가
+   * 쌓인다 — 살리려던 백엔드를 프로버가 밀어뜨린다. 해독기가 잡는 이유는 이것이 두 값
+   * 사이의 관계라 각각의 범위로는 표현되지 않아서다.
+   */
+  if (intervalS !== undefined && timeoutS !== undefined && timeoutS > intervalS) {
+    iss.add('out_of_range', `${path}.timeoutS`,
+      `타임아웃(${timeoutS}초)이 주기(${intervalS}초)보다 길다 — 프로브가 쌓인다`);
+  }
   return {
+    ...(mode === undefined ? {} : { mode }),
+    ...(protocol === undefined ? {} : { protocol }),
+    ...(port === undefined ? {} : { port }),
+    ...(hostOverride === undefined ? {} : { hostOverride }),
     ...(p === undefined ? {} : { path: p }),
     ...(expectStatus === undefined ? {} : { expectStatus }),
     ...(expectBody === undefined ? {} : { expectBody }),
+    ...(hostHeader === undefined ? {} : { hostHeader }),
+    ...(intervalS === undefined ? {} : { intervalS }),
+    ...(timeoutS === undefined ? {} : { timeoutS }),
+    ...(rise === undefined ? {} : { rise }),
+    ...(fall === undefined ? {} : { fall }),
   };
 }
 

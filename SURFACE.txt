@@ -1,8 +1,7 @@
 # barycenter v0.1 공개 표면
-# 117 심볼 · sha256:360f81da3daf2edf0b12df6d2ca4a57ab40ea2746c522868446df0043f061652
-# 동결 카운터: 3 회차 (표면이 안 움직인 검수 회차 수)
+# 117 심볼 · sha256:31b8024668171bce2aef74612b557cff96a8980e29edf4d3a8df84041675eb99
+# 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
-# 회차 3: 게이트 자신 검수 — verify.sh · 워크플로 · 동결/핀 도구 (docs/audit-2026-08-29-gate.md)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
 #
 # 이 파일은 scripts/surface.mjs 가 만든다. 손으로 고치지 않는다.
@@ -244,9 +243,18 @@ export type HeaderRules = {
 };
 ── HealthCheck
 export type HealthCheck = {
+    mode?: 'none' | 'active';
+    protocol?: 'tcp_connect' | 'http';
+    port?: number;
+    hostOverride?: string;
     path?: string;
     expectStatus?: number[];
     expectBody?: string;
+    hostHeader?: string;
+    intervalS?: number;
+    timeoutS?: number;
+    rise?: number;
+    fall?: number;
 };
 ── HstsPolicy
 export type HstsPolicy = {

@@ -184,35 +184,73 @@ export function probeHttp(
   });
 }
 
-/** 스위퍼가 풀 `protocolClass` 로 고르는 자리. HTTP 는 본문, 나머지는 TCP 연결. */
+/**
+ * 계획대로 한 번 찌른다.
+ *
+ * **어디를 찌르는지는 계획이 정한다** — 백엔드의 host/port 는 기본값일 뿐이다(§4.3.1).
+ * 그래서 사이드카 프로브(`hostOverride`)와 별도 헬스 포트(`port`)가 성립한다.
+ */
 export function probeBackend(
-  protocolClass: 'http' | 'tcp' | 'udp' | undefined,
-  host: string, port: number, timeoutMs: number, httpOpts?: HttpProbeOpts,
+  plan: ProbePlan, host: string, port: number, timeoutMs: number,
 ): Promise<string | undefined> {
-  if (protocolClass === 'http') {
-    return probeHttp(host, port, timeoutMs, httpOpts ?? { path: HTTP_PROBE_PATH });
+  const at = { host: plan.hostOverride ?? host, port: plan.port ?? port };
+  if (plan.protocol === 'http') {
+    return probeHttp(at.host, at.port, timeoutMs, plan.http ?? { path: HTTP_PROBE_PATH });
   }
-  return probeTcp(host, port, timeoutMs);
+  return probeTcp(at.host, at.port, timeoutMs);
 }
 
 /**
- * 이 풀의 HTTP 헬스체크 설정 (검수 B-07).
+ * 이 풀을 **어떻게 찌를 것인가** (§4.3.1).
  *
- * **`HttpProbeOpts` 는 있는데 `HealthProber` 가 안 넘겼다** — 이 저장소가 반복해서 잡는
- * *"필드는 있는데 아무도 안 읽는다"* 의 한 판이다. 이 함수가 그 다리다.
+ * ── 전에는 `protocolClass` 가 정했다
  *
- * stream 풀(tcp·udp)에는 `undefined` — 거기엔 요청 개념이 없고 프로버는 연결만 본다.
+ * 이 함수의 옛 모양(`healthCheckOf`)은 http 풀이 아니면 `undefined` 를 냈고, 그래서
+ * 프로브 종류가 **데이터 프로토콜에 묶여 있었다.** §4.3.1 이 그것을 문제로 적었다:
+ * *"TCP/UDP 서비스가 별도 HTTP 헬스 포트나 사이드카 프로브를 갖는 정당한 구성을 막았다."*
  *
- * 안 적으면 `GET /` + 2xx 다. 좁히는 것은 옵트인이고, **안 좁힌 배포의 판정이 안 바뀐다.**
+ * 이제 셋이 갈린다 — **무엇으로**(`protocol`) · **어디를**(`port`·`hostOverride`) ·
+ * **얼마나 자주**(`intervalS` 등). 안 적으면 옛 규칙 그대로다: http 풀은 http 프로브,
+ * 나머지는 TCP connect. **안 쓰는 배포의 판정이 안 바뀐다.**
  */
-export function healthCheckOf(model: Model, poolKey: string): HttpProbeOpts | undefined {
+export type ProbePlan = {
+  /** `none` 이면 이 풀은 안 찌른다 — 백엔드가 `unknown` 으로 남고 멤버십에서 안 빠진다. */
+  mode: 'none' | 'active';
+  protocol: 'tcp_connect' | 'http';
+  /** 없으면 백엔드 포트. */
+  port?: number;
+  /** 없으면 백엔드 host. */
+  hostOverride?: string;
+  /** `protocol: http` 일 때만. */
+  http?: HttpProbeOpts;
+  /** 풀별 타이밍. 없으면 데몬 전체 기본값. */
+  intervalS?: number;
+  timeoutS?: number;
+  rise?: number;
+  fall?: number;
+};
+
+export function probePlanOf(model: Model, poolKey: string): ProbePlan {
   const pool = model.pools.find((p) => p.key === poolKey);
-  if (pool === undefined || pool.protocolClass !== 'http') return undefined;
-  const spec = pool.healthCheck;
-  return {
+  const spec = pool?.healthCheck;
+  // **기본은 옛 규칙이다.** `protocolClass` 가 정하던 그것 — 안 적은 배포가 안 바뀐다.
+  const protocol = spec?.protocol ?? (pool?.protocolClass === 'http' ? 'http' : 'tcp_connect');
+  const http: HttpProbeOpts | undefined = protocol === 'http' ? {
     path: spec?.path ?? HTTP_PROBE_PATH,
     ...(spec?.expectStatus === undefined ? {} : { expectStatus: spec.expectStatus }),
     ...(spec?.expectBody === undefined ? {} : { expectBody: spec.expectBody }),
+    ...(spec?.hostHeader === undefined ? {} : { hostHeader: spec.hostHeader }),
+  } : undefined;
+  return {
+    mode: spec?.mode ?? 'active',
+    protocol,
+    ...(spec?.port === undefined ? {} : { port: spec.port }),
+    ...(spec?.hostOverride === undefined ? {} : { hostOverride: spec.hostOverride }),
+    ...(http === undefined ? {} : { http }),
+    ...(spec?.intervalS === undefined ? {} : { intervalS: spec.intervalS }),
+    ...(spec?.timeoutS === undefined ? {} : { timeoutS: spec.timeoutS }),
+    ...(spec?.rise === undefined ? {} : { rise: spec.rise }),
+    ...(spec?.fall === undefined ? {} : { fall: spec.fall }),
   };
 }
 
@@ -269,8 +307,17 @@ export class HealthProber {
     }
 
     // **시작 순번을 먼저 다 발급한다.** 프로브가 끝나는 순서는 시작 순서와 다르다.
-    const classOf = new Map(model.pools.map((p) => [p.key, p.protocolClass]));
-    const runs = model.backends.map((b) => ({ backend: b, seq: this.#next++ }));
+    // **계획을 풀마다 한 번 만든다.** 백엔드마다 만들면 같은 풀을 여러 번 훑는다.
+    const planOf = new Map(model.pools.map((p) => [p.key, probePlanOf(model, p.key)]));
+    /**
+     * **`mode: none` 인 풀은 아예 안 찌른다** (§4.3.1).
+     *
+     * 순번도 안 발급한다 — 발급하면 그 백엔드의 `probe_start_seq` 가 올라가고, 나중에
+     * 다시 켰을 때 **그 사이에 늦게 도착한 옛 프로브가 버려지지 않는다.** 안 찌르기로
+     * 한 것이 판정 순서에 흔적을 남기면 안 된다.
+     */
+    const targets = model.backends.filter((b) => planOf.get(b.pool)?.mode !== 'none');
+    const runs = targets.map((b) => ({ backend: b, seq: this.#next++ }));
 
     /**
      * **풀의 헬스체크 설정을 넘긴다** (검수 B-07). 전에는 안 넘겨서 옵션 타입이 있어도
@@ -281,8 +328,13 @@ export class HealthProber {
       async ({ backend, seq }) => ({
         key: backend.key, seq,
         reason: await probeBackend(
-          classOf.get(backend.pool), backend.host, backend.port, timeoutMs,
-          healthCheckOf(model, backend.pool),
+          planOf.get(backend.pool) ?? { mode: 'active', protocol: 'tcp_connect' },
+          backend.host, backend.port,
+          // **풀별 타임아웃이 있으면 그것을 쓴다.** 없으면 데몬 전체 값이다 —
+          // 느린 백엔드 하나 때문에 전체를 늘려야 하던 자리다 (§4.3.1).
+          (planOf.get(backend.pool)?.timeoutS ?? 0) > 0
+            ? planOf.get(backend.pool)!.timeoutS! * 1000
+            : timeoutMs,
         ),
       }));
 

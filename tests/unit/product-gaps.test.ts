@@ -134,11 +134,15 @@ describe('HTTP 본문 프로브', () => {
     expect(await probeTcp('127.0.0.1', empty, 500)).toBeUndefined();
     expect(await probeTcp('127.0.0.1', tcp, 500)).toBeUndefined();
 
-    expect(await probeBackend('http', '127.0.0.1', nope, 500, { path: '/', expectBody: 'ok' }))
+    // 계획으로 찌른다 (§4.3.1). 옛 인자(`protocolClass`)가 정하던 것을 이제 계획이 든다.
+    const HTTP = { mode: 'active', protocol: 'http', http: { path: '/' } } as const;
+    const TCP = { mode: 'active', protocol: 'tcp_connect' } as const;
+    expect(await probeBackend(
+      { ...HTTP, http: { path: '/', expectBody: 'ok' } } as never, '127.0.0.1', nope, 500))
       .toMatch(/기대와 다르다/);
-    expect(await probeBackend('tcp', '127.0.0.1', nope, 500)).toBeUndefined();
-    expect(await probeBackend('http', '127.0.0.1', tcp, 500)).not.toBeUndefined();
-    expect(await probeBackend('tcp', '127.0.0.1', tcp, 500)).toBeUndefined();
+    expect(await probeBackend(TCP as never, '127.0.0.1', nope, 500)).toBeUndefined();
+    expect(await probeBackend(HTTP as never, '127.0.0.1', tcp, 500)).not.toBeUndefined();
+    expect(await probeBackend(TCP as never, '127.0.0.1', tcp, 500)).toBeUndefined();
   });
 
   it('스위퍼는 HTTP 풀에 HTTP 프로브를 쓴다 — TCP 만 열린 서버는 죽는다', async () => {
