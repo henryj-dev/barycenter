@@ -103,6 +103,16 @@ function fakeHealthDb(): Db {
       if (text.includes('INSERT INTO health_events')) {
         return { rows: [], rowCount: 1 };
       }
+      // 풀별 주기가 마지막 관측 시각을 본다 (§4.3.1). **가짜도 그 질의를 알아야 한다** —
+      // 모르면 `unexpected sql` 로 죽고, 그건 코드가 아니라 이 이중이 낡은 것이다.
+      if (text.includes('SELECT backend_key, observed_at FROM backend_health')) {
+        return {
+          rows: [...health.keys()].map((backend_key) => ({
+            backend_key, observed_at: new Date(0).toISOString(),
+          })),
+          rowCount: health.size,
+        };
+      }
       if (text.includes('SELECT backend_key, state FROM backend_health')) {
         return {
           rows: [...health.entries()].map(([backend_key, r]) => ({ backend_key, state: r.state })),

@@ -105,6 +105,14 @@ export type HttpProbeOpts = {
   expectStatus?: number[];
   /** 있으면 본문이 이 문자열이어야 산다. 없으면 본문을 안 본다. */
   expectBody?: string;
+  /**
+   * 프로브 요청의 `Host` 헤더 (§4.3.1).
+   *
+   * **없으면 노드가 찌르는 주소로 채운다.** 필요한 이유는 가상호스팅이다 — 백엔드가
+   * `Host` 로 앱을 고르면, IP 로 찌른 프로브는 기본 앱(대개 404)에 닿는다. 그러면
+   * 산 백엔드가 죽은 것으로 보인다.
+   */
+  hostHeader?: string;
 };
 
 /**
@@ -121,7 +129,11 @@ export function probeHttp(
   host: string, port: number, timeoutMs: number, opts: HttpProbeOpts,
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
-    const req = httpRequest({ host, port, path: opts.path, method: 'GET', timeout: timeoutMs }, (res) => {
+    const req = httpRequest({
+      host, port, path: opts.path, method: 'GET', timeout: timeoutMs,
+      // **있을 때만 얹는다.** 빈 값을 넣으면 노드가 채우던 기본이 사라진다.
+      ...(opts.hostHeader === undefined ? {} : { headers: { Host: opts.hostHeader } }),
+    }, (res) => {
       /**
        * **판정이 나면 그 자리에서 끊는다** (검수 D10).
        *
@@ -316,7 +328,42 @@ export class HealthProber {
      * 다시 켰을 때 **그 사이에 늦게 도착한 옛 프로브가 버려지지 않는다.** 안 찌르기로
      * 한 것이 판정 순서에 흔적을 남기면 안 된다.
      */
-    const targets = model.backends.filter((b) => planOf.get(b.pool)?.mode !== 'none');
+    /**
+     * **풀별 주기는 타이머를 쪼개서 만들지 않는다** (§4.3.1).
+     *
+     * 풀마다 `setInterval` 을 두면 타이머 수명·리더 교체·모델 변경마다 그것들을 맞춰
+     * 세우고 걷어야 한다 — 상태가 하나 늘고 그만큼 틀릴 자리가 는다. 대신 **전역 틱을
+     * 상한으로 두고, 자기 주기가 아직 안 된 백엔드를 건너뛴다.** 마지막 관측 시각은
+     * `backend_health.observed_at` 에 이미 있다.
+     *
+     * ⚠️ **전역 틱보다 짧은 주기는 못 만든다.** 전역이 2초인데 풀이 1초를 적으면 2초로
+     * 돈다 — 이 방식이 만드는 상한이고, 늘리는 쪽(느리게)만 정확하다. `BARY_PROBE_INTERVAL_MS`
+     * 가 그 바닥이다.
+     */
+    const lastAt = new Map<string, number>();
+    for (const row of (await this.db.query(
+      'SELECT backend_key, observed_at FROM backend_health')).rows) {
+      const at = new Date(row['observed_at'] as string).getTime();
+      // **못 읽은 시각은 안 싣는다.** 실으면 `NaN` 이 되고, `now - NaN >= x` 는 언제나
+      // 거짓이라 그 백엔드는 **영영 안 찔린다** — 읽기 실패가 조용히 프로브를 끄는 것이다.
+      // 못 읽었으면 「모른다」이고, 모르면 찌르는 쪽이 안전하다.
+      if (Number.isFinite(at)) lastAt.set(String(row['backend_key']), at);
+    }
+    const now = Date.now();
+    const due = (b: { key: string; pool: string }): boolean => {
+      const everyS = planOf.get(b.pool)?.intervalS;
+      if (everyS === undefined) return true;
+      const last = lastAt.get(b.key);
+      return last === undefined || now - last >= everyS * 1000;
+    };
+
+    /**
+     * **건너뛴 것은 순번도 안 받는다.** 위 `mode: none` 과 같은 이유다 — 안 찌른 것이
+     * 판정 순서에 흔적을 남기면, 다시 찌를 때 늦게 도착한 옛 프로브가 안 버려진다.
+     */
+    const targets = model.backends
+      .filter((b) => planOf.get(b.pool)?.mode !== 'none')
+      .filter(due);
     const runs = targets.map((b) => ({ backend: b, seq: this.#next++ }));
 
     /**
@@ -326,7 +373,7 @@ export class HealthProber {
      */
     const results = await inBatches(runs, this.opts.concurrency ?? DEFAULTS.concurrency,
       async ({ backend, seq }) => ({
-        key: backend.key, seq,
+        key: backend.key, seq, pool: backend.pool,
         reason: await probeBackend(
           planOf.get(backend.pool) ?? { mode: 'active', protocol: 'tcp_connect' },
           backend.host, backend.port,
@@ -359,10 +406,18 @@ export class HealthProber {
         const sameAsLast = row !== undefined && row['last_ok'] === ok;
         const streak = sameAsLast ? Number(row['consecutive']) + 1 : 1;
 
-        // 임계값을 넘어야 판정이 바뀐다. 한 번의 실패로 빼면 흔들림에 멤버십이 요동친다.
+        /**
+         * 임계값을 넘어야 판정이 바뀐다. 한 번의 실패로 빼면 흔들림에 멤버십이 요동친다.
+         *
+         * **풀이 정했으면 그것을 쓴다** (§4.3.1). 전에는 데몬 전체에 하나씩이라, 흔들리는
+         * 백엔드 하나 때문에 **모든 풀의** 임계값을 올려야 했다.
+         */
+        const plan = planOf.get(r.pool);
+        const riseN = plan?.rise ?? rise;
+        const failN = plan?.fall ?? fail;
         let next = prevState;
-        if (ok && prevState !== 'healthy' && streak >= rise) next = 'healthy';
-        if (!ok && prevState !== 'unhealthy' && streak >= fail) next = 'unhealthy';
+        if (ok && prevState !== 'healthy' && streak >= riseN) next = 'healthy';
+        if (!ok && prevState !== 'unhealthy' && streak >= failN) next = 'unhealthy';
 
         await c.query(
           `INSERT INTO backend_health
