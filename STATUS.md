@@ -218,8 +218,8 @@ KEK 는 덤프와 다른 곳에 둔다(`docs/runbook-spof.md`). 설정은 안 �
 | 자리 | 없는 필드 |
 |---|---|
 | `Pool` (§4.3) | ~~비었다~~ — `upstream_tls` 는 **구현됐다**(2026-08-24). **`passive`·`sticky` 는 안 넣기로 했다** — `sticky` 가 말하는 둘(L4 소스IP·HTTP 쿠키)은 `algorithm`·`hashKey` 로 이미 표현되고, 쿠키 **발급**은 상용 모듈이다. `passive` 는 — 이 평면의 upstream 은 `server` 가 자리표시 하나뿐이라 peer 별로 셀 대상이 없고, Lua 로 다시 만들면 멤버십의 주인이 둘이 된다. **`dns` 도 결정된 것이다** — 엔진이 선택지를 안 줘서 해독기가 `unknown_field` 로 거절한다 (§7.3) |
-| 헬스 프로브 (§4.3.1) | `probe.mode`·`protocol`·`port`·`host_override`·`udp`. `interval`·`timeout`·`rise`·`fall` 은 **데몬 전체에 하나씩** 이지 풀별이 아니다 |
-| `Backend` (§4.4) | `max_conns` · `admin_state` · `drain.deadline_s` · `is_backup` |
+| 헬스 프로브 (§4.3.1) | ~~비었다~~ — **들어왔다 (2026-08-30).** `mode`·`protocol`·`port`·`hostOverride`·`hostHeader` 와 풀별 `intervalS`/`timeoutS`/`rise`/`fall`. 프로브가 데이터 경로와 갈린다 — tcp 풀이 http 헬스 포트를 가질 수 있다. **`udp` 는 결정이다** (§13-6 드라이버 위임) · **`passive` 도** (이 평면에 `server` 줄이 없다). ⚠️ 풀별 주기는 **전역 틱이 바닥**이다 — 그보다 짧게는 못 만든다 |
+| `Backend` (§4.4) | **`soft_max_conns` · `is_backup` 만 남았다** — 둘 다 `server` 줄에 붙는 값이라 이 평면에서는 **Lua 밸런서 작업**이다 (`docs/adr-membership-attrs.md`). `admin_state` 는 **안 넣기로 했고**(드레인이 이미 운영 동작이다), `drain.deadline_s` 는 **드레인 동작에 붙었다** — 기한은 관측이라 지나도 안 풀리고 `deadline_exceeded` 로 드러난다 |
 
 드레인은 **스펙 필드가 아니라 멤버십 평면의 동작**으로 산다 — `bary backend drain` 이
 슬롯에서 빼고 `in:` 으로 관측한다. 그래서 드레인은 되지만 기한과 `deadline_exceeded` 는
