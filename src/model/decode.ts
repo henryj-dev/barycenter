@@ -688,7 +688,7 @@ function decodeBackend(iss: Issues, v: unknown, path: string): Backend | undefin
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['key', 'pool', 'host', 'port', 'weight']);
+  noExtraKeys(iss, v, path, ['key', 'pool', 'host', 'port', 'weight', 'softMaxConns', 'isBackup']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
   const pool = required(iss, v, 'pool', path, () => str(iss, v['pool'], `${path}.pool`));
   const host = required(iss, v, 'host', path, () => str(iss, v['host'], `${path}.host`));
@@ -698,10 +698,24 @@ function decodeBackend(iss: Issues, v: unknown, path: string): Backend | undefin
   // **게시 전 `nginx -t` 로 옮겨가고**, 그때 보이는 것은 "설정이 이상하다" 다.
   // 저작 표면(`putBackendPatch`)은 처음부터 1 을 요구했다 — 문이 둘인데 답이 달랐다.
   const weight = required(iss, v, 'weight', path, () => int(iss, v['weight'], `${path}.weight`, 1, 1_000_000));
+  /**
+   * **상한은 1 부터다** (§4.4). `0` 은 "아무것도 안 받는다" 인데, 그건 상한이 아니라
+   * 드레인이고 그 자리는 `backend_drain` 이 이미 든다 — 같은 뜻을 두 자리에 두지 않는다.
+   *
+   * 상한이 넉넉한 이유는 `modelAt` 이 옛 리비전을 같은 해독기로 읽기 때문이다. 좁히면
+   * 그런 값이 든 리비전이 해독 불가가 되고 롤백이 막힌다 (검수 D7).
+   */
+  const softMaxConns = optional(v['softMaxConns'], () =>
+    int(iss, v['softMaxConns'], `${path}.softMaxConns`, 1, 1_000_000));
+  const isBackup = optional(v['isBackup'], () => bool(iss, v['isBackup'], `${path}.isBackup`));
   if (key === undefined || pool === undefined || host === undefined || port === undefined || weight === undefined) {
     return undefined;
   }
-  return { key, pool, host, port, weight };
+  return {
+    key, pool, host, port, weight,
+    ...(softMaxConns === undefined ? {} : { softMaxConns }),
+    ...(isBackup === undefined ? {} : { isBackup }),
+  };
 }
 
 function decodeHttpRoute(iss: Issues, v: unknown, path: string): HttpRoute | undefined {

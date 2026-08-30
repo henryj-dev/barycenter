@@ -225,6 +225,30 @@ export function validateModel(
       }
     }
 
+    /**
+     * **해시 풀에는 backup 백엔드를 못 둔다** (§4.3.1).
+     *
+     * 해시는 키에서 자리를 정하는데 backup 은 *"다른 게 다 죽었을 때만"* 이다 — 그 둘을
+     * 함께 두면 해시가 backup 을 고를 수 있고, 그건 backup 이 아니다. 반대로 backup 을
+     * 링에서 빼면 링이 두 개가 되어 재매핑률이 또 달라진다.
+     *
+     * **막지 않으면 「표현은 되는데 안 지켜지는」 설정이 된다** — `source_ip_hash` 가
+     * 한 번 그랬던 자리다.
+     */
+    if (pool.algorithm === 'hash' || pool.algorithm === 'source_ip_hash') {
+      const backups = model.backends
+        .filter((b) => b.pool === pool.key && b.isBackup === true)
+        .map((b) => b.key);
+      if (backups.length > 0) {
+        issues.push({
+          code: 'option_not_supported',
+          subjects: [pool.key, ...backups],
+          message: `풀 '${pool.key}' 은 ${pool.algorithm} 이라 isBackup 백엔드를 못 둔다 `
+            + `(${backups.join(', ')}) — 해시 링과 backup 의 의미가 충돌한다 (§4.3.1)`,
+        });
+      }
+    }
+
     if (pool.algorithm !== 'hash') continue;
     const parsed = parseHashKey(pool.protocolClass, pool.hashKey ?? 'remote_addr');
     if (!parsed.ok) {
