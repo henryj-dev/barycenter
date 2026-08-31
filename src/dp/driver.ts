@@ -125,7 +125,11 @@ export interface DataplaneDriver {
    * 수명이라 엔진 재시작에 통째로 비는데, 그건 상태가 *바뀐* 것이 아니라 *사라진* 것이다.
    * 좌표를 옮기면 있지도 않은 전환을 발명하게 된다.
    */
-  pushMembershipDirect(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
+  pushMembershipDirect(
+    plane: Plane, epoch: string, slots: Record<string, string[]>,
+    /** peer 별 속성 (ADR ②). 없으면 안 민다 — 안 쓰는 배포의 본문이 안 바뀐다. */
+    attrs?: Record<string, Record<string, { softMaxConns?: number; isBackup?: boolean }>>,
+  ): Promise<void>;
 
   /** 지금 상태. 읽기 전용이라 봉투가 필요 없다. */
   /**
@@ -315,11 +319,12 @@ export class LocalDataplaneDriver implements DataplaneDriver {
 
   async pushMembershipDirect(
     plane: Plane, epoch: string, slots: Record<string, string[]>,
+    attrs?: Record<string, Record<string, { softMaxConns?: number; isBackup?: boolean }>>,
   ): Promise<void> {
     if (this.effects.pushMembership === undefined) {
       throw new Error('이 배포는 멤버십 평면을 쓸 수 없다');
     }
-    await this.effects.pushMembership(plane, epoch, slots);
+    await this.effects.pushMembership(plane, epoch, slots, attrs);
   }
 
   recoverConfig(): Promise<ApplyResult> {

@@ -23,7 +23,12 @@
  * 그건 원래 검수로만 잡히는 축이고, 카운터와 분리한 현행 구조가 맞다 — 48차 판정이다.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import ts from 'typescript';
+/**
+ * **컴파일러 API 는 TS5 에 묶는다** — 근거는 `scripts/surface.mjs` 의 같은 자리에 있다.
+ * 한 줄로: `tsc` 는 TS7 을 쓰지만 TS7 은 컴파일러 API 를 `unstable/*` 로 옮겼고,
+ * 계약 장치를 벤더가 불안정하다고 이름 붙인 API 위에 올릴 수는 없다.
+ */
+import ts from 'typescript-5';
 
 import { markerArgv, verdictOf } from './pinned-lib.mjs';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';

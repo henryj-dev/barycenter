@@ -40,7 +40,25 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+/**
+ * **컴파일러 API 는 TS5 에 묶는다** (2026-08-31).
+ *
+ * TypeScript 7 은 네이티브(Go) 포팅판이라 npm 패키지 모양이 통째로 바뀌었다 —
+ * `import ts from 'typescript'` 가 `{version, versionMajorMinor}` 만 주고, 진짜 API 는
+ * `typescript/unstable/*` 로 옮겼다. 이름만 바뀐 게 아니라 **모양이 다르다**:
+ * `createPrinter`·`createSourceFile` 의 직접 대응물이 없다.
+ *
+ * 이 파일이 내는 것은 **계약**이다. 벤더가 `unstable/` 이라고 이름 붙인 API 위에
+ * 계약 장치를 올리면, 그 API 가 또 바뀌는 날 게이트가 멈춘다. 그래서 `tsc` 는 TS7 을
+ * 쓰되(빠르다) 이 도구들은 **안정 API 에 묶어 둔다.**
+ *
+ * ⚠️ **둘째 구현을 두지 않는다.** 표면 해시는 바이트 단위로 같아야 하는데, 두 API 가
+ * 같은 텍스트를 낸다는 보장이 없다 — 공백 하나만 달라도 카운터가 재는 것이
+ * 「계약의 안정성」이 아니라 「어느 컴파일러로 쟀나」가 된다.
+ *
+ * 영구한 답은 컴파일러 API 의존 자체를 없애는 것이다(별도 회차).
+ */
+import ts from 'typescript-5';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE = process.env.BARYCENTER_SURFACE_BASELINE ?? join(ROOT, 'SURFACE.txt');

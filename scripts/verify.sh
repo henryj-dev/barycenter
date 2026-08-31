@@ -283,7 +283,20 @@ echo "════════════════════════�
 # 도커 없이 도는 것 전부. 이 조각만 도커가 필요 없다.
 group unit
 
-run "typecheck            " --what "tsc --noEmit — src·tests 타입만 본다, 산출물은 안 낸다" npx tsc --noEmit
+run "typecheck            " --what "tsc --noEmit (TS7) — src·tests 타입만 본다, 산출물은 안 낸다" npx tsc --noEmit
+
+# **두 컴파일러로 잰다** (2026-08-31).
+#
+# TypeScript 7 은 네이티브(Go) 포팅판이고 `tsc` 는 그대로 돌지만, 계약 도구
+# (`surface.mjs`·`reachable.mjs`·`pinned.mjs`)는 **TS5 의 컴파일러 API** 에 묶여 있다 —
+# TS7 은 그 API 를 `unstable/*` 로 옮기며 모양을 바꿨고, 계약 장치를 벤더가 불안정하다고
+# 이름 붙인 API 위에 올릴 수는 없다.
+#
+# 그래서 두 버전이 실제로 공존한다. **공존하는 것을 둘 다 재지 않으면** 한쪽이 조용히
+# 깨진 채로 남는다 — 도구가 쓰는 TS5 로도 이 저장소가 여전히 타입이 맞는지 본다.
+#
+# 싸다. 둘 다 몇 초다.
+run "typecheck (TS5)      " --what "도구가 쓰는 컴파일러로도 재본다 — 공존하는 것은 둘 다 잰다" npm run typecheck:ts5 --silent
 run "표면 (계약 고정)     " --what "src/index.ts 의 공개 폐포를 해시로 찍어 SURFACE.txt 와 대조" node scripts/surface.mjs --check
 
 # **동결 상태도 잰다** (검수 2026-08-29(3) C 의 결정). `--freeze-check` 는 선언을
