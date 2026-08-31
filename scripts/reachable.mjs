@@ -46,7 +46,12 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import ts from 'typescript';
+/**
+ * **컴파일러 API 는 TS5 에 묶는다** — 근거는 `scripts/surface.mjs` 의 같은 자리에 있다.
+ * 한 줄로: `tsc` 는 TS7 을 쓰지만 TS7 은 컴파일러 API 를 `unstable/*` 로 옮겼고,
+ * 계약 장치를 벤더가 불안정하다고 이름 붙인 API 위에 올릴 수는 없다.
+ */
+import ts from 'typescript-5';
 
 /**
  * 저장소 루트. **테스트가 갈아 끼운다** (검수 G6).
