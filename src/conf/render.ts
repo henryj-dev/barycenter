@@ -349,6 +349,9 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
   // 풀마다 자기 키를 본다. 한 dict 에 여러 풀이 들어가므로 키에 풀 이름이 필요하다.
   const name = upstreamName(pool.key);
   const slotKey = `slot:${name}:`;
+  // 속성은 peer 마다 키 하나다 (ADR ②-a). 슬롯과 **같은 이름**을 쓴다 — 이름을 두 번
+  // 계산하면 갈리고, 갈리면 속성이 엉뚱한 upstream 에 실린다.
+  const attrKey = `attr:${name}:`;
   return block('upstream', [lit(name)], [
     directive('server', [lit('0.0.0.1:1')]),
     lua('balancer_by_lua_block', `
@@ -376,6 +379,52 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
             for i = 1, #all do
                 if not tried[all[i]] then list[#list + 1] = all[i] end
             end
+
+            -- **backup 은 1차가 다 빠졌을 때만 받는다** (§4.4 · ADR 3).
+            --
+            -- 이 평면에는 \`server ... backup\` 줄이 없으므로 여기서 가른다. 속성이 없는
+            -- 배포는 \`attr:\` 키가 아예 없어 \`d:get\` 이 전부 nil 이고, 그러면 \`primary\`
+            -- 가 \`list\` 와 같아져 **거동이 안 바뀐다.**
+            --
+            -- 재시도로 1차가 하나씩 빠지다 전부 소진되면 그때 backup 으로 넘어간다 —
+            -- \`tried\` 가 이미 그 순서를 만든다.
+            local primary, backup, caps = {}, {}, {}
+            for i = 1, #list do
+                local a = d:get("${attrKey}" .. list[i] .. ":" .. (_G.BARY_EPOCH or "0"))
+                if a then
+                    -- \`<max>|<backup>\`
+                    local m, bk = a:match("^([^|]*)|(.*)$")
+                    if m and m ~= "" then caps[list[i]] = tonumber(m) end
+                    if bk and bk ~= "" then
+                        backup[#backup + 1] = list[i]
+                    else
+                        primary[#primary + 1] = list[i]
+                    end
+                else
+                    primary[#primary + 1] = list[i]
+                end
+            end
+            if #primary > 0 then list = primary
+            elseif #backup > 0 then list = backup end
+
+            -- **상한은 후보를 좁힐 뿐 알고리즘을 안 바꾼다** (ADR 4-a).
+            --
+            -- 넘긴 peer 를 후보에서 뺀다. **전부 넘겼으면 상한을 통째로 무시한다** —
+            -- 「최소 부하로 보낸다」로 두면 그건 설정한 알고리즘을 갈아 끼우는 것이고,
+            -- \`hash\` 풀에서는 **하필 부하가 가장 높은 순간에** 세션 친화가 깨진다
+            -- (S15 의 재매핑률 75~94% 가 그 값의 크기를 말한다).
+            --
+            -- nginx 의 \`max_conns\` 와 뜻이 다르다 — 그쪽은 큐잉하거나 502 다. 여기서는
+            -- 안 끊는다. 백엔드가 멀쩡한데 프록시가 끊는 것을 이 저장소는 피해 왔다.
+            local under = {}
+            for i = 1, #list do
+                local cap = caps[list[i]]
+                if not cap or (d:get("in:" .. list[i]) or 0) < cap then
+                    under[#under + 1] = list[i]
+                end
+            end
+            if #under > 0 then list = under end
+
             local n = #list
             if n == 0 then return ngx.exit(ngx.ERROR) end
             ${pickExpression(pool)}
