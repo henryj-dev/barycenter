@@ -232,6 +232,27 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # **설치가 무엇을 먹고 서는가.** 이 목록이 곧 그 답이다.
+          #
+          # 처음에는 `deploy/`·`tests/install/`·이 워크플로 셋이었다. #28 이 그 구멍으로
+          # 지나갔다 — `gui/package.json` 한 줄(typescript 7)을 바꿨는데 필터에 안 걸려
+          # 하네스가 안 돌았고, **머지된 main 이 새 호스트에 설치가 안 되는 상태**가 됐다.
+          #
+          # 왜 다른 잡이 못 잡았나. **CI 는 전부 핀에서 돈다** — `.nvmrc` 가 24 이고
+          # 워크플로들이 그것을 읽는다. 그런데 이 저장소가 선언한 **바닥은 22** 다
+          # (`engines.node: ">=22"`, `install.sh` 의 `node_version_ok`). 그 바닥을 실제로
+          # 밟아 보는 곳은 **이 하네스뿐이다.**
+          #
+          # #28 이 정확히 그 틈으로 갔다: `build (dist·gui)` 는 24 의 npm 11 로 돌아
+          # 통과했고, 설치 컨테이너의 22 는 npm 10.9 라 같은 트리에서 ERESOLVE 로 죽었다.
+          # npm 버전은 바닥이 데리고 오는 것 중 하나일 뿐이라 다음엔 다른 것이 걸린다 —
+          # 규칙은 **빌드 입력이 바뀌면 바닥에서도 재 본다**로 세운다.
+          #
+          # 넓히지는 않는다. `tsconfig*.json` 은 안 넣었다 — 그건 npm 버전과 무관해서
+          # `build (dist·gui)` 가 이미 같은 답을 낸다.
+          #
+          # `tests/unit/install-filter.test.ts` 가 이 값을 읽어 **실제로 grep 을 돌린다.**
+          TARGETS: '^(deploy/|tests/install/|scripts/build\.sh$|\.nvmrc$|(gui/)?package(-lock)?\.json$|\.github/workflows/verify\.yml$)'
         run: |
           set -euo pipefail
           if [ -n "$PR_BASE" ]; then
@@ -247,12 +268,11 @@ jobs:
           # `workflow_dispatch` 는 언제나 돈다 — 손으로 부르는 자리는 재고 싶을 때다.
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
             echo "run=1" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$BASE"...HEAD \
-            | grep -Eq '^(deploy/|tests/install/|\.github/workflows/verify\.yml$)'; then
+          elif git diff --name-only "$BASE"...HEAD | grep -Eq "$TARGETS"; then
             echo "run=1" >> "$GITHUB_OUTPUT"
           else
             echo "run=0" >> "$GITHUB_OUTPUT"
-            echo "deploy/ · tests/install/ · 이 워크플로 중 바뀐 것이 없다 — 건너뛴다"
+            echo "설치가 쓰는 입력 중 바뀐 것이 없다 — 건너뛴다 ($TARGETS)"
           fi
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
