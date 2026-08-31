@@ -22,8 +22,18 @@
 #
 #   7. `--dsn` 으로 다시 깔아도 서는가     — **debian 판에서만** 잰다. 하네스가
 #                                             `--with-postgres` 만 돌면 실배포에서 더 흔한
-#                                             쪽(외부 PG)이 한 번도 안 돌아 본 채 나간다.
-#                                             재설치를 견디는지도 여기서 같이 드러난다
+#                                             쪽(외부 PG)이 한 번도 안 돌아 본 채 나간다
+#
+#   7-a. **재설치가 무엇을 안 부수는가**     — 재실행이 곧 업데이트 경로다. "다시 깔아도
+#                                             선다" 는 절반이고, 나머지 절반은 **쓰던
+#                                             것이 계속 사는가**다:
+#                                               · 첫 설치의 토큰이 그대로 통하는가
+#                                               · `BARY_SECRET_KEK` 이 env 에 남았는가
+#                                                 (잃으면 자료를 영영 못 연다 — STATUS §2)
+#                                             둘 다 **드러나는 데 시차가 있는** 종류라
+#                                             — 토큰은 다음 배포 스크립트가, KEK 은
+#                                             인증서를 읽는 순간이 알려 준다 — 여기서
+#                                             안 재면 아무도 안 잰다
 #   8. 대화형으로 깔아도 같은 것이 서는가   — **ubuntu 판에서만** 잰다. 답을 파이프로
 #                                             넣고 `--interactive` 로 강제한다. 프롬프트가
 #                                             도는 것과 그 답이 **env 파일까지 가는 것**은
@@ -39,6 +49,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1
 
 KEEP=0
 if [ "${1:-}" = "--keep" ]; then KEEP=1; shift; fi
+
+# 32 바이트 base64. **고정값이다** — 하네스가 재는 것은 이 값이 안전한가가 아니라
+# 재설치가 이 줄을 **그대로 이어 가는가**이고, 그러려면 뒤에서 같은 문자열로 대조할 수
+# 있어야 한다. 실배포에서 이 값을 쓰면 안 된다는 것은 말할 필요도 없다.
+KEK='YmFyeWNlbnRlci1oYXJuZXNzLWtlay0zMi1ieXRlcyE='
 
 # 이름|베이스 이미지|초기화 시스템|추가 검사
 ALL_PLANES="
@@ -147,8 +162,13 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
     return 1
   fi
 
+  # `--env` 를 **첫 설치에** 준다. 재설치가 관리 밖 줄을 이어 가는지 보려면 이어 갈
+  # 것이 있어야 하고, 그 대상은 실제로 걸린 것 중 제일 아픈 것이어야 한다 —
+  # `BARY_SECRET_KEK` 이다. 백엔드는 `fs` 그대로라 이 값은 쓰이지 않고 **놓여만 있다**;
+  # 재는 것은 데몬의 동작이 아니라 **설치가 이 줄을 보존하는가**다.
   printf '  ..    install.sh --with-postgres (패키지·빌드로 몇 분 걸린다)\n'
-  if ! docker exec "$c" sh /repo/deploy/install.sh --with-postgres > "/tmp/bary-install-$name.log" 2>&1; then
+  if ! docker exec "$c" sh /repo/deploy/install.sh --with-postgres \
+       --env "BARY_SECRET_KEK=$KEK" > "/tmp/bary-install-$name.log" 2>&1; then
     printf '    NO   install.sh 가 실패했다 — 마지막 30줄:\n'
     tail -n 30 "/tmp/bary-install-$name.log" | sed 's/^/         /'
     return 1
@@ -234,6 +254,40 @@ JSON' >/dev/null 2>&1
     else
       printf '    NO   --dsn 재설치가 실패했다 — 마지막 15줄:\n'
       tail -n 15 "/tmp/bary-install-$name-dsn.log" | sed 's/^/         /'
+      rc=1
+    fi
+
+    # ⑦-a **재설치가 무엇을 안 부쉈는가.** 여기가 업데이트 경로의 판정이다.
+    #
+    # 토큰은 **첫 설치의 것**을 쓴다 ($token 은 ⑤ 에서 첫 로그에서 뽑았다). 이것이
+    # 통하면 "업데이트해도 쓰던 토큰이 산다" 가 서고, 안 통하면 실배포에서 업데이트가
+    # 운영자의 스크립트·CI 를 전부 끊는다는 뜻이다.
+    if [ -n "$token" ]; then
+      if docker exec -e BARY_URL=http://127.0.0.1:8088 -e "BARY_TOKEN=$token" \
+           "$c" node /opt/barycenter/dist/bin/bary.js status >/dev/null 2>&1; then
+        printf '    ok   재설치 뒤에도 첫 설치의 토큰이 통한다\n'
+      else
+        printf '    NO   재설치가 토큰을 갈아 끼웠다 — 업데이트가 클라이언트를 끊는다\n'
+        rc=1
+      fi
+    fi
+
+    # KEK 은 **재설치 명령에 안 줬다.** 그런데도 env 에 남아 있어야 한다 — 그것이
+    # 「관리 밖 줄을 이어 간다」의 뜻이고, 이 값을 잃으면 자료를 영영 못 연다.
+    if docker exec "$c" grep -q "^BARY_SECRET_KEK='$KEK'\$" /etc/barycenter/env; then
+      printf '    ok   재설치 뒤에도 BARY_SECRET_KEK 이 env 에 남았다\n'
+    else
+      printf '    NO   재설치가 BARY_SECRET_KEK 을 지웠다 — 자료를 영영 못 연다\n'
+      rc=1
+    fi
+
+    # 그리고 **두 줄이 되지 않았는가.** 이어 가기가 관리 키까지 나르면 같은 키가
+    # 두 번 들어가고, 어느 쪽이 이기는지는 읽는 쪽(systemd·sh)마다 다르다.
+    dup=$(docker exec "$c" sh -c "sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' /etc/barycenter/env | sort | uniq -d" | tr -d '\r')
+    if [ -z "$dup" ]; then
+      printf '    ok   env 에 중복 키가 없다\n'
+    else
+      printf '    NO   env 에 같은 키가 두 번 있다: %s\n' "$(printf '%s' "$dup" | tr '\n' ' ')"
       rc=1
     fi
   fi

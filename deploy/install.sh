@@ -13,6 +13,20 @@
 # 돌아야 한다. `scripts/build.sh` 가 같은 이유로 `#!/bin/sh` 인 것과 같다 —
 # `#!/usr/bin/env bash` 는 거기서 `exit 127` 로 죽었다.
 #
+# **다시 돌리는 것이 업데이트 경로다.** 새 코드를 받아 이 스크립트를 그대로 다시 돌리면
+# 빌드·설치·유닛이 새것으로 바뀌고 서비스가 재기동된다. 그래서 재실행이 **무엇을
+# 안 부수는지**가 이 스크립트의 계약의 일부다:
+#
+#   `$PREFIX/tokens.json`   그대로 둔다. 새로 발급하면 API 를 부르던 스크립트·CI 가
+#                           전부 그 자리에서 끊긴다 — 업데이트가 할 일이 아니다
+#   `$PREFIX/env` 의        이어 간다. `BARY_SECRET_KEK` 이 여기 살고, 그것을 잃으면
+#   관리 밖 줄               `pg` 시크릿 백엔드의 자료를 **영영 못 연다** (STATUS §2)
+#   관리 키                  다시 쓴다. 이 스크립트가 정하는 값이라 옛 파일이 이길
+#                           이유가 없다 — 섞으면 어느 쪽이 이기는지가 형식마다 다르다
+#
+# 뒤집는 문은 각각 `--rotate-token` 과 `--reset-env` 다. **기본이 보존인 이유**는
+# 업데이트가 흔하고 초기화가 드물어서다 — 드문 쪽에 플래그를 붙인다.
+#
 # 검증은 `tests/install/run.sh` 가 진다. 배포판 네 종의 실제 컨테이너에 이 스크립트를
 # 그대로 돌리고, systemd 로 서비스를 올리고, `/readyz` 와 `bary status` 까지 본다.
 # **문서가 아니라 도는 것이 답한다.**
@@ -31,6 +45,12 @@ TLS_KEY=
 INTERACTIVE=auto
 ASSUME_YES=0
 EXTRA_ENV=
+# `--env` 로 받은 **키만** 따로 든다. ⑩ 이 옛 env 파일에서 줄을 이어 갈 때 "이번에
+# 다시 준 키" 를 정확히 걸러야 하는데, `EXTRA_ENV` 본문을 부분문자열로 뒤지면 값 안에
+# 든 `KEY=` 에 걸린다. `MANAGED_ENV_KEYS` 와 같은 모양으로 둔다.
+EXTRA_ENV_KEYS=
+ROTATE_TOKEN=0
+RESET_ENV=0
 # **여기서 미리 정한다** (검수 2026-08-29(2) · C). `env_line` 의 거절 메세지가 이 값을
 # 넣는데, 그 함수는 **인자 파싱 중에** `extra_env_add` 를 거쳐 불린다 — ⑩ 에서야
 # 정하면 그 시점엔 없고, `set -u` 라 안내 대신 셸 오류가 난다. 가드의 오류 경로 자체가
@@ -48,6 +68,12 @@ USER_SET=0
 # 들어가면 어느 쪽이 이기는지 형식(systemd·sh)마다 다르고, 그건 나중에 찾기 나쁘다.
 MANAGED_ENV_KEYS="BARY_DSN BARY_PREFIX BARY_LISTEN BARY_TOKENS_FILE BARY_ENGINE_BIN
 BARY_GUI BARY_CONFIGTEST_CMD BARY_RELOAD_CMD BARY_TLS_CERT_FILE BARY_TLS_KEY_FILE"
+# **한 줄로 편다.** 대조가 `case " $MANAGED_ENV_KEYS " in *" $k "*` 라 구분자가 공백인데
+# 이 목록은 두 줄이었다 — 줄바꿈에 닿는 두 키(`BARY_ENGINE_BIN`·`BARY_GUI`)는 앞이나
+# 뒤가 공백이 아니라서 **가드를 그냥 지나갔다.** `--env BARY_GUI=...` 가 받아들여졌고,
+# env 파일에 같은 키가 두 줄 들어갔다 — 이 가드가 막으려던 바로 그 상태다.
+# 줄바꿈은 읽으라고 넣은 것이지 뜻이 아니므로 여기서 없앤다.
+MANAGED_ENV_KEYS=$(printf '%s' "$MANAGED_ENV_KEYS" | tr '\n' ' ')
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -74,6 +100,14 @@ PostgreSQL (택일 — 터미널에서는 안 주면 물어본다)
   --no-service             유닛 파일만 쓰고 enable·start 는 하지 않는다
   --skip-packages          패키지 설치를 건너뛴다 (이미 준비된 이미지)
   -h, --help               이 도움말
+
+재실행 (= 업데이트)
+  새 코드를 받아 그대로 다시 돌리면 된다. 기존 토큰과 env 의 관리 밖 줄은 살아남는다.
+
+  --rotate-token           ops 토큰을 새로 발급한다 (다른 토큰은 그대로 둔다).
+                           평문은 그때 한 번만 보인다 — 잃어버렸을 때 쓴다
+  --reset-env              env 파일을 처음 설치처럼 다시 쓴다. **이어 가지 않는다** —
+                           BARY_SECRET_KEK 을 포함해 관리 밖 줄이 전부 사라진다
 
 대화
   --interactive            빈 칸을 물어본다 (TTY 이고 PostgreSQL 을 안 골랐으면 자동)
@@ -120,6 +154,7 @@ extra_env_add() {               # extra_env_add <KEY=VALUE>
   esac
   EXTRA_ENV="$EXTRA_ENV$(env_line "$_k" "$_v")
 "
+  EXTRA_ENV_KEYS="$EXTRA_ENV_KEYS $_k"
 }
 
 # 한 줄 물어본다. **프롬프트는 stderr 로 낸다** — 답을 `$(...)` 로 받기 때문이다.
@@ -154,6 +189,8 @@ while [ $# -gt 0 ]; do
     -y|--yes)         ASSUME_YES=1; shift ;;
     --no-service)     NO_SERVICE=1; shift ;;
     --skip-packages)  SKIP_PACKAGES=1; shift ;;
+    --rotate-token)   ROTATE_TOKEN=1; shift ;;
+    --reset-env)      RESET_ENV=1; shift ;;
     -h|--help)        usage; exit 0 ;;
     *)                usage >&2; die "모르는 인자: $1" ;;
   esac
@@ -822,30 +859,117 @@ fi
 # 평문은 여기서 **한 번만** 화면에 낸다.
 
 step "⑩ 설정"
-TOKEN_PLAIN=$(node -e 'process.stdout.write(require("crypto").randomBytes(24).toString("base64url"))')
-TOKEN_HASH=$(printf '%s' "$TOKEN_PLAIN" \
-  | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>process.stdout.write("sha256:"+require("crypto").createHash("sha256").update(b,"utf8").digest("hex")))')
+TOKENS_FILE="$PREFIX/tokens.json"
 
+# 파일이 **데몬이 읽을 수 있는 모양**인가. 여기서 보는 것은 JSON 배열이고 비어 있지
+# 않고 각 항목에 `sha256:` 해시가 있다는 것까지다 — 정본 해독은 데몬의
+# `parseTokenSpecs` 가 한다. 모양이 아니면 **보존하지 않고 새로 만든다**: 깨진 파일을
+# 그대로 두면 업데이트가 "설치는 됐는데 데몬이 안 뜬다" 로 끝나고, 그건 고치는 것보다
+# 나쁘다.
+tokens_usable() {               # tokens_usable <파일>
+  "$NODE_BIN" -e '
+    const a = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    if (!Array.isArray(a) || a.length === 0) process.exit(1);
+    for (const t of a) {
+      if (t === null || typeof t !== "object") process.exit(1);
+      if (typeof t.hash !== "string" || !t.hash.startsWith("sha256:")) process.exit(1);
+    }
+  ' "$1" >/dev/null 2>&1
+}
+
+new_token() {                   # $TOKEN_PLAIN 과 $TOKEN_HASH 를 채운다
+  TOKEN_PLAIN=$("$NODE_BIN" -e 'process.stdout.write(require("crypto").randomBytes(24).toString("base64url"))')
+  TOKEN_HASH=$(printf '%s' "$TOKEN_PLAIN" \
+    | "$NODE_BIN" -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>process.stdout.write("sha256:"+require("crypto").createHash("sha256").update(b,"utf8").digest("hex")))')
+}
+
+# **재실행이면 토큰을 그대로 둔다** (2026-08-31).
+#
+# 재실행이 곧 업데이트 경로인데, 여기서 새로 발급하면 그 API 를 부르던 것 —
+# 운영자의 `BARY_TOKEN`, CI, 스크립트 — 이 **전부 그 자리에서 끊긴다.** 업데이트가
+# 할 일이 아니다. 그리고 보존은 `ops` 만이 아니라 파일 전체다: 운영자가 손으로 더한
+# 토큰(읽기 전용 감사 토큰 같은 것)도 업데이트가 지울 이유가 없다.
+#
+# 대가는 ⑫ 에 있다 — **평문이 없으니 `bary status` 로 못 잰다.** 거기서 대신 무엇을
+# 재는지 적어 뒀다. 새로 받으려면 `--rotate-token` 이다.
+TOKEN_PLAIN=
+TOKEN_KEPT=0
 # **좁은 umask 안에서 만든다** (검수 2026-08-29(2) · B). `>` 는 umask 로 파일을 만들고
 # sudo 의 기본값은 022 다 — 그러면 0644 로 태어나고, `$PREFIX` 가 0755 라 **그 순간
 # 아무나 읽는다.** 뒤따르는 `chmod` 는 이미 열린 뒤다. 서브셸로 감싸 이 블록 밖의
 # umask 를 안 건드린다 (유닛 파일까지 0600 이 되면 그건 다른 문제를 만든다).
-TOKENS_FILE="$PREFIX/tokens.json"
-(umask 077; printf '[{"name":"ops","scopes":["read","write","apply"],"hash":"%s"}]\n' \
-  "$TOKEN_HASH" > "$TOKENS_FILE")
+if [ -f "$TOKENS_FILE" ] && tokens_usable "$TOKENS_FILE"; then
+  if [ "$ROTATE_TOKEN" = 1 ]; then
+    # `ops` 만 갈아 끼운다 — 다른 토큰은 남긴다. 회전은 "이 토큰을 잃었다" 이지
+    # "이 인스턴스의 토큰을 전부 버린다" 가 아니다.
+    new_token
+    (umask 077; "$NODE_BIN" -e '
+      const fs = require("fs");
+      const [f, hash] = process.argv.slice(1);
+      const rest = JSON.parse(fs.readFileSync(f, "utf8")).filter((t) => t.name !== "ops");
+      const next = [{ name: "ops", scopes: ["read", "write", "apply"], hash }, ...rest];
+      fs.writeFileSync(f, JSON.stringify(next) + "\n");
+    ' "$TOKENS_FILE" "$TOKEN_HASH")
+    ok "$TOKENS_FILE — ops 토큰을 새로 발급했다 (다른 토큰은 그대로)"
+  else
+    TOKEN_KEPT=1
+    ok "$TOKENS_FILE 를 그대로 둔다 — 기존 토큰이 계속 산다 (--rotate-token 으로 새로 발급)"
+  fi
+else
+  [ -f "$TOKENS_FILE" ] && warn "$TOKENS_FILE 를 못 읽었다 — 새로 만든다 (기존 토큰은 죽는다)"
+  new_token
+  (umask 077; printf '[{"name":"ops","scopes":["read","write","apply"],"hash":"%s"}]\n' \
+    "$TOKEN_HASH" > "$TOKENS_FILE")
+fi
 chown root:"$SVC_USER" "$TOKENS_FILE"
 chmod 0640 "$TOKENS_FILE"
 
 # 한 줄 한 줄을 `env_line` 이 만든다 — 인용 규칙이 한 자리에만 있게 하려는 것이다.
 # heredoc 으로 늘어놓던 때는 값에 따옴표가 든 경우(암호를 담은 DSN)가 조용히 깨졌다.
 ENV_FILE="$PREFIX/env"
-# **덮되 덮는다고 말한다** (검수 2026-08-29(2) · E). 이 파일은 매 실행 다시 쓰이는데,
-# `env_line` 의 거절 안내가 *"설치 뒤 이 파일을 직접 고친다"* 를 우회로로 알려 준다 —
-# 알려 준 우회로를 다음 실행이 말없이 지우면 안 된다.
+
+# **관리 키는 다시 쓰고, 관리 밖 줄은 이어 간다** (2026-08-31).
 #
-# 보존하는 쪽은 더 나쁘다: 옛 파일의 관리 키와 새로 계산한 값이 섞이면 어느 쪽이
-# 이기는지가 형식마다 다르고, 그건 `MANAGED_ENV_KEYS` 가 막으려던 바로 그 상태다.
-[ -f "$ENV_FILE" ] && warn "$ENV_FILE 을 다시 쓴다 — 손으로 고친 줄이 있으면 사라진다"
+# 처음에는 파일 전체를 다시 썼다. 근거는 *"옛 파일의 관리 키와 새로 계산한 값이 섞이면
+# 어느 쪽이 이기는지가 형식마다 다르다"* 였고 그건 지금도 맞다 — 그래서 **관리 키는
+# 그대로 다시 쓴다.** 뒤집은 것은 나머지다.
+#
+# 관리 밖 줄까지 버리면 재실행이 곧 업데이트 경로인 이 배포에서 두 가지가 깨진다:
+#
+#   `BARY_SECRET_KEK`   `pg` 시크릿 백엔드의 KEK 가 여기 산다. 잃으면 자료를 **영영
+#                       못 연다** (STATUS §2). 업데이트가 그걸 조용히 할 수는 없다
+#   손으로 고친 줄       `env_line` 의 거절 안내가 *"설치 뒤 이 파일을 직접 고친다"* 를
+#                       우회로로 알려 준다. 알려 준 우회로를 다음 실행이 지우면 안 된다
+#
+# 그리고 섞임의 위험은 **구조적으로 없다**: `extra_env_add` 가 관리 키를 애초에 거절하고
+# (그 가드의 줄바꿈 구멍은 위에서 닫았다), 여기서 이어 갈 때도 관리 키를 다시 거른다.
+# 이번에 `--env` 로 다시 준 키는 새 값이 이긴다 — 두 줄이 되지 않는다.
+#
+# 통째로 초기화하려면 `--reset-env` 다.
+carry_env_lines() {             # carry_env_lines <파일>
+  while IFS= read -r _line; do
+    case "$_line" in
+      BARY_*=*) : ;;
+      *) continue ;;            # 주석·빈 줄·모르는 모양은 안 옮긴다
+    esac
+    _k=${_line%%=*}
+    case " $MANAGED_ENV_KEYS " in *" $_k "*) continue ;; esac
+    case " $EXTRA_ENV_KEYS "    in *" $_k "*) continue ;; esac
+    printf '%s\n' "$_line"
+  done < "$1"
+}
+
+CARRIED_ENV=
+if [ -f "$ENV_FILE" ]; then
+  if [ "$RESET_ENV" = 1 ]; then
+    warn "$ENV_FILE 을 처음처럼 다시 쓴다 (--reset-env) — 관리 밖 줄이 사라진다"
+  else
+    CARRIED_ENV=$(carry_env_lines "$ENV_FILE")
+    if [ -n "$CARRIED_ENV" ]; then
+      ok "$ENV_FILE 의 관리 밖 줄을 이어 간다: $(printf '%s' "$CARRIED_ENV" | sed 's/=.*//' | tr '\n' ' ')"
+    fi
+  fi
+fi
 # 위와 같은 이유로 좁은 umask 안에서 만든다 — DSN 에 비밀번호가 들고, `pg` 시크릿
 # 백엔드를 쓰면 `--env BARY_SECRET_KEK=...` 로 **KEK 가 여기 들어온다** (§4.8.1).
 (umask 077
@@ -874,6 +998,9 @@ ENV_FILE="$PREFIX/env"
   # **서브셸로 감싸면 부모가 보기엔 실패한 명령 하나**라 거기서 죽는다 —
   # `tests/install/run.sh` 가 다섯 판에서 그것을 잡았다(검수 2026-08-29(2) 의 회귀).
   if [ -n "$EXTRA_ENV" ]; then printf '%s' "$EXTRA_ENV"; fi
+  # 이어받은 줄은 **맨 끝**이다. 위의 `--env` 와 키가 겹치는 것은 `carry_env_lines` 가
+  # 이미 뺐으므로, 여기 오는 것은 이번에 안 준 옛 설정들뿐이다.
+  if [ -n "$CARRIED_ENV" ]; then printf '%s\n' "$CARRIED_ENV"; fi
 } > "$ENV_FILE")
 chown root:"$SVC_USER" "$ENV_FILE"
 chmod 0640 "$ENV_FILE"
@@ -1040,9 +1167,24 @@ else
   done
   ok "$URL/readyz"
 
-  BARY_URL="$URL" BARY_TOKEN="$TOKEN_PLAIN" "$NODE_BIN" "$APP_DIR/dist/bin/bary.js" status >/dev/null \
-    || die "bary status 가 실패했다 — API 나 토큰이 안 맞는다"
-  ok "bary status"
+  # **토큰을 보존했으면 `bary status` 를 못 돌린다** — 해시만 있고 평문이 없다.
+  #
+  # 그래서 잴 수 있는 것을 재고, **못 잰 것을 말한다.** 인증 없이 보호된 경로를 찔러
+  # 401 이 오는지 본다: 데몬이 `tokens.json` 을 읽었고(못 읽었으면 아예 안 떴다)
+  # 인증을 실제로 **거는지**까지는 이것으로 선다. 서는 것은 *"토큰 평면이 살아 있다"*
+  # 이고, 안 서는 것은 *"그 토큰이 맞다"* 다 — 후자는 운영자가 자기 토큰으로 확인한다.
+  #
+  # 조용히 건너뛰지 않는 이유: 통과 신호를 위조하는 것이 이 저장소가 반복해서 피해 온
+  # 실패 모양이다. 안 잰 것은 안 잰다고 적는다.
+  if [ "$TOKEN_KEPT" = 1 ]; then
+    code=$(curl -s $CURL_OPTS --max-time 3 -o /dev/null -w '%{http_code}' "$URL/api/v1/config/head" || true)
+    [ "$code" = 401 ] || die "인증 없는 요청에 401 이 아니라 $code 가 왔다 — 토큰 평면이 안 섰다"
+    ok "인증 평면 (401) — 기존 토큰을 그대로 뒀으므로 bary status 는 안 쟀다"
+  else
+    BARY_URL="$URL" BARY_TOKEN="$TOKEN_PLAIN" "$NODE_BIN" "$APP_DIR/dist/bin/bary.js" status >/dev/null \
+      || die "bary status 가 실패했다 — API 나 토큰이 안 맞는다"
+    ok "bary status"
+  fi
 fi
 
 case "$INIT" in
@@ -1062,13 +1204,19 @@ cat <<EOF
   산출물     $APP_DIR
   서비스     $SVC_HINT
 
+$(if [ "$TOKEN_KEPT" = 1 ]; then cat <<'KEPT'
+  토큰       그대로 뒀다 — 쓰던 것을 계속 쓴다
+             (잃어버렸으면 다시 돌린다: sudo deploy/install.sh ... --rotate-token)
+KEPT
+else cat <<TOK
   토큰(평문, **지금 한 번만 보인다**):
     $TOKEN_PLAIN
+TOK
+fi)
 
 CLI:
 
-  export BARY_URL=${URL:-http://$LISTEN}
-  export BARY_TOKEN=$TOKEN_PLAIN
+  export BARY_URL=${URL:-http://$LISTEN}$(if [ "$TOKEN_KEPT" = 0 ]; then printf '\n  export BARY_TOKEN=%s' "$TOKEN_PLAIN"; fi)
   $NODE_BIN $APP_DIR/dist/bin/bary.js status
 
 ⚠️ $LISTEN 을 넓은 인터페이스로 옮기려면 TLS 를 먼저 켠다 — 이 API 로 개인키와
