@@ -388,15 +388,42 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
             --
             -- 재시도로 1차가 하나씩 빠지다 전부 소진되면 그때 backup 으로 넘어간다 —
             -- \`tried\` 가 이미 그 순서를 만든다.
-            local primary, backup = {}, {}
+            local primary, backup, caps = {}, {}, {}
             for i = 1, #list do
                 local a = d:get("${attrKey}" .. list[i] .. ":" .. (_G.BARY_EPOCH or "0"))
-                -- \`<max>|<backup>\` — backup 자리가 비어 있지 않으면 backup 이다.
-                if a and a:match("|(.+)$") then backup[#backup + 1] = list[i]
-                else primary[#primary + 1] = list[i] end
+                if a then
+                    -- \`<max>|<backup>\`
+                    local m, bk = a:match("^([^|]*)|(.*)$")
+                    if m and m ~= "" then caps[list[i]] = tonumber(m) end
+                    if bk and bk ~= "" then
+                        backup[#backup + 1] = list[i]
+                    else
+                        primary[#primary + 1] = list[i]
+                    end
+                else
+                    primary[#primary + 1] = list[i]
+                end
             end
             if #primary > 0 then list = primary
             elseif #backup > 0 then list = backup end
+
+            -- **상한은 후보를 좁힐 뿐 알고리즘을 안 바꾼다** (ADR 4-a).
+            --
+            -- 넘긴 peer 를 후보에서 뺀다. **전부 넘겼으면 상한을 통째로 무시한다** —
+            -- 「최소 부하로 보낸다」로 두면 그건 설정한 알고리즘을 갈아 끼우는 것이고,
+            -- \`hash\` 풀에서는 **하필 부하가 가장 높은 순간에** 세션 친화가 깨진다
+            -- (S15 의 재매핑률 75~94% 가 그 값의 크기를 말한다).
+            --
+            -- nginx 의 \`max_conns\` 와 뜻이 다르다 — 그쪽은 큐잉하거나 502 다. 여기서는
+            -- 안 끊는다. 백엔드가 멀쩡한데 프록시가 끊는 것을 이 저장소는 피해 왔다.
+            local under = {}
+            for i = 1, #list do
+                local cap = caps[list[i]]
+                if not cap or (d:get("in:" .. list[i]) or 0) < cap then
+                    under[#under + 1] = list[i]
+                end
+            end
+            if #under > 0 then list = under end
 
             local n = #list
             if n == 0 then return ngx.exit(ngx.ERROR) end
