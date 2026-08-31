@@ -39,6 +39,34 @@ export type Plane = 'http' | 'stream';
 export type Slots = Record<string, string[]>;
 
 /**
+ * peer 별 속성 — **슬롯과 나란히 간다** (`docs/adr-membership-attrs.md` ②).
+ *
+ * ── 왜 peer 문자열에 안 싣나
+ *
+ * `membership.ts` 가 가중치에서 이미 그 길을 안 골랐다: 슬롯에 실으면 **peer 문자열이
+ * `in:<peer>` 카운터와 두 평면의 inflight 질의 키와 갈린다** — 접미사를 벗기는 자리가
+ * 넷이 된다. 여기서도 같다. peer 문자열은 키로 그대로 둔다.
+ *
+ * ── 왜 한 덩어리 맵이 아닌가
+ *
+ * 밸런서가 **요청마다** 읽는 값이다. 맵 하나를 두면 요청마다 파싱해야 하고, 고르는 비용이
+ * hash 23.1ns · rr 0.48ns 인 자리에서 그건 백 배다(S15). `in:<peer>` 가 이미 답을 갖고
+ * 있었다 — peer 마다 키 하나, 조회 하나.
+ *
+ * **속성이 없는 peer 는 아예 안 실린다.** 그래서 안 쓰는 배포는 키가 안 늘고 조회도
+ * `nil` 한 번이다 — 가중치가 전부 1 일 때 산출물이 안 바뀌는 것과 같은 성질이다.
+ */
+export type PeerAttrs = {
+  /** 인플라이트 힌트. 후보를 좁힐 뿐 알고리즘을 안 바꾼다. */
+  softMaxConns?: number;
+  /** 1차가 전부 빠졌을 때만 받는다. */
+  isBackup?: boolean;
+};
+
+/** upstream 이름 → (peer → 속성). 속성이 없는 upstream 은 키가 없다. */
+export type Attrs = Record<string, Record<string, PeerAttrs>>;
+
+/**
  * 모델에서 평면별 멤버십을 뽑는다.
  *
  * **렌더된 upstream 이름을 키로 쓴다.** 풀 키를 그대로 쓰면 밸런서가 보는 이름과
@@ -134,10 +162,17 @@ export function slotsOf(
   // 렌더는 풀의 upstream 이름을 읽기 위한 것이다. 광고가 비면 백엔드가 없어
   // validate 가 막으므로 이름은 정적 모델에서 읽고, peer 만 발견한 집합에서 온다.
   const conf = render(model, caps).conf;
-  const byPool = new Map<string, { peer: string; weight: number }[]>();
+  const byPool = new Map<string, { peer: string; weight: number; attrs: PeerAttrs }[]>();
   for (const b of used.backends) {
     const list = byPool.get(b.pool) ?? [];
-    list.push({ peer: `${b.host}:${b.port}`, weight: b.weight });
+    list.push({
+      peer: `${b.host}:${b.port}`,
+      weight: b.weight,
+      attrs: {
+        ...(b.softMaxConns === undefined ? {} : { softMaxConns: b.softMaxConns }),
+        ...(b.isBackup === undefined ? {} : { isBackup: b.isBackup }),
+      },
+    });
     byPool.set(b.pool, list);
   }
   for (const pool of used.pools) {
@@ -149,6 +184,46 @@ export function slotsOf(
     if (name === undefined) continue;        // 렌더에 안 쓰인 풀이다
     const plane: Plane = pool.protocolClass === 'http' ? 'http' : 'stream';
     out[plane][name] = weightedSlots(peers);
+  }
+  return out;
+}
+
+/**
+ * 슬롯과 **같은 이름·같은 필터**로 속성을 낸다.
+ *
+ * 이름 규칙을 여기서 다시 구현하지 않는 것이 요점이다 — `slotsOf` 와 갈리면 속성이
+ * 엉뚱한 upstream 에 실리고, 그건 밖에서 안 보인다(D18 이 슬롯에서 겪은 그 사고다).
+ * 그래서 **`slotsOf` 를 그대로 부르고 그 키만 쓴다.**
+ *
+ * 속성이 하나도 없으면 그 upstream 은 결과에 **없다** — 안 쓰는 배포에 키를 안 만든다.
+ */
+export function attrsOf(
+  model: Model, caps: RenderCapabilities, discovery?: DiscoveryIntake,
+): Record<Plane, Attrs> {
+  const used = applyDiscoveredEndpoints(model, discovery);
+  const slots = slotsOf(model, caps, discovery);
+  const byPeer = new Map<string, PeerAttrs>();
+  for (const b of used.backends) {
+    const a: PeerAttrs = {
+      ...(b.softMaxConns === undefined ? {} : { softMaxConns: b.softMaxConns }),
+      ...(b.isBackup === undefined ? {} : { isBackup: b.isBackup }),
+    };
+    if (Object.keys(a).length > 0) byPeer.set(`${b.host}:${b.port}`, a);
+  }
+
+  const out: Record<Plane, Attrs> = { http: {}, stream: {} };
+  if (byPeer.size === 0) return out;
+  for (const plane of ['http', 'stream'] as const) {
+    for (const [name, peers] of Object.entries(slots[plane])) {
+      const here: Record<string, PeerAttrs> = {};
+      // **슬롯에 실제로 있는 peer 만.** 안 그러면 그 upstream 에 없는 peer 의 속성이
+      // dict 에 남고, 회수는 upstream 단위라 아무도 그것을 안 지운다.
+      for (const peer of new Set(peers)) {
+        const a = byPeer.get(peer);
+        if (a !== undefined) here[peer] = a;
+      }
+      if (Object.keys(here).length > 0) out[plane][name] = here;
+    }
   }
   return out;
 }
@@ -215,10 +290,34 @@ export function routedPools(model: Model, caps: RenderCapabilities): Set<string>
   return out;
 }
 
-/** 슬롯을 admin 이 받는 줄 모양으로. `이름=peer,peer` 한 줄씩. */
-export const encodeSlots = (slots: Slots): string =>
-  Object.entries(slots).sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([name, peers]) => `${name}=${peers.join(',')}`).join('\n');
+/**
+ * 슬롯과 속성을 admin 이 받는 줄 모양으로.
+ *
+ *   `이름=peer,peer`                       슬롯
+ *   `!이름=peer|<max>|<backup>,…`          속성 (ADR ②-a)
+ *
+ * **`!` 는 nginx 식별자가 될 수 없다** — upstream 이름과 문법이 안 겹친다.
+ *
+ * 속성이 없으면 그 줄을 **아예 안 낸다.** 안 쓰는 배포의 본문이 안 바뀌고, dict 에 키도
+ * 안 생긴다 — 가중치가 전부 1 일 때 산출물이 안 바뀌는 것과 같은 성질이다.
+ */
+export const encodeSlots = (slots: Slots, attrs: Attrs = {}): string => {
+  const lines = Object.entries(slots).map(([name, peers]) => `${name}=${peers.join(',')}`);
+  for (const [name, peers] of Object.entries(attrs)) {
+    const entries = Object.entries(peers).sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([peer, a]) => `${peer}|${a.softMaxConns ?? ''}|${a.isBackup === true ? '1' : ''}`);
+    if (entries.length > 0) lines.push(`!${name}=${entries.join(',')}`);
+  }
+  /**
+   * **줄 전체를 한 번에 정렬한다.**
+   *
+   * 적재는 **되읽어 비교**한다(`effects-boot` 의 *"적재를 되읽었더니 다르다"*). 그 검사가
+   * 뜻을 가지려면 쓰는 형식과 읽는 형식이 같아야 하고, **순서도 같아야** 한다. 되읽는
+   * 쪽은 Lua 의 `table.sort` 라 바이트 순서다 — 슬롯과 속성을 따로 정렬하면
+   * `!`(0x21)가 글자보다 앞서므로 두 순서가 갈린다.
+   */
+  return lines.sort().join('\n');
+};
 
 /**
  * Lua `ngx.balancer.set_current_peer` 는 호스트 이름을 거절한다.
@@ -341,7 +440,13 @@ server {
                 for _, k in ipairs(d:get_keys(0)) do
                     -- **접두사와 접미사를 함께 본다.** \`slot:\` 로만 걸면 다른 키를
                     -- 지울 수 있고, epoch 으로만 걸면 \`in:\`·\`rr:\` 이 걸린다.
-                    if k:sub(1, 5) == "slot:" and k:sub(-#suffix) == suffix then
+                    --
+                    -- **\`attr:\` 도 함께 지운다.** 슬롯만 지우면 속성이 세대마다 쌓이고,
+                    -- 그 결말은 위 문단이 이미 적었다 — 차면 LRU 가 밀어내고 밀려난 것이
+                    -- \`slot:\` 이면 그 풀의 모든 요청이 끊긴다. 속성을 새는 채로 넣으면
+                    -- **결국 트래픽이 끊긴다.**
+                    local head = k:sub(1, 5)
+                    if (head == "slot:" or head == "attr:") and k:sub(-#suffix) == suffix then
                         d:delete(k)
                         n = n + 1
                     end
@@ -352,11 +457,33 @@ server {
 
             local n = 0
             for line in body:gmatch("[^\\n]+") do
+                -- **\`!\` 로 시작하면 속성 줄이다** (ADR ②-a). upstream 이름은 nginx
+                -- 식별자라 \`!\` 로 시작할 수 없으므로 문법이 안 겹친다.
+                --
+                -- 파싱은 **여기서 한 번**이다. 밸런서가 요청마다 하면 고르는 비용(hash
+                -- 23.1ns · rr 0.48ns)의 백 배가 된다 — 그래서 peer 마다 키 하나로 편다.
+                if line:sub(1, 1) == "!" then
+                    local name, list = line:match("^!([^=]+)=(.*)$")
+                    if name then
+                        for entry in list:gmatch("[^,]+") do
+                            local peer, rest = entry:match("^(.-)|(.*)$")
+                            if peer then
+                                local ok, err = d:set(
+                                    "attr:" .. name .. ":" .. peer .. ":" .. epoch, rest)
+                                if not ok then
+                                    ngx.status = 500; ngx.print("set failed: ", err); return
+                                end
+                                n = n + 1
+                            end
+                        end
+                    end
+                else
                 local name, peers = line:match("^([^=]+)=(.*)$")
                 if name then
                     local ok, err = d:set("slot:" .. name .. ":" .. epoch, peers)
                     if not ok then ngx.status = 500; ngx.print("set failed: ", err); return end
                     n = n + 1
+                end
                 end
             end
             ngx.print("staged ", n)
@@ -417,9 +544,25 @@ server {
             local d = ngx.shared.${MEMBERSHIP_DICT.http}
             local epoch = ngx.var.arg_epoch or ""
             local out = {}
+            local byName = {}
             for _, k in ipairs(d:get_keys(0)) do
                 local name = k:match("^slot:(.+):" .. epoch .. "$")
                 if name then out[#out + 1] = name .. "=" .. (d:get(k) or "") end
+                -- **속성도 되읽을 수 있어야 한다.** 밖에서 못 보면 회수가 지웠는지를
+                -- 잴 방법이 없고, 안 지우면 결국 dict 가 차서 트래픽이 끊긴다.
+                --
+                -- **쓴 형식 그대로 낸다** (\`!이름=peer|max|backup,…\`). 적재는 되읽어
+                -- 비교하므로 형식이 갈리면 그 검사가 **언제나 실패**한다.
+                local an, ap = k:match("^attr:(.+):([^:]+:%d+):" .. epoch .. "$")
+                if an then
+                    byName[an] = byName[an] or {}
+                    local t = byName[an]
+                    t[#t + 1] = ap .. "|" .. (d:get(k) or "")
+                end
+            end
+            for name, list in pairs(byName) do
+                table.sort(list)
+                out[#out + 1] = "!" .. name .. "=" .. table.concat(list, ",")
             end
             table.sort(out)
             ngx.print(table.concat(out, "\\n"))

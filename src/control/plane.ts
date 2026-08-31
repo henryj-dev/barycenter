@@ -18,7 +18,9 @@ import { type DiscoveryIntake } from './discovery.js';
 import { drainKeys, observationPeerOf, observePeerFromAdmin, observeStreamPeer } from './drain.js';
 import { backendStatusRows, type BackendStatusRow } from './backend-status.js';
 import { currentHealth, eligibleCountForPlane, healthRows, reduceMembership, shouldPushMembership } from './health.js';
-import { assertAdminSocket, httpAdminConf, routedPools, slotsForEligible, streamAdminConf } from './membership.js';
+import {
+  assertAdminSocket, attrsOf, httpAdminConf, routedPools, slotsForEligible, streamAdminConf,
+} from './membership.js';
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { RemoteDataplaneDriver } from '../dp/remote.js';
 import { materializeGeneration } from '../dp/materialize.js';
@@ -558,6 +560,8 @@ export class ControlPlane {
     const headModel = await this.store.modelAt(head.revision);
     const eligible = await this.eligible(headModel);
     const slots = slotsForEligible(headModel, eligible, caps, this.discoveryOf());
+    // 속성은 head 모델이 정한다 — 적격 여부와 무관한 백엔드의 성질이다.
+    const attrs = attrsOf(headModel, caps, this.discoveryOf());
     const planes: string[] = [];
     for (const plane of PLANES) {
       const epoch = st.planes[plane].activationEpoch;
@@ -565,7 +569,8 @@ export class ControlPlane {
       if (!shouldPushMembership(
         eligibleCountForPlane(eligible, plane), Object.keys(slots[plane]).length,
       )) continue;
-      await this.driver.pushMembershipDirect(plane, epoch, slots[plane]);
+      // **속성도 같이 민다** (ADR ②). 없으면 빈 객체라 본문이 안 바뀐다.
+      await this.driver.pushMembershipDirect(plane, epoch, slots[plane], attrs[plane]);
       planes.push(plane);
     }
     if (planes.length === 0) return undefined;
@@ -590,6 +595,7 @@ export class ControlPlane {
     const headModel = await this.store.modelAt(head.revision);
     const model = await this.eligible(headModel);
     const slots = slotsForEligible(headModel, model, caps, this.discoveryOf());
+    const attrs = attrsOf(headModel, caps, this.discoveryOf());
 
     const epochs: string[] = [];
     const planes: string[] = [];
@@ -602,7 +608,8 @@ export class ControlPlane {
       // **의도적 zero-peer 는 그대로 쓴다** (§6.7). 모든 백엔드가 죽었으면 멤버십은
       // 실제로 비어 있고 요청은 실패해야 한다 — 옛 peer 를 남기면 죽은 백엔드가 계속
       // 트래픽을 받는다. 갱신 *실패* 의 fail-open 과는 다른 사건이다.
-      await this.driver.pushMembershipDirect(plane, epoch, slots[plane]);
+      // **속성도 같이 민다** (ADR ②). 없으면 빈 객체라 본문이 안 바뀐다.
+      await this.driver.pushMembershipDirect(plane, epoch, slots[plane], attrs[plane]);
       count(`bary_membership_project_total{plane="${plane}"}`);
       epochs.push(epoch);
       planes.push(plane);
