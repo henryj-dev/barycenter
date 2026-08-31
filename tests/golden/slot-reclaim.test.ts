@@ -188,4 +188,52 @@ describe('퇴역한 epoch 의 슬롯 (D4)', () => {
     expect(section(out, 'read3'), 'stream 의 옛 epoch 이 남았다').toBe('');
     expect(section(out, 'read4')).toBe('pool_edge=127.0.0.1:19402');
   }, 180_000);
+
+  /**
+   * **속성도 회수돼야 한다** (ADR ②-b).
+   *
+   * 속성 채널을 넣으면서 회수를 안 넓히면 `attr:` 키가 세대마다 쌓인다. 그 결말은 이
+   * 파일 머리말이 이미 적었다 — 차면 LRU 가 밀어내고, 밀려난 것이 `slot:` 이면
+   * `balancer_by_lua` 가 `ngx.exit(ngx.ERROR)` 를 타 **그 풀의 모든 요청이 끊긴다.**
+   *
+   * 즉 **속성을 새는 채로 넣으면 결국 트래픽이 끊긴다.** 회수가 `slot:` 만 훑던 자리라
+   * 실물로 잰다.
+   */
+  it('퇴역한 epoch 의 **속성**도 안 남는다', () => {
+    const out = run(`
+      curl -s --unix-socket ${HTTP_SOCK} -X POST         --data-binary 'pool_app=127.0.0.1:19301,127.0.0.1:19302
+!pool_app=127.0.0.1:19302|9|,127.0.0.1:19301|100|'         "http://admin/membership?epoch=11" > /dev/null
+      curl -s --unix-socket ${HTTP_SOCK} -X POST         --data-binary 'pool_app=127.0.0.1:19301
+!pool_app=127.0.0.1:19301|200|'         "http://admin/membership?epoch=12" > /dev/null
+      echo "---before---"
+      curl -s --unix-socket ${HTTP_SOCK} "http://admin/membership/read?epoch=11"
+      echo
+      curl -s --unix-socket ${HTTP_SOCK} -X POST         "http://admin/membership?epoch=11&remove=1" > /dev/null
+      echo "---after---"
+      curl -s --unix-socket ${HTTP_SOCK} "http://admin/membership/read?epoch=11"
+      echo
+      echo "---live---"
+      curl -s --unix-socket ${HTTP_SOCK} "http://admin/membership/read?epoch=12"
+      echo
+    `);
+    // 쓰였는지 먼저 못 박는다 — 안 쓰였으면 아래 「안 남았다」가 공허하다.
+    /**
+     * **peer 순서가 뒤집혀 나와야 한다.**
+     *
+     * 위에서 일부러 내림차순(`19302` 먼저)으로 보냈다. 속성을 **peer 마다 키로 펴는**
+     * 구현만이 되읽을 때 다시 정렬해 오름차순을 낸다. 그리고 그 대칭이 곧 계약이다 —
+     * 적재가 되읽어 비교하므로 형식이나 순서가 갈리면 그 검사가 언제나 실패한다.
+     *
+     * 이 단언이 없으면 이 검사는 **엉뚱한 이유로 통과한다** — 속성 경로가 없는 코드는
+     * `!pool_app=…` 줄을 그냥 **슬롯**으로 읽어(`^([^=]+)=(.*)$` 에 이름 `!pool_app` 으로
+     * 걸린다) 값을 통째로 저장하고 그대로 되돌려주고, 회수도 `slot:` 이라 지워진다.
+     * **핀 게이트가 그것을 잡았다.**
+     */
+    expect(section(out, 'before'), '속성이 peer 별로 안 펴졌다 — 줄이 통째로 저장됐다')
+      .toContain('!pool_app=127.0.0.1:19301|100|,127.0.0.1:19302|9|');
+    expect(section(out, 'after'), '회수가 속성을 안 지웠다 — 세대마다 쌓인다').toBe('');
+    // 살아 있는 epoch 은 멀쩡하다. 회수가 옆을 지우면 트래픽이 끊긴다.
+    expect(section(out, 'live')).toContain('!pool_app=127.0.0.1:19301|200|');
+    expect(section(out, 'live')).toContain('pool_app=127.0.0.1:19301');
+  }, 180_000);
 });

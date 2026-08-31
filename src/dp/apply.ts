@@ -126,6 +126,8 @@ export interface Effects {
    */
   pushMembership?(
     plane: Plane, epoch: string, slots: Record<string, string[]>,
+    /** peer 별 속성 (ADR ②). 없으면 안 민다. */
+    attrs?: Record<string, Record<string, { softMaxConns?: number; isBackup?: boolean }>>,
   ): Promise<void>;
 }
 
