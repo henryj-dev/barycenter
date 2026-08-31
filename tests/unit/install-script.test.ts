@@ -16,7 +16,8 @@
  * 로 실측했고 그 기록은 `docs/audit-2026-08-29-install.md` 에 있다.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -119,5 +120,161 @@ describe('오류 경로', () => {
     }
     expect(out).not.toMatch(/unbound variable/);
     expect(out).toMatch(/작은따옴표/);
+  });
+});
+
+/**
+ * 스크립트에서 셸 함수 **본문을 그대로** 꺼낸다.
+ *
+ * 재구현하지 않는 것이 요점이다 — 규칙을 테스트가 다시 적으면 그 사본이 원본과
+ * 갈라지는 날 테스트는 초록인 채로 아무것도 안 지킨다.
+ */
+function shFunction(name: string): string {
+  const at = src.indexOf(`${name}() {`);
+  expect(at).toBeGreaterThan(-1);
+  const end = src.indexOf('\n}\n', at);
+  expect(end).toBeGreaterThan(at);
+  return src.slice(at, end + 3);
+}
+
+/** `MANAGED_ENV_KEYS` 의 값 — 정규화까지 지난 것을 스크립트에서 그대로 얻는다. */
+function managedKeys(): string[] {
+  const out = execFileSync('sh', ['-c',
+    `${src.slice(src.indexOf('MANAGED_ENV_KEYS="'), src.indexOf('\nREPO='))}\nprintf '%s' "$MANAGED_ENV_KEYS"`,
+  ], { encoding: 'utf8' });
+  return out.trim().split(/\s+/).filter((k) => k !== '');
+}
+
+describe('관리 키 가드', () => {
+  /**
+   * **F.** 대조가 `case " $MANAGED_ENV_KEYS " in *" $k "*` 라 구분자가 공백인데,
+   * 목록이 **두 줄**이었다. 줄바꿈에 닿는 두 키(`BARY_ENGINE_BIN`·`BARY_GUI`)는 앞이나
+   * 뒤가 공백이 아니라 패턴에 안 걸렸고, `--env BARY_GUI=...` 가 그대로 통과했다 —
+   * env 파일에 같은 키가 두 줄 들어가는 것, 이 가드가 막으려던 바로 그 상태다.
+   *
+   * **목록을 여기 베껴 적지 않는다.** 스크립트에서 읽어 전수로 돈다 — 키가 늘어
+   * 줄이 또 갈리는 날 이 테스트가 그것까지 잡아야 한다.
+   */
+  it('**관리 키를 하나도 빠짐없이 거절한다** — 목록의 줄바꿈에 닿는 것까지', () => {
+    const keys = managedKeys();
+    expect(keys.length).toBeGreaterThan(5);
+    for (const key of keys) {
+      let out = '';
+      try {
+        execFileSync('sh', [SCRIPT, '--env', `${key}=x`, '--dsn', 'postgres://a'], {
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (e) {
+        const err = e as { stdout?: string; stderr?: string };
+        out = `${err.stdout ?? ''}${err.stderr ?? ''}`;
+      }
+      expect(out, `${key} 가 --env 로 통과했다`).toMatch(/이 스크립트가 정하는 값이다/);
+    }
+  });
+});
+
+describe('재실행 = 업데이트', () => {
+  /** `carry_env_lines` 를 스크립트에서 꺼내 실제로 돌린다. */
+  function carry(file: string, extraKeys = ''): string[] {
+    const out = execFileSync('sh', ['-c',
+      `${src.slice(src.indexOf('MANAGED_ENV_KEYS="'), src.indexOf('\nREPO='))}
+       EXTRA_ENV_KEYS='${extraKeys}'
+       ${shFunction('carry_env_lines')}
+       carry_env_lines "$1"`,
+      'sh', file,
+    ], { encoding: 'utf8' });
+    return out.split('\n').filter((l) => l !== '');
+  }
+
+  /**
+   * **base64 처럼 생긴 값을 안 쓴다.** 진짜 KEK 은 32 바이트 base64 인데, 그 모양을
+   * 픽스처에 두면 gitleaks 의 `generic-api-key` 가 문다 — 실제로 물렸다(#33). 예외를
+   * 다는 쪽은 나쁘다: 넓게 뚫어 둔 예외가 나중에 진짜를 삼킨다(`.gitleaks.toml` 머리말).
+   *
+   * 그리고 여기서 재는 것은 **줄이 옮겨지는가**이지 그 값이 열쇠로 쓸모 있는가가
+   * 아니다 — `carry_env_lines` 는 값을 안 본다. 읽는 사람에게 "이건 열쇠가 아니다" 가
+   * 한눈에 보이는 쪽이 낫다.
+   */
+  const KEK_LINE = "BARY_SECRET_KEK='이것은-열쇠가-아니라-옮겨지는지-보는-줄'";
+
+  const ENV_SAMPLE = [
+    "BARY_DSN='postgres:///bary'",
+    "BARY_GUI='/opt/barycenter/gui/build'",
+    KEK_LINE,
+    "BARY_PROBE_INTERVAL_MS='3000'",
+    '# 손으로 적은 주석',
+    '',
+    'NOT_BARY=1',
+  ].join('\n');
+
+  /**
+   * **예측 가능한 임시 파일 이름을 안 쓴다** (CodeQL `js/insecure-temporary-file`).
+   *
+   * `join(tmpdir(), name)` 은 공용 디렉터리의 **미리 알 수 있는 경로**다. 그 이름으로
+   * 심링크를 먼저 걸어 두면 이 테스트의 쓰기가 남의 파일로 간다. `mkdtempSync` 는
+   * 0700 디렉터리를 원자적으로 만들어 그 창을 없앤다 — `scripts/surface.mjs` 가 이미
+   * 같은 이유로 그것을 쓴다.
+   *
+   * 테스트라고 예외를 두지 않는 이유: 이 저장소의 CI 에서 도는 코드이고, 여기서
+   * 봐준 습관이 프로덕션 코드로 옮겨 간다.
+   */
+  function withEnvFile(body: (file: string) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), 'bary-env-'));
+    try {
+      const file = join(dir, 'env');
+      writeFileSync(file, ENV_SAMPLE);
+      body(file);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  /**
+   * **G.** 이 한 줄이 이번 회차의 이유다. `BARY_SECRET_KEK` 은 `pg` 시크릿 백엔드의
+   * KEK 이고, **잃으면 자료를 영영 못 연다** (STATUS §2). 재실행이 곧 업데이트 경로인데
+   * 예전에는 env 파일을 통째로 다시 써서, `--env` 를 다시 안 주면 KEK 이 조용히
+   * 사라졌다 — 그리고 그 사실은 인증서를 읽으려는 순간에야 드러난다.
+   */
+  it('**KEK 을 이어 간다** — 잃으면 자료를 영영 못 연다', () => {
+    withEnvFile((f) => {
+      expect(carry(f)).toContain(KEK_LINE);
+    });
+  });
+
+  /** 관리 키는 스크립트가 다시 정한다 — 옛 값이 이기면 두 줄이 되거나 옛것이 산다. */
+  it('관리 키는 안 이어 간다 — 그쪽은 스크립트가 정본이다', () => {
+    withEnvFile((f) => {
+      const kept = carry(f);
+      expect(kept.some((l) => l.startsWith('BARY_DSN='))).toBe(false);
+      expect(kept.some((l) => l.startsWith('BARY_GUI='))).toBe(false);
+    });
+  });
+
+  /** 이번에 `--env` 로 다시 준 키는 새 값이 이긴다 — **두 줄이 되면 안 된다.** */
+  it('이번에 다시 준 키는 안 이어 간다 — 같은 키가 두 줄이 되면 안 된다', () => {
+    withEnvFile((f) => {
+      const kept = carry(f, 'BARY_PROBE_INTERVAL_MS');
+      expect(kept.some((l) => l.startsWith('BARY_PROBE_INTERVAL_MS='))).toBe(false);
+      expect(kept).toContain(KEK_LINE);
+    });
+  });
+
+  /** 주석·빈 줄·`BARY_` 가 아닌 것은 안 옮긴다 — 모르는 모양을 나르지 않는다. */
+  it('주석과 모르는 모양은 안 옮긴다', () => {
+    withEnvFile((f) => {
+      const kept = carry(f);
+      expect(kept.some((l) => l.startsWith('#'))).toBe(false);
+      expect(kept.some((l) => l.startsWith('NOT_BARY'))).toBe(false);
+    });
+  });
+
+  /**
+   * **H.** 뒤집는 문이 실제로 있는가. 없으면 "이어 간다" 는 결정이 아니라 강요가 된다 —
+   * 옛 키를 지우려는 운영자에게 남는 길이 파일을 손으로 고치는 것뿐이게 된다.
+   */
+  it('`--reset-env` 와 `--rotate-token` 이 사용법과 파서 양쪽에 있다', () => {
+    for (const flag of ['--reset-env', '--rotate-token']) {
+      expect(src, `${flag} 가 사용법에 없다`).toContain(`  ${flag}`);
+      expect(src, `${flag} 를 파서가 모른다`).toMatch(
+        new RegExp(`\\n\\s*${flag}\\)\\s+\\w+=1;`));
+    }
   });
 });
