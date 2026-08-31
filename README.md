@@ -160,6 +160,13 @@ sudo deploy/install.sh --with-postgres                 # or --dsn postgres://…
 sudo deploy/install.sh                                 # a terminal gets asked instead
 ```
 
+Some of those settings are cheap to change later and one is not: `BARY_SECRET_BACKEND`
+decides where certificate private keys live, and the two stores do not know about each other,
+so switching after material is uploaded means uploading all of it again.
+[`docs/runbook-install.md`](docs/runbook-install.md) is the list of what to decide before the
+first run, what to back up on day one, and where to look when it first breaks;
+[`docs/runbook-upgrade.md`](docs/runbook-upgrade.md) covers every run after that.
+
 Run it bare on a terminal and it walks through the same settings and shows what it will do
 before touching anything; every answer has a flag, and a flag given is never asked about, so
 the identical script fits a config-management run. `--env BARY_ACME=1` (repeatable) carries
