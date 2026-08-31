@@ -73,8 +73,9 @@ export function bootEffects(opts: EffectsBootOptions): FsEffects {
 
   const pushMembership = async (
     plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>,
+    attrs?: Record<string, Record<string, { softMaxConns?: number; isBackup?: boolean }>>,
   ): Promise<void> => {
-    const want = encodeSlots(await resolveSlots(slots));
+    const want = encodeSlots(await resolveSlots(slots), attrs ?? {});
     const got = plane === 'http'
       ? await pushHttp(adminSocket, epoch, want)
       : await pushStream(streamAdminSocket, epoch, want);

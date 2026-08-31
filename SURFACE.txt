@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 117 심볼 · sha256:31b8024668171bce2aef74612b557cff96a8980e29edf4d3a8df84041675eb99
+# 117 심볼 · sha256:4209ef49f856b4e8aa0133717cdc8513fbabe0c54e8986df957e26d43ad9191b
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -54,6 +54,8 @@ export type Backend = {
     host: string;
     port: number;
     weight: number;
+    softMaxConns?: number;
+    isBackup?: boolean;
 };
 ── Certificate
 export type Certificate = {
@@ -89,7 +91,10 @@ export interface DataplaneDriver {
     recoverConfig(): Promise<ApplyResult>;
     abortConfig(op: ApplyOperation): Promise<void>;
     applyMembership(op: ApplyOperation, plane: Plane, slots: Record<string, string[]>): Promise<PlaneAck>;
-    pushMembershipDirect(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
+    pushMembershipDirect(plane: Plane, epoch: string, slots: Record<string, string[]>, attrs?: Record<string, Record<string, {
+        softMaxConns?: number;
+        isBackup?: boolean;
+    }>>): Promise<void>;
     reconcileConfig(): Promise<ReconcileResult>;
     status(): Promise<DriverStatus>;
 }
@@ -180,7 +185,10 @@ export interface Effects {
     signalReload(lease: ApplyLease): Promise<Checked>;
     observeActivation(): Promise<ActivationEvidence | undefined>;
     stageMembership?(generation: string, plane: Plane, lease: ApplyLease): Promise<Checked>;
-    pushMembership?(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
+    pushMembership?(plane: Plane, epoch: string, slots: Record<string, string[]>, attrs?: Record<string, Record<string, {
+        softMaxConns?: number;
+        isBackup?: boolean;
+    }>>): Promise<void>;
 }
 ── EngineSettings
 export type EngineSettings = {
@@ -337,7 +345,10 @@ export declare class LocalDataplaneDriver implements DataplaneDriver {
     }>;
     applyConfig(op: ApplyOperation): Promise<ApplyResult>;
     applyMembership(op: ApplyOperation, plane: Plane, slots: Record<string, string[]>): Promise<PlaneAck>;
-    pushMembershipDirect(plane: Plane, epoch: string, slots: Record<string, string[]>): Promise<void>;
+    pushMembershipDirect(plane: Plane, epoch: string, slots: Record<string, string[]>, attrs?: Record<string, Record<string, {
+        softMaxConns?: number;
+        isBackup?: boolean;
+    }>>): Promise<void>;
     recoverConfig(): Promise<ApplyResult>;
     abortConfig(op: ApplyOperation): Promise<void>;
     reconcileConfig(): Promise<ReconcileResult>;
