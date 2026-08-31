@@ -624,6 +624,30 @@ export type Backend = {
   host: string;
   port: number;
   weight: number;
+  /**
+   * peer 별 인플라이트 **힌트** (§4.4 · `docs/adr-membership-attrs.md`).
+   *
+   * ── 왜 `maxConns` 가 아닌가
+   *
+   * nginx 의 `max_conns` 는 초과분을 큐에 넣거나 502 로 끊는다. **여기서는 안 끊는다** —
+   * 초과한 peer 를 후보에서 빼고, 전부 초과했으면 **상한을 통째로 무시한다.**
+   * 백엔드가 멀쩡한데 프록시가 끊는 것을 이 저장소는 반복해서 피해 왔다.
+   *
+   * 같은 이름을 쓰면 운영자가 nginx 문서를 읽고 우리 거동을 예측하게 되고, 그 예측이
+   * 틀린다. 그래서 근사임이 이름에 드러난다.
+   *
+   * ⚠️ **상한은 후보를 좁힐 뿐 알고리즘을 안 바꾼다.** 전부 초과했을 때 「최소 부하」로
+   * 고르면 `hash` 풀의 세션 친화가 **하필 부하가 가장 높은 순간에** 깨진다.
+   */
+  softMaxConns?: number;
+  /**
+   * 전부 죽었을 때만 받는다 (§4.4).
+   *
+   * 이 평면에는 `server ... backup` 줄이 없으므로 **Lua 밸런서가 1차/backup 을 가른다.**
+   * `hash`·`source_ip_hash` 와는 함께 못 쓴다 — 해시 링과 backup 의 의미가 충돌한다
+   * (§4.3.1). 검증기가 막는다.
+   */
+  isBackup?: boolean;
 };
 
 export type HttpAction =
