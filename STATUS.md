@@ -213,13 +213,16 @@ KEK 는 덤프와 다른 곳에 둔다(`docs/runbook-spof.md`). 설정은 안 �
 | §11.3 동적 포트 | k8s 네이티브 배포는 여전히 별도 과제다 — 설계의 결정이고 안 뒤집는다. 다만 어느 배포를 고르든 필요한 **소켓 집합**을 낸다: `GET /api/v1/sockets` · `bary get sockets` **그리고 v1 권장 배포(전용 VM 한 대)는 이제 스크립트가 세운다** — `deploy/install.sh` 가 패키지·서비스 유저·`setcap`·빌드·유닛과 (선택) 로컬 PG 를 세우고 `/readyz` 와 `bary status` 까지 확인하고 끝낸다. Debian·Ubuntu·RHEL9 계열·Amazon Linux 2023·Alpine 을 `tests/install/run.sh` 가 **실물 컨테이너에서** 판정한다 — 서비스 기동·재기동·비-root nginx·특권 포트 apply 까지 본다. 재설치는 안 잰다(그 사실을 러너 머리말에 적어 뒀다) |
 
 **§4.3·§4.3.1·§4.4 에 적혀 있는데 코드에 없는 것** (2026-08-23 실사). 이건 축소 결정이
-아니라 **아직 안 한 것**이다 — 결정이었다면 §12.0 이나 §15 에 근거가 있어야 한다:
+아니라 **아직 안 한 것**이었다 — 결정이었다면 §12.0 이나 §15 에 근거가 있어야 한다.
+
+✅ **2026-08-31 에 이 표가 닫혔다.** 남은 것은 전부 「안 하기로 한 것」이고 근거가
+`docs/adr-membership-attrs.md` 에 있다. 세 줄 다 그 뒤에 적었다:
 
 | 자리 | 없는 필드 |
 |---|---|
 | `Pool` (§4.3) | ~~비었다~~ — `upstream_tls` 는 **구현됐다**(2026-08-24). **`passive`·`sticky` 는 안 넣기로 했다** — `sticky` 가 말하는 둘(L4 소스IP·HTTP 쿠키)은 `algorithm`·`hashKey` 로 이미 표현되고, 쿠키 **발급**은 상용 모듈이다. `passive` 는 — 이 평면의 upstream 은 `server` 가 자리표시 하나뿐이라 peer 별로 셀 대상이 없고, Lua 로 다시 만들면 멤버십의 주인이 둘이 된다. **`dns` 도 결정된 것이다** — 엔진이 선택지를 안 줘서 해독기가 `unknown_field` 로 거절한다 (§7.3) |
 | 헬스 프로브 (§4.3.1) | ~~비었다~~ — **들어왔다 (2026-08-30).** `mode`·`protocol`·`port`·`hostOverride`·`hostHeader` 와 풀별 `intervalS`/`timeoutS`/`rise`/`fall`. 프로브가 데이터 경로와 갈린다 — tcp 풀이 http 헬스 포트를 가질 수 있다. **`udp` 는 결정이다** (§13-6 드라이버 위임) · **`passive` 도** (이 평면에 `server` 줄이 없다). ⚠️ 풀별 주기는 **전역 틱이 바닥**이다 — 그보다 짧게는 못 만든다 |
-| `Backend` (§4.4) | **`soft_max_conns` · `is_backup` 만 남았다** — 둘 다 `server` 줄에 붙는 값이라 이 평면에서는 **Lua 밸런서 작업**이다 (`docs/adr-membership-attrs.md`). `admin_state` 는 **안 넣기로 했고**(드레인이 이미 운영 동작이다), `drain.deadline_s` 는 **드레인 동작에 붙었다** — 기한은 관측이라 지나도 안 풀리고 `deadline_exceeded` 로 드러난다 |
+| `Backend` (§4.4) | ~~비었다~~ — **전부 닫혔다 (2026-08-31).** `soft_max_conns`·`is_backup` 은 Lua 밸런서가 진다 — peer 별 속성이 `attr:` 키로 슬롯과 나란히 가고, 밸런서는 **읽기만** 한다(쓰면 멤버십 주인이 둘이 된다). `admin_state` 는 **안 넣기로 했고**(드레인이 이미 운영 동작이다), `drain.deadline_s` 는 **드레인 동작에 붙었다** — 기한은 관측이라 지나도 안 풀리고 `deadline_exceeded` 로 드러난다 |
 
 드레인은 **스펙 필드가 아니라 멤버십 평면의 동작**으로 산다 — `bary backend drain` 이
 슬롯에서 빼고 `in:` 으로 관측한다. 그래서 드레인은 되지만 기한과 `deadline_exceeded` 는
