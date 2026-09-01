@@ -181,7 +181,7 @@ export class PgSecretStore implements SecretStore {
      * ⚠️ **이것을 KEK 회전이라고 부르지 않는다.** 고칠 수 있는 것은 운영자가 **자료를
      * 아직 들고 있는** 인증서뿐이다. ACME 가 발급한 것은 개인키가 이 저장소에만 있으므로
      * 재업로드할 자료가 없다 — 그것까지 옮기려면 옛 KEK 로 읽어 새 KEK 로 다시 감싸는
-     * 별도의 통과가 필요하고, 그건 아직 없다 (§4.8.1).
+     * **별도의 통과**가 필요하다. 그것이 `scripts/rotate-kek.mjs` 다 (§4.8.3).
      */
     await this.#db.query(
       `INSERT INTO secret_materials

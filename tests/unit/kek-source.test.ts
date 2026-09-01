@@ -82,6 +82,32 @@ describe('KEK 출처', () => {
     expect(String(err)).toContain('AccessDenied');
   });
 
+  /**
+   * **명령 문자열 자체도 비밀이다.**
+   *
+   * 처음엔 stderr 가 비었을 때 `err.message` 를 실었다. 그건 execFile 이 만든 것이라
+   * `Command failed: /bin/sh -c <명령>` 을 통째로 담는다 — 그래서
+   * `BARY_SECRET_KEK_CMD='printf %s <키>'` 처럼 둔 배포에서 **키가 로그로 나갔다.**
+   * CodeQL 의 `js/clear-text-logging` 이 짚었고 실물로 재현했다 (2026-09-01).
+   *
+   * 앞선 회차의 재현물은 **stdout 만** 봤다. 그래서 이 경로가 초록으로 남아 있었다 —
+   * 비밀이 새는 길은 하나가 아니다.
+   */
+  it('**오류에 명령 문자열을 안 싣는다** — 명령에 키가 들어 있을 수 있다', async () => {
+    // **base64 처럼 생긴 값을 안 쓴다.** gitleaks 의 `generic-api-key` 가 문다 —
+    // #33 에서 같은 실수를 하고 고쳤는데 또 했다. 여기서 재는 것은 "이 문자열이 오류에
+    // 실리느냐" 이지 그 값이 키로 쓸모 있느냐가 아니다.
+    const secret = '이것은-명령에-박힌-값-오류에-실리면-안-된다';
+    const err = await resolveKek(
+      // stderr 가 **비어 있다** — 그때 무엇을 싣느냐가 이 케이스다.
+      { BARY_SECRET_KEK_CMD: `printf %s ${secret}; exit 1` },
+    ).catch((e: Error) => e);
+    expect(String(err)).not.toContain(secret);
+    expect(String(err)).not.toContain('/bin/sh');
+    // 그래도 어떻게 죽었는지는 말해야 한다 — 안 그러면 진단이 사라진다.
+    expect(String(err)).toMatch(/종료 코드 1/);
+  });
+
   it('성공했지만 값이 틀렸을 때도 그 값을 안 싣는다', async () => {
     const secret = '이것은-키가-아닌-무언가-길이도-틀렸다';
     const err = await resolveKek(
