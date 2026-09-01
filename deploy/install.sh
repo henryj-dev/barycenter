@@ -139,6 +139,17 @@ env_line() {                    # env_line <KEY> <VALUE>
   case "$2" in
     *\'*) die "$1 의 값에 작은따옴표가 있다 — 이 env 파일 형식이 못 담는다 (값을 바꾸거나 설치 뒤 $ENV_FILE 을 직접 고친다)" ;;
   esac
+  # **개행도 못 담는다** (검수 2026-09-01 ㉰). 작은따옴표와 같은 이유이고 결과는 더
+  # 나쁘다: systemd 의 `EnvironmentFile` 은 여러 줄 값을 안 받으므로 그 파일은 그
+  # 순간부터 **한쪽 파서에서만 읽힌다.** 그리고 이어 가기(`carry_env_lines`)는 줄 단위라
+  # 다음 재실행에서 **따옴표가 안 닫힌 반쪽 줄**을 새 파일로 나른다.
+  # **따옴표 안에 진짜 개행을 둔다.** \`$(printf '\n')\` 는 명령 치환이 끝 개행을 버려
+  # **빈 문자열**이 되고, 그러면 패턴이 \`*""*\` 라 모든 값에 걸린다 — 이 검사를 처음
+  # 그렇게 썼다가 설치 하네스가 첫 판에서 잡았다.
+  case "$2" in
+    *"
+"*) die "$1 의 값에 개행이 있다 — 이 env 파일 형식이 못 담는다 (한 줄로 준다)" ;;
+  esac
   printf "%s='%s'\n" "$1" "$2"
 }
 
@@ -861,20 +872,25 @@ fi
 step "⑩ 설정"
 TOKENS_FILE="$PREFIX/tokens.json"
 
-# 파일이 **데몬이 읽을 수 있는 모양**인가. 여기서 보는 것은 JSON 배열이고 비어 있지
-# 않고 각 항목에 `sha256:` 해시가 있다는 것까지다 — 정본 해독은 데몬의
-# `parseTokenSpecs` 가 한다. 모양이 아니면 **보존하지 않고 새로 만든다**: 깨진 파일을
-# 그대로 두면 업데이트가 "설치는 됐는데 데몬이 안 뜬다" 로 끝나고, 그건 고치는 것보다
-# 나쁘다.
+# 파일이 **데몬이 읽을 수 있는 모양**인가.
+#
+# **데몬의 파서를 그대로 부른다** (검수 2026-09-01 ㉮). 전에는 여기서 흉내를 냈다 —
+# JSON 배열이고 비어 있지 않고 각 항목에 `sha256:` 로 시작하는 해시가 있는지. 그
+# 흉내가 **정본보다 느슨했다**: `parseTokenSpecs` 는 `name` 을 요구하고 해시가
+# `sha256:<64 hex>` 인지 보고 **모르는 필드를 거부**하는데, 네 종류의 파일이 이 검사를
+# 통과하고 데몬에서 거절됐다.
+#
+# 그 결과가 정확히 이 함수가 막으려던 것이었다: 깨진 파일이 **보존되고**, 설치는
+# ⑩ 을 지나 ⑫ 에서 `데몬이 60초 안에 안 답했다` 로 죽는다 — 그 메세지는 원인을
+# 안 가리킨다.
+#
+# `$APP_DIR/dist` 는 ⑧ 에서 이미 놓였다. 판정이 두 자리에 있으면 하나는 반드시
+# 뒤처진다 — 이 저장소가 반복해서 적어 온 규칙이다.
 tokens_usable() {               # tokens_usable <파일>
   "$NODE_BIN" -e '
-    const a = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-    if (!Array.isArray(a) || a.length === 0) process.exit(1);
-    for (const t of a) {
-      if (t === null || typeof t !== "object") process.exit(1);
-      if (typeof t.hash !== "string" || !t.hash.startsWith("sha256:")) process.exit(1);
-    }
-  ' "$1" >/dev/null 2>&1
+    const { parseTokenSpecs } = require(process.argv[2] + "/dist/api/auth.js");
+    parseTokenSpecs(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")));
+  ' "$1" "$APP_DIR" >/dev/null 2>&1
 }
 
 new_token() {                   # $TOKEN_PLAIN 과 $TOKEN_HASH 를 채운다
@@ -947,7 +963,15 @@ ENV_FILE="$PREFIX/env"
 #
 # 통째로 초기화하려면 `--reset-env` 다.
 carry_env_lines() {             # carry_env_lines <파일>
-  while IFS= read -r _line; do
+  # **`|| [ -n "$_line" ]` 가 없으면 마지막 줄을 버린다** (검수 2026-09-01 ㉯).
+  # `read` 는 개행을 못 만나면 실패를 내는데, 그 직전까지 읽은 것은 `$_line` 에 있다.
+  # 그냥 `while read` 면 **개행 없이 끝나는 파일의 마지막 줄이 조용히 사라진다.**
+  #
+  # 이 경로는 가상이 아니다 — `env_line` 의 거절 안내가 *"설치 뒤 이 파일을 직접
+  # 고친다"* 를 우회로로 알려 주고, 손으로 한 줄 덧붙이는 편집기 중에는 끝 개행을
+  # 안 넣는 것이 있다. 그러면 **방금 적은 그 줄**이 다음 재실행에서 사라진다.
+  # 그 줄이 `BARY_SECRET_KEK` 이면 결과는 이 기능이 막으려던 것 그 자체다.
+  while IFS= read -r _line || [ -n "$_line" ]; do
     case "$_line" in
       BARY_*=*) : ;;
       *) continue ;;            # 주석·빈 줄·모르는 모양은 안 옮긴다

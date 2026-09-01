@@ -278,3 +278,100 @@ describe('재실행 = 업데이트', () => {
     }
   });
 });
+
+describe('검수 2026-09-01', () => {
+  /**
+   * **㉮ 판정을 두 자리에 두지 않는다.**
+   *
+   * `tokens_usable` 이 데몬의 `parseTokenSpecs` 를 흉내 내고 있었고, 그 흉내가 **정본보다
+   * 느슨했다** — `name` 없음 · 해시가 64 hex 아님 · 모르는 필드 · 이상한 role, 넷이
+   * 설치를 통과하고 데몬에서 거절됐다. 그러면 깨진 파일이 **보존되고** 설치는 ⑫ 에서
+   * `데몬이 60초 안에 안 답했다` 로 죽는다 — 원인을 안 가리키는 메세지다.
+   *
+   * ⚠️ **여기서는 위임만 잰다.** 두 판정이 실제로 같은지는 `dist/` 가 있어야 돌릴 수
+   * 있어서 `tests/install/run.sh` 가 실물로 잰다(거기서는 설치가 이미 `dist` 를 놨다).
+   * 이 케이스가 지키는 것은 *"다시 흉내로 돌아가지 않는다"* 하나다.
+   */
+  it('**토큰 판정을 데몬에 위임한다** — 흉내로 돌아가지 않는다', () => {
+    const fn = shFunction('tokens_usable');
+    expect(fn, '정본을 안 부른다').toContain('parseTokenSpecs');
+    expect(fn, 'dist 의 파서를 부르지 않는다').toContain('/dist/api/auth.js');
+    // 흉내의 흔적이 남아 있으면 판정이 또 갈린다.
+    expect(fn).not.toContain('startsWith("sha256:")');
+  });
+
+  /**
+   * **㉯ 마지막 줄을 안 버린다.**
+   *
+   * `while IFS= read -r` 는 개행을 못 만나면 실패를 내는데, 그 직전까지 읽은 것은
+   * `$_line` 에 있다. `|| [ -n "$_line" ]` 가 없으면 **개행 없이 끝나는 파일의 마지막
+   * 줄이 조용히 사라진다.**
+   *
+   * 가상의 경로가 아니다 — `env_line` 의 거절 안내가 *"설치 뒤 이 파일을 직접 고친다"* 를
+   * 우회로로 알려 주고, 손으로 한 줄 덧붙이는 편집기 중에는 끝 개행을 안 넣는 것이 있다.
+   * 그러면 **방금 적은 그 줄**이 다음 재실행에서 사라진다. 그 줄이 KEK 이면 결과는
+   * 이 기능이 막으려던 것 그 자체다.
+   */
+  it('**끝 개행이 없어도 마지막 줄을 이어 간다** — 손으로 덧붙인 그 줄이다', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bary-env-'));
+    try {
+      const file = join(dir, 'env');
+      const last = "BARY_SECRET_KEK='이것은-열쇠가-아니라-옮겨지는지-보는-줄'";
+      // **끝 개행이 없다.** 그게 이 케이스의 전부다.
+      writeFileSync(file, `BARY_DSN='postgres:///bary'\n${last}`);
+      const kept = execFileSync('sh', ['-c',
+        `${src.slice(src.indexOf('MANAGED_ENV_KEYS="'), src.indexOf('\nREPO='))}
+         EXTRA_ENV_KEYS=''
+         ${shFunction('carry_env_lines')}
+         carry_env_lines "$1"`,
+        'sh', file,
+      ], { encoding: 'utf8' }).split('\n').filter((l) => l !== '');
+      expect(kept).toContain(last);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  /**
+   * **㉰ 값에 개행을 못 담는다.**
+   *
+   * 작은따옴표와 같은 이유이고 결과는 더 나쁘다: systemd 의 `EnvironmentFile` 은 여러
+   * 줄 값을 안 받으므로 그 파일은 그 순간부터 **한쪽 파서에서만 읽힌다.** 그리고
+   * 이어 가기는 줄 단위라 다음 재실행에서 **따옴표가 안 닫힌 반쪽 줄**을 나른다.
+   */
+  it('**값에 개행이 있으면 안내로 거절한다**', () => {
+    let out = '';
+    try {
+      execFileSync('sh', [SCRIPT, '--env', 'BARY_X=a\nb', '--dsn', 'postgres://a'], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string };
+      out = `${err.stdout ?? ''}${err.stderr ?? ''}`;
+    }
+    expect(out).toMatch(/개행이 있다/);
+    expect(out).not.toMatch(/unbound variable/);
+  });
+
+  /**
+   * **그리고 정상 값은 통과해야 한다.**
+   *
+   * 이 검사를 처음 \`*"$(printf '\n')"*\` 로 썼다. 명령 치환은 **끝 개행을 버리므로**
+   * 그 표현식은 빈 문자열이 되고, 패턴이 \`*""*\` 라 **모든 값에 걸렸다.** 설치
+   * 하네스가 첫 판에서 잡았다 — KEK 를 주는 정상 설치가 죽었다.
+   *
+   * 거절 케이스만 두면 그 결함이 초록으로 남는다. **막는 검사는 통과도 같이 재야 한다.**
+   */
+  it('개행이 없는 값은 통과한다 — 모든 값을 막던 자리다', () => {
+    let out = '';
+    try {
+      execFileSync('sh', [SCRIPT, '--env', 'BARY_X=YWJjZA==', '--dsn', 'postgres://a'], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string };
+      out = `${err.stdout ?? ''}${err.stderr ?? ''}`;
+    }
+    // root 검사에서 죽는 것이 정상이다 — 그 앞의 --env 가드를 지났다는 뜻이다.
+    expect(out).not.toMatch(/개행이 있다/);
+    expect(out).toMatch(/root 로 돌려야 한다/);
+  });
+});

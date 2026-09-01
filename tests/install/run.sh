@@ -281,6 +281,36 @@ JSON' >/dev/null 2>&1
       rc=1
     fi
 
+    # ⑦-b **깨진 tokens.json 은 보존하지 않고 고친다** (검수 2026-09-01 ㉮).
+    #
+    # `tokens_usable` 이 데몬의 `parseTokenSpecs` 를 흉내 내던 때, 그 흉내가 정본보다
+    # 느슨해서 **데몬이 거절할 파일을 보존**했다. 그러면 설치는 ⑩ 을 지나 ⑫ 에서
+    # `데몬이 60초 안에 안 답했다` 로 죽는다 — 원인을 안 가리키는 메세지다.
+    #
+    # 여기서 쓰는 입력은 **옛 검사를 통과하던 것**이다: `sha256:` 로 시작하는 해시는
+    # 있는데 `name` 이 없다. 단위 테스트는 위임만 재고(그쪽엔 `dist` 가 없다),
+    # **두 판정이 실제로 같은지는 여기서만 잰다.**
+    docker exec "$c" sh -c \
+      'printf "%s" "[{\"scopes\":[\"read\"],\"hash\":\"sha256:deadbeef\"}]" > /etc/barycenter/tokens.json' \
+      >/dev/null 2>&1
+    if docker exec "$c" sh /repo/deploy/install.sh \
+         --dsn 'postgres:///bary?host=/run/postgresql' > "/tmp/bary-install-$name-repair.log" 2>&1 \
+       && wait_ready "$c"; then
+      printf '    ok   깨진 tokens.json 을 고치고 선다\n'
+      # 고쳤으면 **새 토큰을 화면에 냈어야 한다** — 조용히 고치면 운영자는 자기 토큰이
+      # 죽은 것을 다음에 API 를 부를 때 안다.
+      if grep -q '기존 토큰은 죽는다' "/tmp/bary-install-$name-repair.log"; then
+        printf '    ok   고쳤다고 말한다 (새 토큰을 낸다)\n'
+      else
+        printf '    NO   조용히 고쳤다 — 운영자가 토큰이 바뀐 것을 모른다\n'
+        rc=1
+      fi
+    else
+      printf '    NO   깨진 tokens.json 을 못 고쳤다 — 마지막 15줄:\n'
+      tail -n 15 "/tmp/bary-install-$name-repair.log" | sed 's/^/         /'
+      rc=1
+    fi
+
     # 그리고 **두 줄이 되지 않았는가.** 이어 가기가 관리 키까지 나르면 같은 키가
     # 두 번 들어가고, 어느 쪽이 이기는지는 읽는 쪽(systemd·sh)마다 다르다.
     dup=$(docker exec "$c" sh -c "sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' /etc/barycenter/env | sort | uniq -d" | tr -d '\r')
