@@ -56,8 +56,30 @@ openssl rand -base64 32
 - `--env BARY_SECRET_KEK_ID=<이름>` 으로 이름을 붙여 두면 나중에 회전할 때 어느 키로
   감쌌는지 행마다 남는다
 
-KEK 를 운영자가 직접 지는 것이 부담이면, 그것이 KMS/Vault 드라이버가 있어야 할 이유다 —
-아직 없다(STATUS §2).
+### 키를 파일로 안 두려면 — `BARY_SECRET_KEK_CMD`
+
+`BARY_SECRET_KEK` 은 값을 그대로 받으므로 그 키가 `$PREFIX/env`(0640)에 **파일로 남는다.**
+그게 싫으면 값 대신 **명령**을 준다 — 기동 때 한 번 돌려 stdout 을 KEK 로 쓰고, 키는
+메모리에만 있다:
+
+```sh
+sudo deploy/install.sh --with-postgres \
+  --env BARY_SECRET_BACKEND=pg \
+  --env BARY_SECRET_KEK_CMD='aws kms decrypt --ciphertext-blob fileb:///etc/barycenter/kek.enc --query Plaintext --output text'
+```
+
+`vault read`·`gcloud kms decrypt`·`systemd-creds cat`·TPM 을 읽는 스크립트 — stdout 으로
+32 바이트를 base64 나 hex 로 내기만 하면 무엇이든 된다. **벤더 SDK 를 안 들이는 것**이
+이 모양을 고른 이유다 (§4.8.2).
+
+⚠️ **둘을 같이 주면 안 뜬다.** 한 비밀에 출처가 둘이면 어느 쪽이 이기는지가 곧 사고다.
+그리고 명령이 실패하면 데몬이 **안 뜬다** — 지어내면 *"암호화된 줄 알았다"* 가 그대로
+돌아온다. 느린 KMS 를 위해 `BARY_SECRET_KEK_CMD_TIMEOUT_MS` 로 상한을 늘릴 수 있다
+(기본 10초).
+
+⚠️ **백업 대상이 바뀐다.** 이제 지켜야 하는 것은 KEK 자체가 아니라 **그 명령이 닿는
+것**이다 — KMS 키, 그 키에 대한 권한, 암호문 파일. 그 셋 중 하나라도 잃으면 결과는
+KEK 를 잃은 것과 같다.
 
 ### 리스너와 TLS
 

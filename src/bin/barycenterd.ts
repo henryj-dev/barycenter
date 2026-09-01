@@ -25,7 +25,8 @@ import { apiHandler, apiTlsOptions, createApi } from '../api/server.js';
 import { JwksCache } from '../api/jwks.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore, type SecretStore } from '../dp/secrets.js';
-import { PgSecretStore, readKek } from '../dp/secrets-pg.js';
+import { resolveKek } from '../dp/kek-source.js';
+import { PgSecretStore } from '../dp/secrets-pg.js';
 import {
   TokenAuth, oidcKeyFrom, parseTokenSpecs, type OidcSettings, type TokenSpec,
 } from '../api/auth.js';
@@ -345,7 +346,10 @@ export async function main(): Promise<void> {
     // 그대로 돌아온다 — 아직 아무 자료도 안 들어간 지금 죽는 편이 정직하다.
     const pgSecrets = new PgSecretStore({
       db,
-      kek: readKek(env('BARY_SECRET_KEK', '')),
+      // **KEK 의 출처는 이음매다** (§4.8.2). 값을 그대로 받거나(`BARY_SECRET_KEK`),
+      // 명령을 돌려 그 stdout 을 받는다(`BARY_SECRET_KEK_CMD`) — 후자면 키가
+      // `$PREFIX/env` 에 파일로 안 남는다. 둘 다 주면 안 뜬다.
+      kek: await resolveKek(process.env),
       ...(env('BARY_SECRET_KEK_ID', '') === '' ? {} : { kekId: env('BARY_SECRET_KEK_ID', '') }),
     });
     // 동기 창구(`facts`)의 뒷받침을 기동에서 채운다. **자료를 복호화하지 않는다** —
