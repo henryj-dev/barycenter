@@ -85,16 +85,34 @@ export async function resolveKek(
   if (cmd === '') return readKek(direct); // 빈 것도 여기로 보낸다 — 안내는 readKek 이 든다
 
   const run = opts.run ?? defaultRunner;
+  // **상한 판정을 try 밖에 둔다.** 안에 두면 설정이 잘못됐다는 오류가 아래 catch 에
+  // 걸려 *"명령이 실패했다"* 로 둔갑한다 — 운영자는 멀쩡한 명령을 들여다보게 된다.
+  // 이 결함은 오래 초록이었다: 오류 문구에 `err.message` 를 싣던 동안에는 안쪽 오류의
+  // 문장이 그대로 실려 나와, 재현물이 **엉뚱한 이유로** 통과했다 (검수 2026-09-01).
+  const timeoutMs = timeoutFrom(env);
   let stdout: string;
   try {
-    ({ stdout } = await run(cmd, timeoutFrom(env)));
+    ({ stdout } = await run(cmd, timeoutMs));
   } catch (e) {
-    // **stdout 을 안 싣는다.** 실패한 명령도 부분 출력에 비밀을 담을 수 있다.
-    const err = e as { stderr?: string; message?: string };
+    // **stdout 도 명령 자체도 안 싣는다.**
+    //
+    // 실패한 명령은 부분 출력에 비밀을 담을 수 있고 — 그건 처음부터 막았다 — **명령
+    // 문자열 자체도 비밀일 수 있다.** `err.message` 는 execFile 이 만든 것이라
+    // `Command failed: /bin/sh -c <명령>` 을 통째로 담는다. 처음엔 stderr 가 비었을 때
+    // 그걸 실었고, 그래서 `BARY_SECRET_KEK_CMD='printf %s <키>'` 처럼 둔 배포에서
+    // **키가 로그로 나갔다** (CodeQL js/clear-text-logging · 2026-09-01 실측).
+    //
+    // 대신 **어떻게 죽었는지만** 낸다. 진단에 필요한 것은 그것과 stderr 이고, 둘 다
+    // 명령 문자열을 안 담는다.
+    const err = e as { stderr?: string; code?: number | string; signal?: string; killed?: boolean };
     const why = (err.stderr ?? '').trim();
+    const how = err.killed === true ? '상한을 넘겨 끊었다'
+      : typeof err.signal === 'string' && err.signal !== '' ? `시그널 ${err.signal}`
+      : err.code !== undefined ? `종료 코드 ${err.code}`
+      : '알 수 없는 오류';
     throw new Error(
-      `BARY_SECRET_KEK_CMD 가 실패했다 — KEK 없이 pg 시크릿 백엔드는 안 뜬다 (§4.8.2).`
-      + (why === '' ? ` (${err.message ?? '알 수 없는 오류'})` : `\n  stderr: ${why}`));
+      `BARY_SECRET_KEK_CMD 가 실패했다 (${how}) — KEK 없이 pg 시크릿 백엔드는 안 뜬다 (§4.8.2).`
+      + (why === '' ? '' : `\n  stderr: ${why}`));
   }
 
   const value = stdout.trim();

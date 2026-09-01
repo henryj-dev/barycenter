@@ -53,8 +53,9 @@ openssl rand -base64 32
 
 - **덤프와 다른 곳**에 둔다. 같은 금고에 넣으면 봉투 암호화가 하는 일이 없다
 - 그 자체의 백업을 따로 가진다 — VM 이 사라지면 `$PREFIX/env` 도 사라진다
-- `--env BARY_SECRET_KEK_ID=<이름>` 으로 이름을 붙여 두면 나중에 회전할 때 어느 키로
-  감쌌는지 행마다 남는다
+- `--env BARY_SECRET_KEK_ID=<이름>` 으로 **이름을 붙여 둔다.** 회전이 그 이름으로
+  진행 상황을 센다 — 기본값 `env` 로 두면 첫 회전에서 새 이름을 정해야 한다
+  (`scripts/rotate-kek.mjs`, §4.8.3)
 
 ### 키를 파일로 안 두려면 — `BARY_SECRET_KEK_CMD`
 
@@ -71,6 +72,10 @@ sudo deploy/install.sh --with-postgres \
 `vault read`·`gcloud kms decrypt`·`systemd-creds cat`·TPM 을 읽는 스크립트 — stdout 으로
 32 바이트를 base64 나 hex 로 내기만 하면 무엇이든 된다. **벤더 SDK 를 안 들이는 것**이
 이 모양을 고른 이유다 (§4.8.2).
+
+⚠️ **명령은 키를 stdout 으로만 낸다.** stderr 는 진단 채널이라 **로그로 나간다** —
+거기 키를 쓰는 명령은 그것을 로그에 쓰는 것이다. (오류에 명령 문자열이나 stdout 은
+안 실린다. 실리는 것은 종료 코드와 stderr 뿐이다.)
 
 ⚠️ **둘을 같이 주면 안 뜬다.** 한 비밀에 출처가 둘이면 어느 쪽이 이기는지가 곧 사고다.
 그리고 명령이 실패하면 데몬이 **안 뜬다** — 지어내면 *"암호화된 줄 알았다"* 가 그대로
