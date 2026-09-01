@@ -47,9 +47,41 @@
  * 두 KEK 를 동시에 들어야 하는데, 그건 이 회차의 범위가 아니다.
  */
 import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { Db } from '../dist/store/pg.js';
-import { resolveKek } from '../dist/dp/kek-source.js';
+/**
+ * **산출물을 어디서 찾나.**
+ *
+ * 처음엔 `../dist` 를 정적으로 import 했다. **실배포에서 안 돌았다** —
+ * `install.sh` 는 저장소를 **읽기만** 하고 빌드는 임시 디렉터리에서 해서
+ * `$APP_DIR/dist` 에 놓는다. 그래서 설치된 호스트의 체크아웃에는 `dist` 가 없고,
+ * 런북이 시킨 명령이 `ERR_MODULE_NOT_FOUND` 로 죽었다 (2026-09-01 실측).
+ *
+ * 그래서 셋을 순서대로 본다. 개발 체크아웃과 설치된 호스트에서 **같은 명령**이 돌아야
+ * 하고, 못 찾으면 **어디를 봤는지 말하고** 죽는다 — 모듈 스택을 던지는 것보다 낫다.
+ */
+const HERE = dirname(fileURLToPath(import.meta.url));
+// **빈 문자열을 「안 준 것」으로 본다.** `??` 만 쓰면 `BARY_APP_DIR=""` 이 그대로 통과해
+// `join("", "dist")` = 상대 경로 `dist` 가 되고, 그러면 **cwd 에 있는 아무 dist** 를
+// 집는다. 재현물이 그 자리를 잡았다.
+const appDir = (process.env['BARY_APP_DIR'] ?? '').trim() || '/opt/barycenter';
+const CANDIDATES = [
+  resolve(HERE, '..', 'dist'),        // 개발 체크아웃
+  resolve(appDir, 'dist'),            // 설치된 호스트
+];
+const DIST = CANDIDATES.find((d) => existsSync(join(d, 'store', 'pg.js')));
+if (DIST === undefined) {
+  console.error('  FAIL  산출물(dist)을 못 찾았다 — 본 곳:');
+  for (const c of CANDIDATES) console.error(`          ${c}`);
+  console.error('        설치된 호스트면 BARY_APP_DIR 를 준다 (기본 /opt/barycenter).');
+  console.error('        저장소에서 돌리려면 ./scripts/build.sh 를 먼저 돌린다.');
+  process.exit(1);
+}
+
+const { Db } = await import(`${DIST}/store/pg.js`);
+const { resolveKek } = await import(`${DIST}/dp/kek-source.js`);
 
 const NONCE = 12;
 const TAG = 16;
@@ -77,6 +109,8 @@ for (let i = 2; i < process.argv.length; i += 1) {
 
 환경
   BARY_DSN                                   PostgreSQL
+  BARY_APP_DIR                               산출물이 있는 곳 (기본 /opt/barycenter).
+                                             저장소에 dist 가 있으면 그것을 먼저 쓴다
   BARY_SECRET_KEK      | BARY_SECRET_KEK_CMD          지금 쓰는 KEK
   BARY_SECRET_KEK_NEW  | BARY_SECRET_KEK_NEW_CMD      새 KEK
 
@@ -189,7 +223,7 @@ for (const r of rows) {
 // 기본은 안 한다 — 회전의 요점이 **자료를 안 읽는 것**이라서다. 그래도 재기동 앞에서
 // 한 번 확인하고 싶은 운영자를 위해 문을 둔다. 여는 것은 메모리에서뿐이고 아무 데도 안 쓴다.
 if (verify && !checkOnly && failed.length === 0) {
-  const { PgSecretStore } = await import('../dist/dp/secrets-pg.js');
+  const { PgSecretStore } = await import(`${DIST}/dp/secrets-pg.js`);
   const store = new PgSecretStore({ db, kek: newKek, kekId: toId });
   let checked = 0;
   for (const r of rows) {
