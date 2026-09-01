@@ -375,3 +375,109 @@ describe('검수 2026-09-01', () => {
     expect(out).toMatch(/root 로 돌려야 한다/);
   });
 });
+
+/**
+ * **재실행이 옛 설정을 이어받는다** (2026-09-01).
+ *
+ * 지금까지 관리 키는 **쓰기만** 했다. 그래서 `--listen 0.0.0.0:8443 --tls-cert …` 로
+ * 깐 인스턴스를 플래그 없이 업데이트하면 API 가 **127.0.0.1:8088 평문으로 되돌아가고**,
+ * "루프백 밖이면 TLS 필수" 가드는 안 걸리고(이제 루프백이니까), ⑫ 검증은 새 주소를 보고
+ * **통과하고**, 설치는 "끝났다" 고 말한다. 조용히 망가지고 성공이라고 보고한다.
+ *
+ * 여기서는 그 블록을 **스크립트에서 꺼내 실제로 돌린다.**
+ */
+describe('재실행이 기억한다', () => {
+  const ENV = [
+    "BARY_DSN='postgres:///bary?host=/run/postgresql'",
+    "BARY_LISTEN='0.0.0.0:8443'",
+    "BARY_GUI='/opt/bary-custom/gui/build'",
+    "BARY_TLS_CERT_FILE='/etc/ssl/api.crt'",
+    "BARY_TLS_KEY_FILE='/etc/ssl/api.key'",
+    '',
+  ].join('\n');
+
+  /** ⓪-a 를 스크립트에서 꺼내 돌리고, 결정된 값들을 되돌려 받는다. */
+  function decide(pre: string): Record<string, string> {
+    const dir = mkdtempSync(join(tmpdir(), 'bary-reuse-'));
+    try {
+      const file = join(dir, 'env');
+      writeFileSync(file, ENV);
+      const out = execFileSync('sh', ['-c',
+        `ENV_FILE="$1"
+         DSN=''; WITH_PG=0; LISTEN_SET=0; LISTEN='127.0.0.1:8088'
+         NO_TLS=0; TLS_CERT=''; TLS_KEY=''; APP_DIR_SET=0; APP_DIR=/opt/barycenter
+         ${pre}
+         ${shFunction('env_get')}
+         ${src.slice(src.indexOf('REUSED=\n'), src.indexOf("\n# **\`--prefix\` 와"))}
+         printf 'DSN=%s\\nLISTEN=%s\\nAPP_DIR=%s\\nTLS=%s\\nREUSED=%s\\n' \\
+           "$DSN" "$LISTEN" "$APP_DIR" "$TLS_CERT" "$REUSED"`,
+        'sh', file,
+      ], { encoding: 'utf8' });
+      const o: Record<string, string> = {};
+      for (const line of out.split('\n')) {
+        const at = line.indexOf('=');
+        if (at > 0) o[line.slice(0, at)] = line.slice(at + 1);
+      }
+      return o;
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  /** **이것이 이 회차의 이유다.** 플래그 없이 돌려도 리스너와 TLS 가 살아 있어야 한다. */
+  it('**플래그 없이 돌려도 리스너와 TLS 를 안 잃는다**', () => {
+    const d = decide('');
+    expect(d['LISTEN']).toBe('0.0.0.0:8443');
+    expect(d['TLS']).toBe('/etc/ssl/api.crt');
+    expect(d['DSN']).toContain('postgres:///bary');
+    expect(d['APP_DIR']).toBe('/opt/bary-custom');
+  });
+
+  /** 옵션으로 준 것은 **언제나 이긴다** — 그게 `*_SET` 갈래가 있던 이유다. */
+  it('플래그가 옛 값을 이긴다', () => {
+    const d = decide("LISTEN_SET=1; LISTEN='10.0.0.9:9999'");
+    expect(d['LISTEN']).toBe('10.0.0.9:9999');
+    expect(d['REUSED']).not.toContain('--listen');
+    // 나머지는 그대로 이어받는다.
+    expect(d['TLS']).toBe('/etc/ssl/api.crt');
+  });
+
+  /**
+   * **끄는 문이 있어야 한다.** 이어받기가 생기면 한 번 켠 TLS 를 다시 끌 방법이
+   * env 를 손으로 고치는 것뿐이게 된다.
+   */
+  it('`--no-tls` 는 TLS 만 안 이어받는다', () => {
+    const d = decide('NO_TLS=1');
+    expect(d['TLS']).toBe('');
+    expect(d['LISTEN']).toBe('0.0.0.0:8443');  // 나머지는 살아 있다
+  });
+
+  /** `--dsn` 을 주면 그것을 쓴다 — `--with-postgres` 도 같다. */
+  it('`--with-postgres` 를 주면 옛 DSN 을 안 쓴다', () => {
+    const d = decide('WITH_PG=1');
+    expect(d['DSN']).toBe('');
+    expect(d['REUSED']).not.toContain('--dsn');
+  });
+
+  /** 첫 설치에는 이어받을 것이 없다 — env 가 없으면 아무 일도 안 일어난다. */
+  it('첫 설치에는 이어받지 않는다', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bary-reuse-'));
+    try {
+      const out = execFileSync('sh', ['-c',
+        `ENV_FILE="$1/없는파일"
+         DSN=''; WITH_PG=0; LISTEN_SET=0; LISTEN='127.0.0.1:8088'
+         NO_TLS=0; TLS_CERT=''; TLS_KEY=''; APP_DIR_SET=0; APP_DIR=/opt/barycenter
+         ${shFunction('env_get')}
+         ${src.slice(src.indexOf('REUSED=\n'), src.indexOf("\n# **\`--prefix\` 와"))}
+         printf 'LISTEN=%s\\nREUSED=%s\\n' "$LISTEN" "$REUSED"`,
+        'sh', dir,
+      ], { encoding: 'utf8' });
+      expect(out).toContain('LISTEN=127.0.0.1:8088');
+      expect(out).toContain('REUSED=\n');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  /** `--no-tls` 가 사용법과 파서 양쪽에 있어야 한다 — 없으면 문이 없는 것이다. */
+  it('`--no-tls` 가 사용법과 파서 양쪽에 있다', () => {
+    expect(src).toContain('  --no-tls');
+    expect(src).toMatch(/\n\s*--no-tls\)\s+NO_TLS=1;/);
+  });
+});
