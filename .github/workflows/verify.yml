@@ -96,6 +96,32 @@ jobs:
       - run: npm ci
       - run: ./scripts/verify.sh --quick
 
+      # **흔들림을 실행 요약에 올린다** (2026-09-01).
+      #
+      # `scripts/lib/flake.sh` 가 흔들린 스위트를 `.flakes.jsonl` 에 적는데, 그 파일은
+      # `.gitignore` 되어 있고 아무도 안 챙겨서 **CI 에서는 워크스페이스와 함께
+      # 사라졌다.** 장부 머리말이 *"회차를 가로질러 쌓여야 세는 뜻이 있다"* 고 적어 둔
+      # 그 성질이, 정작 흔들림이 제일 많이 일어나는 자리에서 안 서고 있었다 —
+      # 이 회차에 e2e 활성화 흔들림을 두 번 보고도 남은 것은 인상뿐이었다.
+      #
+      # `if: always()` 다. 흔들림은 **잡이 빨간 채로** 끝날 때 나온다 (재실행이 초록이어도
+      # 판정을 안 바꾸는 것이 그쪽의 결정이다) — `success()` 에 걸면 영영 안 찍힌다.
+      - name: 흔들림 요약
+        if: always()
+        env:
+          LABEL: quick
+        run: node scripts/flake-report.mjs "$LABEL" >> "$GITHUB_STEP_SUMMARY"
+
+      # 기계가 읽을 장부는 아티팩트로 남긴다 (90일). **실행을 가로질러 세지는 못한다** —
+      # 그러려면 저장소 밖에 두는 곳이 있어야 하고 그건 쓰기 자격증명이나 새 액션을
+      # 뜻한다. 둘 다 일부러 안 늘린다. 그 한계는 `flake-report.mjs` 에 적어 뒀다.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: flakes-quick
+          path: .flakes.jsonl
+          if-no-files-found: ignore
+
       # **재현물 핀 검사는 푸시된 커밋 전부**를 본다.
       #
       # `verify.sh` 안에서도 돌지만 거기서는 직전 커밋 하나만 본다(로컬 작업 흐름에 맞춘
@@ -187,6 +213,32 @@ jobs:
         env:
           GROUP: ${{ matrix.group }}
         run: ./scripts/verify.sh --group "$GROUP"
+
+      # **흔들림을 실행 요약에 올린다** (2026-09-01).
+      #
+      # `scripts/lib/flake.sh` 가 흔들린 스위트를 `.flakes.jsonl` 에 적는데, 그 파일은
+      # `.gitignore` 되어 있고 아무도 안 챙겨서 **CI 에서는 워크스페이스와 함께
+      # 사라졌다.** 장부 머리말이 *"회차를 가로질러 쌓여야 세는 뜻이 있다"* 고 적어 둔
+      # 그 성질이, 정작 흔들림이 제일 많이 일어나는 자리에서 안 서고 있었다 —
+      # 이 회차에 e2e 활성화 흔들림을 두 번 보고도 남은 것은 인상뿐이었다.
+      #
+      # `if: always()` 다. 흔들림은 **잡이 빨간 채로** 끝날 때 나온다 (재실행이 초록이어도
+      # 판정을 안 바꾸는 것이 그쪽의 결정이다) — `success()` 에 걸면 영영 안 찍힌다.
+      - name: 흔들림 요약
+        if: always()
+        env:
+          LABEL: ${{ matrix.group }}
+        run: node scripts/flake-report.mjs "$LABEL" >> "$GITHUB_STEP_SUMMARY"
+
+      # 기계가 읽을 장부는 아티팩트로 남긴다 (90일). **실행을 가로질러 세지는 못한다** —
+      # 그러려면 저장소 밖에 두는 곳이 있어야 하고 그건 쓰기 자격증명이나 새 액션을
+      # 뜻한다. 둘 다 일부러 안 늘린다. 그 한계는 `flake-report.mjs` 에 적어 뒀다.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: flakes-${{ matrix.group }}
+          path: .flakes.jsonl
+          if-no-files-found: ignore
 
       # 실패했을 때 남은 컨테이너의 로그를 남긴다. CI 의 실패는 재현이 어려우므로
       # 그때 손에 있는 것을 다 챙긴다.
