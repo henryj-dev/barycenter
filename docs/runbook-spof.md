@@ -38,9 +38,14 @@ v1 데이터 플레인은 **단일 장애점**이다. 자동 페일오버는 없
 자료를 다시 올릴 필요가 없고, ACME 가 발급한 것(재업로드할 자료가 아예 없는 것)까지 옮긴다:
 
 ```sh
+BARY_APP_DIR=/opt/barycenter \
 BARY_SECRET_KEK_NEW="$(openssl rand -base64 32)" \
   node scripts/rotate-kek.mjs --to <새-kek-id> --check   # 먼저 본다
 ```
+
+⚠️ **`BARY_APP_DIR` 가 필요하다** — 설치는 저장소를 읽기만 하고 산출물을 `$APP_DIR/dist`
+에 놓는다. 저장소 체크아웃에는 `dist` 가 없다. 못 찾으면 스크립트가 **어디를 봤는지
+말하고** 죽는다.
 
 돌린 뒤 KEK 출처를 새 것으로 바꾸고 **데몬을 재기동한다.** 그 사이 제어 평면은 인증서를
 못 읽는다(데이터 평면은 멀쩡하다).
