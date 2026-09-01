@@ -22,8 +22,9 @@
  *   · API 가 개인키를 돌려준다 (§8.1 위반)              → 응답에 PRIVATE KEY 가 보인다
  */
 import { execFileSync } from 'node:child_process';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import { dumpEngineIfFailed } from './engine-diagnostics.js';
 import { waitForPg } from './pg-ready.js';
 import { waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
@@ -181,6 +182,17 @@ afterAll(() => {
 });
 
 describe('v0.6 TLS 종단 — 실물', () => {
+  /**
+   * **실패한 케이스가 엔진의 상태를 들고 죽게 한다** (`engine-diagnostics.ts`).
+   *
+   * 이 파일의 활성화 흔들림(2026-08-31 · PR #33)이 남긴 것은 *"기대 세대 r3-e2,
+   * 관측 r2-e1"* 한 줄뿐이었다. 여기 컨테이너는 `afterAll` 까지 살아 있으므로
+   * 케이스마다 바로 찍어 둔다 — 뒤 케이스가 상태를 덮기 전에.
+   */
+  afterEach((ctx) => {
+    dumpEngineIfFailed(ctx.task.result?.state, DP);
+  });
+
   let refOld = '';
   let refNew = '';
   let digestsOld = { chain: '', key: '' };

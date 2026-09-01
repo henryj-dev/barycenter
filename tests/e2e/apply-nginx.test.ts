@@ -23,6 +23,7 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
+import { dumpEngineIfFailed } from './engine-diagnostics.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -342,7 +343,11 @@ describe('S12 end-to-end — 실제 nginx', () => {
     }
   }, 120_000);
 
-  afterEach(() => {
+  afterEach((ctx) => {
+    // **지우기 전에 본다.** 활성화 흔들림을 두 번 보고도 아는 것이 안 늘었던 이유가
+    // 여기다 — 실패 메세지는 "엔진의 error log 를 본다" 라고 하는데 그 로그가 이 줄
+    // 아래에서 컨테이너와 함께 사라졌다 (`engine-diagnostics.ts`).
+    dumpEngineIfFailed(ctx.task.result?.state, container);
     for (const s of openStores.splice(0)) s.release();
     try {
       docker('rm', '-f', container);
