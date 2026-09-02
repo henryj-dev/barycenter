@@ -281,6 +281,42 @@ JSON' >/dev/null 2>&1
       rc=1
     fi
 
+    # ⑦-a2 **플래그 없이 다시 깔아도 설정이 살아 있는가** (2026-09-01).
+    #
+    # 위 ⑦ 은 `--dsn` 을 준다. 그런데 **업데이트하는 사람은 플래그를 다시 안 준다** —
+    # 그게 이 회차가 고친 것이다. 아무 옵션 없이 돌려서 `BARY_DSN` 과 `BARY_LISTEN` 이
+    # 옛 값 그대로인지 본다. 안 그러면 API 가 조용히 기본값으로 되돌아간다.
+    if docker exec "$c" sh /repo/deploy/install.sh > "/tmp/bary-install-$name-bare.log" 2>&1 \
+       && wait_ready "$c"; then
+      printf '    ok   플래그 없이 재설치해도 선다\n'
+      if docker exec "$c" grep -q "^BARY_DSN='postgres:///bary?host=/run/postgresql'\$" \
+           /etc/barycenter/env; then
+        printf '    ok   DSN 을 이어받았다 (--dsn 을 안 줬는데)\n'
+      else
+        printf '    NO   DSN 이 사라졌다 — 업데이트가 설정을 잃는다\n'
+        rc=1
+      fi
+      # **이어받았다고 말했는가.** 조용히 이어받으면 무엇이 물려온 값인지 모른다.
+      if grep -q '옛 설정을 이어받는다' "/tmp/bary-install-$name-bare.log"; then
+        printf '    ok   무엇을 이어받았는지 말한다\n'
+      else
+        printf '    NO   조용히 이어받았다\n'
+        rc=1
+      fi
+    else
+      printf '    NO   플래그 없는 재설치가 실패했다 — 마지막 15줄:\n'
+      tail -n 15 "/tmp/bary-install-$name-bare.log" | sed 's/^/         /'
+      rc=1
+    fi
+
+    # ⑦-a3 **무엇이 설치됐는지 적혔는가.** 없으면 업데이트 앞뒤로 "지금 뭐지" 를 못 묻는다.
+    if docker exec "$c" grep -q '^commit=' /etc/barycenter/version; then
+      printf '    ok   설치된 커밋을 적었다\n'
+    else
+      printf '    NO   버전 기록이 없다 — 무엇이 도는지 알 수 없다\n'
+      rc=1
+    fi
+
     # ⑦-b **깨진 tokens.json 은 보존하지 않고 고친다** (검수 2026-09-01 ㉮).
     #
     # `tokens_usable` 이 데몬의 `parseTokenSpecs` 를 흉내 내던 때, 그 흉내가 정본보다

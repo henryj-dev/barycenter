@@ -42,6 +42,9 @@ NO_SERVICE=0
 SKIP_PACKAGES=0
 TLS_CERT=
 TLS_KEY=
+# **TLS 를 끄는 문.** 이어받기가 생기면서 필요해졌다 — 안 그러면 한 번 켠 TLS 를
+# 다시 끌 방법이 env 를 손으로 고치는 것뿐이다.
+NO_TLS=0
 INTERACTIVE=auto
 ASSUME_YES=0
 EXTRA_ENV=
@@ -61,6 +64,10 @@ ENV_FILE="$PREFIX/env"
 # 묻게 되고, 그러면 옵션이 뜻을 잃는다.
 LISTEN_SET=0
 PREFIX_SET=0
+# **PG 를 플래그로 골랐는가.** 값이 있는지(`-z "$DSN"`)와 다른 물음이다 — 재실행이
+# env 에서 DSN 을 이어받으면 값은 있지만 **고른 적은 없다.** 그 둘을 섞었더니 대화형이
+# PG 질문을 통째로 건너뛰었다 (CI 의 ubuntu 판이 잡았다).
+PG_SET=0
 APP_DIR_SET=0
 USER_SET=0
 
@@ -95,6 +102,7 @@ PostgreSQL (택일 — 터미널에서는 안 주면 물어본다)
   --listen <host:port>     컨트롤 플레인 API (기본 127.0.0.1:8088)
   --tls-cert <경로>        API 서버 인증서 — 루프백 밖으로 열려면 필요하다
   --tls-key <경로>         그 개인키
+  --no-tls                 재실행에서 **이어받지 않는다** — TLS 를 끈다
   --env KEY=VALUE          env 파일에 넣을 BARY_* 설정. 여러 번 줄 수 있다
                            (예: --env BARY_ACME=1 --env BARY_PROBE_INTERVAL_MS=3000)
   --no-service             유닛 파일만 쓰고 enable·start 는 하지 않는다
@@ -102,7 +110,12 @@ PostgreSQL (택일 — 터미널에서는 안 주면 물어본다)
   -h, --help               이 도움말
 
 재실행 (= 업데이트)
-  새 코드를 받아 그대로 다시 돌리면 된다. 기존 토큰과 env 의 관리 밖 줄은 살아남는다.
+  새 코드를 받아 그대로 다시 돌리면 된다 — **플래그를 다시 안 줘도 된다.**
+  기존 토큰과 env 의 관리 밖 줄이 살아남고, `--dsn`·`--listen`·`--tls-*`·`--app-dir`
+  는 옛 env 에서 이어받는다 (플래그를 주면 그쪽이 이긴다).
+
+  ⚠️ `--prefix` 와 `--user` 는 못 이어받는다 — 기본값이 아니었다면 다시 준다.
+     $PREFIX 의 소유자가 안 맞으면 안내하고 죽는다.
 
   --rotate-token           ops 토큰을 새로 발급한다 (다른 토큰은 그대로 둔다).
                            평문은 그때 한 번만 보인다 — 잃어버렸을 때 쓴다
@@ -186,12 +199,13 @@ ask() {                         # ask <질문> <기본값>
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dsn)            DSN=${2:?--dsn 에 값이 필요하다}; shift 2 ;;
-    --with-postgres)  WITH_PG=1; shift ;;
+    --dsn)            DSN=${2:?--dsn 에 값이 필요하다}; PG_SET=1; shift 2 ;;
+    --with-postgres)  WITH_PG=1; PG_SET=1; shift ;;
     --prefix)         PREFIX=${2:?--prefix 에 값이 필요하다}; PREFIX_SET=1; shift 2 ;;
     --app-dir)        APP_DIR=${2:?--app-dir 에 값이 필요하다}; APP_DIR_SET=1; shift 2 ;;
     --user)           SVC_USER=${2:?--user 에 값이 필요하다}; USER_SET=1; shift 2 ;;
     --listen)         LISTEN=${2:?--listen 에 값이 필요하다}; LISTEN_SET=1; shift 2 ;;
+    --no-tls)         NO_TLS=1; shift ;;
     --tls-cert)       TLS_CERT=${2:?--tls-cert 에 값이 필요하다}; shift 2 ;;
     --tls-key)        TLS_KEY=${2:?--tls-key 에 값이 필요하다}; shift 2 ;;
     --env)            extra_env_add "${2:?--env 에 KEY=VALUE 가 필요하다}"; shift 2 ;;
@@ -211,6 +225,91 @@ done
 
 if [ -n "$DSN" ] && [ "$WITH_PG" = 1 ]; then
   die "--dsn 과 --with-postgres 는 같이 못 쓴다 — 어느 PG 를 쓸지 하나만 정한다"
+fi
+
+# ── ⓪-a 재실행이면 옛 설정을 이어받는다 ────────────────────────────────
+#
+# **재실행이 곧 업데이트다.** 그런데 관리 키는 지금까지 **쓰기만** 했다 — 옛 값을
+# 안 읽고 코드의 기본값으로 다시 썼다. 그래서 `--listen 0.0.0.0:8443 --tls-cert …`
+# 로 깐 인스턴스를 플래그 없이 업데이트하면:
+#
+#   · API 가 127.0.0.1:8088 **평문으로 되돌아간다**
+#   · "루프백 밖이면 TLS 필수" 가드는 안 걸린다 (이제 루프백이니까)
+#   · ⑫ 검증은 **통과한다** — 새 주소로 /healthz 를 보니까
+#   · 설치가 "끝났다" 고 말한다
+#
+# **조용히 망가지고 성공이라고 보고한다.** 값은 전부 여기 있는데 안 읽었을 뿐이다.
+#
+# 우선순위를 셋으로 둔다: **플래그 > 기존 env > 코드 기본값.** 옵션으로 준 것은 언제나
+# 이긴다 — `*_SET` 갈래가 원래 그것을 가르려고 있던 것이다.
+ENV_FILE="$PREFIX/env"
+
+# env 파일의 값 하나. 형식은 `KEY='값'` 이고 값에는 작은따옴표도 개행도 못 들어간다
+# (`env_line` 이 둘 다 거절한다) — 그래서 이 한 줄로 정확히 읽힌다.
+env_get() {                     # env_get <KEY>
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n "s/^$1='\(.*\)'\$/\1/p" "$ENV_FILE" | tail -1
+}
+
+REUSED=
+if [ -f "$ENV_FILE" ]; then
+  _v=$(env_get BARY_DSN)
+  if [ -z "$DSN" ] && [ "$WITH_PG" = 0 ] && [ -n "$_v" ]; then
+    DSN=$_v; REUSED="$REUSED --dsn"
+  fi
+
+  _v=$(env_get BARY_LISTEN)
+  if [ "$LISTEN_SET" = 0 ] && [ -n "$_v" ]; then
+    LISTEN=$_v; REUSED="$REUSED --listen"
+  fi
+
+  # **짝으로만 이어받는다.** 한쪽만 물려받으면 인증서와 키가 갈린다.
+  _c=$(env_get BARY_TLS_CERT_FILE)
+  _k=$(env_get BARY_TLS_KEY_FILE)
+  if [ "$NO_TLS" = 0 ] && [ -z "$TLS_CERT" ] && [ -z "$TLS_KEY" ] \
+     && [ -n "$_c" ] && [ -n "$_k" ]; then
+    TLS_CERT=$_c; TLS_KEY=$_k; REUSED="$REUSED --tls-cert/--tls-key"
+  fi
+
+  # `$APP_DIR` 는 env 에 직접 없지만 **install.sh 자신이 쓴 값**에서 정확히 나온다.
+  _v=$(env_get BARY_GUI)
+  if [ "$APP_DIR_SET" = 0 ] && [ -n "$_v" ]; then
+    case "$_v" in
+      */gui/build) APP_DIR=${_v%/gui/build}; REUSED="$REUSED --app-dir" ;;
+    esac
+  fi
+fi
+
+# **`--prefix` 와 `--user` 는 못 이어받는다** — 그래서 조용히 넘어가지 않는다.
+#
+# prefix 는 env 를 찾는 자리라 닭이 먼저다. 유저는 env 에 없다. 대신 **$PREFIX 의
+# 소유자**가 그 답을 들고 있으므로, 어긋나면 안내하고 죽는다. 안 그러면 남의 유저로
+# 깔린 설치를 `bary` 로 다시 chown 해 버린다.
+if [ "$USER_SET" = 0 ] && [ -d "$PREFIX" ]; then
+  _owner=$(stat -c %U "$PREFIX" 2>/dev/null || true)
+  if [ -n "$_owner" ] && [ "$_owner" != "$SVC_USER" ]; then
+    die "$PREFIX 의 소유자는 $_owner 인데 서비스 유저 기본값은 $SVC_USER 다 — 처음 설치에 --user $_owner 를 줬다면 이번에도 준다"
+  fi
+fi
+
+# ── ⓪-b 무엇에서 무엇으로 가나 ──────────────────────────────────────────
+#
+# **무엇이 돌고 있는지 알 수 없었다.** 버전도 커밋도 아무 데도 안 적혀서, 업데이트
+# 앞에서 *"지금 뭐지?"* 를, 뒤에서 *"정말 바뀌었나?"* 를 못 물었다. 체크아웃의
+# `git rev-parse` 는 **체크아웃**을 말하지 설치된 것을 말하지 않는다.
+VERSION_FILE="$PREFIX/version"
+NEW_COMMIT=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo '(git 아님)')
+NEW_DESCRIBE=$(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo '')
+PREV_COMMIT=$(sed -n "s/^commit=//p" "$VERSION_FILE" 2>/dev/null | tail -1)
+
+if [ -n "$PREV_COMMIT" ] || [ -n "$REUSED" ]; then
+  step "⓪ 재실행 (= 업데이트)"
+  if [ -n "$PREV_COMMIT" ]; then
+    ok "현재 $PREV_COMMIT → 새로 $NEW_COMMIT${NEW_DESCRIBE:+ ($NEW_DESCRIBE)}"
+  fi
+  if [ -n "$REUSED" ]; then
+    ok "옛 설정을 이어받는다:$REUSED (플래그로 주면 그쪽이 이긴다)"
+  fi
 fi
 
 # ── ⓪ 대화형 설정 ───────────────────────────────────────────────────────
@@ -233,15 +332,22 @@ if [ "$INTERACTIVE" = 1 ]; then
   say "  빈 칸으로 두면 대괄호 안의 기본값을 쓴다. 옵션으로 준 값은 안 묻는다."
   say ""
 
-  if [ -z "$DSN" ] && [ "$WITH_PG" = 0 ]; then
+  # **묻는 기준은 「플래그로 줬나」다.** 나머지 항목이 `*_SET` 으로 거는 것과 같다 —
+  # 이어받은 값은 **안 묻는 이유가 아니라 프롬프트의 기본값**이다. 값으로 걸었더니
+  # 재실행에서 이 질문이 통째로 사라져, 파이프로 답을 넣는 쪽의 순서가 한 칸씩 밀렸다.
+  if [ "$PG_SET" = 0 ]; then
     say "  PostgreSQL — 정본이 사는 곳이다 (§11.2)."
     say "    1) 이 호스트에 설치한다 (유닉스 소켓 + peer 인증 — 비밀번호를 안 만든다)"
     say "    2) 이미 있는 것을 쓴다 (DSN 을 입력한다)"
-    while [ -z "$DSN" ] && [ "$WITH_PG" = 0 ]; do
-      choice=$(ask "고른다" "1")
+    # 이어받은 DSN 이 있으면 그쪽이 기본이다 — 다시 고르게 하되 손이 덜 가게.
+    _pg_default=1
+    [ -n "$DSN" ] && _pg_default=2
+    while : ; do
+      choice=$(ask "고른다" "$_pg_default")
       case "$choice" in
-        1) WITH_PG=1 ;;
-        2) DSN=$(ask "DSN" "") ;;
+        1) WITH_PG=1; DSN=''; break ;;
+        2) DSN=$(ask "DSN" "$DSN"); [ -n "$DSN" ] && break
+           warn "DSN 이 비었다" ;;
         *) warn "1 이나 2 를 고른다" ;;
       esac
     done
@@ -758,6 +864,17 @@ cp -R "$BUILD_DIR/drivers" "$APP_DIR/drivers"
 cp "$REPO/package.json" "$APP_DIR/package.json"
 chown -R root:root "$APP_DIR"
 ok "$APP_DIR (dist · node_modules · gui/build · drivers)"
+
+# **무엇이 설치됐는지 적는다.** 다음 재실행이 ⓪-b 에서 이것을 읽어 「어디서 어디로」를
+# 보여 준다. API 로는 안 낸다 — 엔드포인트를 늘리면 B 동결(OpenAPI 드리프트)을
+# 건드리게 되고, 그 값이 파일 하나만큼도 안 된다.
+install -d -m 0755 "$PREFIX"
+{
+  printf 'commit=%s\n' "$NEW_COMMIT"
+  [ -n "$NEW_DESCRIBE" ] && printf 'describe=%s\n' "$NEW_DESCRIBE"
+  printf 'installed_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > "$VERSION_FILE"
+chmod 0644 "$VERSION_FILE"
 
 # ── ⑨ PostgreSQL ────────────────────────────────────────────────────────
 #
