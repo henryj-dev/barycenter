@@ -33,7 +33,7 @@
     "typecheck:ts5": "node node_modules/typescript-5/bin/tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.4.1",
     "@types/pg": "^8.23.1",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
