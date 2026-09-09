@@ -46,6 +46,14 @@ updates:
       gui:
         patterns: ['*']
         update-types: [minor, patch]
+    ignore:
+      # **typescript 7.x 는 @sveltejs/kit 이 못 받는다.** 그쪽 peerOptional 이
+      # `^5.3.3 || ^6.0.0` 이라 npm 이 설치 자체를 거부한다(ERESOLVE) — CI 의
+      # `test:install` 이 그 자리에서 죽는다. 그룹은 minor·patch 만 묶으므로
+      # major 는 개별 PR 로 새어 나오고, 그렇게 나온 것이 #45 였다.
+      # SvelteKit 이 TS7 을 지원하면 이 줄을 걷는다.
+      - dependency-name: typescript
+        versions: ['>=7.0.0']
     open-pull-requests-limit: 3
     commit-message:
       prefix: 'chore(deps)'
