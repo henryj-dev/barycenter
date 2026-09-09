@@ -38,7 +38,7 @@
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "typescript-5": "npm:typescript@^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   },
   "dependencies": {
     "pg": "^8.23.0"
