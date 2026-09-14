@@ -51,7 +51,7 @@ COPY src ./src
 COPY gui ./gui
 RUN ./scripts/build.sh
 
-FROM docker.io/openresty/openresty:alpine@sha256:99b32fe3e411c98033114dd471440fb702992d0953ce8b6e6b5c016285ac2ab9
+FROM docker.io/openresty/openresty:alpine@sha256:b3a6f1f432eabdbda4adcb6ec3e6461e621782eaa82dbe67154ddd1afd109569
 
 # 엔진 이미지 위에 Node 를 얹는다. 반대로(node 이미지에 openresty 를 얹기) 하면
 # OpenResty 를 소스에서 빌드해야 한다 — alpine 저장소에 패키지가 없다.
