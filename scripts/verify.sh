@@ -335,11 +335,8 @@ PINNED_BASE="${BARY_PINNED_BASE:-HEAD~1}"
 [ $QUICK -eq 0 ] && run "재현물 (핀 검사)     " --what "src 를 바꾼 커밋마다 표식이 있고 그 테스트가 부모 트리에서 빨간가" node scripts/pinned.mjs "$PINNED_BASE"
 
 # **훅 — 핀 검사의 한 발을 메운다.** 위 검사는 `HEAD~1` 을 보므로 *지금 만들 커밋*을 못
-# 본다. 커밋 전에 게이트를 돌리는 이 저장소의 순서에서는 위반이 **항상 한 사이클 늦게**
-# 잡힌다 (2026-08-18 에 실제로 그렇게 놓쳤다). `commit-msg` 훅이 커밋 시점에 표식을
-# 요구한다. 훅은 커밋되지만 `core.hooksPath` 를 건 클론에서만 도니, **훅 자체가 도는지를
-# 여기서 잰다** — 안 그러면 "있는데 안 도는" 층이 된다.
-run "훅 (pre-commit)      " --what "메인 트리 쓰기 차단 훅이 실제로 도는가" python3 scripts/git-hooks/test-pre-commit.py
+# 본다. 커밋 전에 게이트를 돌리는 이 저장소의 순서에서는 위반이 한 사이클 늦게 잡힌다.
+# `commit-msg` 훅은 커밋 시점에 표식을 요구하며, 격리 저장소의 양성 시험으로 이를 확인한다.
 run "훅 (commit-msg)      " --what "Pinned-by 를 요구하는 훅이 실제로 도는가" python3 scripts/git-hooks/test-commit-msg.py
 # **계수기 자신도 잰다** (검수 W4-9). 이 게이트가 흔들림을 세는데 세는 쪽이 틀리면
 # 그 숫자가 거짓이 된다 — 훅을 여기서 재는 것과 같은 이유다.

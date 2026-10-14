@@ -10,10 +10,9 @@
  * 그리고 컨테이너 안에서 `node /app/dist/bin/barycenterd.js` 를 돌린다. 그 산출물은
  * `pg` 를 import 하므로 `/app/node_modules` 가 있어야 한다.
  *
- * **git worktree 에서는 `node_modules` 가 심볼릭 링크다.** 이 저장소의 규칙이
- * *"에이전트는 워크트리, 사람은 메인에서 작업"* 이고, 워크트리 생성기는 설치를 다시
- * 하지 않으려고 메인 체크아웃의 `node_modules` 로 링크를 건다. 그 링크의 대상은
- * **절대경로**이고, 컨테이너 안에는 그런 경로가 없다:
+ * **git worktree 에서는 `node_modules` 가 심볼릭 링크일 수 있다.** 메인 체크아웃의
+ * 설치를 재사용하려고 링크를 걸 수 있는데, 그 대상은 **절대경로**이고 컨테이너 안에는
+ * 그런 경로가 없다:
  *
  *   Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'pg'
  *     imported from /app/dist/control/leader.js
