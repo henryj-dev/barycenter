@@ -33,9 +33,8 @@ Then, once per clone:
 ./scripts/git-hooks/install.sh
 ```
 
-This points `core.hooksPath` at the tracked `scripts/git-hooks/`. The hooks are hygiene, not a
-boundary (`--no-verify` bypasses them) — but the gate that follows them is not, so skipping
-them only moves the failure later. See the next section.
+This points `core.hooksPath` at the tracked `scripts/git-hooks/`, where the `commit-msg` hook
+checks the `Pinned-by:` trailer described below. CI also checks every pushed commit.
 
 ## Running the gate
 
@@ -64,8 +63,8 @@ it, expecting it to fail.** A test that passes without your change pins nothing.
 is rejected; the reason after the dash is the part that matters.
 
 This exists because the rule used to live in prose, and prose rules got broken repeatedly. If
-it blocks you and you believe it is wrong for your case, say so in the pull request — do not
-quietly `--no-verify`, since CI checks every pushed commit, not just the tip.
+the hook blocks you and you believe it is wrong for your case, say so in the pull request — CI
+checks every pushed commit, not just the tip.
 
 ## Commits and pull requests
 
@@ -89,10 +88,9 @@ quietly `--no-verify`, since CI checks every pushed commit, not just the tip.
 
 ## A note on the maintainer's workflow
 
-[`AGENTS.md`](./AGENTS.md) describes a rule where coding agents are confined to git worktrees
-and the main tree is read-only to them. That is about how this repository is maintained, and
-it is enforced by local hooks only — **it does not apply to you.** Fork, branch, and open a
-pull request as usual.
+Work on a separate branch for each task and use a worktree for that branch when practical.
+Keep unrelated work and other contributors' changes out of your branch. The main branch is
+protected; open a pull request as usual.
 
 ## Licence
 
