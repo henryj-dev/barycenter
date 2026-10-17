@@ -84,6 +84,12 @@ const rich = (): Model => ({
       http: { defaultAction: 'reject' },
     },
     {
+      // 헤더 realip (024) — 두 컬럼이 같은 모양으로 돌아와야 한다.
+      key: 'cf', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: false,
+      realIpFromHeader: { header: 'CF-Connecting-IP', trustedCidrs: ['173.245.48.0/20', '2400:cb00::/32'] },
+      http: { defaultAction: 'reject' },
+    },
+    {
       key: 'stream', protocol: 'tcp', bind: '127.0.0.1', port: 9443, enabled: false,
       defaultPool: 'l4',
     },

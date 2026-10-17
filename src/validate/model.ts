@@ -305,6 +305,22 @@ export function validateModel(
       });
     };
     notHere('acceptProxyProtocol', l.protocol === 'udp' && l.acceptProxyProtocol !== undefined);
+    // 헤더는 HTTP 를 푼 뒤에만 보인다 — stream 리스너에 적힌 값은 아무도 안 읽는다.
+    notHere('realIpFromHeader',
+      l.protocol !== 'http' && l.protocol !== 'https' && l.realIpFromHeader !== undefined);
+    // **원본 IP 의 출처는 하나다.** nginx 의 `real_ip_header` 는 server 마다 하나라, 둘 다
+    // 적으면 어느 쪽이 이기는지가 렌더 순서에 달린다. 신뢰 대역도 한 목록으로 합쳐져서
+    // PROXY 를 믿으라고 적은 앞단이 헤더까지 믿게 된다.
+    if (l.acceptProxyProtocol !== undefined && l.realIpFromHeader !== undefined) {
+      issues.push({
+        code: 'option_not_supported',
+        subjects: [l.key],
+        message:
+          `리스너 '${l.key}' 에 acceptProxyProtocol 과 realIpFromHeader 를 같이 적었다. ` +
+          `원본 IP 의 출처는 하나만 고른다 — PROXY 헤더를 받는 앞단이면 acceptProxyProtocol, ` +
+          `HTTP 헤더(CF-Connecting-IP 등)로 넘기는 앞단이면 realIpFromHeader.`,
+      });
+    }
     // **https 도 `http` 프로필을 쓴다.** TLS 를 종단하고 나면 평범한 HTTP 다.
     notHere('http', l.protocol !== 'http' && l.protocol !== 'https' && l.http !== undefined);
     notHere('tls', l.protocol !== 'https' && l.tls !== undefined);

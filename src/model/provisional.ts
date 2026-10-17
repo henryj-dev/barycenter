@@ -54,6 +54,37 @@ export type InboundProxyProtocol = {
   trustedCidrs: string[];
 };
 
+/**
+ * 원본 IP 를 실어 오는 HTTP 헤더 — **고르는 값이지 자유 문자열이 아니다.**
+ *
+ * 자유 문자열이면 `X-Forwarded-For` 를 `X-Forwarded-Fro` 로 적어도 nginx 는 받고,
+ * 그 헤더가 안 오므로 realip 이 **조용히 아무 일도 안 한다.** 쓰이는 이름은 손에 꼽힌다.
+ */
+export type RealIpHeaderName = 'CF-Connecting-IP' | 'X-Forwarded-For' | 'X-Real-IP';
+
+/**
+ * 헤더로 받는 원본 IP (§4.7 의 HTTP 판).
+ *
+ * PROXY protocol 을 안 보내는 앞단(예: Cloudflare 일반 프록시)이 원본 IP 를 HTTP 헤더로
+ * 넘길 때 쓴다. **http·https 리스너에만 있다** — 헤더는 HTTP 를 푼 뒤에만 보인다.
+ *
+ * `InboundProxyProtocol` 과 같은 원칙이다: **신뢰 대역 없이는 표현할 수 없다.** 헤더는
+ * 누구나 붙일 수 있다 — 신뢰 대역 밖의 peer 가 보낸 헤더는 `$remote_addr` 를 못 바꾼다.
+ *
+ * 렌더 결과는 `set_real_ip_from <cidr>` 들 + `real_ip_header <header>` +
+ * `real_ip_recursive on` 이다. recursive 는 `X-Forwarded-For` 에서 뜻이 있다 — 오른쪽부터
+ * 신뢰 대역 주소를 걷어 내고 **처음 만난 불신 주소**를 쓴다. 끄면 맨 오른쪽(바로 앞 홉)을
+ * 쓰므로 앞단이 둘 이상이면 앞단 주소가 클라이언트가 된다.
+ *
+ * **PROXY 수신과 같이 못 켠다.** nginx 의 `real_ip_header` 는 server 마다 하나다 — 둘 다
+ * 적으면 어느 쪽이 이기는지가 렌더 순서에 달린다. 검증기가 막는다.
+ */
+export type InboundRealIpHeader = {
+  header: RealIpHeaderName;
+  /** 이 헤더를 믿어 줄 앞단의 CIDR 목록. **비어 있을 수 없다.** */
+  trustedCidrs: string[];
+};
+
 
 export type TlsVersion = '1.2' | '1.3';
 
@@ -233,6 +264,7 @@ export type RawListener = ListenerBase & {
   protocol: ListenerProtocol;
   defaultPool?: string;
   acceptProxyProtocol?: InboundProxyProtocol;
+  realIpFromHeader?: InboundRealIpHeader;
   udp?: { preset: UdpPreset };
   http?: HttpProfile;
   onUnmatchedSni?: SniOutcome;
@@ -248,6 +280,7 @@ export type RawTlsBinding = { policy: string; defaultCertificate: string };
 export type HttpListener = ListenerBase & {
   protocol: 'http';
   acceptProxyProtocol?: InboundProxyProtocol;
+  realIpFromHeader?: InboundRealIpHeader;
   http?: HttpProfile;
 };
 
@@ -262,6 +295,7 @@ export type HttpListener = ListenerBase & {
 export type HttpsListener = ListenerBase & {
   protocol: 'https';
   acceptProxyProtocol?: InboundProxyProtocol;
+  realIpFromHeader?: InboundRealIpHeader;
   http?: HttpProfile;
   tls: { policy: string; defaultCertificate: string };
   /**

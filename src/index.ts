@@ -24,6 +24,8 @@ export type {
   HttpListener,
   HttpProfile,
   InboundProxyProtocol,
+  InboundRealIpHeader,
+  RealIpHeaderName,
   HttpRoute,
   Listener,
   Model,
