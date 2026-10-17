@@ -510,7 +510,7 @@ describe('지원 배포판 표', () => {
   }
 
   it('**EL 10 은 EL 9 의 OpenResty 트리 + AppStream nodejs 다**', () => {
-    for (const [id, ver] of [['rocky', '10.2'], ['almalinux', '10.0'], ['rhel', '10.1'], ['centos', '10']]) {
+    for (const [id, ver] of [['rocky', '10.2'], ['almalinux', '10.0'], ['rhel', '10.1'], ['centos', '10']] as [string, string][]) {
       const d = lookup(id, ver);
       expect(d['rc']).toBe('0');
       expect(d['or']).toBe('openresty.org/rocky/9');
@@ -528,7 +528,7 @@ describe('지원 배포판 표', () => {
   });
 
   it('표에 없는 버전은 거절한다 (rc=1)', () => {
-    for (const [id, ver] of [['rocky', '8.10'], ['debian', '10'], ['ubuntu', '18.04'], ['alpine', '3.18.0'], ['rocky', '']]) {
+    for (const [id, ver] of [['rocky', '8.10'], ['debian', '10'], ['ubuntu', '18.04'], ['alpine', '3.18.0'], ['rocky', '']] as [string, string][]) {
       expect(lookup(id, ver)['rc'], `${id} ${ver}`).toBe('1');
     }
     // debian 파생은 openresty.org 에 자기 트리가 없다.
@@ -542,7 +542,7 @@ describe('지원 배포판 표', () => {
   });
 
   it('지원 줄은 출처 세 칸을 다 채운다', () => {
-    for (const [id, ver] of [['debian', '12'], ['ubuntu', '24.04'], ['amzn', '2023'], ['alpine', '3.21.3']]) {
+    for (const [id, ver] of [['debian', '12'], ['ubuntu', '24.04'], ['amzn', '2023'], ['alpine', '3.21.3']] as [string, string][]) {
       const d = lookup(id, ver);
       expect(d['rc'], `${id} ${ver}`).toBe('0');
       expect(d['or']).not.toBe('');
