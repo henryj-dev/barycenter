@@ -481,3 +481,89 @@ describe('재실행이 기억한다', () => {
     expect(src).toMatch(/\n\s*--no-tls\)\s+NO_TLS=1;/);
   });
 });
+
+/**
+ * **지원 배포판 표** (2026-10-18).
+ *
+ * 전에는 지원·거절이 조건문 여러 곳에 흩어져 있었다(EL 9 고정, `rocky/9` 하드코딩).
+ * 이제 ① 의 `DISTRO_TABLE` 한 곳이 정하고, 여기서는 그 표와 조회 함수를 **스크립트에서
+ * 꺼내 실제로 돌린다** — 패턴 하나가 틀려도 텍스트 검사는 못 잡는다.
+ */
+describe('지원 배포판 표', () => {
+  function lookup(id: string, ver: string, like = ''): Record<string, string> {
+    const block = src.slice(src.indexOf("DISTRO_TABLE='"), src.indexOf('step "① 배포판 판별"'));
+    const out = execFileSync('sh', ['-c',
+      `${block}
+       if distro_key "$1" "$3"; then
+         if distro_lookup "$DISTRO_KEY" "$2"; then rc=0; else rc=$?; fi
+       else rc=key; fi
+       printf 'rc=%s\\nkey=%s\\nor=%s\\nnode=%s\\npg=%s\\nwhy=%s\\n' \\
+         "$rc" "\${DISTRO_KEY:-}" "\${OR_SRC:-}" "\${NODE_SRC:-}" "\${PG_PKGS:-}" "\${DISTRO_REASON:-}"`,
+      'sh', id, ver, like,
+    ], { encoding: 'utf8' });
+    const o: Record<string, string> = {};
+    for (const line of out.split('\n')) {
+      const at = line.indexOf('=');
+      if (at > 0) o[line.slice(0, at)] = line.slice(at + 1);
+    }
+    return o;
+  }
+
+  it('**EL 10 은 EL 9 의 OpenResty 트리 + AppStream nodejs 다**', () => {
+    for (const [id, ver] of [['rocky', '10.2'], ['almalinux', '10.0'], ['rhel', '10.1'], ['centos', '10']]) {
+      const d = lookup(id, ver);
+      expect(d['rc']).toBe('0');
+      expect(d['or']).toBe('openresty.org/rocky/9');
+      expect(d['node']).toBe('appstream');
+    }
+    // ID_LIKE 로 들어오는 파생(Oracle 등)도 같은 줄에 걸린다.
+    expect(lookup('ol', '10.1', 'fedora')['or']).toBe('openresty.org/rocky/9');
+  });
+
+  it('EL 9 는 nodejs 모듈을 켠다', () => {
+    const d = lookup('rocky', '9.6');
+    expect(d['rc']).toBe('0');
+    expect(d['node']).toBe('module-22');
+    expect(d['pg']).toBe('postgresql-server postgresql');
+  });
+
+  it('표에 없는 버전은 거절한다 (rc=1)', () => {
+    for (const [id, ver] of [['rocky', '8.10'], ['debian', '10'], ['ubuntu', '18.04'], ['alpine', '3.18.0'], ['rocky', '']]) {
+      expect(lookup(id, ver)['rc'], `${id} ${ver}`).toBe('1');
+    }
+    // debian 파생은 openresty.org 에 자기 트리가 없다.
+    expect(lookup('linuxmint', '22', 'ubuntu debian')['rc']).toBe('1');
+  });
+
+  it('거절 줄은 이유를 함께 낸다 (rc=2)', () => {
+    const d = lookup('amzn', '2');
+    expect(d['rc']).toBe('2');
+    expect(d['why']).toContain('2023');
+  });
+
+  it('지원 줄은 출처 세 칸을 다 채운다', () => {
+    for (const [id, ver] of [['debian', '12'], ['ubuntu', '24.04'], ['amzn', '2023'], ['alpine', '3.21.3']]) {
+      const d = lookup(id, ver);
+      expect(d['rc'], `${id} ${ver}`).toBe('0');
+      expect(d['or']).not.toBe('');
+      expect(d['node']).not.toBe('');
+      expect(d['pg']).not.toBe('');
+    }
+  });
+
+  it('패턴이 현재 디렉터리 파일명으로 펼쳐지지 않는다', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bary-glob-'));
+    try {
+      writeFileSync(join(dir, '9.x'), '');
+      const block = src.slice(src.indexOf("DISTRO_TABLE='"), src.indexOf('step "① 배포판 판별"'));
+      const out = execFileSync('sh', ['-c', `cd "$1"; ${block}
+        distro_lookup el 9.6 && printf '%s' "$NODE_SRC"`, 'sh', dir], { encoding: 'utf8' });
+      expect(out).toBe('module-22');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('EL 저장소 주소가 하드코딩이 아니라 표에서 온다', () => {
+    expect(src).not.toContain('package/rocky/9/');
+    expect(src).toContain('package/${OR_SRC#openresty.org/}/');
+  });
+});

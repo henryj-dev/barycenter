@@ -7,7 +7,9 @@
 장애 대응은 [`runbook-spof.md`](./runbook-spof.md) 다.
 
 전제는 §11.3 의 v1 권장 배포다 — **전용 VM 한 대**, 엔진과 데몬이 한 유닛.
-Debian 11+ · Ubuntu 20.04+ · RHEL 계열 9 · Amazon Linux 2023 · Alpine 3.19+.
+Debian 11+ · Ubuntu 20.04+ · RHEL 계열 9·10 · Amazon Linux 2023 · Alpine 3.19+.
+버전별 지원·거절과 패키지 출처는 `deploy/install.sh` ① 의 `DISTRO_TABLE` 한 곳에 있다.
+EL 10 은 openresty.org 가 EL 10 판을 안 내서 **EL 9 의 OpenResty RPM 을 쓴다** (실측으로 선다).
 node 는 **22 가 바닥**이고 스크립트가 없으면 깐다.
 
 ## 1. 깔기 전에 정할 것
@@ -190,7 +192,7 @@ curl -fsS http://127.0.0.1:8088/readyz    # 엔진이 붙었고 드라이버가 
 
 ## 무엇이 이것을 지키나
 
-`tests/install/run.sh` 가 **배포판 다섯 종의 실물 컨테이너에서** 이 스크립트를 그대로
+`tests/install/run.sh` 가 **배포판 여섯 판의 실물 컨테이너에서** 이 스크립트를 그대로
 돌리고, 서비스 기동·재기동·비-root nginx·특권 포트 apply 까지 본다. `verify.yml` 의
 `install` 잡이 **설치의 입력이 바뀐 PR 에서** 그것을 돌린다 — 이 저장소가 선언한 바닥
 (node 22)을 실제로 밟아 보는 곳은 거기뿐이다.
