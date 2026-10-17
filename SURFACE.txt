@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 117 심볼 · sha256:4209ef49f856b4e8aa0133717cdc8513fbabe0c54e8986df957e26d43ad9191b
+# 119 심볼 · sha256:f7c4ae6faa081371dc007282833281a6d04e430dd0ef9ce868490775cc3d5e53
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -287,6 +287,7 @@ export type HttpAction = {
 export type HttpListener = ListenerBase & {
     protocol: 'http';
     acceptProxyProtocol?: InboundProxyProtocol;
+    realIpFromHeader?: InboundRealIpHeader;
     http?: HttpProfile;
 };
 ── HttpProfile
@@ -312,6 +313,7 @@ export type HttpRoute = {
 export type HttpsListener = ListenerBase & {
     protocol: 'https';
     acceptProxyProtocol?: InboundProxyProtocol;
+    realIpFromHeader?: InboundRealIpHeader;
     http?: HttpProfile;
     tls: {
         policy: string;
@@ -321,6 +323,11 @@ export type HttpsListener = ListenerBase & {
 };
 ── InboundProxyProtocol
 export type InboundProxyProtocol = {
+    trustedCidrs: string[];
+};
+── InboundRealIpHeader
+export type InboundRealIpHeader = {
+    header: RealIpHeaderName;
     trustedCidrs: string[];
 };
 ── Listener
@@ -520,6 +527,7 @@ export type RawListener = ListenerBase & {
     protocol: ListenerProtocol;
     defaultPool?: string;
     acceptProxyProtocol?: InboundProxyProtocol;
+    realIpFromHeader?: InboundRealIpHeader;
     udp?: {
         preset: UdpPreset;
     };
@@ -545,6 +553,8 @@ export declare class ReadOnlyFileStore {
     constructor(path: string);
     load(): StoredState | undefined;
 }
+── RealIpHeaderName
+export type RealIpHeaderName = 'CF-Connecting-IP' | 'X-Forwarded-For' | 'X-Real-IP';
 ── ReconcileResult
 export type ReconcileResult = {
     kind: 'no_baseline';

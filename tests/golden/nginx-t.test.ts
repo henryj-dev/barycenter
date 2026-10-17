@@ -212,6 +212,25 @@ const fixtures: Array<{ name: string; model: Model }> = [
     },
   },
   {
+    // 헤더 realip (2026-10-18). `real_ip_header <헤더>` 와 `real_ip_recursive` 는 realip
+    // 모듈 디렉티브다 — 렌더는 되는데 엔진이 거절하면 게시 전에 죽는다. http 와 https 를
+    // 나란히 둔다(https 도 http 컨텍스트다 — S-02 가 그 혼동이었다).
+    name: '헤더 realip — CF-Connecting-IP · X-Forwarded-For 가 실제 엔진을 통과한다',
+    model: {
+      ...base,
+      listeners: [
+        { key: 'cf', protocol: 'http', bind: '0.0.0.0', port: 9001, enabled: true,
+          realIpFromHeader: { header: 'CF-Connecting-IP', trustedCidrs: ['173.245.48.0/20', '2400:cb00::/32'] },
+          http: { defaultAction: { pool: 'app' } } },
+        { key: 'xff', protocol: 'http', bind: '0.0.0.0', port: 9002, enabled: true,
+          realIpFromHeader: { header: 'X-Forwarded-For', trustedCidrs: ['10.0.0.0/8'] },
+          http: { defaultAction: { pool: 'app' } } },
+      ],
+      pools: [{ key: 'app', protocolClass: 'http', algorithm: 'source_ip_hash' }],
+      backends: [{ key: 'a', pool: 'app', host: '10.0.0.1', port: 443, weight: 1 }],
+    },
+  },
+  {
     // 4차 검수 High 묶음: 비단사 identifier · IPv6 백엔드 · map 제어어.
     // 셋 다 산출물이 `nginx -t` 에서 깨지던 것들이다.
     name: 'R20 identifier 충돌 · IPv6 백엔드 · map 제어어 SNI',

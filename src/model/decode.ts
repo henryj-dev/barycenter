@@ -23,6 +23,7 @@ import type {
   AcmeIntent,
   EngineSettings,
   InboundProxyProtocol,
+  InboundRealIpHeader,
   Backend,
   Certificate,
   HttpAction,
@@ -168,6 +169,7 @@ const CIPHER_POLICIES = ['modern-2026', 'intermediate-2026'] as const;
 const PROTOCOL_CLASSES = ['http', 'tcp', 'udp'] as const;
 const ALGORITHMS = ['round_robin', 'source_ip_hash', 'hash', 'least_conn'] as const;
 const UDP_PRESETS = ['dns', 'wireguard', 'game_generic', 'custom'] as const;
+const REAL_IP_HEADERS = ['CF-Connecting-IP', 'X-Forwarded-For', 'X-Real-IP'] as const;
 const REDIRECT_STATUSES = [301, 302, 307, 308] as const;
 const REJECT_STATUSES = [403, 404, 444] as const;
 const SEND_PROXY_PROTOCOL = ['v1'] as const;
@@ -451,6 +453,37 @@ function decodeInboundProxyProtocol(
   return { trustedCidrs: cidrs };
 }
 
+/**
+ * 헤더로 받는 원본 IP. PROXY 수신과 같은 원칙이다 — **신뢰 대역 없이는 못 켠다.**
+ * 헤더 이름은 고르는 값이다(오타면 realip 이 조용히 아무 일도 안 한다).
+ */
+function decodeInboundRealIpHeader(
+  iss: Issues, v: unknown, path: string,
+): InboundRealIpHeader | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path,
+      `객체여야 한다 (받은 것: ${typeName(v)}). \`{ "header": "CF-Connecting-IP", "trustedCidrs": [...] }\` 처럼 `
+      + '헤더와 **믿어 줄 앞단**을 함께 적는다 — 신뢰 경계가 없으면 클라이언트가 자기 IP 를 정한다');
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['header', 'trustedCidrs']);
+  const header = required(iss, v, 'header', path,
+    () => oneOf(iss, v['header'], `${path}.header`, REAL_IP_HEADERS));
+  if (v['trustedCidrs'] === undefined) {
+    iss.add('missing_field', `${path}.trustedCidrs`, '필수다 — 비어 있을 수 없다 (§4.7)');
+    return undefined;
+  }
+  const cidrs = arrayOf(iss, v['trustedCidrs'], `${path}.trustedCidrs`,
+    (item, at) => str(iss, item, at));
+  if (cidrs.length === 0) {
+    iss.add('out_of_range', `${path}.trustedCidrs`,
+      '비어 있을 수 없다 — 아무도 안 믿을 거면 헤더 realip 을 켜지 않는다');
+    return undefined;
+  }
+  if (header === undefined) return undefined;
+  return { header, trustedCidrs: cidrs };
+}
+
 function decodeListener(iss: Issues, v: unknown, path: string): Listener | undefined {
   if (!isObject(v)) {
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
@@ -468,18 +501,21 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
 
   switch (protocol) {
     case 'http': {
-      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'http']);
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http']);
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
+      const realIp = optional(v['realIpFromHeader'], () => decodeInboundRealIpHeader(iss, v['realIpFromHeader'], `${path}.realIpFromHeader`));
       const http = optional(v['http'], () => decodeHttpProfile(iss, v['http'], `${path}.http`));
       return {
         ...head, protocol,
         ...(accept === undefined ? {} : { acceptProxyProtocol: accept }),
+        ...(realIp === undefined ? {} : { realIpFromHeader: realIp }),
         ...(http === undefined ? {} : { http }),
       };
     }
     case 'https': {
-      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'http', 'tls', 'http2']);
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http', 'tls', 'http2']);
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
+      const realIp = optional(v['realIpFromHeader'], () => decodeInboundRealIpHeader(iss, v['realIpFromHeader'], `${path}.realIpFromHeader`));
       const http = optional(v['http'], () => decodeHttpProfile(iss, v['http'], `${path}.http`));
       // **`tls` 는 필수다.** 없으면 렌더러가 인증서를 지어내거나 평문으로 내야 한다 —
       // v3 이 정확히 그렇게 깨졌다. 여기서 막는다.
@@ -489,6 +525,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
       return {
         ...head, protocol, tls,
         ...(accept === undefined ? {} : { acceptProxyProtocol: accept }),
+        ...(realIp === undefined ? {} : { realIpFromHeader: realIp }),
         ...(http === undefined ? {} : { http }),
         ...(http2 === undefined ? {} : { http2 }),
       };
