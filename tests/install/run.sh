@@ -60,12 +60,13 @@ ALL_PLANES="
 debian|debian:12|systemd|dsn
 ubuntu|ubuntu:24.04|systemd|interactive
 rocky|rockylinux/rockylinux:9|systemd|-
+rocky10|rockylinux/rockylinux:10|systemd|-
 amazon|amazonlinux:2023|systemd|-
 alpine|alpine:3.21|openrc|-
 "
 
 WANT="$*"
-[ -z "$WANT" ] && WANT="debian ubuntu rocky amazon alpine"
+[ -z "$WANT" ] && WANT="debian ubuntu rocky rocky10 amazon alpine"
 
 command -v docker >/dev/null 2>&1 || { echo "  FAIL  docker 가 없다"; exit 1; }
 docker info >/dev/null 2>&1 || { echo "  FAIL  도커 데몬이 안 돈다"; exit 1; }
