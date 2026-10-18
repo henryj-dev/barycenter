@@ -63,12 +63,13 @@ debian|debian:12|systemd|dsn
 ubuntu|ubuntu:24.04|systemd|interactive
 rocky|rockylinux/rockylinux:9|systemd|-
 rocky10|rockylinux/rockylinux:10|systemd|-
+global|debian:12|systemd|global
 amazon|amazonlinux:2023|systemd|-
 alpine|alpine:3.21|openrc|-
 "
 
 WANT="$*"
-[ -z "$WANT" ] && WANT="debian ubuntu rocky rocky10 amazon alpine"
+[ -z "$WANT" ] && WANT="debian ubuntu rocky rocky10 amazon alpine global"
 
 command -v docker >/dev/null 2>&1 || { echo "  FAIL  docker 가 없다"; exit 1; }
 docker info >/dev/null 2>&1 || { echo "  FAIL  도커 데몬이 안 돈다"; exit 1; }
@@ -100,6 +101,61 @@ wait_ready() {                 # wait_ready <컨테이너>
     sleep 1
   done
   return 0
+}
+
+# **전역 모드 판** (docs/runbook-global.md). 엔진·설정 DB 없이 전역 barycenterd 만 깐다. 지역 목록에는 **닿지
+# 않는 지역** 하나만 둔다 — 재는 것은 지역 중계가 아니라(그건 단위 테스트가 가짜 지역으로 잰다) **설치가 전역을
+# 세우는가**다: 서비스 · readyz 의 mode · 못 닿은 지역을 「모른다」로 · 엔진이 없음 · 지역 전용 설정이면 기동 거부.
+run_global() {                 # run_global <컨테이너> <이름>
+  local c="$1" name="$2" rc=0 d token
+  d=$(mktemp -d)
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=127.0.0.1 \
+    -keyout "$d/k.pem" -out "$d/ca.pem" >/dev/null 2>&1 || { printf '    NO   시험용 CA 를 못 만들었다\n'; return 1; }
+  printf 'region-token' > "$d/t"
+  printf '[{"name":"faraway","api":"https://127.0.0.1:1","gui":"https://faraway.example","ca":"/etc/barycenter-global/ca.pem","token":"/etc/barycenter-global/t"}]\n' > "$d/r.json"
+  docker exec "$c" mkdir -p /etc/barycenter-global
+  for f in ca.pem t r.json; do docker cp "$d/$f" "$c:/etc/barycenter-global/$f"; done
+  rm -rf "$d"
+  printf '  ..    install.sh --mode global (패키지·빌드로 몇 분 걸린다)\n'
+  if ! docker exec "$c" sh /repo/deploy/install.sh --mode global --regions /etc/barycenter-global/r.json --no-accounts \
+       > "/tmp/bary-install-$name.log" 2>&1; then
+    printf '    NO   install.sh --mode global 이 실패했다 — 마지막 30줄:\n'
+    tail -n 30 "/tmp/bary-install-$name.log" | sed 's/^/         /'
+    return 1
+  fi
+  printf '    ok   install.sh --mode global\n'
+  # 데몬이 지역 목록을 읽어야 하므로 서비스 유저에게 읽기를 준다(운영도 같다 — 런북).
+  docker exec "$c" sh -c 'chown -R root:bary /etc/barycenter-global && chmod 0640 /etc/barycenter-global/*' >/dev/null 2>&1
+  docker exec "$c" systemctl restart barycenterd >/dev/null 2>&1
+  expect "서비스 active" "$c" systemctl is-active --quiet barycenterd || rc=1
+  if wait_ready "$c" && docker exec "$c" curl -s --max-time 3 http://127.0.0.1:8088/readyz | grep -Eq '"mode": *"global"'; then
+    printf '    ok   /readyz 가 전역이라고 답한다\n'
+  else
+    printf '    NO   /readyz 가 전역 모드가 아니다\n'; rc=1
+  fi
+  token=$(sed -n 's/^ *\([A-Za-z0-9_-]\{20,\}\) *$/\1/p' "/tmp/bary-install-$name.log" | tail -1)
+  if docker exec "$c" curl -s --max-time 10 -H "authorization: Bearer $token" http://127.0.0.1:8088/api/v1/regions \
+       | tr -d ' \n' | grep -q '"name":"faraway","gui":"https://faraway.example","reachable":false'; then
+    printf '    ok   못 닿은 지역을 「모른다」로 싣는다\n'
+  else
+    printf '    NO   /api/v1/regions 가 기대한 모양이 아니다\n'; rc=1
+  fi
+  if ! docker exec "$c" sh -c 'command -v openresty || [ -x /usr/local/openresty/bin/openresty ]' >/dev/null 2>&1 \
+     && ! docker exec "$c" systemctl cat barycenterd 2>/dev/null | grep -q ExecStartPre; then
+    printf '    ok   엔진이 없고 유닛이 엔진을 안 띄운다\n'
+  else
+    printf '    NO   전역 모드인데 엔진이 깔렸거나 유닛이 엔진을 띄운다\n'; rc=1
+  fi
+  # 지역 전용 설정이 섞이면 **기동을 거부**한다 — 켰다고 믿는데 아무것도 안 하는 상태를 막는다.
+  docker exec "$c" sh -c "printf \"BARY_DSN='postgres:///x'\\n\" >> /etc/barycenter/env && systemctl restart barycenterd" >/dev/null 2>&1
+  sleep 3
+  if ! docker exec "$c" systemctl is-active --quiet barycenterd \
+     && docker exec "$c" journalctl -u barycenterd --no-pager -n 30 2>/dev/null | grep -q 'BARY_DSN 를 쓰지 않는다'; then
+    printf '    ok   지역 전용 설정(BARY_DSN)이 있으면 기동을 거부한다\n'
+  else
+    printf '    NO   BARY_DSN 이 섞였는데 떴다\n'; rc=1
+  fi
+  return "$rc"
 }
 
 run_plane() {                  # run_plane <이름> <베이스> <초기화> <추가검사>
@@ -169,6 +225,11 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
   # 것이 있어야 하고, 그 대상은 실제로 걸린 것 중 제일 아픈 것이어야 한다 —
   # `BARY_SECRET_KEK` 이다. 백엔드는 `fs` 그대로라 이 값은 쓰이지 않고 **놓여만 있다**;
   # 재는 것은 데몬의 동작이 아니라 **설치가 이 줄을 보존하는가**다.
+  if [ "$extra" = global ]; then
+    run_global "$c" "$name"
+    return $?
+  fi
+
   printf '  ..    install.sh --with-postgres (패키지·빌드로 몇 분 걸린다)\n'
   if ! docker exec "$c" sh /repo/deploy/install.sh --with-postgres \
        --env "BARY_SECRET_KEK=$KEK" > "/tmp/bary-install-$name.log" 2>&1; then

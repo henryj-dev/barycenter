@@ -35,7 +35,18 @@ env:
 | `BARY_OIDC_*` | 전역용 OIDC 클라이언트(호스트 이름 하나에 redirect URI 하나) |
 
 `BARY_DSN`·`BARY_DP_REMOTE_URL`·`BARY_SECRET_BACKEND`·`BARY_DRIVER` 가 있으면 **기동 거부**(전역은 안 쓴다).
-설치 스크립트의 전역 모드(`--mode global`)는 아직 없다 — 지금은 위 env 로 유닛을 손으로 둔다.
+
+설치:
+
+```sh
+sudo deploy/install.sh --mode global --regions /etc/barycenter-global/regions.json \
+  --accounts-dsn 'postgres://…/bary_accounts' --env BARY_ACCOUNTS_KEK='<지역과 같은 값>' \
+  --listen <메시 주소>:8443 --tls-cert … --tls-key …
+```
+
+엔진·설정 DB 를 깔지 않고, 유닛은 엔진을 띄우지 않는다. 계정을 켜면 KEK 는 **지역과 같은 값을 직접** 줘야 한다
+(새로 만들면 지역에서 등록한 인증 앱을 못 연다 — 설치가 거부한다). 지역 목록·토큰 파일은 서비스 유저(`bary`)가
+읽을 수 있어야 한다(`root:bary 0640`). 설치 하네스의 `global` 판이 이 길을 실물로 잰다.
 
 ## 여러 전역 + DNS
 
