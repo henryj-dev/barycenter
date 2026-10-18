@@ -6,11 +6,18 @@
   import type { Session } from '$lib/account/session.svelte.ts';
   import PasswordStep from '$lib/account/PasswordStep.svelte';
   import MfaStep from '$lib/account/MfaStep.svelte';
+  import { accountApi } from '$lib/account/api';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const session = getContext<Session>('session');
   /** 자체 로그인 단계 — 비밀번호 → (필요하면) 인증 코드. */
   let step = $state<'password' | 'mfa'>('password');
+  /** 메일이 켜진 배포에서만 「비밀번호를 잊었다」를 그린다. */
+  let mailOn = $state(false);
+  onMount(async () => {
+    const f = await accountApi.features();
+    mailOn = f.ok && f.data.mail;
+  });
 
   const signedIn = async (): Promise<void> => {
     await session.refresh();
@@ -84,6 +91,7 @@
   {:else}
     <MfaStep onDone={() => { void signedIn(); }} onRestart={() => { step = 'password'; }} />
   {/if}
+  {#if mailOn && step === 'password'}<p><a href="/reset">비밀번호를 잊었다</a></p>{/if}
 </section>
 
 <section>

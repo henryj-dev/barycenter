@@ -36,7 +36,10 @@
   const invite = async (): Promise<void> => {
     const r = await accountApi.invite(inviteRole, inviteEmail);
     if (!r.ok) { error = r.message; return; }
-    shown = { label: `${inviteRole} 초대 링크 (72시간)`, link: linkFor(r.data.token) };
+    shown = {
+      label: `${inviteRole} 초대 링크 (72시간)${r.data.mailed ? ' — 메일로도 보냈다' : inviteEmail !== '' ? ' — 메일은 못 보냈다, 직접 전한다' : ''}`,
+      link: linkFor(r.data.token),
+    };
     inviteEmail = '';
     await load();
   };

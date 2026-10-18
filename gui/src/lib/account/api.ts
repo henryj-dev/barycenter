@@ -5,7 +5,9 @@
  * 화면은 status 로 갈래를 고르고 message 를 그대로 보인다(서버가 사람에게 쓴 문장이다).
  * 세션은 HttpOnly 쿠키라 여기서 자격증명을 들고 다니지 않는다.
  */
-export type Result<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
+import { needsStepUp, stepUp } from './step-up.svelte';
+
+export type Result<T> = { ok: true; data: T } | { ok: false; status: number; code?: string; message: string };
 
 export type Role = 'auditor' | 'operator' | 'admin';
 
@@ -31,7 +33,7 @@ export type InvitationRow = {
   createdAt: string; expiresAt: string; usedAt: string | null; revokedAt: string | null;
 };
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<Result<T>> {
+async function call<T>(method: string, path: string, body?: unknown, retried = false): Promise<Result<T>> {
   let r: Response;
   try {
     r = await fetch(path, {
@@ -46,8 +48,13 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<Re
   let parsed: unknown = undefined;
   try { parsed = text === '' ? undefined : JSON.parse(text); } catch { /* 본문이 JSON 이 아니다 */ }
   if (!r.ok) {
-    const message = (parsed as { message?: unknown } | undefined)?.message;
-    return { ok: false, status: r.status, message: typeof message === 'string' ? message : `${method} ${path} → ${r.status}` };
+    const { message, code } = (parsed ?? {}) as { message?: unknown; code?: unknown };
+    // 민감 작업 — 코드를 한 번 받고 **한 번만** 다시 보낸다. 두 번째도 막히면 그대로 돌려준다.
+    if (!retried && needsStepUp(r.status, code) && await stepUp.request()) return call<T>(method, path, body, true);
+    return {
+      ok: false, status: r.status, ...(typeof code === 'string' ? { code } : {}),
+      message: typeof message === 'string' ? message : `${method} ${path} → ${r.status}`,
+    };
   }
   return { ok: true, data: parsed as T };
 }
@@ -57,6 +64,12 @@ export const accountApi = {
     call<{ status: 'ok' | 'mfa_required' }>('POST', '/api/v1/session/login', { username, password }),
   mfa: (code: string) => call<{ status: 'ok' }>('POST', '/api/v1/session/mfa', { code }),
   logout: () => call<undefined>('POST', '/api/v1/session/logout', {}),
+  features: () => call<{ accounts: boolean; mail: boolean }>('GET', '/api/v1/account/features'),
+  stepUp: (code: string) => call<{ stepUp: true }>('POST', '/api/v1/session/step-up', { code }, true),
+  requestReset: (email: string) => call<{ accepted: true }>('POST', '/api/v1/account/password-reset', { email }),
+  confirmReset: (token: string, password: string) => call<{ reset: true }>('POST', '/api/v1/account/password-reset/confirm', { token, password }),
+  changeEmail: (email: string, password: string) => call<{ sent: true }>('POST', '/api/v1/me/email', { email, password }),
+  confirmEmail: (token: string) => call<{ changed: true }>('POST', '/api/v1/account/email/confirm', { token }),
   logoutAll: () => call<{ revoked: number }>('POST', '/api/v1/session/logout-all', {}),
   me: () => call<Me>('GET', '/api/v1/me'),
   changePassword: (current: string, next: string) => call<{ changed: true }>('POST', '/api/v1/me/password', { current, next }),
@@ -75,7 +88,7 @@ export const accountApi = {
   recoveryLink: (id: string) => call<{ token: string }>('POST', `/api/v1/users/${encodeURIComponent(id)}/recovery-link`, {}),
   invitations: () => call<InvitationRow[]>('GET', '/api/v1/invitations'),
   invite: (role: Role, email: string) =>
-    call<{ id: string; token: string; expiresAt: string }>('POST', '/api/v1/invitations', { role, ...(email === '' ? {} : { email }) }),
+    call<{ id: string; token: string; expiresAt: string; mailed: boolean }>('POST', '/api/v1/invitations', { role, ...(email === '' ? {} : { email }) }),
   revokeInvitation: (id: string) => call<{ revoked: true }>('DELETE', `/api/v1/invitations/${encodeURIComponent(id)}`),
 };
 

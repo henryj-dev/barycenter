@@ -15,7 +15,10 @@ import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('accounts-service');
 let db: Db;
-let clock = Date.UTC(2026, 9, 18, 12, 0, 0);
+// **지금 시각에서 시작한다.** 만료 비교는 DB 의 now() 로 하므로, 고정 날짜를 쓰면 실제 시각이 그 날짜를 지나는
+// 순간(예: MFA 대기 5분) 테스트가 깨진다 — 2026-10-18 12:05 UTC 이후 CI 에서 실제로 그렇게 깨졌다.
+// 시간창 재사용 거절을 피하려고 테스트 안에서는 앞으로만 민다.
+let clock = Date.now();
 const sealer = new Sealer(randomBytes(32).toString('base64'));
 const svc = (): AccountService => new AccountService({ db, sealer, now: () => clock });
 
@@ -55,7 +58,8 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.query('DROP TABLE IF EXISTS account_audit, mfa_recovery_codes, mfa_totp, invitations, sessions, users, account_schema_migrations CASCADE');
+  // 테이블을 나열하지 않는다 — 마이그레이션이 늘 때마다 빠진 이름이 다음 스위트를 깨뜨린다.
+  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   await db.migrate(ACCOUNT_MIGRATIONS);
 });
 

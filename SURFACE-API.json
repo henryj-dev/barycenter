@@ -580,6 +580,28 @@
         }
       }
     },
+    "/api/v1/session/step-up": {
+      "post": {
+        "operationId": "POST:/api/v1/session/step-up",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/email": {
+      "post": {
+        "operationId": "POST:/api/v1/me/email",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/users": {
       "get": {
         "operationId": "GET:/api/v1/users",

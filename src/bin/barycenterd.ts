@@ -25,6 +25,7 @@ import { apiHandler, apiTlsOptions, createApi, parseBuildInfo, type BuildInfo } 
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
 import { Sealer } from '../accounts/seal.js';
 import { AccountService } from '../accounts/service.js';
+import { smtpMailer } from '../accounts/mail.js';
 import { JwksCache } from '../api/jwks.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore, type SecretStore } from '../dp/secrets.js';
@@ -269,7 +270,25 @@ async function accountsFromEnv(): Promise<AccountService | undefined> {
   const adb = new Db(dsn);
   const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
   if (applied.length > 0) log.info('accounts.migrate.applied', { migrations: applied });
-  return new AccountService({ db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter') });
+  /**
+   * 메일(초대·재설정·이메일 변경). **셋 다 있어야 켠다** — 링크 앞부분(`BARY_PUBLIC_URL`)이 없으면 메일 속
+   * 링크를 못 만들고, 보내는 주소가 없으면 받는 쪽이 스팸으로 버린다. 반만 켜면 조용히 안 가는 메일이 된다.
+   */
+  const smtp = env('BARY_SMTP_URL', '');
+  const from = env('BARY_MAIL_FROM', '');
+  const publicUrl = env('BARY_PUBLIC_URL', '');
+  let mail: { mailer: ReturnType<typeof smtpMailer>; publicUrl: string } | undefined;
+  if (smtp !== '' || from !== '') {
+    if (smtp === '' || from === '' || publicUrl === '') {
+      throw new Error('메일을 켜려면 BARY_SMTP_URL · BARY_MAIL_FROM · BARY_PUBLIC_URL 이 모두 필요하다');
+    }
+    mail = { mailer: smtpMailer(smtp, from), publicUrl };
+    log.info('accounts.mail.enabled', { from });
+  }
+  return new AccountService({
+    db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
+    ...(mail === undefined ? {} : mail),
+  });
 }
 
 /**

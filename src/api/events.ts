@@ -102,6 +102,12 @@ export async function openEventStream(opts: {
   hub: EventHub;
   snapshot: () => Promise<unknown>;
   heartbeatMs?: number;
+  /**
+   * **열린 스트림도 철회를 따른다** (공통 회원정책 1차). 사람 세션이면 하트비트마다 묻고, 거짓이거나
+   * 묻지 못하면(계정 PG 장애) 닫는다 — 로그아웃·정지 뒤에도 열려 있던 스트림이 계속 흐르지 않게.
+   * 이미 보낸 데이터는 되돌릴 수 없다(별도 계약). 토큰 세션에는 없다.
+   */
+  alive?: () => Promise<boolean>;
 }): Promise<void> {
   const { res, hub, snapshot } = opts;
   res.writeHead(200, {
@@ -198,11 +204,15 @@ export async function openEventStream(opts: {
   });
   tick = setInterval(() => {
     if (!writable()) { finish(); return; }
-    try {
-      writeHeartbeat(res);
-    } catch {
-      finish();
-    }
+    const beat = (): void => {
+      try {
+        writeHeartbeat(res);
+      } catch {
+        finish();
+      }
+    };
+    if (opts.alive === undefined) { beat(); return; }
+    opts.alive().then((ok) => { if (ok) beat(); else finish(true); }, () => finish(true));
   }, opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS);
   tick.unref?.();
 

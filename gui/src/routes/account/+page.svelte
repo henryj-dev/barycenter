@@ -4,11 +4,17 @@
   import type { Session } from '$lib/account/session.svelte.ts';
   import ChangePassword from '$lib/account/ChangePassword.svelte';
   import TotpManage from '$lib/account/TotpManage.svelte';
+  import ChangeEmail from '$lib/account/ChangeEmail.svelte';
 
   const session = getContext<Session>('session');
   let note = $state<string | undefined>();
+  let mailOn = $state(false);
 
-  onMount(() => { void session.refresh(); });
+  onMount(async () => {
+    void session.refresh();
+    const f = await accountApi.features();
+    mailOn = f.ok && f.data.mail;
+  });
 
   const logoutAll = async (): Promise<void> => {
     const r = await accountApi.logoutAll();
@@ -26,6 +32,7 @@
     <p><strong>{me.username}</strong> · {me.role}{me.email !== null ? ` · ${me.email}` : ''}</p>
   </section>
   <ChangePassword />
+  {#if mailOn}<ChangeEmail />{/if}
   <TotpManage {me} onChanged={session.refresh} />
   <section>
     <h2>열린 세션</h2>

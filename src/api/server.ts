@@ -39,7 +39,7 @@ import { count, render as renderMetrics, type LabeledGauge } from '../obs/metric
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
-import { AccountError, AccountStoreUnavailable, type AccountService, type Meta as AccountMeta } from '../accounts/service.js';
+import { AccountError, AccountStoreUnavailable, STEP_UP_MAX_AGE_MS, type AccountService, type Meta as AccountMeta } from '../accounts/service.js';
 import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
@@ -180,6 +180,11 @@ type Route = {
    * 비밀번호를 못 바꾸면 사람이 그 이유를 알 길이 없다.
    */
   leaderFree?: boolean;
+  /**
+   * **민감 작업** (공통 회원정책 1차). 사람 세션이면 최근 MFA(`STEP_UP_MAX_AGE_MS`)를 요구하고, 없으면
+   * 403 `mfa_step_up_required` — 화면이 코드를 받아 `/session/step-up` 하고 다시 보낸다. 기계 토큰엔 없다.
+   */
+  sensitive?: boolean;
 };
 
 const json = (res: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}): void => {
@@ -198,7 +203,7 @@ const json = (res: ServerResponse, status: number, value: unknown, headers: Reco
 function route(
   method: string, path: string, scope: Scope,
   handle: (c: Ctx, api: ApiOptions) => Promise<void>,
-  opts: { leaderFree?: boolean } = {},
+  opts: { leaderFree?: boolean; sensitive?: boolean } = {},
 ): Route {
   const keys: string[] = [];
   const pattern = new RegExp(
@@ -207,7 +212,11 @@ function route(
       return '([^/]+)';
     }) + '$',
   );
-  return { method, path, pattern, keys, scope, handle, ...(opts.leaderFree === true ? { leaderFree: true } : {}) };
+  return {
+    method, path, pattern, keys, scope, handle,
+    ...(opts.leaderFree === true ? { leaderFree: true } : {}),
+    ...(opts.sensitive === true ? { sensitive: true } : {}),
+  };
 }
 
 /** 구현된 REST 표면. OpenAPI 동결이 이 표를 본다. */
@@ -298,7 +307,7 @@ const ROUTES: Route[] = [
     const out = await api.store.importFromManifest(manifest, 'replace', c.who.name);
     eventsOf(api).publish('revision', { revision: out.revision, restored: true });
     json(c.res, 200, out);
-  }),
+  }, { sensitive: true }),
 
   route('GET', '/api/v1/listeners', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).listeners);
@@ -745,6 +754,10 @@ const ROUTES: Route[] = [
         return { ...status, health };
       },
       ...(api.heartbeatMs === undefined ? {} : { heartbeatMs: api.heartbeatMs }),
+      // 사람 세션이면 하트비트마다 살아 있는지 묻는다 — 로그아웃·정지 뒤 열린 스트림을 닫는다.
+      ...(c.who.account !== undefined && api.accounts !== undefined
+        ? { alive: ((acc, h) => () => acc.sessionAlive(h))(api.accounts, c.who.account.sessionHash) }
+        : {}),
     });
   }),
 
@@ -849,7 +862,7 @@ const ROUTES: Route[] = [
     } catch (e) {
       json(c.res, 400, { error: 'invalid_body', message: (e as Error).message });
     }
-  }),
+  }, { sensitive: true }),
 
   route('GET', '/api/v1/audit', 'read', async (c, api) => {
     // **하한이 필요하다** (검수 B-11). `Math.min` 만 걸면 음수가 그대로 내려가고
@@ -906,6 +919,19 @@ const ROUTES: Route[] = [
     json(c.res, 200, { recoveryCodes: await accountsOf(api).regenerateRecoveryCodes(personOf(c.who).userId, bodyStr(c.body, 'password'), metaOf(c.req)) });
   }, { leaderFree: true }),
 
+  /** 민감 작업 앞의 재확인. 세션을 새로 만들지 않고 MFA 시각만 찍는다. */
+  route('POST', '/api/v1/session/step-up', 'read', async (c, api) => {
+    const p = personOf(c.who);
+    await accountsOf(api).stepUp(p.sessionHash, p.userId, bodyStr(c.body, 'code'), metaOf(c.req));
+    json(c.res, 200, { stepUp: true });
+  }, { leaderFree: true }),
+
+  /** 새 주소로 확인 메일 — 확인 전까지 주소는 그대로다. 비밀번호를 다시 묻는다. */
+  route('POST', '/api/v1/me/email', 'read', async (c, api) => {
+    await accountsOf(api).requestEmailChange(personOf(c.who).userId, bodyStr(c.body, 'email'), bodyStr(c.body, 'password'), metaOf(c.req));
+    json(c.res, 202, { sent: true });
+  }, { leaderFree: true }),
+
   route('GET', '/api/v1/users', 'admin', async (c, api) => {
     json(c.res, 200, await accountsOf(api).listUsers());
   }, { leaderFree: true }),
@@ -917,21 +943,21 @@ const ROUTES: Route[] = [
       ...(typeof b['status'] === 'string' ? { status: b['status'] } : {}),
     }, c.who.name, metaOf(c.req));
     json(c.res, 200, { updated: true });
-  }, { leaderFree: true }),
+  }, { leaderFree: true, sensitive: true }),
 
   route('DELETE', '/api/v1/users/:id', 'admin', async (c, api) => {
     await accountsOf(api).deleteUser(c.params['id'] ?? '', c.who.name, metaOf(c.req));
     json(c.res, 200, { deleted: true });
-  }, { leaderFree: true }),
+  }, { leaderFree: true, sensitive: true }),
 
   route('POST', '/api/v1/users/:id/revoke-sessions', 'admin', async (c, api) => {
     json(c.res, 200, { revoked: await accountsOf(api).logoutAll(c.params['id'] ?? '', c.who.name, metaOf(c.req)) });
-  }, { leaderFree: true }),
+  }, { leaderFree: true, sensitive: true }),
 
   /** 관리자 MFA 초기화·복구 — 링크는 이 응답에만 한 번 나온다. 대상 세션은 즉시 끊긴다. */
   route('POST', '/api/v1/users/:id/recovery-link', 'admin', async (c, api) => {
     json(c.res, 200, { token: await accountsOf(api).recoveryLink(c.params['id'] ?? '', c.who.name, metaOf(c.req)) });
-  }, { leaderFree: true }),
+  }, { leaderFree: true, sensitive: true }),
 
   route('GET', '/api/v1/invitations', 'admin', async (c, api) => {
     json(c.res, 200, await accountsOf(api).listInvitations());
@@ -944,12 +970,12 @@ const ROUTES: Route[] = [
       role: typeof b['role'] === 'string' ? b['role'] : '',
       ...(typeof b['email'] === 'string' && b['email'] !== '' ? { email: b['email'] } : {}),
     }, c.who.name, metaOf(c.req)));
-  }, { leaderFree: true }),
+  }, { leaderFree: true, sensitive: true }),
 
   route('DELETE', '/api/v1/invitations/:id', 'admin', async (c, api) => {
     await accountsOf(api).revokeInvitation(c.params['id'] ?? '', c.who.name, metaOf(c.req));
     json(c.res, 200, { revoked: true });
-  }, { leaderFree: true }),
+  }, { leaderFree: true, sensitive: true }),
 
   route('GET', '/api/v1/account-audit', 'admin', async (c, api) => {
     json(c.res, 200, await accountsOf(api).accountAudit(Number(c.url.searchParams.get('limit') ?? '100') || 100));
@@ -1119,6 +1145,11 @@ const accountCookie = (api: { sessionSecure?: boolean }): string =>
   api.sessionSecure === true ? '__Host-bary_sid' : 'bary_sid';
 /** MFA 대기 표 — MFA 단계에만 실린다. */
 const MFA_COOKIE = 'bary_mfa';
+/**
+ * 재설정 요청 제한(IP). **로그인 실패 카운터와 나눈다** — 같이 쓰면 재설정을 몇 번 누른 사람이 로그인에서
+ * 잠긴다. 실패가 아니라 요청 수를 세므로 「성공」으로 지우지 않는다.
+ */
+const resetRequests = new AuthFailureLimiter({ maxFailures: 5, baseDelayMs: 60_000, maxDelayMs: 3_600_000 });
 const MFA_PATH = '/api/v1/session/mfa';
 
 function accountsOf(api: { accounts?: AccountService }): AccountService {
@@ -1228,6 +1259,49 @@ async function handle(
     res.setHeader('set-cookie', clear);
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  // 화면이 「비밀번호를 잊었다」를 그릴지 고른다. 비밀이 아니다.
+  if (req.method === 'GET' && url.pathname === '/api/v1/account/features') {
+    json(res, 200, api.accounts === undefined ? { accounts: false, mail: false } : { accounts: true, ...api.accounts.features() });
+    return;
+  }
+
+  /**
+   * **메일 링크** (계획 B1) — 비밀번호 재설정 요청·확인, 이메일 변경 확인. 인증 앞이다.
+   * 재설정 요청은 **늘 202** 다(열거 방지). IP 단위로 요청 수를 제한한다 — 로그인 실패 카운터와는 따로.
+   */
+  if (req.method === 'POST' && (url.pathname === '/api/v1/account/password-reset'
+    || url.pathname === '/api/v1/account/password-reset/confirm' || url.pathname === '/api/v1/account/email/confirm')) {
+    if (!sameOriginWrite(req)) { crossSite(res); return; }
+    const accounts = api.accounts;
+    if (accounts === undefined) {
+      json(res, 404, { code: 'accounts_disabled', message: '이 배포에는 사람 계정이 켜져 있지 않다' });
+      return;
+    }
+    try {
+      const body = await readBody(req, max);
+      if (url.pathname === '/api/v1/account/password-reset') {
+        const retryAfter = resetRequests.record(req.socket.remoteAddress ?? 'unknown');
+        if (retryAfter !== undefined) {
+          json(res, 429, { code: 'rate_limited', message: '요청이 너무 많다 — 잠시 뒤 다시 한다' }, { 'retry-after': String(retryAfter) });
+          return;
+        }
+        await accounts.requestPasswordReset(bodyStr(body, 'email'), metaOf(req));
+        json(res, 202, { accepted: true });
+      } else if (url.pathname === '/api/v1/account/password-reset/confirm') {
+        await accounts.confirmPasswordReset(bodyStr(body, 'token'), bodyStr(body, 'password'), metaOf(req));
+        json(res, 200, { reset: true });
+      } else {
+        await accounts.confirmEmailChange(bodyStr(body, 'token'), metaOf(req));
+        json(res, 200, { changed: true });
+      }
+    } catch (e) {
+      if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
+      if (e instanceof AccountError || e instanceof StoreError) { json(res, e.status, { code: e.code, message: e.message }); return; }
+      throw e;
+    }
     return;
   }
 
@@ -1468,6 +1542,18 @@ async function handle(
       message: `'${hit.r.scope}' 스코프가 필요하다 (가진 것: ${[...who.scopes].join(',') || '없음'})`,
     });
     return;
+  }
+
+  // **민감 작업은 최근 MFA** (공통 회원정책 1차). 사람 세션만 — 기계 토큰은 MFA 가 없다.
+  if (hit.r.sensitive === true && who.account !== undefined) {
+    const at = who.account.mfaAt;
+    if (at === undefined || Date.now() - at > STEP_UP_MAX_AGE_MS) {
+      json(res, 403, {
+        code: 'mfa_step_up_required',
+        message: `이 작업은 최근 ${STEP_UP_MAX_AGE_MS / 60_000}분 안에 인증 앱 확인이 필요하다`,
+      });
+      return;
+    }
   }
 
   // **스탠바이는 읽기만 답한다** (§3.5 · §11.4).

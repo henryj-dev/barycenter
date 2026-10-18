@@ -21,6 +21,7 @@ import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs } from '@web/reconnect';
 import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
+import { needsStepUp, stepUp } from '$lib/account/step-up.svelte';
 
 export type StatusSnap = {
   head?: string;
@@ -310,7 +311,7 @@ export function createDesk() {
     }
   };
 
-  const call = async (method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> => {
+  const call = async (method: string, path: string, body?: unknown, retried = false): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> => {
     const r = await fetch(path, {
       method,
       headers: {
@@ -322,6 +323,8 @@ export function createDesk() {
     if (r.status === 204) return { ok: r.ok, status: r.status, body: {} };
     const parsed: unknown = await r.json().catch(() => ({}));
     const rec = parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    // 민감 작업(인증서 개인키 등) — 사람 세션이면 코드를 한 번 받고 한 번만 다시 보낸다.
+    if (!retried && needsStepUp(r.status, rec['code']) && await stepUp.request()) return call(method, path, body, true);
     return { ok: r.ok, status: r.status, body: rec };
   };
 

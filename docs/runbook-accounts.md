@@ -53,3 +53,28 @@ sudo -u bary env $(cat /etc/barycenter/env | xargs) node /opt/barycenter/dist/bi
 
 사람 로그인과 사람 세션의 모든 요청이 **503 `account_store_unavailable`** 로 거부된다(확인할 수 없으면
 거부 — 공통 정책). API 토큰(`tokens.json`)과 mTLS 는 그대로 된다. 데이터 플레인은 영향이 없다.
+
+## 메일 (B1)
+
+초대 메일·비밀번호 재설정·이메일 변경은 **셋이 모두 있어야** 켜진다(반만 켜지면 조용히 안 가는 메일이 된다 —
+기동을 거부한다):
+
+```sh
+sudo deploy/install.sh ... \
+  --env BARY_SMTP_URL='smtps://user:pass@smtp.example.com:465' \
+  --env BARY_MAIL_FROM='barycenter <noreply@example.com>' \
+  --env BARY_PUBLIC_URL='https://dev-icn-vtr.barycenter.example.com'
+```
+
+- 재설정 요청은 **언제나 같은 답**이다(주소에 계정이 있는지 말하지 않는다). 같은 사람에게 5분에 한 번만 보낸다.
+- **재설정은 인증 앱을 풀지 않는다.** 메일함을 가진 사람이 곧 관리자가 되지 않게 — 인증 앱을 잃었으면 복구 링크다.
+- 이메일은 새 주소에서 확인해야 바뀌고, 옛 주소에는 요청이 왔다는 알림이 간다.
+
+## 민감 작업 (B1)
+
+다음은 **최근 15분 안에 인증 앱 확인**이 필요하다(사람 세션만 — 토큰은 MFA 가 없다): 사람·초대 관리
+(역할·정지·삭제·세션 끊기·복구 링크·초대 만들기/취소), `/restore`, 인증서 개인키 올리기. 화면은 코드를 한 번
+묻고 이어서 한다(`POST /api/v1/session/step-up`). **인증 앱이 없는 사람은 민감 작업을 못 한다** — 먼저 등록한다.
+
+열린 실시간 스트림(SSE)도 하트비트(15초)마다 세션을 확인해, 로그아웃·정지된 세션의 스트림을 닫는다.
+이미 보낸 데이터는 되돌릴 수 없다.
