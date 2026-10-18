@@ -17,6 +17,7 @@
 #   4. **재기동 뒤에도** 1·2 가 참인가      — `--write-bootstrap` 이 활성 세대를 되돌리지
 #                                             않는다는 것은 재기동해 봐야만 안다
 #   5. `bary status` 가 답하는가            — 토큰 해시와 API 가 맞물렸는가
+#   5-b. reload 가 재시작 없이 토큰을 들이는가 — PID 가 그대로여야 한다. `/status` 의 판 표시도
 #   6. apply 가 :80 을 여는가                — `setcap` 이 걸렸다는 것과 특권 포트가
 #                                             열린다는 것은 다른 사실이다
 #
@@ -221,6 +222,52 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
     fi
   else
     printf '    NO   설치 로그에서 토큰을 못 찾았다\n'
+    rc=1
+  fi
+
+  # ⑤-b **reload 가 재시작 없이 토큰을 들인다** (2026-10-18). 재시작은 데이터 플레인을
+  #      끊으므로 토큰 철회가 그 비용을 지면 철회가 늦어진다. 그래서 재는 것은 셋이다:
+  #      새 토큰이 통하는가 · **데몬 PID 가 그대로인가**(= 재시작이 아니다) · `/status` 가
+  #      설치된 판(`build.commit`)을 말하는가 — 전역 모드가 판 차이를 드러내는 근거다.
+  local pid_before pid_after aud
+  if [ "$init" = systemd ]; then
+    pid_before=$(docker exec "$c" systemctl show -p MainPID --value barycenterd 2>/dev/null | tr -d ' \n')
+  else
+    pid_before=$(docker exec "$c" cat /run/barycenterd.pid 2>/dev/null | tr -d ' \n')
+  fi
+  aud=$(docker exec "$c" node -e '
+    const fs = require("fs"), c = require("crypto");
+    const plain = c.randomBytes(24).toString("base64url");
+    const f = "/etc/barycenter/tokens.json";
+    const t = JSON.parse(fs.readFileSync(f, "utf8"));
+    t.push({ name: "harness-auditor", role: "auditor", hash: "sha256:" + c.createHash("sha256").update(plain).digest("hex") });
+    fs.writeFileSync(f, JSON.stringify(t) + "\n");
+    process.stdout.write(plain);
+  ' 2>/dev/null)
+  if [ "$init" = systemd ]; then
+    docker exec "$c" systemctl reload barycenterd >/dev/null 2>&1 || rc=1
+  else
+    docker exec "$c" rc-service barycenterd reload >/dev/null 2>&1 || rc=1
+  fi
+  sleep 1
+  if [ "$init" = systemd ]; then
+    pid_after=$(docker exec "$c" systemctl show -p MainPID --value barycenterd 2>/dev/null | tr -d ' \n')
+  else
+    pid_after=$(docker exec "$c" cat /run/barycenterd.pid 2>/dev/null | tr -d ' \n')
+  fi
+  local st
+  st=$(docker exec "$c" curl -s --max-time 5 -H "authorization: Bearer $aud" http://127.0.0.1:8088/api/v1/status 2>/dev/null)
+  if [ -n "$aud" ] && printf '%s' "$st" | grep -q '"head"' \
+     && [ -n "$pid_before" ] && [ "$pid_before" = "$pid_after" ]; then
+    printf '    ok   reload 가 새 토큰을 들였다 (PID %s 그대로)\n' "$pid_after"
+  else
+    printf '    NO   reload 뒤 새 토큰이 안 통하거나 데몬이 재시작됐다 (PID %s → %s)\n' "${pid_before:-?}" "${pid_after:-?}"
+    rc=1
+  fi
+  if printf '%s' "$st" | grep -q '"commit"'; then
+    printf '    ok   /status 가 설치된 판을 말한다\n'
+  else
+    printf '    NO   /status 에 build.commit 이 없다\n'
     rc=1
   fi
 
