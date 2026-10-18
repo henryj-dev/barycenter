@@ -3155,8 +3155,13 @@ capability 패키지이지 apply 구현이 아니다.
 인증은 같은 데몬이 서빙하는 세션 경계를 지난다. OIDC 교환 전의 state·PKCE verifier·nonce는
 데몬 메모리의 짧은 수명 로그인 세션에 있고, 브라우저에는 opaque `bary_login` 쿠키만 간다.
 교환 뒤 ID Token은 응답 본문에 내보내지 않고 `bary_session` HttpOnly·SameSite=Lax 쿠키로
-바꾼다(HTTPS에서는 Secure). 세션은 인스턴스 메모리라 재시작·다중 인스턴스 사이에 공유되지
-않는다. 다중 인스턴스가 필요해지는 배포는 외부 세션 저장소와 폐기 계약을 별도로 정한다.
+바꾼다(HTTPS에서는 Secure). 이 메모리 세션은 **사람 계정이 꺼진 배포**의 경로다.
+
+**사람 계정이 켜지면**(`BARY_ACCOUNTS_DSN`, §5.1) 세션은 **공용 계정 PG 의 서버 세션**이다 — 쿠키에는 불투명 id
+하나(TLS 면 `__Host-bary_sid`)뿐이고, 모든 보호된 요청이 계정 PG 로 세션·계정·역할을 확인한다. 그래서 재시작·지역
+스탠바이·전역 다중 인스턴스 사이에서 같은 세션이고, 로그아웃·정지·역할 하향이 다음 요청부터 어디서나 반영된다.
+확인할 수 없으면 503 으로 거부한다. 로그인 중 상태(MFA 대기·OIDC state·PKCE)도 계정 PG 에 있다. 화면: `/login`
+(비밀번호 → 인증 앱 코드, SSO) · `/invite` · `/account` · `/users` · `/reset` · `/email`, 민감 작업은 step-up 대화창.
 
 **쿠키로 들어온 쓰기는 같은 출처에서만 받는다** (2026-10-18). SameSite=Lax 는 다른 *사이트*만
 막고 형제 서브도메인(`evil.example.com` → `bary.example.com`)은 같은 사이트라 못 막는다. 그래서
