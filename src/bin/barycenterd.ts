@@ -16,14 +16,14 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
 import type { Server } from 'node:http';
-import { createServer as createHttpsServer } from 'node:https';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
-  apiHandler, apiTlsOptions, createApi, parseBuildInfo,
+  apiHandler, apiTlsOptions, createApi, parseBuildInfo, reloadApiTls,
   type ApiOptions, type BuildInfo, type GlobalApiOptions,
 } from '../api/server.js';
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
@@ -513,6 +513,23 @@ async function listenApi(
   await new Promise<void>((resolve) => {
     server.listen(port, host, resolve);
   });
+  /**
+   * **SIGHUP 은 인증서도 다시 읽는다** (2026-10-19). 인증서 갱신(cert-manager·반출 경로가 파일을 바꾼다) 뒤
+   * `systemctl reload barycenterd` 로 새 연결부터 새 인증서를 쓴다 — 재시작(데이터 플레인 끊김)이 필요 없다.
+   * 실패하면 옛 인증서를 그대로 두고 크게 말한다. 토큰 재적재(같은 신호)와 서로 막지 않는다.
+   */
+  if (tlsOn) {
+    process.on('SIGHUP', () => {
+      try {
+        const validTo = reloadApiTls(server as HttpsServer, {
+          cert: tlsCert, key: tlsKey, ...(tlsClientCa === '' ? {} : { clientCa: tlsClientCa }),
+        });
+        log.info('tls.reloaded', { cert: tlsCert, validTo });
+      } catch (e) {
+        log.error('tls.reload_failed', { cert: tlsCert, reason: e instanceof Error ? e.message : String(e), kept: 'previous' });
+      }
+    });
+  }
   log.info('listening', {
     host, port: Number(port), ...logFields,
     // 켰다고 생각했는데 안 켜진 상태를 밖에서 확인할 수 있어야 한다.

@@ -25,8 +25,9 @@ import {
   createServer, type IncomingMessage, type RequestListener, type Server,
   type ServerResponse,
 } from 'node:http';
-import type { SecureContextOptions } from 'node:tls';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { createSecureContext, type SecureContextOptions } from 'node:tls';
+import { createHash, randomBytes, randomUUID, X509Certificate } from 'node:crypto';
 
 import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore } from '../control/acme-store.js';
@@ -1264,6 +1265,25 @@ export function apiTlsOptions(input: ApiTlsInput): ApiTlsOptions {
       ? {}
       : { ca: input.clientCa, requestCert: true, rejectUnauthorized: true }),
   };
+}
+
+/**
+ * **인증서 파일을 다시 읽어 지금 리스너에 건다** (2026-10-19). 인증서가 갱신돼 파일이 바뀌어도 재시작하지 않는다 —
+ * 지역은 데몬과 엔진이 한 유닛이라 재시작이 데이터 플레인을 끊는다. 이미 열린 연결은 옛 인증서로 끝나고, 새 연결부터
+ * 새 인증서다. **읽기·해석이 실패하면 던지고 옛 인증서가 그대로 산다**(반쯤 바뀐 상태가 없다).
+ * 바뀐 인증서의 만료 시각을 돌려준다 — 갱신이 실제로 들어갔는지 로그로 확인하게.
+ */
+export function reloadApiTls(server: { setSecureContext(o: SecureContextOptions): void }, files: { cert: string; key: string; clientCa?: string }): string {
+  const cert = readFileSync(files.cert, 'utf8');
+  const opts = apiTlsOptions({
+    cert,
+    key: readFileSync(files.key, 'utf8'),
+    ...(files.clientCa === undefined ? {} : { clientCa: readFileSync(files.clientCa, 'utf8') }),
+  });
+  // 키와 인증서가 짝이 맞는지 먼저 본다 — 틀린 짝을 걸면 다음 연결부터 TLS 가 전부 실패한다.
+  createSecureContext(opts);
+  server.setSecureContext(opts);
+  return new X509Certificate(cert).validTo;
 }
 
 /**

@@ -72,3 +72,11 @@ sudo deploy/install.sh --mode global --regions /etc/barycenter-global/regions.js
   조회는 안 된다. 그때의 비상 경로는 지역 인스턴스(토큰)와 호스트 CLI 다.
 - 전역에 계정 PG(`BARY_ACCOUNTS_DSN`)가 없으면 공용 저장소가 없으므로 프로세스 로그(`global.view`)로만 남는다.
 - 조회: 관리자 화면 「사람 → 감사」나 `GET /api/v1/account-audit`.
+
+## 인증서 갱신
+
+관리 포트(8443)의 인증서(`BARY_TLS_CERT_FILE`·`BARY_TLS_KEY_FILE`)가 갱신돼 파일이 바뀌면 **`systemctl reload barycenterd`**
+(OpenRC 는 `rc-service barycenterd reload`) — SIGHUP 으로 인증서와 토큰을 다시 읽는다. 재시작이 아니라 지역의 데이터
+플레인이 끊기지 않는다. 새 연결부터 새 인증서이고, 로그에 `tls.reloaded`(새 만료 시각 `validTo`)가 남는다.
+파일이 깨졌거나 키와 짝이 안 맞으면 `tls.reload_failed` 를 남기고 **옛 인증서를 계속 쓴다** — 갱신 경로(cert-manager·반출)는
+파일을 바꾼 뒤 reload 까지 해야 끝난다. 컨테이너(파드)로 돌릴 때는 Secret 갱신 뒤 롤링 재시작이 단순하다.
