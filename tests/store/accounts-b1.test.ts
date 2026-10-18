@@ -23,7 +23,10 @@ import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('accounts-b1');
 let db: Db;
-let clock = Date.UTC(2026, 9, 18, 12, 0, 0);
+// **지금 시각에서 시작한다.** 만료 비교는 DB 의 now() 로 하므로, 고정 날짜를 쓰면 실제 시각이 그 날짜를 지나는
+// 순간(예: MFA 대기 5분) 테스트가 깨진다 — 2026-10-18 12:05 UTC 이후 CI 에서 실제로 그렇게 깨졌다.
+// 시간창 재사용 거절을 피하려고 테스트 안에서는 앞으로만 민다.
+let clock = Date.now();
 const sealer = new Sealer(randomBytes(32).toString('base64'));
 let outbox: { to: string; subject: string; text: string }[] = [];
 const mailer: Mailer = { send: async (to, subject, text) => { outbox.push({ to, subject, text }); } };
