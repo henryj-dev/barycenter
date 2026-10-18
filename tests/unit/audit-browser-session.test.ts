@@ -98,7 +98,8 @@ describe('OIDC 교환의 HttpOnly 세션 경계', () => {
     const startBody = await start.json() as { state: string };
     const loginCookie = start.headers.get('set-cookie')!.split(';', 1)[0]!;
     const exchange = await fetch(`${base}/api/v1/oidc/token`, {
-      method: 'POST', headers: { 'content-type': 'application/json', cookie: loginCookie },
+      // 브라우저는 POST 에 Origin 을 붙인다 — 없으면 쿠키 POST 는 거절된다 (session-csrf).
+      method: 'POST', headers: { 'content-type': 'application/json', cookie: loginCookie, origin: base },
       body: JSON.stringify({ code: 'good', state: startBody.state }),
     });
     expect(exchange.status).toBe(200);

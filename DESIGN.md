@@ -3144,6 +3144,12 @@ capability 패키지이지 apply 구현이 아니다.
 바꾼다(HTTPS에서는 Secure). 세션은 인스턴스 메모리라 재시작·다중 인스턴스 사이에 공유되지
 않는다. 다중 인스턴스가 필요해지는 배포는 외부 세션 저장소와 폐기 계약을 별도로 정한다.
 
+**쿠키로 들어온 쓰기는 같은 출처에서만 받는다** (2026-10-18). SameSite=Lax 는 다른 *사이트*만
+막고 형제 서브도메인(`evil.example.com` → `bary.example.com`)은 같은 사이트라 못 막는다. 그래서
+세션 쿠키가 신원인 GET·HEAD 외 요청은 `Origin` 의 host 가 요청 `Host` 와 같아야 하고, `Origin` 이
+없으면 `Sec-Fetch-Site: same-origin` 이어야 한다(`sameOriginWrite`). 로그인 교환·로그아웃도 같다.
+Bearer·클라이언트 인증서 요청은 브라우저가 저절로 싣는 자격증명이 아니라 대상이 아니다.
+
 ---
 
 ## 11. 배포 형태

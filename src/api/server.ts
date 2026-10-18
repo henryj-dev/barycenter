@@ -938,6 +938,51 @@ export function apiTlsOptions(input: ApiTlsInput): ApiTlsOptions {
   };
 }
 
+/**
+ * **쿠키로 들어온 쓰기는 같은 출처에서만 받는다** (CSRF, 2026-10-18).
+ *
+ * 브라우저 세션 쿠키는 `SameSite=Lax` 다. Lax 는 **다른 사이트**의 POST 에 쿠키를 안
+ * 싣지만, 사이트는 등록 가능 도메인 단위다 — `a.example.com` 과 `b.example.com` 은
+ * **같은 사이트**라서 형제 서브도메인의 페이지가 폼 POST 로 쿠키를 실어 보낼 수 있다.
+ * 본문 파서는 Content-Type 을 안 보므로 `text/plain` 폼이 JSON 본문을 만들 수 있다.
+ * 그 쿠키가 write·apply 까지 인증하므로, 지역 대시보드를 공개 도메인 아래 열면
+ * 옆 서브도메인 하나가 곧 설정 변경 권한이 된다.
+ *
+ * 그래서 GET·HEAD 가 아니면:
+ *   · `Origin` 이 있으면 그 host 가 요청의 `Host` 와 같아야 한다
+ *   · 없으면 `Sec-Fetch-Site: same-origin` 이어야 한다 — 둘 다 없으면 거절한다.
+ *     쿠키를 싣는 것은 브라우저뿐이고, 요즘 브라우저는 POST 에 `Origin` 을 늘 붙인다
+ *
+ * **스킴은 안 본다.** 앞단이 TLS 를 풀면(`BARY_ALLOW_PLAINTEXT_EXPOSED`) 브라우저의
+ * 출처는 https 인데 데몬은 http 로 받는다. 막으려는 것은 다른 host 이고, 같은 host 의
+ * 다른 스킴은 이 데몬 자신이다.
+ *
+ * Bearer·클라이언트 인증서 요청에는 걸지 않는다 — 브라우저가 저절로 싣는 자격증명이
+ * 아니라 CSRF 의 대상이 아니다.
+ */
+export function sameOriginWrite(req: IncomingMessage): boolean {
+  const m = req.method ?? 'GET';
+  if (m === 'GET' || m === 'HEAD') return true;
+  const host = req.headers.host;
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin !== '') {
+    if (origin === 'null' || host === undefined) return false;
+    try {
+      return new URL(origin).host === host.toLowerCase();
+    } catch {
+      return false;
+    }
+  }
+  return req.headers['sec-fetch-site'] === 'same-origin';
+}
+
+function crossSite(res: ServerResponse): void {
+  json(res, 403, {
+    code: 'cross_site',
+    message: '브라우저 세션으로 들어온 쓰기는 같은 출처에서만 받는다 (Origin 이 이 호스트가 아니다)',
+  });
+}
+
 export function createApi(api: ApiOptions): Server {
   return createServer(apiHandler(api));
 }
@@ -980,6 +1025,8 @@ async function handle(
 
   // 로그아웃은 인증이 없어도 쿠키를 지워야 한다. 응답 본문에 신원을 싣지 않는다.
   if (req.method === 'POST' && url.pathname === '/api/v1/session/logout') {
+    // 남이 로그아웃시키는 것도 막는다 — 피해는 작지만 쿠키가 걸린 POST 의 규칙은 하나다.
+    if (!sameOriginWrite(req)) { crossSite(res); return; }
     res.setHeader('set-cookie', [
       expiredCookie(SESSION_COOKIE, api.sessionSecure === true),
       expiredCookie(LOGIN_COOKIE, api.sessionSecure === true),
@@ -1016,6 +1063,8 @@ async function handle(
     return;
   }
   if (req.method === 'POST' && url.pathname === '/api/v1/oidc/token') {
+    // 로그인 CSRF — 남의 code 로 피해자를 공격자 계정에 앉히는 것 — 도 같은 문으로 막는다.
+    if (!sameOriginWrite(req)) { crossSite(res); return; }
     const rp = api.oidcRp;
     if (rp === undefined) {
       json(res, 404, { code: 'oidc_not_configured', message: 'Authorization Code 가 설정되지 않았다' });
@@ -1091,9 +1140,16 @@ async function handle(
    * 인증서는 이름만 말하고 역할은 토큰 표에서 온다. `principalFromClientCert` 가
    * 그 규칙을 진다.
    */
-  const who = api.auth.authenticate(req.headers.authorization)
-    ?? api.sessions!.get(cookieValue(req.headers.cookie, SESSION_COOKIE))
-    ?? principalFromClientCert(peerCertOf(req), api.auth);
+  const bearer = api.auth.authenticate(req.headers.authorization);
+  const session = bearer === undefined
+    ? api.sessions!.get(cookieValue(req.headers.cookie, SESSION_COOKIE))
+    : undefined;
+  // 쿠키가 신원이 된 요청만 출처를 본다 (위 `sameOriginWrite`).
+  if (session !== undefined && !sameOriginWrite(req)) {
+    crossSite(res);
+    return;
+  }
+  const who = bearer ?? session ?? principalFromClientCert(peerCertOf(req), api.auth);
   if (who === undefined) {
     const key = req.socket.remoteAddress ?? 'unknown';
     count('bary_auth_failures_total');
