@@ -17,24 +17,37 @@ import { mailText, type Mailer } from './mail.js';
 import type { Sealer } from './seal.js';
 import { base32Encode, newTotpSecret, otpauthUri, verifyTotp } from './totp.js';
 
-export const SESSION_MAX_MS = 8 * 60 * 60 * 1000;
+/** 세션 수명 (회원 공통 수치 1차) — 절대 12시간, 요청이 없으면 30분 뒤 끝난다. */
+export const SESSION_MAX_MS = 12 * 60 * 60 * 1000;
+export const SESSION_IDLE_MS = 30 * 60 * 1000;
+/** 미확인 인증 앱 등록이 유효한 시간 (공통 수치 1차 — TOTP 등록 코드 24시간). */
+const TOTP_SETUP_TTL_MS = 24 * 60 * 60 * 1000;
+/** 감사 기록 보존 (공통 수치 1차 — 1년). */
+export const AUDIT_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
 const MFA_PENDING_MS = 5 * 60 * 1000;
 const INVITE_TTL_MS = 72 * 60 * 60 * 1000;
 const BOOTSTRAP_TTL_MS = 24 * 60 * 60 * 1000;
 const RECOVERY_TTL_MS = 24 * 60 * 60 * 1000;
 const LOCK_AFTER = 5;
-const LOCK_MAX_MS = 60 * 60 * 1000;
+/** 지연 상한이자 계수 초기화 시간 (공통 수치 1차 추가 — 시작 1초, 상한 15분, 마지막 실패 뒤 15분이면 초기화). */
+const LOCK_MAX_MS = 15 * 60 * 1000;
+const LOCK_BASE_MS = 1000;
 const RECOVERY_CODES = 10;
 const RESET_TTL_MS = 30 * 60 * 1000;
 const EMAIL_CHANGE_TTL_MS = 24 * 60 * 60 * 1000;
 /** 같은 사람에게 재설정 메일을 연달아 보내지 않는다 — 메일 폭탄의 손잡이가 되지 않게. */
 const RESET_EVERY_MS = 5 * 60 * 1000;
 /** 민감 작업은 이만큼 안에 MFA 를 지난 세션만 (공통 정책 · 수치는 미정, 권장 기본). */
-export const STEP_UP_MAX_AGE_MS = 15 * 60 * 1000;
+export const STEP_UP_MAX_AGE_MS = 10 * 60 * 1000;
 /** last_seen 을 요청마다 쓰지 않는다 — 읽기 화면의 요청마다 쓰기가 생긴다. */
 const TOUCH_EVERY_MS = 60_000;
 
 const ROLES: readonly Role[] = ['auditor', 'operator', 'admin'];
+/** 5번째 실패부터 1초·2초·4초 … 최대 15분. 그 전은 0. */
+function backoffMs(failures: number): number {
+  return failures >= LOCK_AFTER ? Math.min(LOCK_MAX_MS, LOCK_BASE_MS * 2 ** (failures - LOCK_AFTER)) : 0;
+}
+
 export const USERNAME = /^[a-z0-9][a-z0-9._-]{1,62}$/;
 
 /** 계정 PG 를 못 물었다. 「세션이 없다」와 다르다 — 서버는 401 이 아니라 503 으로 거부한다. */
@@ -631,17 +644,19 @@ export class AccountService {
       return { kind: 'denied' };
     }
     const userId = str(u, 'id');
-    const locked = u['locked_until'] !== null && new Date(String(u['locked_until'])).getTime() > now;
+    const locked = this.#locked(u['locked_until'], now);
     const ok = await verifyPassword(password, str(u, 'password_hash'));
     if (!ok || locked || str(u, 'status') !== 'active') {
       if (!ok) await this.#failed(userId, Number(u['failed_logins']), meta);
       return { kind: 'denied' };
     }
-    await this.#q(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
+    const hasTotp = u['totp_at'] !== null;
+    // **인증 앱이 있으면 여기서 실패 계수를 지우지 않는다** — 비밀번호를 아는 상대가 로그인을 되풀이해
+    // 계수를 지우며 인증 코드를 무한히 넣을 수 있다. 지우는 것은 MFA 단계가 성공했을 때다.
+    if (!hasTotp) await this.#q(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
     if (needsRehash(str(u, 'password_hash'))) {
       await this.#q(`UPDATE users SET password_hash=$2 WHERE id=$1`, [userId, await hashPassword(password)]);
     }
-    const hasTotp = u['totp_at'] !== null;
     // admin 인데 TOTP 가 없는 상태는 만들지 않지만(수락·승격이 막는다), 만들어졌다면 들이지 않는다.
     if (str(u, 'role') === 'admin' && !hasTotp) return { kind: 'denied' };
     if (hasTotp) {
@@ -653,15 +668,75 @@ export class AccountService {
     return { kind: 'session', sessionId: sid, maxAgeS: SESSION_MAX_MS / 1000 };
   }
 
-  /** 계정 단위 잠금 — 인스턴스를 가리지 않는다(공용 PG). 5번부터 1분, 2분, … 최대 1시간. */
-  async #failed(userId: string, prev: number, meta: Meta): Promise<void> {
-    const n = prev + 1;
-    const lockMs = n >= LOCK_AFTER ? Math.min(LOCK_MAX_MS, 60_000 * 2 ** (n - LOCK_AFTER)) : 0;
-    await this.#q(
-      `UPDATE users SET failed_logins=$2, locked_until=$3 WHERE id=$1`,
-      [userId, n, lockMs === 0 ? null : new Date(this.#now() + lockMs)],
-    );
-    if (lockMs > 0) await this.#audit(undefined, 'system', 'account.locked', userId, meta, { failures: n });
+  #locked(lockedUntil: unknown, now: number): boolean {
+    return lockedUntil !== null && lockedUntil !== undefined && new Date(String(lockedUntil)).getTime() > now;
+  }
+
+  /**
+   * 계정 단위 잠금 — 인스턴스를 가리지 않는다(공용 PG). 비밀번호·인증 코드 실패를 같이 센다.
+   * **5번째 실패부터** 1초, 2초, 4초 … 최대 15분(공통 수치 1차 — 지수 지연, 영구 잠금 없음). 마지막 실패 뒤
+   * 15분이 지났으면 처음부터 센다. 증가는 SQL 한 문장이라 동시에 온 실패도 빠지지 않는다.
+   */
+  async #failed(userId: string, _prev: number, meta: Meta, c?: Queryable): Promise<void> {
+    const run = async (q: Queryable): Promise<number> => {
+      const r = (await q.query(
+        `UPDATE users SET failed_logins = CASE WHEN last_failed_at IS NULL OR last_failed_at < $2 THEN 1 ELSE failed_logins + 1 END,
+                          last_failed_at = $3
+          WHERE id=$1 RETURNING failed_logins`,
+        [userId, new Date(this.#now() - LOCK_MAX_MS), new Date(this.#now())],
+      )).rows[0];
+      const n = Number(r?.['failed_logins'] ?? 0);
+      const ms = backoffMs(n);
+      await q.query(`UPDATE users SET locked_until=$2 WHERE id=$1`, [userId, ms === 0 ? null : new Date(this.#now() + ms)]);
+      return n;
+    };
+    const n = c !== undefined ? await run(c) : await this.#tx(run);
+    const lockMs = backoffMs(n);
+    if (lockMs > 0) await this.#audit(c, 'system', 'account.locked', userId, meta, { failures: n });
+  }
+
+  /**
+   * **IP 단위 시도 제한** (공통 수치 1차) — 공용 계정 PG 에서 센다. 여러 인스턴스가 같은 값을 본다.
+   * 막혀 있으면 남은 초, 아니면 undefined. **검증보다 먼저 묻는다** — 막힌 동안에는 비밀번호를 보지 않는다.
+   */
+  async throttleWait(key: string): Promise<number | undefined> {
+    const r = (await this.#q(`SELECT blocked_until FROM auth_throttle WHERE key=$1`, [key]))[0];
+    if (r === undefined || r['blocked_until'] === null) return undefined;
+    const left = new Date(String(r['blocked_until'])).getTime() - this.#now();
+    return left > 0 ? Math.ceil(left / 1000) : undefined;
+  }
+
+  /**
+   * 실패(또는 세는 요청) 하나를 더한다. 마지막 실패에서 15분이 지났으면 처음부터 센다 — 영구 잠금은 없다.
+   * 성공해도 지우지 않는다: 같은 IP 의 다른 계정 성공으로 공격자의 계수가 지워지면 안 된다.
+   */
+  async throttleFail(key: string): Promise<number | undefined> {
+    const now = new Date(this.#now());
+    const fresh = new Date(this.#now() - LOCK_MAX_MS);
+    const r = (await this.#q(
+      `INSERT INTO auth_throttle (key, failures, last_failure_at) VALUES ($1, 1, $2)
+       ON CONFLICT (key) DO UPDATE SET
+         failures = CASE WHEN auth_throttle.last_failure_at < $3 THEN 1 ELSE auth_throttle.failures + 1 END,
+         last_failure_at = $2
+       RETURNING failures`,
+      [key, now, fresh],
+    ))[0]!;
+    const ms = backoffMs(Number(r['failures']));
+    if (ms === 0) return undefined;
+    await this.#q(`UPDATE auth_throttle SET blocked_until=$2 WHERE key=$1`, [key, new Date(this.#now() + ms)]);
+    return Math.ceil(ms / 1000);
+  }
+
+  /**
+   * 보존 기한 정리 (공통 수치 1차) — 감사 기록 1년, 끝난 시도 계수. 여러 인스턴스가 동시에 돌려도 같다.
+   */
+  async purgeExpired(): Promise<{ audit: number }> {
+    const audit = (await this.#q(
+      `WITH d AS (DELETE FROM account_audit WHERE at < $1 RETURNING 1) SELECT count(*)::int AS n FROM d`,
+      [new Date(this.#now() - AUDIT_RETENTION_MS)],
+    ))[0]!;
+    await this.#q(`DELETE FROM auth_throttle WHERE last_failure_at < $1`, [new Date(this.#now() - LOCK_MAX_MS)]);
+    return { audit: Number(audit['n']) };
   }
 
   /**
@@ -673,17 +748,19 @@ export class AccountService {
     const now = this.#now();
     return this.#tx(async (c) => {
       const s = (await c.query(
-        `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.status, t.secret_sealed, t.last_step
+        `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.locked_until, u.status, t.secret_sealed, t.last_step
            FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN mfa_totp t ON t.user_id = s.user_id
           WHERE s.id_hash=$1 AND s.mfa_pending AND s.revoked_at IS NULL AND s.expires_at > now()
-          FOR UPDATE OF s`,
+          FOR UPDATE OF s, u`,
         [sha(pendingId)],
       )).rows[0];
       if (s === undefined || str(s, 'status') !== 'active') return { kind: 'denied' } as const;
       const userId = str(s, 'user_id');
+      // 인증 코드도 같은 계정 잠금에 걸린다 — 비밀번호를 아는 상대가 코드를 무작정 넣는 길을 막는다.
+      if (this.#locked(s['locked_until'], now)) return { kind: 'denied' } as const;
       const method = await this.#secondFactor(c, userId, code, s['secret_sealed'] === null ? null : str(s, 'secret_sealed'), Number(s['last_step']));
       if (method === undefined) {
-        await c.query(`UPDATE users SET failed_logins=failed_logins+1 WHERE id=$1`, [userId]);
+        await this.#failed(userId, Number(s['failed_logins']), meta, c);
         return { kind: 'denied' } as const;
       }
       await c.query(`UPDATE sessions SET revoked_at=now() WHERE id_hash=$1`, [sha(pendingId)]);
@@ -693,7 +770,7 @@ export class AccountService {
          VALUES ($1,$2,$3,false,$4,now(),$5,$6)`,
         [sha(sid), userId, new Date(now + SESSION_MAX_MS), ['pwd', method], meta.ip ?? null, meta.userAgent ?? null],
       );
-      await c.query(`UPDATE users SET failed_logins=0 WHERE id=$1`, [userId]);
+      await c.query(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
       await this.#audit(c, `user:${str(s, 'username')}`, 'session.login', userId, meta, { mfa: method });
       return { kind: 'session', sessionId: sid, maxAgeS: SESSION_MAX_MS / 1000 } as const;
     });
@@ -732,11 +809,16 @@ export class AccountService {
         `SELECT t.secret_sealed, t.last_step FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL FOR UPDATE`, [userId],
       )).rows[0];
       if (t === undefined) throw new AccountError(409, 'no_totp', '인증 앱을 먼저 등록한다 — 민감 작업은 MFA 가 필요하다');
+      const u = (await c.query(`SELECT failed_logins, locked_until FROM users WHERE id=$1 FOR UPDATE`, [userId])).rows[0]!;
+      if (this.#locked(u['locked_until'], this.#now())) {
+        throw new AccountError(429, 'locked', '실패가 너무 많다 — 잠시 뒤 다시 한다');
+      }
       const method = await this.#secondFactor(c, userId, code, str(t, 'secret_sealed'), Number(t['last_step']));
       if (method === undefined) {
-        await c.query(`UPDATE users SET failed_logins=failed_logins+1 WHERE id=$1`, [userId]);
+        await this.#failed(userId, Number(u['failed_logins']), meta, c);
         throw new AccountError(403, 'step_up_failed', '인증 코드가 맞지 않는다');
       }
+      await c.query(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
       await c.query(
         `UPDATE sessions SET mfa_at=now(), auth_methods = array_append(auth_methods, $2)
           WHERE id_hash=$1 AND revoked_at IS NULL`, [sessionHash, `step-up:${method}`],
@@ -749,8 +831,9 @@ export class AccountService {
   async sessionAlive(sessionHash: string): Promise<boolean> {
     const r = await this.#q(
       `SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id
-        WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending AND u.status='active'`,
-      [sessionHash],
+        WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending AND u.status='active'
+          AND s.last_seen_at > now() - make_interval(secs => $2::double precision / 1000)`,
+      [sessionHash, SESSION_IDLE_MS],
     );
     return r.length > 0;
   }
@@ -777,8 +860,9 @@ export class AccountService {
       `SELECT s.user_id, s.mfa_at, s.last_seen_at, u.username, u.role
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending
+          AND s.last_seen_at > now() - make_interval(secs => $2::double precision / 1000)
           AND u.status='active'`,
-      [h],
+      [h, SESSION_IDLE_MS],
     ))[0];
     if (r === undefined) return undefined;
     const role = str(r, 'role');
@@ -874,9 +958,9 @@ export class AccountService {
         throw new AccountError(409, 'totp_exists', '이미 등록된 인증 앱이 있다 — 먼저 해제한다');
       }
       await c.query(
-        `INSERT INTO mfa_totp (user_id, secret_sealed) VALUES ($1,$2)
-         ON CONFLICT (user_id) DO UPDATE SET secret_sealed=EXCLUDED.secret_sealed, last_step=0, created_at=now()`,
-        [userId, this.#sealer.seal(secret, `totp:${userId}`)],
+        `INSERT INTO mfa_totp (user_id, secret_sealed, created_at) VALUES ($1,$2,$3)
+         ON CONFLICT (user_id) DO UPDATE SET secret_sealed=EXCLUDED.secret_sealed, last_step=0, created_at=EXCLUDED.created_at`,
+        [userId, this.#sealer.seal(secret, `totp:${userId}`), new Date(this.#now())],
       );
     });
     return { secret: base32Encode(secret), uri: otpauthUri(secret, username, this.#issuer) };
@@ -884,8 +968,11 @@ export class AccountService {
 
   async confirmTotp(userId: string, code: string, meta: Meta = {}): Promise<string[]> {
     return this.#tx(async (c) => {
-      const t = (await c.query(`SELECT secret_sealed, confirmed_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`, [userId])).rows[0];
+      const t = (await c.query(`SELECT secret_sealed, confirmed_at, created_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`, [userId])).rows[0];
       if (t === undefined || t['confirmed_at'] !== null) throw new AccountError(409, 'no_pending_totp', '확인할 등록이 없다');
+      if (new Date(String(t['created_at'])).getTime() + TOTP_SETUP_TTL_MS < this.#now()) {
+        throw new AccountError(410, 'totp_setup_expired', '인증 앱 등록이 만료됐다(24시간) — 처음부터 다시 등록한다');
+      }
       const step = verifyTotp(this.#sealer.open(str(t, 'secret_sealed'), `totp:${userId}`), code, this.#now(), 0);
       if (step === undefined) throw new AccountError(400, 'totp_mismatch', '인증 앱의 코드가 맞지 않는다');
       await c.query(`UPDATE mfa_totp SET confirmed_at=now(), last_step=$2 WHERE user_id=$1`, [userId, step]);
@@ -990,7 +1077,12 @@ export class AccountService {
     });
   }
 
-  /** 소프트 삭제 — 로그인 수단을 지우고 username 은 묘비로 남긴다(재사용 금지, 감사 대응 유지). */
+  /**
+   * 탈퇴(소프트 삭제) — **개인정보는 즉시 지운다**(공통 수치 1차): 이메일·이름·비밀번호·인증 앱·복구 코드·
+   * 세션(IP·UA 포함)·진행 중 메일 링크. 남기는 것은 username 묘비(재사용 금지)와 **SSO 연결 (iss, sub)** 이다 —
+   * 같은 IdP 계정이 다른 사람 계정에 다시 붙거나 JIT 로 새로 생기지 않게 한다(로그인은 status 로 막힌다).
+   * 감사 기록은 1년 보존 규칙을 따른다.
+   */
   async deleteUser(userId: string, by: string, meta: Meta = {}): Promise<void> {
     await this.#tx(async (c) => {
       await c.query(`SELECT id FROM users WHERE role='admin' AND status='active' FOR UPDATE`);
@@ -1004,10 +1096,14 @@ export class AccountService {
       );
       await c.query('DELETE FROM mfa_totp WHERE user_id=$1', [userId]);
       await c.query('DELETE FROM mfa_recovery_codes WHERE user_id=$1', [userId]);
-      await c.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId]);
-      await c.query(`UPDATE invitations SET revoked_at=now() WHERE for_user=$1 AND used_at IS NULL`, [userId]);
-      // SSO 연결도 끊는다 — 묘비가 IdP 로 다시 살아나지 않게.
-      await c.query(`DELETE FROM user_identities WHERE user_id=$1`, [userId]);
+      await c.query(`DELETE FROM sessions WHERE user_id=$1`, [userId]);
+      await c.query(
+        `UPDATE invitations SET email=NULL, revoked_at=CASE WHEN used_at IS NULL THEN now() ELSE revoked_at END
+          WHERE for_user=$1 OR used_by=$1`, [userId],
+      );
+      await c.query(`DELETE FROM password_resets WHERE user_id=$1`, [userId]);
+      await c.query(`DELETE FROM email_changes WHERE user_id=$1`, [userId]);
+      await c.query(`DELETE FROM login_flows WHERE user_id=$1`, [userId]);
       await this.#audit(c, by, 'account.delete', userId, meta);
     });
   }

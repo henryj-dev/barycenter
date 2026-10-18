@@ -1322,10 +1322,12 @@ const accountCookie = (api: { sessionSecure?: boolean }): string =>
 /** MFA 대기 표 — MFA 단계에만 실린다. */
 const MFA_COOKIE = 'bary_mfa';
 /**
- * 재설정 요청 제한(IP). **로그인 실패 카운터와 나눈다** — 같이 쓰면 재설정을 몇 번 누른 사람이 로그인에서
- * 잠긴다. 실패가 아니라 요청 수를 세므로 「성공」으로 지우지 않는다.
+ * 로그인·가입·재설정 요청 본문 상한 (회원 공통 수치 1차 — 64 KiB). 비밀번호에는 최대 길이가 없으므로
+ * 해시 부담 공격은 여기서 막는다.
  */
-const resetRequests = new AuthFailureLimiter({ maxFailures: 5, baseDelayMs: 60_000, maxDelayMs: 3_600_000 });
+const PASSWORD_BODY_MAX = 64 * 1024;
+/** 시도 제한 키(공용 계정 PG 의 `auth_throttle`). 재설정 요청 수는 로그인 실패와 나눠 센다. */
+const throttleKey = (use: 'login' | 'reset', req: IncomingMessage): string => `${use}:${req.socket.remoteAddress ?? 'unknown'}`;
 const MFA_PATH = '/api/v1/session/mfa';
 
 function accountsOf(api: { accounts?: AccountService }): AccountService {
@@ -1653,9 +1655,10 @@ async function handle(
       return;
     }
     try {
-      const body = await readBody(req, max);
+      const body = await readBody(req, Math.min(max, PASSWORD_BODY_MAX));
       if (url.pathname === '/api/v1/account/password-reset') {
-        const retryAfter = resetRequests.record(req.socket.remoteAddress ?? 'unknown');
+        // 실패가 아니라 요청 수를 센다 — 성공으로 지우지 않는다. 인스턴스를 가리지 않는다(공용 PG).
+        const retryAfter = await accounts.throttleWait(throttleKey('reset', req)) ?? await accounts.throttleFail(throttleKey('reset', req));
         if (retryAfter !== undefined) {
           json(res, 429, { code: 'rate_limited', message: '요청이 너무 많다 — 잠시 뒤 다시 한다' }, { 'retry-after': String(retryAfter) });
           return;
@@ -1680,8 +1683,9 @@ async function handle(
   /**
    * **사람 계정 로그인** (공통 회원정책 1차 · 계획 A). 인증 앞이라 여기서 받는다.
    *
-   * 셋 다 쿠키를 만드는 POST 라 같은 출처 검사를 지난다(로그인 CSRF). 실패는 IP 단위 제한
-   * (`authFailures`)과 계정 단위 잠금(계정 PG) 둘에 걸린다. 응답은 계정 유무와 무관하게 같다.
+   * 셋 다 쿠키를 만드는 POST 라 같은 출처 검사를 지난다(로그인 CSRF). 실패는 IP 단위 제한과 계정 단위
+   * 잠금에 걸리고, **둘 다 공용 계정 PG 에서 센다**(회원 공통 수치 1차 — 인스턴스마다 따로 세지 않는다).
+   * IP 가 막혀 있으면 **비밀번호를 보기 전에** 429 다. 응답은 계정 유무와 무관하게 같다.
    */
   if (req.method === 'POST' && (url.pathname === '/api/v1/session/login' || url.pathname === MFA_PATH
     || url.pathname === '/api/v1/invitations/preview' || url.pathname === '/api/v1/invitations/accept')) {
@@ -1691,9 +1695,9 @@ async function handle(
       json(res, 404, { code: 'accounts_disabled', message: '이 배포에는 사람 계정이 켜져 있지 않다' });
       return;
     }
-    const ipKey = req.socket.remoteAddress ?? 'unknown';
+    const ipKey = throttleKey('login', req);
     try {
-      const body = await readBody(req, max);
+      const body = await readBody(req, Math.min(max, PASSWORD_BODY_MAX));
       const secure = api.sessionSecure === true;
       if (url.pathname === '/api/v1/invitations/preview') {
         json(res, 200, await accounts.previewLink(bodyStr(body, 'token')));
@@ -1712,12 +1716,17 @@ async function handle(
         }, metaOf(req)));
         return;
       }
+      const wait = await accounts.throttleWait(ipKey);
+      if (wait !== undefined) {
+        json(res, 429, { code: 'rate_limited', message: '실패가 너무 많다 — 잠시 뒤 다시 시도하라' }, { 'retry-after': String(wait) });
+        return;
+      }
       const out = url.pathname === MFA_PATH
         ? await accounts.completeMfa(cookieValue(req.headers.cookie, MFA_COOKIE), bodyStr(body, 'code'), metaOf(req))
         : await accounts.login(bodyStr(body, 'username'), bodyStr(body, 'password'), metaOf(req));
       if (out.kind === 'denied') {
         count('bary_auth_failures_total');
-        const retryAfter = authFailures.record(ipKey);
+        const retryAfter = await accounts.throttleFail(ipKey);
         if (retryAfter !== undefined) {
           json(res, 429, { code: 'rate_limited', message: '실패가 너무 많다 — 잠시 뒤 다시 시도하라' }, { 'retry-after': String(retryAfter) });
         } else {
@@ -1725,7 +1734,6 @@ async function handle(
         }
         return;
       }
-      authFailures.clear(ipKey);
       if (out.kind === 'mfa') {
         res.setHeader('set-cookie', mfaCookie(out.sessionId, secure, out.maxAgeS));
         json(res, 200, { status: 'mfa_required' });

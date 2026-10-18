@@ -263,6 +263,21 @@ function writeBootstrap(prefix: string, adminSocket: string, streamAdminSocket: 
 }
 
 /**
+ * 보존 기한 정리 (회원 공통 수치 1차 — 감사 1년). 기동 때 한 번, 그 뒤 하루마다. 여러 인스턴스가 같이 돌려도
+ * 결과가 같다. 실패는 다음 차례에 다시 한다 — 정리가 늦어도 인증은 영향이 없다.
+ */
+function tidyAccounts(accounts: AccountService): void {
+  const run = (): void => {
+    accounts.purgeExpired().then(
+      (r) => { if (r.audit > 0) log.info('accounts.purge', r); },
+      (e: unknown) => log.warn('accounts.purge_failed', { error: e instanceof Error ? e.message : String(e) }),
+    );
+  };
+  run();
+  setInterval(run, 24 * 60 * 60 * 1000).unref();
+}
+
+/**
  * 사람 계정 (공통 회원정책 1차 · 계획 A). `BARY_ACCOUNTS_DSN` 이 있을 때만 켠다.
  *
  * **키 없이 켜지 않는다.** TOTP 비밀을 감쌀 `BARY_ACCOUNTS_KEK` 가 없으면 기동을 거부한다 — 계정은
@@ -530,6 +545,7 @@ async function mainGlobal(): Promise<void> {
   const { auth, oidcRp, stopJwks } = await authFromEnv(readTimings().oidcJwksMs);
   const serveRoot = guiRootFromEnv();
   const accounts = await accountsFromEnv();
+  if (accounts !== undefined) tidyAccounts(accounts);
   const apiOpts: GlobalApiOptions = {
     global: relay, auth, build,
     plaintextExposed: false, sessionSecure: false,
@@ -1043,7 +1059,10 @@ export async function main(): Promise<void> {
   const serveRoot = guiRootFromEnv();
 
   const accounts = await accountsFromEnv();
-  if (accounts !== undefined) log.info('accounts.enabled', {});
+  if (accounts !== undefined) {
+    log.info('accounts.enabled', {});
+    tidyAccounts(accounts);
+  }
   const apiOpts = {
     db, store, control, auth, election, secrets, events,
     ...(accounts === undefined ? {} : { accounts }),

@@ -176,7 +176,7 @@ describe('연결 · 해제', () => {
     expect(r.status).toBe(409);
   });
 
-  it('해제는 비밀번호를 다시 묻고, 삭제된 계정의 연결은 사라진다', async () => {
+  it('해제는 비밀번호를 다시 묻고, **탈퇴해도 (iss, sub) 는 남아 재사용을 막는다** (공통 수치 1차)', async () => {
     const base = await serve();
     const { userId, sid } = await operator(base);
     who = { sub: 'u-6' };
@@ -189,7 +189,18 @@ describe('연결 · 해제', () => {
     for (const ch of p.totp!.secret) { v = (v << 5) | A.indexOf(ch); bits += 5; if (bits >= 8) { key.push((v >>> (bits - 8)) & 255); bits -= 8; } }
     await accounts.acceptLink({ token: t, username: 'root', password: 'admin-password-1', totp: { secret: p.totp!.secret, code: hotp(Buffer.from(key), stepOf(Date.now())) } });
     await accounts.deleteUser(userId, 'user:root');
-    expect((await sso(base)).status).toBe(403);
+    // 연결은 남고(묘비), 로그인은 status 로 막힌다 — 401 이지 「연결 없음」 403 이 아니다
+    expect((await db.query(`SELECT user_id FROM user_identities WHERE issuer=$1 AND subject='u-6'`, [ISS])).rows[0]?.['user_id']).toBe(userId);
+    expect((await sso(base)).status).toBe(401);
+    // JIT 를 켜도 같은 IdP 계정으로 새 계정이 생기지 않는다
+    const before = (await db.query(`SELECT count(*)::int AS n FROM users`)).rows[0]?.['n'];
+    await accounts.setProviderJit(ISS, true, 'user:root');
+    expect((await sso(base)).status).toBe(401);
+    expect((await db.query(`SELECT count(*)::int AS n FROM users`)).rows[0]?.['n']).toBe(before);
+    // 개인정보는 지워졌다
+    const u = (await db.query(`SELECT email, password_hash, display_name FROM users WHERE id=$1`, [userId])).rows[0]!;
+    expect(u).toEqual({ email: null, password_hash: null, display_name: null });
+    expect((await db.query(`SELECT count(*)::int AS n FROM sessions WHERE user_id=$1`, [userId])).rows[0]?.['n']).toBe(0);
   });
 });
 

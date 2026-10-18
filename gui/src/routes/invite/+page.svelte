@@ -62,7 +62,7 @@
     {#if !isRecovery}
       <label><span>아이디 (영소문자·숫자·._-, 바꿀 수 없다)</span><input autocomplete="username" bind:value={username} required /></label>
     {/if}
-    <label><span>비밀번호 (12자 이상)</span><input type="password" autocomplete="new-password" bind:value={password} required /></label>
+    <label><span>비밀번호 (8자 이상, 영소문자·영대문자·숫자·특수문자 중 3종류)</span><input type="password" autocomplete="new-password" bind:value={password} required /></label>
     <label><span>비밀번호 확인</span><input type="password" autocomplete="new-password" bind:value={confirm} required /></label>
     {#if confirm !== '' && !passwordsMatch}<p class="err">두 비밀번호가 다르다</p>{/if}
     {#if preview.totp !== undefined}

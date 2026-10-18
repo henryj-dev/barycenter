@@ -23,7 +23,7 @@
   <div class="veil" role="dialog" aria-modal="true" aria-labelledby="stepup-h">
     <form onsubmit={(e) => { e.preventDefault(); void submit(); }}>
       <h2 id="stepup-h">인증 앱으로 한 번 더 확인한다</h2>
-      <p>이 작업은 최근 15분 안에 인증 앱 확인이 필요하다. 코드(또는 복구 코드)를 넣으면 바로 이어서 한다.</p>
+      <p>이 작업은 최근 10분 안에 인증 앱 확인이 필요하다. 코드(또는 복구 코드)를 넣으면 바로 이어서 한다.</p>
       <input inputmode="numeric" autocomplete="one-time-code" bind:value={code} required />
       <div class="row">
         <button type="submit" disabled={busy}>확인</button>

@@ -5,21 +5,26 @@
  * 기본값을 올려도 옛 해시가 그대로 검증되고, 로그인이 성공한 순간 새 매개변수로 다시 해시한다
  * (`needsRehash`).
  *
- * ⚠️ 매개변수·길이 규칙의 **수치는 공통 정책에서 아직 미정**이다. 여기 값은 권장 기본이다.
+ * 수치는 **회원 공통 수치 1차**(2026-10-18 사용자 결정, orc 경유)다 — 7개 제품이 같은 값을 쓴다.
+ * scrypt N=2^16·r=8·p=2 는 Cloudflare Workers 의 상한(N×r×p ≤ 2^20, isolate 128MB) 안에서 고른 OWASP 동급
+ * 조합이다. 옛 매개변수(N=2^15·p=1)의 해시는 그대로 검증되고 다음 로그인 때 새 값으로 다시 저장된다.
  */
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 
-const LOG_N = 15;
+const LOG_N = 16;
 const R = 8;
-const P = 1;
+const P = 2;
 const KEY_LEN = 64;
 const SALT_LEN = 16;
-/** N=2^15·r=8 은 32MiB 를 쓴다. 기본 상한(32MiB)에 딱 걸리므로 여유를 준다. */
+/** N=2^16·r=8 은 64MiB 를 쓴다. Node 기본 상한(32MiB)으로는 거부되므로 넉넉히 준다. */
 const MAXMEM = 128 * 1024 * 1024;
 
-export const PASSWORD_MIN = 12;
-/** 상한이 없으면 1MB 비밀번호 하나가 scrypt 를 오래 붙든다. */
-export const PASSWORD_MAX = 1024;
+export const PASSWORD_MIN = 8;
+/**
+ * **최대 길이는 두지 않는다**(공통 수치 1차). 해시 부담 공격은 비밀번호 규칙이 아니라 요청 본문 상한
+ * (로그인·가입·재설정 64 KiB, `src/api/server.ts` `PASSWORD_BODY_MAX`)으로 막는다.
+ */
+const CLASSES_NEEDED = 3;
 
 function scrypt(password: string, salt: Buffer, logN: number, r: number, p: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -30,11 +35,18 @@ function scrypt(password: string, salt: Buffer, logN: number, r: number, p: numb
   });
 }
 
-/** 정책 위반이면 이유를, 받아 줄 수 있으면 undefined. 조합 규칙은 두지 않는다. */
+/**
+ * 정책 위반이면 이유를, 받아 줄 수 있으면 undefined (공통 수치 1차).
+ * NFC 로 정규화한 뒤 **8자 이상**, 그리고 영소문자·영대문자·숫자·특수문자 **4종류 중 3종류 이상**.
+ * 특수문자는 영문자·숫자가 아닌 모든 문자다(공백·한글 포함). 유출 목록 차단·정기 변경 강제는 두지 않는다.
+ */
 export function passwordProblem(password: string): string | undefined {
-  const n = [...password.normalize('NFC')].length;
-  if (n < PASSWORD_MIN) return `비밀번호는 ${PASSWORD_MIN}자 이상이어야 한다`;
-  if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX) return `비밀번호가 너무 길다 (${PASSWORD_MAX}바이트 이하)`;
+  const p = password.normalize('NFC');
+  if ([...p].length < PASSWORD_MIN) return `비밀번호는 ${PASSWORD_MIN}자 이상이어야 한다`;
+  const kinds = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((re) => re.test(p)).length;
+  if (kinds < CLASSES_NEEDED) {
+    return `비밀번호는 영소문자·영대문자·숫자·특수문자 중 ${CLASSES_NEEDED}종류 이상을 섞어야 한다`;
+  }
   return undefined;
 }
 

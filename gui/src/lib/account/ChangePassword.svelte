@@ -19,7 +19,7 @@
 <form onsubmit={(e) => { e.preventDefault(); void submit(); }}>
   <h2>비밀번호</h2>
   <label><span>지금 비밀번호</span><input type="password" autocomplete="current-password" bind:value={current} required /></label>
-  <label><span>새 비밀번호 (12자 이상)</span><input type="password" autocomplete="new-password" bind:value={next} required /></label>
+  <label><span>새 비밀번호 (8자 이상, 영소문자·영대문자·숫자·특수문자 중 3종류)</span><input type="password" autocomplete="new-password" bind:value={next} required /></label>
   <button type="submit" disabled={busy}>바꾸기</button>
   {#if note !== undefined}<p class:err={!note.ok} role="status">{note.text}</p>{/if}
 </form>

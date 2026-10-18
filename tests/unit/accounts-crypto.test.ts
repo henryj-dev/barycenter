@@ -11,7 +11,7 @@ import { base32Encode, hotp, otpauthUri, stepOf, verifyTotp } from '../../src/ac
 describe('scrypt 비밀번호', () => {
   it('맞는 비밀번호만 통과하고, 형식에 매개변수가 들어 있다', async () => {
     const h = await hashPassword('correct horse battery');
-    expect(h).toMatch(/^scrypt\$15\$8\$1\$[\w-]+\$[\w-]+$/);
+    expect(h).toMatch(/^scrypt\$16\$8\$2\$[\w-]+\$[\w-]+$/);
     expect(await verifyPassword('correct horse battery', h)).toBe(true);
     expect(await verifyPassword('correct horse batterz', h)).toBe(false);
     expect(needsRehash(h)).toBe(false);
@@ -31,10 +31,33 @@ describe('scrypt 비밀번호', () => {
     expect(needsRehash('scrypt$14$8$1$AAAA$BBBB')).toBe(true);
   });
 
-  it('길이 규칙: 12자 이상, 1024바이트 이하. 조합 규칙은 없다', () => {
-    expect(passwordProblem('short')).toBeDefined();
-    expect(passwordProblem('aaaaaaaaaaaa')).toBeUndefined();
-    expect(passwordProblem('x'.repeat(1025))).toBeDefined();
+  it('**공통 수치 1차**: 8자 이상, 4종류 중 3종류 이상, 최대 길이 없음', () => {
+    expect(passwordProblem('Ab1!xyz')).toBeDefined(); // 7자
+    expect(passwordProblem('abcdefgh')).toBeDefined(); // 1종류
+    expect(passwordProblem('abcdefg1')).toBeDefined(); // 2종류
+    expect(passwordProblem('abcdefG1')).toBeUndefined(); // 소·대·숫자
+    expect(passwordProblem('abcdef1!')).toBeUndefined(); // 소·숫자·특수
+    // 특수문자는 영문자·숫자가 아닌 모든 문자 — 공백·한글도 센다
+    expect(passwordProblem('abc def1')).toBeUndefined();
+    expect(passwordProblem('비밀번호abc1')).toBeUndefined();
+    // 최대 길이를 두지 않는다(본문 상한 64 KiB 가 막는다)
+    expect(passwordProblem('Ab1'.repeat(2000))).toBeUndefined();
+  });
+
+  it('NFC 로 정규화한 뒤 센다 — 조합형 한글도 같은 글자 수', () => {
+    const nfd = '가나다라마바'.normalize('NFD') + 'a1';
+    expect([...nfd].length).toBeGreaterThan(8);
+    expect(passwordProblem(nfd)).toBeUndefined(); // NFC 로 8자
+    expect(passwordProblem('가나다라'.normalize('NFD') + 'a1')).toBeDefined(); // NFC 로 6자
+  });
+
+  it('**옛 매개변수(N=2^15·p=1) 해시도 검증되고, 재해시 대상이다**', async () => {
+    const { scrypt } = await import('node:crypto');
+    const salt = Buffer.alloc(16, 7);
+    const key = await new Promise<Buffer>((res, rej) => scrypt('Old-pass-123', salt, 64, { N: 2 ** 15, r: 8, p: 1, maxmem: 128 << 20 }, (e, k) => (e ? rej(e) : res(k))));
+    const old = `scrypt$15$8$1$${salt.toString('base64url')}$${key.toString('base64url')}`;
+    expect(await verifyPassword('Old-pass-123', old)).toBe(true);
+    expect(needsRehash(old)).toBe(true);
   });
 });
 
