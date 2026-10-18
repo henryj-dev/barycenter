@@ -118,6 +118,19 @@ describe('공용 계정 PG — 인스턴스를 넘는 세션·철회', () => {
     expect((await me(B, cookie)).status).toBe(401);
   });
 
+  it('**전역 조회가 공용 감사에 남는다** — 누가·어느 화면·언제, 본문 없이', async () => {
+    const { cookie } = await operator('viewer');
+    expect((await fetch(`${G}/api/v1/regions`, { headers: { cookie } })).status).toBe(200);
+    const db = new Db(PG.dsn);
+    dbs.push(db);
+    const rows = (await db.query(
+      `SELECT actor, action, detail::text AS d, subject_user FROM account_audit WHERE action LIKE 'global.%' ORDER BY id DESC LIMIT 1`,
+    )).rows;
+    expect(rows[0]).toMatchObject({ actor: 'user:viewer', action: 'global.view' });
+    expect(JSON.parse(String(rows[0]!['d']))).toEqual({ region: null, path: 'regions' });
+    expect(rows[0]!['subject_user']).not.toBeNull();
+  });
+
   it('**계정 PG 가 죽으면 세 인스턴스 모두 503 으로 거부한다** — 토큰은 그대로 통한다', async () => {
     const { cookie } = await operator('outage');
     execFileSync('docker', ['stop', '-t', '1', PG.name], { stdio: 'ignore' });
@@ -130,8 +143,10 @@ describe('공용 계정 PG — 인스턴스를 넘는 세션·철회', () => {
     const out = await fetch(`${A}/api/v1/session/logout`, { method: 'POST', headers: { cookie, origin: A } });
     expect(out.status).toBe(503);
     expect(out.headers.getSetCookie().some((c) => c.startsWith('bary_sid=;') || c.startsWith('bary_sid= ;') || /^bary_sid=;?/.test(c))).toBe(true);
-    // 기계 토큰은 계정 PG 와 무관하다 — 비상 경로가 산다
+    // **전역 조회는 기록을 남겨야 한다**(공통 정책 1차 4번) — 계정 PG 가 죽으면 토큰이어도 전역 조회는 거부된다.
+    // 비상 경로는 지역 인스턴스(토큰)와 호스트 CLI 다.
     const tok = await fetch(`${G}/api/v1/regions`, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
-    expect(tok.status).toBe(200);
+    expect(tok.status).toBe(503);
+    expect((await tok.json() as { code: string }).code).toBe('audit_unavailable');
   });
 });

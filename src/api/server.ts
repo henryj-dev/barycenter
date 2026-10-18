@@ -1074,6 +1074,32 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
  * 지역의 같은 경로로 넘긴다. **허용 목록은 `RELAY_PATHS` 하나다** — 표에 없는 경로로 중계를 만들면 모듈을
  * 읽는 순간 던진다. 표와 라우트가 갈리는 날을 만들지 않는다.
  */
+/**
+ * **전역 조회를 남긴다** (공통 정책 1차 4번). 누가·어느 지역·어느 화면·언제를 공용 감사 저장소(계정 PG 의
+ * account_audit)에. **남기지 못하면 그 조회를 거부한다**(503) — 남지 않은 조회를 허용하면 감사에 구멍이 난다.
+ * 전역에 사람 계정이 꺼져 있으면 공용 저장소가 없으므로 프로세스 로그로만 남는다(docs/runbook-global.md).
+ */
+async function auditGlobalView(api: GlobalApiOptions, c: Ctx, region: string | null, path: string, stream = false): Promise<boolean> {
+  const view = { region, path, ...(stream ? { stream: true } : {}) };
+  if (api.accounts === undefined) {
+    log.info('global.view', { actor: c.who.name, ...view, ip: c.req.socket.remoteAddress });
+    return true;
+  }
+  try {
+    await api.accounts.recordGlobalView(c.who.name, view, c.who.account?.userId ?? null, metaOf(c.req));
+    return true;
+  } catch (e) {
+    if (e instanceof AccountStoreUnavailable) {
+      json(c.res, 503, {
+        code: 'audit_unavailable',
+        message: '전역 조회 기록을 남길 수 없어 조회를 거부한다 — 계정 저장소에 닿지 않는다',
+      }, { 'retry-after': '5' });
+      return false;
+    }
+    throw e;
+  }
+}
+
 const relayTo = (path: string) => {
   if (!RELAY_PATHS.includes(path)) throw new Error(`중계 허용 목록에 없는 경로다: ${path}`);
   return async (c: Ctx, api: GlobalApiOptions): Promise<void> => {
@@ -1082,6 +1108,7 @@ const relayTo = (path: string) => {
     json(c.res, 404, { code: 'no_region', message: `지역 '${name}' 은 목록에 없다` });
     return;
   }
+  if (!await auditGlobalView(api, c, name, path, path === 'events')) return;
   if (path !== 'events') {
     await api.global.relay(name, path, c.url.search, c.res);
     return;
@@ -1112,6 +1139,7 @@ const relayTo = (path: string) => {
  */
 const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions', 'read', async (c, api: GlobalApiOptions) => {
+    if (!await auditGlobalView(api, c, null, 'regions')) return;
     json(c.res, 200, { mode: 'global', build: api.build ?? null, regions: await api.global.summary() });
   }),
   route('GET', '/api/v1/regions/:name/status', 'read', relayTo('status')),
