@@ -54,6 +54,7 @@ import { PATH_SEGMENT_RULE, PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import { AuthFailureLimiter } from './auth-rate-limit.js';
+import { RELAY_PATHS, type RegionRelay } from '../global/relay.js';
 import {
   BrowserSessions, LOGIN_COOKIE, SESSION_COOKIE, cookieValue, expiredCookie, sessionCookie,
 } from './browser-session.js';
@@ -128,6 +129,30 @@ export function parseBuildInfo(text: string): BuildInfo | null {
   return Object.keys(out).length === 0 ? null : out;
 }
 
+/**
+ * **전역 모드의 API** (docs/design-global-mode.md).
+ *
+ * 설정 PG·데이터 플레인·리더가 없다 — 그 자리(`db`·`store`·`control`·`election`)를 타입에서 아예 뺀다. 가짜
+ * 객체로 채우면 지역 라우트가 실수로 닿았을 때 조용히 이상한 값을 낸다. 인증·세션·OIDC·GUI·**사람 계정**은
+ * 지역과 같은 코드를 지난다(계정은 공용 계정 PG 에 산다 — 사용자 결정).
+ */
+export type GlobalApiOptions = {
+  global: RegionRelay;
+  auth: TokenAuth;
+  maxBodyBytes?: number;
+  guiRoot?: string;
+  oidcRp?: OidcRpSettings;
+  oidcFetch?: typeof fetch;
+  plaintextExposed?: boolean;
+  sessions?: BrowserSessions;
+  sessionSecure?: boolean;
+  accounts?: AccountService;
+  build?: BuildInfo | null;
+};
+
+type AnyApi = ApiOptions | GlobalApiOptions;
+const isGlobal = (api: AnyApi): api is GlobalApiOptions => 'global' in api;
+
 export function plaintextExposureMetric(exposed: boolean): LabeledGauge {
   return {
     name: 'bary_api_plaintext_exposed',
@@ -168,13 +193,13 @@ type Ctx = {
   params: Record<string, string>;
 };
 
-type Route = {
+type Route<A = ApiOptions> = {
   method: string;
   path: string;
   pattern: RegExp;
   keys: string[];
   scope: Scope;
-  handle: (c: Ctx, api: ApiOptions) => Promise<void>;
+  handle: (c: Ctx, api: A) => Promise<void>;
   /**
    * 리더가 아니어도 받는다. 계정 쓰기는 **계정 PG** 에 가고 지역 리더십과 무관하다 — 스탠바이에서
    * 비밀번호를 못 바꾸면 사람이 그 이유를 알 길이 없다.
@@ -200,11 +225,11 @@ const json = (res: ServerResponse, status: number, value: unknown, headers: Reco
 };
 
 /** `/api/v1/changesets/:id/plan` → 정규식 + 키 이름. */
-function route(
+function route<A = ApiOptions>(
   method: string, path: string, scope: Scope,
-  handle: (c: Ctx, api: ApiOptions) => Promise<void>,
+  handle: (c: Ctx, api: A) => Promise<void>,
   opts: { leaderFree?: boolean; sensitive?: boolean } = {},
-): Route {
+): Route<A> {
   const keys: string[] = [];
   const pattern = new RegExp(
     '^' + path.replace(/:([a-zA-Z]+)/g, (_, k: string) => {
@@ -221,7 +246,8 @@ function route(
 
 /** 구현된 REST 표면. OpenAPI 동결이 이 표를 본다. */
 export function apiRouteTable(): { method: string; path: string; scope: Scope }[] {
-  return ROUTES.map((r) => ({ method: r.method, path: r.path, scope: r.scope }));
+  // 전역 경로도 구현된 표면이다 — 같은 데몬이 `BARY_MODE` 로 고를 뿐이다.
+  return [...ROUTES, ...ACCOUNT_ROUTES, ...GLOBAL_ROUTES].map((r) => ({ method: r.method, path: r.path, scope: r.scope }));
 }
 
 const asPatchOps = (v: unknown): PatchOp[] => {
@@ -880,54 +906,63 @@ const ROUTES: Route[] = [
     })));
   }),
 
+];
+
+/**
+ * 사람 계정 경로가 쓰는 것만. 지역(`ApiOptions`)과 전역(`GlobalApiOptions`)이 **같은 표**를 쓴다 —
+ * 전역에서도 로그인·내 계정·사람 관리를 한다(계정은 공용 계정 PG 에 산다).
+ */
+type AccountApi = { accounts?: AccountService; oidcRp?: OidcRpSettings; sessionSecure?: boolean };
+
+const ACCOUNT_ROUTES: Route<AccountApi>[] = [
   // ── 사람 계정 (공통 회원정책 1차 · 계획 A) ─────────────────────────────
   //
   // 「나」 경로는 사람 세션에만 뜻이 있다(`personOf`). 관리 경로는 `admin` 스코프 — 사람 admin 은
   // MFA 를 지난 세션이고(`AccountService.authenticate`), 기계 토큰의 admin 은 비상 경로다.
   // 전부 `leaderFree` 다: 계정 PG 는 지역 리더십과 무관하다.
 
-  route('GET', '/api/v1/me', 'read', async (c, api) => {
+  route<AccountApi>('GET', '/api/v1/me', 'read', async (c, api) => {
     json(c.res, 200, await accountsOf(api).me(personOf(c.who).userId));
   }, { leaderFree: true }),
 
-  route('POST', '/api/v1/session/logout-all', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/session/logout-all', 'read', async (c, api) => {
     const n = await accountsOf(api).logoutAll(personOf(c.who).userId, c.who.name, metaOf(c.req));
     c.res.setHeader('set-cookie', expiredCookie(accountCookie(api), api.sessionSecure === true));
     json(c.res, 200, { revoked: n });
   }, { leaderFree: true }),
 
-  route('POST', '/api/v1/me/password', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/me/password', 'read', async (c, api) => {
     const p = personOf(c.who);
     await accountsOf(api).changePassword(p.userId, bodyStr(c.body, 'current'), bodyStr(c.body, 'next'), p.sessionHash, metaOf(c.req));
     json(c.res, 200, { changed: true });
   }, { leaderFree: true }),
 
-  route('POST', '/api/v1/me/mfa/totp', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/me/mfa/totp', 'read', async (c, api) => {
     json(c.res, 200, await accountsOf(api).beginTotp(personOf(c.who).userId, c.who.name.replace(/^user:/, '')));
   }, { leaderFree: true }),
 
-  route('POST', '/api/v1/me/mfa/totp/confirm', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/me/mfa/totp/confirm', 'read', async (c, api) => {
     json(c.res, 200, { recoveryCodes: await accountsOf(api).confirmTotp(personOf(c.who).userId, bodyStr(c.body, 'code'), metaOf(c.req)) });
   }, { leaderFree: true }),
 
-  route('POST', '/api/v1/me/mfa/totp/remove', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/me/mfa/totp/remove', 'read', async (c, api) => {
     await accountsOf(api).removeTotp(personOf(c.who).userId, bodyStr(c.body, 'password'), metaOf(c.req));
     json(c.res, 200, { removed: true });
   }, { leaderFree: true }),
 
-  route('POST', '/api/v1/me/mfa/recovery-codes', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/me/mfa/recovery-codes', 'read', async (c, api) => {
     json(c.res, 200, { recoveryCodes: await accountsOf(api).regenerateRecoveryCodes(personOf(c.who).userId, bodyStr(c.body, 'password'), metaOf(c.req)) });
   }, { leaderFree: true }),
 
   /** 민감 작업 앞의 재확인. 세션을 새로 만들지 않고 MFA 시각만 찍는다. */
-  route('POST', '/api/v1/session/step-up', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/session/step-up', 'read', async (c, api) => {
     const p = personOf(c.who);
     await accountsOf(api).stepUp(p.sessionHash, p.userId, bodyStr(c.body, 'code'), metaOf(c.req));
     json(c.res, 200, { stepUp: true });
   }, { leaderFree: true }),
 
   /** 새 주소로 확인 메일 — 확인 전까지 주소는 그대로다. 비밀번호를 다시 묻는다. */
-  route('POST', '/api/v1/me/email', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/me/email', 'read', async (c, api) => {
     await accountsOf(api).requestEmailChange(personOf(c.who).userId, bodyStr(c.body, 'email'), bodyStr(c.body, 'password'), metaOf(c.req));
     json(c.res, 202, { sent: true });
   }, { leaderFree: true }),
@@ -935,7 +970,7 @@ const ROUTES: Route[] = [
   /**
    * SSO 연결 시작 — **비밀번호를 다시 넣어야** 연다(공통 정책). 돌아온 콜백(`/oidc/token`)이 그 사람에게 잇는다.
    */
-  route('POST', '/api/v1/me/identities/link', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/me/identities/link', 'read', async (c, api) => {
     const rp = api.oidcRp;
     if (rp === undefined) throw new StoreError(404, 'oidc_not_configured', 'SSO 공급자가 설정되지 않았다');
     const state = randomBytes(16).toString('hex');
@@ -950,13 +985,13 @@ const ROUTES: Route[] = [
     });
   }, { leaderFree: true }),
 
-  route('POST', '/api/v1/me/identities/unlink', 'read', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/me/identities/unlink', 'read', async (c, api) => {
     await accountsOf(api).unlinkIdentity(personOf(c.who).userId, bodyStr(c.body, 'issuer'), bodyStr(c.body, 'subject'),
       bodyStr(c.body, 'password'), metaOf(c.req));
     json(c.res, 200, { unlinked: true });
   }, { leaderFree: true }),
 
-  route('GET', '/api/v1/sso-providers', 'admin', async (c, api) => {
+  route<AccountApi>('GET', '/api/v1/sso-providers', 'admin', async (c, api) => {
     json(c.res, 200, {
       configured: api.oidcRp?.issuer ?? null,
       providers: await accountsOf(api).providers(),
@@ -964,18 +999,18 @@ const ROUTES: Route[] = [
   }, { leaderFree: true }),
 
   /** 공급자별 JIT — 관리자가 명시해서 켠다. 켜도 auditor 로만 만든다. */
-  route('POST', '/api/v1/sso-providers', 'admin', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/sso-providers', 'admin', async (c, api) => {
     const b = (c.body ?? {}) as Record<string, unknown>;
     if (typeof b['jitEnabled'] !== 'boolean') throw new StoreError(400, 'malformed', "본문에 'jitEnabled' 불리언이 필요하다");
     await accountsOf(api).setProviderJit(bodyStr(c.body, 'issuer'), b['jitEnabled'], c.who.name, metaOf(c.req));
     json(c.res, 200, { updated: true });
   }, { leaderFree: true, sensitive: true }),
 
-  route('GET', '/api/v1/users', 'admin', async (c, api) => {
+  route<AccountApi>('GET', '/api/v1/users', 'admin', async (c, api) => {
     json(c.res, 200, await accountsOf(api).listUsers());
   }, { leaderFree: true }),
 
-  route('PATCH', '/api/v1/users/:id', 'admin', async (c, api) => {
+  route<AccountApi>('PATCH', '/api/v1/users/:id', 'admin', async (c, api) => {
     const b = (c.body ?? {}) as Record<string, unknown>;
     await accountsOf(api).updateUser(c.params['id'] ?? '', {
       ...(typeof b['role'] === 'string' ? { role: b['role'] } : {}),
@@ -984,26 +1019,26 @@ const ROUTES: Route[] = [
     json(c.res, 200, { updated: true });
   }, { leaderFree: true, sensitive: true }),
 
-  route('DELETE', '/api/v1/users/:id', 'admin', async (c, api) => {
+  route<AccountApi>('DELETE', '/api/v1/users/:id', 'admin', async (c, api) => {
     await accountsOf(api).deleteUser(c.params['id'] ?? '', c.who.name, metaOf(c.req));
     json(c.res, 200, { deleted: true });
   }, { leaderFree: true, sensitive: true }),
 
-  route('POST', '/api/v1/users/:id/revoke-sessions', 'admin', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/users/:id/revoke-sessions', 'admin', async (c, api) => {
     json(c.res, 200, { revoked: await accountsOf(api).logoutAll(c.params['id'] ?? '', c.who.name, metaOf(c.req)) });
   }, { leaderFree: true, sensitive: true }),
 
   /** 관리자 MFA 초기화·복구 — 링크는 이 응답에만 한 번 나온다. 대상 세션은 즉시 끊긴다. */
-  route('POST', '/api/v1/users/:id/recovery-link', 'admin', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/users/:id/recovery-link', 'admin', async (c, api) => {
     json(c.res, 200, { token: await accountsOf(api).recoveryLink(c.params['id'] ?? '', c.who.name, metaOf(c.req)) });
   }, { leaderFree: true, sensitive: true }),
 
-  route('GET', '/api/v1/invitations', 'admin', async (c, api) => {
+  route<AccountApi>('GET', '/api/v1/invitations', 'admin', async (c, api) => {
     json(c.res, 200, await accountsOf(api).listInvitations());
   }, { leaderFree: true }),
 
   /** 초대 링크는 이 응답에만 한 번 나온다(메일 발송은 B 단계). 공개 가입은 없다. */
-  route('POST', '/api/v1/invitations', 'admin', async (c, api) => {
+  route<AccountApi>('POST', '/api/v1/invitations', 'admin', async (c, api) => {
     const b = (c.body ?? {}) as Record<string, unknown>;
     json(c.res, 200, await accountsOf(api).invite({
       role: typeof b['role'] === 'string' ? b['role'] : '',
@@ -1011,15 +1046,75 @@ const ROUTES: Route[] = [
     }, c.who.name, metaOf(c.req)));
   }, { leaderFree: true, sensitive: true }),
 
-  route('DELETE', '/api/v1/invitations/:id', 'admin', async (c, api) => {
+  route<AccountApi>('DELETE', '/api/v1/invitations/:id', 'admin', async (c, api) => {
     await accountsOf(api).revokeInvitation(c.params['id'] ?? '', c.who.name, metaOf(c.req));
     json(c.res, 200, { revoked: true });
   }, { leaderFree: true, sensitive: true }),
 
-  route('GET', '/api/v1/account-audit', 'admin', async (c, api) => {
+  route<AccountApi>('GET', '/api/v1/account-audit', 'admin', async (c, api) => {
     json(c.res, 200, await accountsOf(api).accountAudit(Number(c.url.searchParams.get('limit') ?? '100') || 100));
   }, { leaderFree: true }),
 ];
+
+/**
+ * 지역의 같은 경로로 넘긴다. **허용 목록은 `RELAY_PATHS` 하나다** — 표에 없는 경로로 중계를 만들면 모듈을
+ * 읽는 순간 던진다. 표와 라우트가 갈리는 날을 만들지 않는다.
+ */
+const relayTo = (path: string) => {
+  if (!RELAY_PATHS.includes(path)) throw new Error(`중계 허용 목록에 없는 경로다: ${path}`);
+  return async (c: Ctx, api: GlobalApiOptions): Promise<void> => {
+  const name = c.params['name'] ?? '';
+  if (!api.global.has(name)) {
+    json(c.res, 404, { code: 'no_region', message: `지역 '${name}' 은 목록에 없다` });
+    return;
+  }
+  if (path !== 'events') {
+    await api.global.relay(name, path, c.url.search, c.res);
+    return;
+  }
+  api.global.relayEvents(name, c.req, c.res);
+  /**
+   * **보는 사람의 세션도 따른다** (공통 회원정책 1차). 상류는 지역 하나를 여럿이 나눠 쓰므로 상류를 끊을 수는
+   * 없다 — 이 사람의 스트림만 닫는다. 15초마다(지역 하트비트와 같은 간격) 묻는다.
+   */
+  const acc = api.accounts;
+  const hash = c.who.account?.sessionHash;
+  const timer = acc !== undefined && hash !== undefined
+    ? setInterval(() => {
+      acc.sessionAlive(hash).then((ok) => { if (!ok) c.res.end(); }, () => c.res.end());
+    }, 15_000)
+    : undefined;
+  timer?.unref?.();
+  await new Promise<void>((resolve) => c.res.on('close', () => resolve()));
+  if (timer !== undefined) clearInterval(timer);
+  };
+};
+
+/**
+ * 전역 라우트. **GET 만 있다** — 설정 쓰기는 지역 GUI 로 넘긴다(설계 §1).
+ *
+ * 경로를 하나씩 적는다. 패턴 하나(`:name/*`)로 접으면 허용 목록이 이 표에서 안 보이고, B 동결 게이트
+ * (`SURFACE-API.json`)도 무엇이 열렸는지 못 센다.
+ */
+const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
+  route('GET', '/api/v1/regions', 'read', async (c, api: GlobalApiOptions) => {
+    json(c.res, 200, { mode: 'global', build: api.build ?? null, regions: await api.global.summary() });
+  }),
+  route('GET', '/api/v1/regions/:name/status', 'read', relayTo('status')),
+  route('GET', '/api/v1/regions/:name/listeners', 'read', relayTo('listeners')),
+  route('GET', '/api/v1/regions/:name/pools', 'read', relayTo('pools')),
+  route('GET', '/api/v1/regions/:name/backends', 'read', relayTo('backends')),
+  route('GET', '/api/v1/regions/:name/backends/status', 'read', relayTo('backends/status')),
+  route('GET', '/api/v1/regions/:name/routes', 'read', relayTo('routes')),
+  route('GET', '/api/v1/regions/:name/certificates', 'read', relayTo('certificates')),
+  route('GET', '/api/v1/regions/:name/tls-policies', 'read', relayTo('tls-policies')),
+  route('GET', '/api/v1/regions/:name/sni-bindings', 'read', relayTo('sni-bindings')),
+  route('GET', '/api/v1/regions/:name/acme/orders', 'read', relayTo('acme/orders')),
+  route('GET', '/api/v1/regions/:name/audit', 'read', relayTo('audit')),
+  route('GET', '/api/v1/regions/:name/config/rendered', 'read', relayTo('config/rendered')),
+  route('GET', '/api/v1/regions/:name/events', 'read', relayTo('events')),
+];
+
 
 async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -1046,7 +1141,7 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
  * 없었다. 그러면 TLS 를 켜려고 라우팅을 한 벌 더 쓰게 되고, 두 벌은 갈라진다 —
  * `renderCapsOf` 를 한 자리로 모은 이유(B-02)와 같은 종류의 사고다.
  */
-export function apiHandler(api: ApiOptions): RequestListener {
+export function apiHandler(api: AnyApi): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const authFailures = new AuthFailureLimiter();
   api.sessions ??= new BrowserSessions();
@@ -1238,7 +1333,7 @@ function ssoCookie(value: string, secure: boolean, maxAge: number): string {
  * IdP 의 MFA 도 인정하지 않는다 — 관리자·인증 앱 등록자는 이어서 로컬 TOTP 단계다(공급자 계약 미해결).
  */
 async function finishAccountSso(
-  req: IncomingMessage, res: ServerResponse, api: ApiOptions, accounts: AccountService,
+  req: IncomingMessage, res: ServerResponse, api: { oidcFetch?: typeof fetch; sessionSecure?: boolean }, accounts: AccountService,
   rp: OidcRpSettings, code: string, state: string,
 ): Promise<void> {
   const secure = api.sessionSecure === true;
@@ -1289,12 +1384,139 @@ function mfaCookie(value: string, secure: boolean, maxAge: number): string {
   return `${MFA_COOKIE}=${value}; Max-Age=${maxAge}; Path=${MFA_PATH}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
 }
 
-export function createApi(api: ApiOptions): Server {
+export function createApi(api: ApiOptions | GlobalApiOptions): Server {
   return createServer(apiHandler(api));
 }
 
+/**
+ * 인증 **뒤**의 한 갈래 — 매칭 → 스코프 → 민감 작업 MFA → 리더 → 실행 → 오류 번역.
+ *
+ * 지역과 전역이 **같은 함수**를 지난다. 둘로 나누면 스코프·MFA 게이트가 한쪽만 고쳐지는 날이 온다.
+ */
+async function dispatch<A>(
+  req: IncomingMessage, res: ServerResponse, url: URL, who: Principal, api: A,
+  routes: Route<A>[], max: number, opts: { leader?: LeaderElection; notFound?: string },
+): Promise<void> {
+  const matched = routes.map((r) => ({ r, m: r.pattern.exec(url.pathname) }))
+    .filter((x) => x.m !== null);
+  if (matched.length === 0) {
+    json(res, 404, opts.notFound === undefined
+      ? { code: 'no_route', message: `${url.pathname} 은 없다` }
+      : { code: 'global_mode', message: opts.notFound });
+    return;
+  }
+  const hit = matched.find((x) => x.r.method === req.method);
+  if (hit === undefined) {
+    // **경로는 있는데 메서드가 다른 것과 없는 것은 다르다.** 405 로 구분해 주지 않으면
+    // 클라이언트가 오타와 권한 문제를 구별할 수 없다.
+    json(res, 405, {
+      code: 'method_not_allowed',
+      message: `${url.pathname} 은 ${matched.map((x) => x.r.method).join(', ')} 만 받는다`,
+    }, { allow: matched.map((x) => x.r.method).join(', ') });
+    return;
+  }
+
+  if (!can(who, hit.r.scope)) {
+    json(res, 403, {
+      code: 'forbidden',
+      message: `'${hit.r.scope}' 스코프가 필요하다 (가진 것: ${[...who.scopes].join(',') || '없음'})`,
+    });
+    return;
+  }
+
+  // **민감 작업은 최근 MFA** (공통 회원정책 1차). 사람 세션만 — 기계 토큰은 MFA 가 없다.
+  if (hit.r.sensitive === true && who.account !== undefined) {
+    const at = who.account.mfaAt;
+    if (at === undefined || Date.now() - at > STEP_UP_MAX_AGE_MS) {
+      json(res, 403, {
+        code: 'mfa_step_up_required',
+        message: `이 작업은 최근 ${STEP_UP_MAX_AGE_MS / 60_000}분 안에 인증 앱 확인이 필요하다`,
+      });
+      return;
+    }
+  }
+
+  // **스탠바이는 읽기만 답한다** (§3.5 · §11.4).
+  //
+  // `apply` 만 막고 `write` 는 열어 둘까 고민했는데, 그러면 스탠바이에 커밋해 놓고
+  // 적용이 안 되는 상태를 사람이 만들 수 있다. head 는 PG 가 직렬화하니 안전하긴 하지만
+  // **안전한 것과 이해할 수 있는 것은 다르다.** 리더 하나만 쓴다.
+  //
+  // **503 이지 403 이 아니다.** 권한이 없는 것이 아니라 *여기서는* 못 하는 것이고,
+  // 다른 인스턴스에서는 되고 이 인스턴스도 승격되면 된다.
+  // 전역에는 리더가 없다(`opts.leader` 없음) — 전역 라우트는 GET 뿐이고 계정 경로는 leaderFree 다.
+  if (opts.leader !== undefined && hit.r.scope !== 'read' && hit.r.leaderFree !== true && !opts.leader.state.isLeader) {
+    const s = opts.leader.state;
+    json(res, 503, {
+      code: 'not_leader',
+      message: `이 인스턴스는 리더가 아니다 — ${s.reason ?? '리더가 아니다'}`,
+      holder: s.holder,
+    }, { 'retry-after': '5' });
+    return;
+  }
+
+  const params: Record<string, string> = {};
+  try {
+    // **해독을 `try` 안으로 넣는다** (검수 B-11). 밖에 있으면 `%` 하나가
+    // `URIError` 로 올라가 **500** 이 된다 — 우리 잘못이 아닌데 우리 잘못이라고 답한다.
+    hit.r.keys.forEach((k, i) => {
+      params[k] = decodeURIComponent(hit.m?.[i + 1] ?? '');
+    });
+  } catch {
+    json(res, 400, {
+      code: 'malformed',
+      message: `경로에 잘못된 퍼센트 인코딩이 있다: ${url.pathname}`,
+    });
+    return;
+  }
+
+  try {
+    const body = req.method === 'GET' || req.method === 'DELETE'
+      ? null : await readBody(req, max);
+    await hit.r.handle({ req, res, url, who, body, params }, api);
+  } catch (e) {
+    if (e instanceof StoreError) {
+      json(res, e.status, {
+        code: e.code, message: e.message,
+        ...(e.detail === undefined ? {} : { detail: e.detail }),
+      });
+      return;
+    }
+    if (e instanceof AccountError) {
+      json(res, e.status, { code: e.code, message: e.message });
+      return;
+    }
+    if (e instanceof AccountStoreUnavailable) {
+      accountStoreDown(res);
+      return;
+    }
+    // 라우팅 시점에 리더였는데 부작용 직전에 아니게 된 경우다. 창이 있다는 사실
+    // 자체는 못 없앤다 — 닫는 것은 DP Agent 의 토큰 비교다 (§3.5).
+    if (e instanceof NotLeader) {
+      json(res, e.status, { code: e.code, message: e.message }, { 'retry-after': '5' });
+      return;
+    }
+    /**
+     * PG `22P02` (invalid_text_representation) — **값이 컬럼 타입이 아니다.**
+     *
+     * `/plans/:id` 같은 자리는 `uuid` 컬럼에 그대로 물으므로, uuid 가 아닌 문자열이
+     * 오면 PG 가 거절한다. 그건 우리 잘못이 아니라 **입력의 구문 오류**다
+     * (§5.1 의 4분할에서 400). 500 으로 답하면 호출자는 재시도하고 운영자는
+     * 서버 로그를 뒤진다 — 정작 고칠 것은 요청에 있는데 (검수 B-11).
+     */
+    if ((e as { code?: string }).code === '22P02') {
+      json(res, 400, {
+        code: 'malformed',
+        message: '경로나 본문의 값이 그 자리의 타입이 아니다',
+      });
+      return;
+    }
+    throw e;
+  }
+}
+
 async function handle(
-  req: IncomingMessage, res: ServerResponse, api: ApiOptions, max: number,
+  req: IncomingMessage, res: ServerResponse, api: AnyApi, max: number,
   authFailures: AuthFailureLimiter,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -1324,6 +1546,14 @@ async function handle(
    * 대개 자격증명을 못 들고 다닌다.
    */
   if (url.pathname === '/readyz') {
+    /**
+     * **전역은 지역 상태를 안 본다** (설계 §5). 여러 전역을 DNS 로 묶으므로, 지역 하나가 죽었다고 전역 전부가
+     * 빠지면 그 지역을 볼 화면까지 사라진다. 전역이 준비됐다는 것은 「지역 목록을 들고 답한다」 뿐이다.
+     */
+    if (isGlobal(api)) {
+      json(res, 200, { ok: true, mode: 'global', regions: api.global.regions.length });
+      return;
+    }
     const r = await api.control.readiness();
     json(res, r.ok ? 200 : 503, r);
     return;
@@ -1640,117 +1870,13 @@ async function handle(
   }
   authFailures.clear(req.socket.remoteAddress ?? 'unknown');
 
-  const matched = ROUTES.map((r) => ({ r, m: r.pattern.exec(url.pathname) }))
-    .filter((x) => x.m !== null);
-  if (matched.length === 0) {
-    json(res, 404, { code: 'no_route', message: `${url.pathname} 은 없다` });
-    return;
-  }
-  const hit = matched.find((x) => x.r.method === req.method);
-  if (hit === undefined) {
-    // **경로는 있는데 메서드가 다른 것과 없는 것은 다르다.** 405 로 구분해 주지 않으면
-    // 클라이언트가 오타와 권한 문제를 구별할 수 없다.
-    json(res, 405, {
-      code: 'method_not_allowed',
-      message: `${url.pathname} 은 ${matched.map((x) => x.r.method).join(', ')} 만 받는다`,
-    }, { allow: matched.map((x) => x.r.method).join(', ') });
-    return;
-  }
-
-  if (!can(who, hit.r.scope)) {
-    json(res, 403, {
-      code: 'forbidden',
-      message: `'${hit.r.scope}' 스코프가 필요하다 (가진 것: ${[...who.scopes].join(',') || '없음'})`,
+  if (isGlobal(api)) {
+    await dispatch(req, res, url, who, api, [...GLOBAL_ROUTES, ...ACCOUNT_ROUTES as Route<GlobalApiOptions>[]], max, {
+      notFound: `전역 모드에는 ${url.pathname} 이 없다 — /api/v1/regions 와 /api/v1/regions/<지역>/… 를 쓴다`,
     });
     return;
   }
-
-  // **민감 작업은 최근 MFA** (공통 회원정책 1차). 사람 세션만 — 기계 토큰은 MFA 가 없다.
-  if (hit.r.sensitive === true && who.account !== undefined) {
-    const at = who.account.mfaAt;
-    if (at === undefined || Date.now() - at > STEP_UP_MAX_AGE_MS) {
-      json(res, 403, {
-        code: 'mfa_step_up_required',
-        message: `이 작업은 최근 ${STEP_UP_MAX_AGE_MS / 60_000}분 안에 인증 앱 확인이 필요하다`,
-      });
-      return;
-    }
-  }
-
-  // **스탠바이는 읽기만 답한다** (§3.5 · §11.4).
-  //
-  // `apply` 만 막고 `write` 는 열어 둘까 고민했는데, 그러면 스탠바이에 커밋해 놓고
-  // 적용이 안 되는 상태를 사람이 만들 수 있다. head 는 PG 가 직렬화하니 안전하긴 하지만
-  // **안전한 것과 이해할 수 있는 것은 다르다.** 리더 하나만 쓴다.
-  //
-  // **503 이지 403 이 아니다.** 권한이 없는 것이 아니라 *여기서는* 못 하는 것이고,
-  // 다른 인스턴스에서는 되고 이 인스턴스도 승격되면 된다.
-  if (hit.r.scope !== 'read' && hit.r.leaderFree !== true && !api.election.state.isLeader) {
-    const s = api.election.state;
-    json(res, 503, {
-      code: 'not_leader',
-      message: `이 인스턴스는 리더가 아니다 — ${s.reason ?? '리더가 아니다'}`,
-      holder: s.holder,
-    }, { 'retry-after': '5' });
-    return;
-  }
-
-  const params: Record<string, string> = {};
-  try {
-    // **해독을 `try` 안으로 넣는다** (검수 B-11). 밖에 있으면 `%` 하나가
-    // `URIError` 로 올라가 **500** 이 된다 — 우리 잘못이 아닌데 우리 잘못이라고 답한다.
-    hit.r.keys.forEach((k, i) => {
-      params[k] = decodeURIComponent(hit.m?.[i + 1] ?? '');
-    });
-  } catch {
-    json(res, 400, {
-      code: 'malformed',
-      message: `경로에 잘못된 퍼센트 인코딩이 있다: ${url.pathname}`,
-    });
-    return;
-  }
-
-  try {
-    const body = req.method === 'GET' || req.method === 'DELETE'
-      ? null : await readBody(req, max);
-    await hit.r.handle({ req, res, url, who, body, params }, api);
-  } catch (e) {
-    if (e instanceof StoreError) {
-      json(res, e.status, {
-        code: e.code, message: e.message,
-        ...(e.detail === undefined ? {} : { detail: e.detail }),
-      });
-      return;
-    }
-    if (e instanceof AccountError) {
-      json(res, e.status, { code: e.code, message: e.message });
-      return;
-    }
-    if (e instanceof AccountStoreUnavailable) {
-      accountStoreDown(res);
-      return;
-    }
-    // 라우팅 시점에 리더였는데 부작용 직전에 아니게 된 경우다. 창이 있다는 사실
-    // 자체는 못 없앤다 — 닫는 것은 DP Agent 의 토큰 비교다 (§3.5).
-    if (e instanceof NotLeader) {
-      json(res, e.status, { code: e.code, message: e.message }, { 'retry-after': '5' });
-      return;
-    }
-    /**
-     * PG `22P02` (invalid_text_representation) — **값이 컬럼 타입이 아니다.**
-     *
-     * `/plans/:id` 같은 자리는 `uuid` 컬럼에 그대로 물으므로, uuid 가 아닌 문자열이
-     * 오면 PG 가 거절한다. 그건 우리 잘못이 아니라 **입력의 구문 오류**다
-     * (§5.1 의 4분할에서 400). 500 으로 답하면 호출자는 재시도하고 운영자는
-     * 서버 로그를 뒤진다 — 정작 고칠 것은 요청에 있는데 (검수 B-11).
-     */
-    if ((e as { code?: string }).code === '22P02') {
-      json(res, 400, {
-        code: 'malformed',
-        message: '경로나 본문의 값이 그 자리의 타입이 아니다',
-      });
-      return;
-    }
-    throw e;
-  }
+  await dispatch(req, res, url, who, api, [...ROUTES, ...ACCOUNT_ROUTES as Route<ApiOptions>[]], max, {
+    leader: api.election,
+  });
 }

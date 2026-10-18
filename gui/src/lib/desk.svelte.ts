@@ -34,7 +34,11 @@ export type StatusSnap = {
   unfinished?: unknown;
 };
 
-export function createDesk() {
+/**
+ * @param scope 전역 모드면 읽기 경로를 고른 지역의 중계 경로로 바꾼다(`lib/global/scope`). 지역 인스턴스면 그대로다.
+ */
+export function createDesk(scope?: { api(path: string): string }) {
+  const api = (path: string): string => scope?.api(path) ?? path;
   // OIDC 로그인은 HttpOnly 세션 쿠키를 쓴다. 수동 Bearer 입력은 새로고침하면 사라지는
   // 메모리 값으로만 남긴다 — 브라우저 저장소에 API 자격증명을 보관하지 않는다.
   let token = $state('');
@@ -65,7 +69,7 @@ export function createDesk() {
       view = undefined;
       return;
     }
-    const r = await fetch(`/api/v1/plans/${pending.planId}`, { headers: auth() });
+    const r = await fetch(api(`/api/v1/plans/${pending.planId}`), { headers: auth() });
     if (!r.ok) {
       error = `plan ${pending.planId} 을 못 읽었다 (${r.status})`;
       view = undefined;
@@ -76,7 +80,7 @@ export function createDesk() {
   };
 
   const refreshListeners = async (impact: ImpactView | undefined): Promise<void> => {
-    const r = await fetch('/api/v1/listeners', { headers: auth() });
+    const r = await fetch(api('/api/v1/listeners'), { headers: auth() });
     if (!r.ok) {
       error = `listeners ${r.status}`;
       listeners = { rows: [] };
@@ -102,9 +106,9 @@ export function createDesk() {
 
   const refreshPools = async (): Promise<void> => {
     const [pr, br, sr] = await Promise.all([
-      fetch('/api/v1/pools', { headers: auth() }),
-      fetch('/api/v1/backends', { headers: auth() }),
-      fetch('/api/v1/backends/status', { headers: auth() }),
+      fetch(api('/api/v1/pools'), { headers: auth() }),
+      fetch(api('/api/v1/backends'), { headers: auth() }),
+      fetch(api('/api/v1/backends/status'), { headers: auth() }),
     ]);
     // 상태 API 는 **선택**이다. 못 읽어도 풀 화면은 서야 한다 — 헬스와 드레인은
     // 다른 경로로 오고, 이 줄 하나 때문에 화면 전체가 비면 그게 더 나쁘다.
@@ -140,7 +144,7 @@ export function createDesk() {
   };
 
   const refreshAudit = async (): Promise<void> => {
-    const r = await fetch('/api/v1/audit', { headers: auth() });
+    const r = await fetch(api('/api/v1/audit'), { headers: auth() });
     if (!r.ok) {
       error = `audit ${r.status}`;
       audit = viewOfAudit([]);
@@ -150,7 +154,7 @@ export function createDesk() {
   };
 
   const refreshRendered = async (): Promise<void> => {
-    const r = await fetch('/api/v1/config/rendered', { headers: auth() });
+    const r = await fetch(api('/api/v1/config/rendered'), { headers: auth() });
     if (!r.ok) {
       error = `rendered ${r.status}`;
       rendered = viewOfRendered({});
@@ -160,7 +164,7 @@ export function createDesk() {
   };
 
   const refreshBindings = async (): Promise<void> => {
-    const r = await fetch('/api/v1/sni-bindings', { headers: auth() });
+    const r = await fetch(api('/api/v1/sni-bindings'), { headers: auth() });
     if (!r.ok) {
       error = `sni-bindings ${r.status}`;
       bindings = [];
@@ -177,7 +181,7 @@ export function createDesk() {
   };
 
   const refreshPolicies = async (): Promise<void> => {
-    const r = await fetch('/api/v1/tls-policies', { headers: auth() });
+    const r = await fetch(api('/api/v1/tls-policies'), { headers: auth() });
     if (!r.ok) {
       error = `tls-policies ${r.status}`;
       policies = [];
@@ -190,8 +194,8 @@ export function createDesk() {
 
   const refreshCerts = async (): Promise<void> => {
     const [cr, or] = await Promise.all([
-      fetch('/api/v1/certificates', { headers: auth() }),
-      fetch('/api/v1/acme/orders', { headers: auth() }),
+      fetch(api('/api/v1/certificates'), { headers: auth() }),
+      fetch(api('/api/v1/acme/orders'), { headers: auth() }),
     ]);
     if (!cr.ok) {
       error = `certificates ${cr.status}`;
@@ -203,7 +207,7 @@ export function createDesk() {
   };
 
   const refreshRoutes = async (): Promise<void> => {
-    const r = await fetch('/api/v1/routes', { headers: auth() });
+    const r = await fetch(api('/api/v1/routes'), { headers: auth() });
     if (!r.ok) {
       error = `routes ${r.status}`;
       routes = { order: [], warnings: [], errors: [], passthrough: [] };
@@ -232,7 +236,7 @@ export function createDesk() {
    *   `stop`     우리가 끊었거나 토큰이 거절됐다 — **다시 안 붙는다**
    */
   const streamOnce = async (ac: AbortController): Promise<'served' | 'refused' | 'stop'> => {
-    const r = await fetch('/api/v1/events', { headers: auth(), signal: ac.signal });
+    const r = await fetch(api('/api/v1/events'), { headers: auth(), signal: ac.signal });
     if (!r.ok || r.body === null) {
       error = r.status === 401 ? '토큰이 거절됐다' : `events ${r.status}`;
       live = false;
@@ -257,7 +261,7 @@ export function createDesk() {
           } else if (frame.event === 'health') {
             onHealth(frame.data);
           } else if (frame.event === 'revision' || frame.event === 'apply') {
-            const st = await fetch('/api/v1/status', { headers: auth() });
+            const st = await fetch(api('/api/v1/status'), { headers: auth() });
             if (st.ok) await onStatus((await st.json()) as StatusSnap);
           }
         }
@@ -700,7 +704,7 @@ export function createDesk() {
     applying = true;
     error = undefined;
     try {
-      const r = await fetch('/api/v1/apply', {
+      const r = await fetch(api('/api/v1/apply'), {
         method: 'POST',
         headers: { ...auth(), 'content-type': 'application/json' },
         body: JSON.stringify({ plan_id: view.planId }),
@@ -717,7 +721,7 @@ export function createDesk() {
     editing = true;
     error = undefined;
     try {
-      const r = await fetch(`/api/v1/backends/${encodeURIComponent(key)}/drain`, {
+      const r = await fetch(api(`/api/v1/backends/${encodeURIComponent(key)}/drain`), {
         method: 'POST', headers: auth(),
       });
       if (!r.ok) {
@@ -739,7 +743,7 @@ export function createDesk() {
     recovering = true;
     error = undefined;
     try {
-      const r = await fetch('/api/v1/recover', { method: 'POST', headers: auth() });
+      const r = await fetch(api('/api/v1/recover'), { method: 'POST', headers: auth() });
       const body = (await r.json()) as { phase?: string; message?: string };
       if (!r.ok) error = body.message ?? `recover ${r.status}`;
     } finally {

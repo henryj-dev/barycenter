@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import type { Scope } from './global/scope.svelte.ts';
   import type { ImpactView } from '@web/impact-view';
 
   let { view, applying, apply }: {
@@ -6,6 +8,9 @@
     applying: boolean;
     apply: () => void;
   } = $props();
+  // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
+  const scope = getContext<Scope | undefined>('scope');
+  const ro = $derived(scope?.readOnly === true);
 </script>
 
 <article class="impact" data-reload={view.requiresReload}>
@@ -56,9 +61,11 @@
   {#each view.capabilityWarnings as warn (warn)}
     <p class="warn">엔진 — {warn}</p>
   {/each}
+  {#if !ro}
   <button type="button" class="go" disabled={applying} onclick={apply}>
     {applying ? '적용하는 중' : '트래픽에 건다'}
   </button>
+  {/if}
 </article>
 
 <style>

@@ -3,7 +3,7 @@
  */
 export type Place =
   | 'impact' | 'listeners' | 'pools' | 'routes' | 'certificates' | 'status' | 'rendered' | 'audit' | 'login'
-  | 'invite' | 'account' | 'users' | 'reset' | 'email';
+  | 'invite' | 'account' | 'users' | 'reset' | 'email' | 'regions';
 
 /** SvelteKit 이 프리렌더하는 자리. 한 index.html 폴백이 아니다. */
 export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
@@ -21,6 +21,7 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'users', path: '/users' },
   { place: 'reset', path: '/reset' },
   { place: 'email', path: '/email' },
+  { place: 'regions', path: '/regions' },
 ];
 
 export function pageOf(pathname: string): Place {
@@ -37,5 +38,6 @@ export function pageOf(pathname: string): Place {
   if (pathname === '/users' || pathname.startsWith('/users/')) return 'users';
   if (pathname === '/reset' || pathname.startsWith('/reset/')) return 'reset';
   if (pathname === '/email' || pathname.startsWith('/email/')) return 'email';
+  if (pathname === '/regions' || pathname.startsWith('/regions/')) return 'regions';
   return 'impact';
 }

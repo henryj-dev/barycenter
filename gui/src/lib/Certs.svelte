@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import type { Scope } from './global/scope.svelte.ts';
+  import Writable from './global/Writable.svelte';
   import type { CertsView } from '@web/certs-view';
   import AddCert from './AddCert.svelte';
   import AddSniBinding from './AddSniBinding.svelte';
@@ -15,6 +18,9 @@
     withdrawSni: (key: string) => void;
     withdraw: (key: string) => void;
   } = $props();
+  // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
+  const scope = getContext<Scope | undefined>('scope');
+  const ro = $derived(scope?.readOnly === true);
 
   const label = (mark: string, days: number | undefined): string => {
     if (mark === 'missing') return '자료가 없다';
@@ -36,13 +42,17 @@
         <span class="dom mono">{row.domains.join(', ') || '—'}</span>
         <span class="src">{row.acme ? (row.orderState ?? 'acme') : '자료'}</span>
         <span class="mark">{label(row.mark, row.expiresInDays)}</span>
+        {#if !ro}
         <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
+        {/if}
       </li>
     {/each}
   </ul>
 {/if}
 {#if live}
+  <Writable>
   <AddCert {editing} add={insert} />
+  </Writable>
   {#if bindings.length > 0}
     <h2>SNI</h2>
     <ul class="binds">
@@ -51,12 +61,16 @@
           <span class="key">{row.key}</span>
           <span class="dom mono">{row.hosts.join(', ')}</span>
           <span class="src">{row.listener} → {row.certificate}</span>
+          {#if !ro}
           <button type="button" disabled={editing} onclick={() => withdrawSni(row.key)}>설정에서 뺀다</button>
+          {/if}
         </li>
       {/each}
     </ul>
   {/if}
+  <Writable>
   <AddSniBinding {listeners} {certificates} {editing} add={insertSni} />
+  </Writable>
 {/if}
 
 <style>

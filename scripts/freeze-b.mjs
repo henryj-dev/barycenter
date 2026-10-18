@@ -18,7 +18,8 @@ const accountDdlPath = join(root, 'SURFACE-DDL-ACCOUNTS.sql');
 function routesOf() {
   const src = readFileSync(join(root, 'src/api/server.ts'), 'utf8');
   const out = [];
-  for (const m of src.matchAll(/route\('(GET|POST|PATCH|DELETE)', '([^']+)', '([^']+)'/g)) {
+  // `route<AccountApi>(…)` 처럼 타입 인자가 붙은 것도 센다 — 안 세면 계정 경로가 게이트에서 조용히 빠진다.
+  for (const m of src.matchAll(/route(?:<\w+>)?\('(GET|POST|PATCH|DELETE)', '([^']+)', '([^']+)'/g)) {
     out.push({ method: m[1], path: m[2], scope: m[3] });
   }
   return out;

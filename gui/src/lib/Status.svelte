@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import type { Scope } from './global/scope.svelte.ts';
   import type { StatusView } from '@web/status-view';
 
   let { view, live, recovering, recover }: {
@@ -7,6 +9,9 @@
     recovering: boolean;
     recover: () => void;
   } = $props();
+  // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
+  const scope = getContext<Scope | undefined>('scope');
+  const ro = $derived(scope?.readOnly === true);
 </script>
 
 {#if !live}
@@ -36,9 +41,11 @@
       <dd>
         {view.unfinished ? '있다 — recover 의 대상' : '없다'}
         {#if view.unfinished}
+          {#if !ro}
           <button type="button" disabled={recovering} onclick={recover}>
             {recovering ? '이어받는 중' : '이어받는다'}
           </button>
+          {/if}
         {/if}
       </dd>
     </div>

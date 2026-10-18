@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import type { Scope } from './global/scope.svelte.ts';
+  import Writable from './global/Writable.svelte';
   import type { KeylessAlgorithm } from '@web/edit';
   import { trafficMarkOf } from '@web/pools-view';
   import type { PoolsView } from '@web/pools-view';
@@ -30,6 +33,9 @@
       pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
     }) => void;
   } = $props();
+  // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
+  const scope = getContext<Scope | undefined>('scope');
+  const ro = $derived(scope?.readOnly === true);
 
   const label = (state: string): string => {
     if (state === 'healthy') return '살아 있다';
@@ -55,11 +61,13 @@
             <span data-state="unknown">{pool.unknown}</span>
             <span data-state="unhealthy">{pool.unhealthy}</span>
           </p>
+          {#if !ro}
           <button
             type="button"
             disabled={editing}
             onclick={() => withdrawPool(pool.key)}
           >설정에서 뺀다</button>
+          {/if}
         </header>
         {#if pool.backends.length === 0}
           <p class="empty">백엔드가 없다.</p>
@@ -82,32 +90,40 @@
                     {/if}
                   </span>
                 {/if}
+                {#if !ro}
                 <button
                   type="button"
                   disabled={editing}
                   onclick={() => drain(be.key)}
                 >드레인</button>
+                {/if}
+                {#if !ro}
                 <button
                   type="button"
                   disabled={editing}
                   onclick={() => withdraw(be.key)}
                 >설정에서 뺀다</button>
+                {/if}
               </li>
             {/each}
           </ul>
         {/if}
+        <Writable>
         <AddBackend
           pool={pool.key}
           {editing}
           add={(key, host, port) => insert(pool.key, key, host, port)}
         />
+        </Writable>
       </section>
     {/each}
   </div>
   {/if}
+  <Writable>
   <AddPool {editing} add={openPool} />
   <AddHashPool {editing} add={openHashPool} />
   <AddSourceIpHashPool {editing} add={openSourceIpHashPool} />
+  </Writable>
 {/if}
 
 <style>

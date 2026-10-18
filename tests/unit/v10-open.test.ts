@@ -148,7 +148,7 @@ describe('Kit 경로', () => {
 
   it('Kit 자리가 라우트고 pageOf 가 같은 이름을 읽는다', () => {
     expect(KIT_ROUTES.some((r) => r.place === 'login' && r.path === '/login')).toBe(true);
-    expect(KIT_ROUTES).toHaveLength(14); // + invite · account · users (계획 A) · reset · email (B1)
+    expect(KIT_ROUTES).toHaveLength(15); // + invite · account · users (계획 A) · reset · email (B1) · regions (전역)
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);

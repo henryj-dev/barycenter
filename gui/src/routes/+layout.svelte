@@ -7,19 +7,31 @@
   import { createDesk } from '$lib/desk.svelte.ts';
   import { createSession } from '$lib/account/session.svelte.ts';
   import StepUpDialog from '$lib/account/StepUpDialog.svelte';
+  import { createScope } from '$lib/global/scope.svelte.ts';
   import '../app.css';
 
   let { children } = $props();
 
-  const desk = createDesk();
+  // 전역 모드면 읽기 경로가 고른 지역으로 간다 — desk 보다 먼저 만든다.
+  const scope = createScope();
+  setContext('scope', scope);
+  const desk = createDesk(scope);
   setContext('desk', desk);
+  /** 전역인데 지역을 안 골랐다 — 설정 화면은 볼 것이 없다. 계정 화면은 그대로 쓴다. */
+  const needsRegion = $derived(
+    scope.mode === 'global' && scope.region === undefined
+      && !['regions', 'login', 'invite', 'account', 'users', 'reset', 'email'].includes(place),
+  );
+  $effect(() => { if (needsRegion) void goto('/regions'); });
   // 사람 계정 — 쿠키 세션이면 `/me` 가 답한다. 토큰으로 붙었으면 비어 있다.
   const session = createSession();
   setContext('session', session);
   let logoutNote = $state<string | undefined>();
   onMount(async () => {
+    await scope.detect();
     await session.refresh();
-    if (session.me !== undefined) void desk.connect();
+    // 전역은 지역을 고른 뒤에 붙는다(`/regions` 가 desk.connect 를 부른다).
+    if (session.me !== undefined && scope.mode !== 'global') void desk.connect();
   });
   const logout = async (): Promise<void> => {
     const r = await session.logout();
@@ -87,6 +99,10 @@
       h: '이메일 확인',
       p: '새 주소로 간 링크를 열면 바뀐다.',
     },
+    regions: {
+      h: '지역',
+      p: '전역 화면은 읽기만 한다. 닿지 않는 지역은 「모른다」로 보인다. 설정은 그 지역의 GUI 에서 바꾼다.',
+    },
     users: {
       h: '사람과 초대',
       p: '공개 가입은 없다. 역할 하향·정지는 그 사람의 다음 요청부터 막는다. 마지막 관리자는 강등·정지할 수 없다.',
@@ -98,6 +114,11 @@
   <header class="mast">
     <p class="eyebrow">barycenter</p>
     <nav class="nav" aria-label="화면">
+      {#if scope.mode === 'global'}
+        <a href="/regions" aria-current={place === 'regions' ? 'page' : undefined}>
+          지역{scope.region !== undefined ? ` · ${scope.region.name}` : ''}
+        </a>
+      {/if}
       <a href="/" aria-current={place === 'impact' ? 'page' : undefined}>영향</a>
       <a href="/listeners" aria-current={place === 'listeners' ? 'page' : undefined}>리스너</a>
       <a href="/pools" aria-current={place === 'pools' ? 'page' : undefined}>풀</a>
