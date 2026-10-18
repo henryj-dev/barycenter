@@ -53,6 +53,8 @@ EXTRA_ENV=
 # 든 `KEY=` 에 걸린다. `MANAGED_ENV_KEYS` 와 같은 모양으로 둔다.
 EXTRA_ENV_KEYS=
 ROTATE_TOKEN=0
+ACCOUNTS_DSN=
+NO_ACCOUNTS=0
 RESET_ENV=0
 # **여기서 미리 정한다** (검수 2026-08-29(2) · C). `env_line` 의 거절 메세지가 이 값을
 # 넣는데, 그 함수는 **인자 파싱 중에** `extra_env_add` 를 거쳐 불린다 — ⑩ 에서야
@@ -96,6 +98,11 @@ barycenter 단일 인스턴스 설치
 PostgreSQL (택일 — 터미널에서는 안 주면 물어본다)
   --dsn <postgres://...>   이미 있는 PostgreSQL 을 쓴다
   --with-postgres          같은 호스트에 PostgreSQL 을 설치하고 role·db 를 만든다
+
+사람 계정 (공통 회원정책 — 자체 계정이 기본이다)
+  --accounts-dsn <DSN>     공용 계정 PG. 모든 지역·전역 인스턴스가 같은 값을 쓴다
+                           (안 주면 --with-postgres 일 때 같은 PG 에 bary_accounts DB 를 만든다)
+  --no-accounts            사람 계정을 켜지 않는다 (토큰·OIDC 만)
                            (유닉스 소켓 + peer 인증 — 비밀번호를 만들지 않는다)
 
 옵션
@@ -202,6 +209,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dsn)            DSN=${2:?--dsn 에 값이 필요하다}; PG_SET=1; shift 2 ;;
     --with-postgres)  WITH_PG=1; PG_SET=1; shift ;;
+    --accounts-dsn)   ACCOUNTS_DSN=${2:?--accounts-dsn 에 값이 필요하다}; shift 2 ;;
+    --no-accounts)    NO_ACCOUNTS=1; shift ;;
     --prefix)         PREFIX=${2:?--prefix 에 값이 필요하다}; PREFIX_SET=1; shift 2 ;;
     --app-dir)        APP_DIR=${2:?--app-dir 에 값이 필요하다}; APP_DIR_SET=1; shift 2 ;;
     --user)           SVC_USER=${2:?--user 에 값이 필요하다}; USER_SET=1; shift 2 ;;
@@ -1025,7 +1034,13 @@ install_postgres() {
   su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='$SVC_USER'\"" \
     | grep -q 1 || su postgres -c "createdb -O '$SVC_USER' '$SVC_USER'"
 
+  # **계정 DB 도 같이 만든다** (공통 회원정책). 설정 DB 와 다른 DB 다 — 계정은 지역에 속하지 않고,
+  # 나중에 공용 계정 PG 로 옮길 때 이 DB 만 떼어 가면 된다.
+  su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='bary_accounts'\"" \
+    | grep -q 1 || su postgres -c "createdb -O '$SVC_USER' bary_accounts"
+
   sock=$(pg_socket_dir) || die "PostgreSQL 유닉스 소켓을 못 찾았다"
+  LOCAL_ACCOUNTS_DSN="postgres:///bary_accounts?host=$sock"
   DSN="postgres:///$SVC_USER?host=$sock"
   ok "로컬 PostgreSQL — $DSN (peer 인증, 비밀번호 없음)"
 }
@@ -1181,6 +1196,40 @@ carry_env_lines() {             # carry_env_lines <파일>
     printf '%s\n' "$_line"
   done < "$1"
 }
+
+# ── 사람 계정을 켤까 (공통 회원정책 1차) ─────────────────────────────────
+#
+# 두 줄(DSN·KEK)은 **관리 키가 아니라 이어 가는 줄**이다. 재실행이 곧 업데이트라서 KEK 를 다시
+# 만들면 모든 사람의 인증 앱(TOTP)이 그 자리에서 못 쓰게 된다 — 그래서 없을 때만 만든다.
+ACCOUNTS_STATE=
+LOCAL_ACCOUNTS_DSN=${LOCAL_ACCOUNTS_DSN:-}
+_prev_adsn=$(env_get BARY_ACCOUNTS_DSN)
+if [ "$NO_ACCOUNTS" = 1 ]; then
+  ACCOUNTS_STATE="꺼짐 (--no-accounts)"
+  [ -n "$_prev_adsn" ] && warn "$ENV_FILE 에 BARY_ACCOUNTS_DSN 이 이미 있다 — 끄려면 그 줄을 지운다"
+elif [ -n "$ACCOUNTS_DSN" ]; then
+  extra_env_add "BARY_ACCOUNTS_DSN=$ACCOUNTS_DSN"
+  ACCOUNTS_STATE="켜짐 — $ACCOUNTS_DSN"
+elif [ -n "$_prev_adsn" ]; then
+  ACCOUNTS_STATE="켜짐 — 쓰던 것을 이어 간다"
+elif [ -n "$LOCAL_ACCOUNTS_DSN" ]; then
+  extra_env_add "BARY_ACCOUNTS_DSN=$LOCAL_ACCOUNTS_DSN"
+  ACCOUNTS_STATE="켜짐 — 같은 호스트의 bary_accounts"
+else
+  ACCOUNTS_STATE="꺼짐 — 외부 PG 면 --accounts-dsn 으로 공용 계정 PG 를 준다"
+fi
+case "$ACCOUNTS_STATE" in
+  켜짐*)
+    case " $EXTRA_ENV_KEYS " in
+      *" BARY_ACCOUNTS_KEK "*) : ;;
+      *)
+        if [ -z "$(env_get BARY_ACCOUNTS_KEK)" ]; then
+          extra_env_add "BARY_ACCOUNTS_KEK=$("$NODE_BIN" -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64"))')"
+          warn "BARY_ACCOUNTS_KEK 을 새로 만들었다 — 잃으면 인증 앱이 전부 못 쓰게 된다. env 파일과 같이 백업한다"
+        fi ;;
+    esac ;;
+esac
+ok "사람 계정 $ACCOUNTS_STATE"
 
 CARRIED_ENV=
 if [ -f "$ENV_FILE" ]; then
@@ -1421,6 +1470,22 @@ else
   fi
 fi
 
+# **첫 관리자 링크** — 계정이 켜졌고 활성 관리자가 아직 없을 때만 나온다(호스트 CLI 와 같은 길).
+# 이미 있으면 데몬이 거절하고, 그건 실패가 아니다.
+BOOTSTRAP_LINK=
+case "$ACCOUNTS_STATE" in
+  켜짐*)
+    if _out=$(su -s /bin/sh "$SVC_USER" -c "set -a; . '$ENV_FILE'; set +a; BARY_PUBLIC_URL='${URL:-}' '$NODE_BIN' '$APP_DIR/dist/bin/barycenterd.js' account bootstrap" 2>&1); then
+      BOOTSTRAP_LINK=$(printf '%s\n' "$_out" | sed -n 's/^  \(.*\/invite#.*\)$/\1/p' | head -1)
+      ok "첫 관리자 링크를 만들었다 (24시간, 한 번)"
+    else
+      case "$_out" in
+        *admin_exists*|*'활성 관리자가 이미 있다'*) ok "관리자가 이미 있다 — 첫 관리자 링크는 안 만든다" ;;
+        *) warn "첫 관리자 링크를 못 만들었다: $(printf '%s' "$_out" | tail -1)" ;;
+      esac
+    fi ;;
+esac
+
 case "$INIT" in
   systemd) SVC_HINT="systemctl status barycenterd" ;;
   openrc)  SVC_HINT="rc-service barycenterd status" ;;
@@ -1447,6 +1512,8 @@ else cat <<TOK
     $TOKEN_PLAIN
 TOK
 fi)
+
+  계정       $ACCOUNTS_STATE$(if [ -n "$BOOTSTRAP_LINK" ]; then printf '\n  첫 관리자  %s\n             (24시간, 한 번 — 아이디·비밀번호·인증 앱을 정한다)' "$BOOTSTRAP_LINK"; fi)
 
 CLI:
 

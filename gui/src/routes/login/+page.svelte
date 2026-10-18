@@ -3,8 +3,20 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import type { createDesk } from '$lib/desk.svelte.ts';
+  import type { Session } from '$lib/account/session.svelte.ts';
+  import PasswordStep from '$lib/account/PasswordStep.svelte';
+  import MfaStep from '$lib/account/MfaStep.svelte';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
+  const session = getContext<Session>('session');
+  /** 자체 로그인 단계 — 비밀번호 → (필요하면) 인증 코드. */
+  let step = $state<'password' | 'mfa'>('password');
+
+  const signedIn = async (): Promise<void> => {
+    await session.refresh();
+    await desk.connect();
+    await goto('/');
+  };
   let startError = $state<string | undefined>();
   let starting = $state(false);
   let exchanging = $state(false);
@@ -66,10 +78,20 @@
 </script>
 
 <section>
+  <h2>계정으로 로그인</h2>
+  {#if step === 'password'}
+    <PasswordStep onDone={(next) => { if (next === 'mfa') step = 'mfa'; else void signedIn(); }} />
+  {:else}
+    <MfaStep onDone={() => { void signedIn(); }} onRestart={() => { step = 'password'; }} />
+  {/if}
+</section>
+
+<section>
+  <h2>SSO</h2>
   <button type="button" onclick={() => { void startLogin(); }} disabled={starting || exchanging}>
     IdP로 로그인
   </button>
-  <p>해시 토큰은 위 칸에 넣는다. 폴링하지 않는다.</p>
+  <p>계정이 없으면 관리자에게 초대를 받는다 — 공개 가입은 없다. 해시 토큰은 위 칸에 넣는다.</p>
   {#if startError !== undefined}
     <p class="err" role="alert">{startError}</p>
   {/if}
@@ -77,6 +99,7 @@
 
 <style>
   section { display: grid; gap: 0.75rem; margin: 1.5rem 0; }
+  h2 { font-size: 1rem; margin: 0; }
   button {
     justify-self: start;
     background: var(--plate);
