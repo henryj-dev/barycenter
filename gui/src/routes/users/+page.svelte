@@ -83,15 +83,22 @@
   <section>
     <h2>사람</h2>
     <table>
-      <thead><tr><th>아이디</th><th>역할</th><th>상태</th><th>MFA</th><th></th></tr></thead>
+      <thead><tr><th>아이디</th><th>역할</th><th>정본</th><th>상태</th><th>MFA</th><th></th></tr></thead>
       <tbody>
         {#each users as u (u.id)}
           <tr>
             <td>{u.username}{u.lockedUntil !== null ? ' (잠김)' : ''}</td>
             <td>
-              <select value={u.role} onchange={(e) => { void accountApi.updateUser(u.id, { role: (e.currentTarget as HTMLSelectElement).value as Role }).then(act); }}>
+              <!-- IdP 가 정본이면 역할은 SSO 로그인이 맞춘다 — 손으로 못 바꾼다 -->
+              <select value={u.role} disabled={u.roleAuthority === 'idp'} onchange={(e) => { void accountApi.updateUser(u.id, { role: (e.currentTarget as HTMLSelectElement).value as Role }).then(act); }}>
                 {#each ROLES as r (r)}<option value={r}>{r}</option>{/each}
               </select>
+            </td>
+            <td>
+              <button type="button" class="quiet" title="IdP 정본이면 역할이 다음 SSO 로그인 때 IdP 를 따른다"
+                onclick={() => { void accountApi.updateUser(u.id, { roleAuthority: u.roleAuthority === 'idp' ? 'local' : 'idp' }).then(act); }}>
+                {u.roleAuthority === 'idp' ? 'IdP → 로컬' : '로컬 → IdP'}
+              </button>
             </td>
             <td>
               <button type="button" class="quiet" onclick={() => { void accountApi.updateUser(u.id, { status: u.status === 'active' ? 'suspended' : 'active' }).then(act); }}>

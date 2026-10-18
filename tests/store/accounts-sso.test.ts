@@ -209,3 +209,94 @@ describe('관리자는 SSO 로 와도 로컬 TOTP', () => {
     expect(cookie(r, 'bary_sid')).toBe('');
   });
 });
+
+describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
+  /** SSO 로 이어진 operator 하나. 권한 정본을 idp 로 돌린다. */
+  async function idpUser(base: string, sub = 'idp-1'): Promise<string> {
+    const { token } = await accounts.invite({ role: 'operator' }, 't');
+    const { userId } = await accounts.acceptLink({ token, username: `u-${sub}`, password: 'operator-pass-1' });
+    await db.query(`INSERT INTO user_identities (issuer, subject, user_id, linked_by) VALUES ($1,$2,$3,'test')`, [ISS, sub, userId]);
+    await accounts.updateUser(userId, { roleAuthority: 'idp' }, 'test');
+    void base;
+    return userId;
+  }
+  const roleOf = async (id: string): Promise<string> => String((await db.query('SELECT role FROM users WHERE id=$1', [id])).rows[0]!['role']);
+
+  it('**로그인 때마다 IdP 역할 클레임을 매핑으로 맞춘다** (lodestar 의 roles 배열)', async () => {
+    const base = await serve();
+    await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator', view: 'auditor' }, 'test');
+    const id = await idpUser(base);
+    who = { sub: 'idp-1', roles: ['view'], roles_label: ['운영자'] };
+    const first = await sso(base);
+    expect(first.status).toBe(200);
+    expect(await roleOf(id)).toBe('auditor');
+    // IdP 쪽에서 바뀌면 **다음 SSO 로그인**에 반영된다(그 사이는 지연 — 사용자가 받아들였다)
+    who = { sub: 'idp-1', roles: ['ops'] };
+    await sso(base);
+    expect(await roleOf(id)).toBe('operator');
+    // 맞춘 역할은 먼저 열린 세션에도 다음 요청부터 보인다
+    const me = await (await fetch(`${base}/api/v1/me`, { headers: { cookie: cookie(first, 'bary_sid') } })).json() as { role: string };
+    expect(me.role).toBe('operator');
+  });
+
+  it('**클레임 없음·값 둘·매핑에 없는 값은 로그인 거부** — 로컬 역할로 떨어지지 않는다', async () => {
+    const base = await serve();
+    await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator' }, 'test');
+    const id = await idpUser(base);
+    for (const claims of [{}, { roles: ['ops', 'x'] }, { roles: ['nope'] }, { roles: 'nope' }]) {
+      who = { sub: 'idp-1', ...claims };
+      expect((await sso(base)).status).toBe(401);
+    }
+    expect(await roleOf(id)).toBe('operator');
+    const refused = (await db.query(`SELECT count(*) AS n FROM account_audit WHERE action='account.idp_role_refused'`)).rows[0]!['n'];
+    expect(Number(refused)).toBe(4);
+  });
+
+  it('**로컬 정지가 우선** — IdP 가 멀쩡하다고 해도', async () => {
+    const base = await serve();
+    await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator' }, 'test');
+    const id = await idpUser(base);
+    await accounts.updateUser(id, { status: 'suspended' }, 'test');
+    who = { sub: 'idp-1', roles: ['ops'] };
+    expect((await sso(base)).status).toBe(401);
+  });
+
+  it('인증 앱 없는 사람을 IdP 가 관리자로 올리면 거부한다', async () => {
+    const base = await serve();
+    await accounts.setProviderRoles(ISS, 'roles', { boss: 'admin' }, 'test');
+    const id = await idpUser(base);
+    who = { sub: 'idp-1', roles: ['boss'] };
+    expect((await sso(base)).status).toBe(401);
+    expect(await roleOf(id)).toBe('operator');
+  });
+
+  it('**마지막 활성 관리자는 IdP 가 내려도 안 내려간다** — 그 로그인만 거부', async () => {
+    const base = await serve();
+    await accounts.setProviderRoles(ISS, 'roles', { boss: 'admin', view: 'auditor' }, 'test');
+    const t = await accounts.bootstrap('cli');
+    const p = await accounts.previewLink(t);
+    const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let bits = 0; let v = 0; const key: number[] = [];
+    for (const ch of p.totp!.secret) { v = (v << 5) | A.indexOf(ch); bits += 5; if (bits >= 8) { key.push((v >>> (bits - 8)) & 255); bits -= 8; } }
+    const { userId } = await accounts.acceptLink({ token: t, username: 'root', password: 'admin-password-1', totp: { secret: p.totp!.secret, code: hotp(Buffer.from(key), stepOf(Date.now())) } });
+    await db.query(`INSERT INTO user_identities (issuer, subject, user_id, linked_by) VALUES ($1,'root-sub',$2,'test')`, [ISS, userId]);
+    await accounts.updateUser(userId, { roleAuthority: 'idp' }, 'test');
+    who = { sub: 'root-sub', roles: ['view'] };
+    expect((await sso(base)).status).toBe(401);
+    expect(await roleOf(userId)).toBe('admin');
+  });
+
+  it('IdP 정본 계정의 역할은 손으로 못 바꾸고, SSO 가 없으면 IdP 정본이 될 수 없다', async () => {
+    const base = await serve();
+    const id = await idpUser(base);
+    await expect(accounts.updateUser(id, { role: 'auditor' }, 't')).rejects.toMatchObject({ code: 'role_from_idp' });
+    const { token } = await accounts.invite({ role: 'auditor' }, 't');
+    const { userId } = await accounts.acceptLink({ token, username: 'loner', password: 'auditor-pass-12' });
+    await expect(accounts.updateUser(userId, { roleAuthority: 'idp' }, 't')).rejects.toMatchObject({ code: 'no_identity' });
+  });
+
+  it('매핑 값은 역할만 받는다', async () => {
+    await expect(accounts.setProviderRoles(ISS, 'roles', { x: 'root' }, 't')).rejects.toMatchObject({ code: 'malformed' });
+    await expect(accounts.setProviderRoles(ISS, 'bad claim!', {}, 't')).rejects.toMatchObject({ code: 'malformed' });
+  });
+});

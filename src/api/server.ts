@@ -998,11 +998,24 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
     });
   }, { leaderFree: true }),
 
-  /** 공급자별 JIT — 관리자가 명시해서 켠다. 켜도 auditor 로만 만든다. */
+  /**
+   * 공급자 설정 — JIT(관리자가 명시해서 켠다, 켜도 auditor 만)와 역할 클레임·매핑(IdP 권한 정본 계정용, B3).
+   * 둘 중 준 것만 바꾼다.
+   */
   route<AccountApi>('POST', '/api/v1/sso-providers', 'admin', async (c, api) => {
     const b = (c.body ?? {}) as Record<string, unknown>;
-    if (typeof b['jitEnabled'] !== 'boolean') throw new StoreError(400, 'malformed', "본문에 'jitEnabled' 불리언이 필요하다");
-    await accountsOf(api).setProviderJit(bodyStr(c.body, 'issuer'), b['jitEnabled'], c.who.name, metaOf(c.req));
+    const issuer = bodyStr(c.body, 'issuer');
+    const hasJit = typeof b['jitEnabled'] === 'boolean';
+    const hasRoles = 'roleClaim' in b || 'roleMap' in b;
+    if (!hasJit && !hasRoles) throw new StoreError(400, 'malformed', "본문에 'jitEnabled' 또는 'roleClaim'·'roleMap' 이 필요하다");
+    if (hasJit) await accountsOf(api).setProviderJit(issuer, b['jitEnabled'] as boolean, c.who.name, metaOf(c.req));
+    if (hasRoles) {
+      const claim = b['roleClaim'];
+      const map = b['roleMap'];
+      if (claim !== null && typeof claim !== 'string') throw new StoreError(400, 'malformed', "'roleClaim' 은 문자열 또는 null 이다");
+      if (map === null || typeof map !== 'object' || Array.isArray(map)) throw new StoreError(400, 'malformed', "'roleMap' 은 객체다");
+      await accountsOf(api).setProviderRoles(issuer, claim as string | null, map as Record<string, unknown>, c.who.name, metaOf(c.req));
+    }
     json(c.res, 200, { updated: true });
   }, { leaderFree: true, sensitive: true }),
 
@@ -1015,6 +1028,7 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
     await accountsOf(api).updateUser(c.params['id'] ?? '', {
       ...(typeof b['role'] === 'string' ? { role: b['role'] } : {}),
       ...(typeof b['status'] === 'string' ? { status: b['status'] } : {}),
+      ...(typeof b['roleAuthority'] === 'string' ? { roleAuthority: b['roleAuthority'] } : {}),
     }, c.who.name, metaOf(c.req));
     json(c.res, 200, { updated: true });
   }, { leaderFree: true, sensitive: true }),
@@ -1352,7 +1366,7 @@ async function finishAccountSso(
   }
   const pref = claims['preferred_username'];
   const out = await accounts.completeSso(flow.intent, flow.userId, {
-    iss: claims['iss'], sub: claims['sub'], ...(typeof pref === 'string' ? { preferredUsername: pref } : {}),
+    iss: claims['iss'], sub: claims['sub'], raw: claims, ...(typeof pref === 'string' ? { preferredUsername: pref } : {}),
   }, metaOf(req));
   switch (out.kind) {
     case 'session':

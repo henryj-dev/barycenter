@@ -20,7 +20,8 @@ export type Me = {
   hasPassword: boolean;
 };
 
-export type SsoProviders = { configured: string | null; providers: { issuer: string; jitEnabled: boolean; jitRole: string }[] };
+export type SsoProvider = { issuer: string; jitEnabled: boolean; jitRole: string; roleClaim: string | null; roleMap: Record<string, Role> };
+export type SsoProviders = { configured: string | null; providers: SsoProvider[] };
 
 export type LinkPreview = {
   kind: 'invite' | 'bootstrap' | 'recovery'; role: Role; email: string | null; username?: string;
@@ -74,6 +75,8 @@ export const accountApi = {
     call<{ unlinked: true }>('POST', '/api/v1/me/identities/unlink', { issuer, subject, password }),
   ssoProviders: () => call<SsoProviders>('GET', '/api/v1/sso-providers'),
   setJit: (issuer: string, jitEnabled: boolean) => call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, jitEnabled }),
+  setRoles: (issuer: string, roleClaim: string | null, roleMap: Record<string, string>) =>
+    call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, roleClaim, roleMap }),
   stepUp: (code: string) => call<{ stepUp: true }>('POST', '/api/v1/session/step-up', { code }, true),
   requestReset: (email: string) => call<{ accepted: true }>('POST', '/api/v1/account/password-reset', { email }),
   confirmReset: (token: string, password: string) => call<{ reset: true }>('POST', '/api/v1/account/password-reset/confirm', { token, password }),
@@ -90,7 +93,7 @@ export const accountApi = {
   acceptLink: (input: { token: string; username?: string; password: string; totp?: { secret: string; code: string } }) =>
     call<{ userId: string; recoveryCodes?: string[] }>('POST', '/api/v1/invitations/accept', input),
   users: () => call<UserRow[]>('GET', '/api/v1/users'),
-  updateUser: (id: string, patch: { role?: Role; status?: 'active' | 'suspended' }) =>
+  updateUser: (id: string, patch: { role?: Role; status?: 'active' | 'suspended'; roleAuthority?: 'local' | 'idp' }) =>
     call<{ updated: true }>('PATCH', `/api/v1/users/${encodeURIComponent(id)}`, patch),
   deleteUser: (id: string) => call<{ deleted: true }>('DELETE', `/api/v1/users/${encodeURIComponent(id)}`),
   revokeSessions: (id: string) => call<{ revoked: number }>('POST', `/api/v1/users/${encodeURIComponent(id)}/revoke-sessions`, {}),
