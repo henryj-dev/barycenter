@@ -502,6 +502,396 @@
           }
         }
       }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "GET:/api/v1/me",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/session/logout-all": {
+      "post": {
+        "operationId": "POST:/api/v1/session/logout-all",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/password": {
+      "post": {
+        "operationId": "POST:/api/v1/me/password",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/totp": {
+      "post": {
+        "operationId": "POST:/api/v1/me/mfa/totp",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/totp/confirm": {
+      "post": {
+        "operationId": "POST:/api/v1/me/mfa/totp/confirm",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/totp/remove": {
+      "post": {
+        "operationId": "POST:/api/v1/me/mfa/totp/remove",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/recovery-codes": {
+      "post": {
+        "operationId": "POST:/api/v1/me/mfa/recovery-codes",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/session/step-up": {
+      "post": {
+        "operationId": "POST:/api/v1/session/step-up",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/email": {
+      "post": {
+        "operationId": "POST:/api/v1/me/email",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/identities/link": {
+      "post": {
+        "operationId": "POST:/api/v1/me/identities/link",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/identities/unlink": {
+      "post": {
+        "operationId": "POST:/api/v1/me/identities/unlink",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/sso-providers": {
+      "get": {
+        "operationId": "GET:/api/v1/sso-providers",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "post": {
+        "operationId": "POST:/api/v1/sso-providers",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "operationId": "GET:/api/v1/users",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "patch": {
+        "operationId": "PATCH:/api/v1/users/:id",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "DELETE:/api/v1/users/:id",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/revoke-sessions": {
+      "post": {
+        "operationId": "POST:/api/v1/users/:id/revoke-sessions",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/recovery-link": {
+      "post": {
+        "operationId": "POST:/api/v1/users/:id/recovery-link",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/invitations": {
+      "get": {
+        "operationId": "GET:/api/v1/invitations",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "post": {
+        "operationId": "POST:/api/v1/invitations",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/invitations/{id}": {
+      "delete": {
+        "operationId": "DELETE:/api/v1/invitations/:id",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/account-audit": {
+      "get": {
+        "operationId": "GET:/api/v1/account-audit",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions": {
+      "get": {
+        "operationId": "GET:/api/v1/regions",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/status": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/status",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/listeners": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/listeners",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/pools": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/pools",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/backends": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/backends",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/backends/status": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/backends/status",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/routes": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/routes",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/certificates": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/certificates",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/tls-policies": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/tls-policies",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/sni-bindings": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/sni-bindings",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/acme/orders": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/acme/orders",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/audit": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/audit",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/config/rendered": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/config/rendered",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/events": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/events",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
     }
   }
 }

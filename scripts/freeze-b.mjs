@@ -12,11 +12,14 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const apiPath = join(root, 'SURFACE-API.json');
 const ddlPath = join(root, 'SURFACE-DDL.sql');
+// 계정 DB 는 설정 DB 와 다른 DB·다른 계열이다 — 파일을 나눠 한쪽 드리프트가 다른 쪽에 묻히지 않게.
+const accountDdlPath = join(root, 'SURFACE-DDL-ACCOUNTS.sql');
 
 function routesOf() {
   const src = readFileSync(join(root, 'src/api/server.ts'), 'utf8');
   const out = [];
-  for (const m of src.matchAll(/route\('(GET|POST|PATCH|DELETE)', '([^']+)', '([^']+)'/g)) {
+  // `route<AccountApi>(…)` 처럼 타입 인자가 붙은 것도 센다 — 안 세면 계정 경로가 게이트에서 조용히 빠진다.
+  for (const m of src.matchAll(/route(?:<\w+>)?\('(GET|POST|PATCH|DELETE)', '([^']+)', '([^']+)'/g)) {
     out.push({ method: m[1], path: m[2], scope: m[3] });
   }
   return out;
@@ -40,20 +43,22 @@ function openApiOf(routes) {
   };
 }
 
-function ddlOf() {
-  const dir = join(root, 'src/store/migrations');
+function ddlOf(sub = 'migrations') {
+  const dir = join(root, 'src/store', sub);
   return readdirSync(dir).filter((n) => n.endsWith('.sql')).sort()
     .map((n) => `-- ${n}\n${readFileSync(join(dir, n), 'utf8').trim()}\n`).join('\n');
 }
 
 const api = `${JSON.stringify(openApiOf(routesOf()), null, 2)}\n`;
 const ddl = ddlOf();
+const accountDdl = ddlOf('account-migrations');
 const write = process.argv.includes('--write');
 const check = process.argv.includes('--check') || !write;
 
 if (write) {
   writeFileSync(apiPath, api);
   writeFileSync(ddlPath, ddl);
+  writeFileSync(accountDdlPath, accountDdl);
   console.log(`wrote ${apiPath} ${ddlPath} (${routesOf().length} routes)`);
 }
 
@@ -67,6 +72,10 @@ if (check) {
   }
   if (wantDdl !== ddl) {
     console.error('SURFACE-DDL.sql 이 마이그레이션과 다르다');
+    bad = 1;
+  }
+  if (readFileSync(accountDdlPath, 'utf8') !== accountDdl) {
+    console.error('SURFACE-DDL-ACCOUNTS.sql 이 계정 마이그레이션과 다르다');
     bad = 1;
   }
   if (bad === 0) console.log(`ok  B freeze  ${routesOf().length} routes`);

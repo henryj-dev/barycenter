@@ -17,6 +17,8 @@
 #   4. **재기동 뒤에도** 1·2 가 참인가      — `--write-bootstrap` 이 활성 세대를 되돌리지
 #                                             않는다는 것은 재기동해 봐야만 안다
 #   5. `bary status` 가 답하는가            — 토큰 해시와 API 가 맞물렸는가
+#   5-b. reload 가 재시작 없이 토큰을 들이는가 — PID 가 그대로여야 한다. `/status` 의 판 표시도
+#   5-c. 사람 계정이 설치에서 바로 서는가 — 첫 관리자 링크 → TOTP 관리자 → 로그인 → MFA → /me
 #   6. apply 가 :80 을 여는가                — `setcap` 이 걸렸다는 것과 특권 포트가
 #                                             열린다는 것은 다른 사실이다
 #
@@ -61,12 +63,13 @@ debian|debian:12|systemd|dsn
 ubuntu|ubuntu:24.04|systemd|interactive
 rocky|rockylinux/rockylinux:9|systemd|-
 rocky10|rockylinux/rockylinux:10|systemd|-
+global|debian:12|systemd|global
 amazon|amazonlinux:2023|systemd|-
 alpine|alpine:3.21|openrc|-
 "
 
 WANT="$*"
-[ -z "$WANT" ] && WANT="debian ubuntu rocky rocky10 amazon alpine"
+[ -z "$WANT" ] && WANT="debian ubuntu rocky rocky10 amazon alpine global"
 
 command -v docker >/dev/null 2>&1 || { echo "  FAIL  docker 가 없다"; exit 1; }
 docker info >/dev/null 2>&1 || { echo "  FAIL  도커 데몬이 안 돈다"; exit 1; }
@@ -98,6 +101,61 @@ wait_ready() {                 # wait_ready <컨테이너>
     sleep 1
   done
   return 0
+}
+
+# **전역 모드 판** (docs/runbook-global.md). 엔진·설정 DB 없이 전역 barycenterd 만 깐다. 지역 목록에는 **닿지
+# 않는 지역** 하나만 둔다 — 재는 것은 지역 중계가 아니라(그건 단위 테스트가 가짜 지역으로 잰다) **설치가 전역을
+# 세우는가**다: 서비스 · readyz 의 mode · 못 닿은 지역을 「모른다」로 · 엔진이 없음 · 지역 전용 설정이면 기동 거부.
+run_global() {                 # run_global <컨테이너> <이름>
+  local c="$1" name="$2" rc=0 d token
+  d=$(mktemp -d)
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=127.0.0.1 \
+    -keyout "$d/k.pem" -out "$d/ca.pem" >/dev/null 2>&1 || { printf '    NO   시험용 CA 를 못 만들었다\n'; return 1; }
+  printf 'region-token' > "$d/t"
+  printf '[{"name":"faraway","api":"https://127.0.0.1:1","gui":"https://faraway.example","ca":"/etc/barycenter-global/ca.pem","token":"/etc/barycenter-global/t"}]\n' > "$d/r.json"
+  docker exec "$c" mkdir -p /etc/barycenter-global
+  for f in ca.pem t r.json; do docker cp "$d/$f" "$c:/etc/barycenter-global/$f"; done
+  rm -rf "$d"
+  printf '  ..    install.sh --mode global (패키지·빌드로 몇 분 걸린다)\n'
+  if ! docker exec "$c" sh /repo/deploy/install.sh --mode global --regions /etc/barycenter-global/r.json --no-accounts \
+       > "/tmp/bary-install-$name.log" 2>&1; then
+    printf '    NO   install.sh --mode global 이 실패했다 — 마지막 30줄:\n'
+    tail -n 30 "/tmp/bary-install-$name.log" | sed 's/^/         /'
+    return 1
+  fi
+  printf '    ok   install.sh --mode global\n'
+  # 데몬이 지역 목록을 읽어야 하므로 서비스 유저에게 읽기를 준다(운영도 같다 — 런북).
+  docker exec "$c" sh -c 'chown -R root:bary /etc/barycenter-global && chmod 0640 /etc/barycenter-global/*' >/dev/null 2>&1
+  docker exec "$c" systemctl restart barycenterd >/dev/null 2>&1
+  expect "서비스 active" "$c" systemctl is-active --quiet barycenterd || rc=1
+  if wait_ready "$c" && docker exec "$c" curl -s --max-time 3 http://127.0.0.1:8088/readyz | grep -Eq '"mode": *"global"'; then
+    printf '    ok   /readyz 가 전역이라고 답한다\n'
+  else
+    printf '    NO   /readyz 가 전역 모드가 아니다\n'; rc=1
+  fi
+  token=$(sed -n 's/^ *\([A-Za-z0-9_-]\{20,\}\) *$/\1/p' "/tmp/bary-install-$name.log" | tail -1)
+  if docker exec "$c" curl -s --max-time 10 -H "authorization: Bearer $token" http://127.0.0.1:8088/api/v1/regions \
+       | tr -d ' \n' | grep -q '"name":"faraway","gui":"https://faraway.example","reachable":false'; then
+    printf '    ok   못 닿은 지역을 「모른다」로 싣는다\n'
+  else
+    printf '    NO   /api/v1/regions 가 기대한 모양이 아니다\n'; rc=1
+  fi
+  if ! docker exec "$c" sh -c 'command -v openresty || [ -x /usr/local/openresty/bin/openresty ]' >/dev/null 2>&1 \
+     && ! docker exec "$c" systemctl cat barycenterd 2>/dev/null | grep -q ExecStartPre; then
+    printf '    ok   엔진이 없고 유닛이 엔진을 안 띄운다\n'
+  else
+    printf '    NO   전역 모드인데 엔진이 깔렸거나 유닛이 엔진을 띄운다\n'; rc=1
+  fi
+  # 지역 전용 설정이 섞이면 **기동을 거부**한다 — 켰다고 믿는데 아무것도 안 하는 상태를 막는다.
+  docker exec "$c" sh -c "printf \"BARY_DSN='postgres:///x'\\n\" >> /etc/barycenter/env && systemctl restart barycenterd" >/dev/null 2>&1
+  sleep 3
+  if ! docker exec "$c" systemctl is-active --quiet barycenterd \
+     && docker exec "$c" journalctl -u barycenterd --no-pager -n 30 2>/dev/null | grep -q 'BARY_DSN 를 쓰지 않는다'; then
+    printf '    ok   지역 전용 설정(BARY_DSN)이 있으면 기동을 거부한다\n'
+  else
+    printf '    NO   BARY_DSN 이 섞였는데 떴다\n'; rc=1
+  fi
+  return "$rc"
 }
 
 run_plane() {                  # run_plane <이름> <베이스> <초기화> <추가검사>
@@ -167,6 +225,11 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
   # 것이 있어야 하고, 그 대상은 실제로 걸린 것 중 제일 아픈 것이어야 한다 —
   # `BARY_SECRET_KEK` 이다. 백엔드는 `fs` 그대로라 이 값은 쓰이지 않고 **놓여만 있다**;
   # 재는 것은 데몬의 동작이 아니라 **설치가 이 줄을 보존하는가**다.
+  if [ "$extra" = global ]; then
+    run_global "$c" "$name"
+    return $?
+  fi
+
   printf '  ..    install.sh --with-postgres (패키지·빌드로 몇 분 걸린다)\n'
   if ! docker exec "$c" sh /repo/deploy/install.sh --with-postgres \
        --env "BARY_SECRET_KEK=$KEK" > "/tmp/bary-install-$name.log" 2>&1; then
@@ -221,6 +284,94 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
     fi
   else
     printf '    NO   설치 로그에서 토큰을 못 찾았다\n'
+    rc=1
+  fi
+
+  # ⑤-b **reload 가 재시작 없이 토큰을 들인다** (2026-10-18). 재시작은 데이터 플레인을
+  #      끊으므로 토큰 철회가 그 비용을 지면 철회가 늦어진다. 그래서 재는 것은 셋이다:
+  #      새 토큰이 통하는가 · **데몬 PID 가 그대로인가**(= 재시작이 아니다) · `/status` 가
+  #      설치된 판(`build.commit`)을 말하는가 — 전역 모드가 판 차이를 드러내는 근거다.
+  local pid_before pid_after aud
+  if [ "$init" = systemd ]; then
+    pid_before=$(docker exec "$c" systemctl show -p MainPID --value barycenterd 2>/dev/null | tr -d ' \n')
+  else
+    pid_before=$(docker exec "$c" cat /run/barycenterd.pid 2>/dev/null | tr -d ' \n')
+  fi
+  aud=$(docker exec "$c" node -e '
+    const fs = require("fs"), c = require("crypto");
+    const plain = c.randomBytes(24).toString("base64url");
+    const f = "/etc/barycenter/tokens.json";
+    const t = JSON.parse(fs.readFileSync(f, "utf8"));
+    t.push({ name: "harness-auditor", role: "auditor", hash: "sha256:" + c.createHash("sha256").update(plain).digest("hex") });
+    fs.writeFileSync(f, JSON.stringify(t) + "\n");
+    process.stdout.write(plain);
+  ' 2>/dev/null)
+  if [ "$init" = systemd ]; then
+    docker exec "$c" systemctl reload barycenterd >/dev/null 2>&1 || rc=1
+  else
+    docker exec "$c" rc-service barycenterd reload >/dev/null 2>&1 || rc=1
+  fi
+  sleep 1
+  if [ "$init" = systemd ]; then
+    pid_after=$(docker exec "$c" systemctl show -p MainPID --value barycenterd 2>/dev/null | tr -d ' \n')
+  else
+    pid_after=$(docker exec "$c" cat /run/barycenterd.pid 2>/dev/null | tr -d ' \n')
+  fi
+  local st
+  st=$(docker exec "$c" curl -s --max-time 5 -H "authorization: Bearer $aud" http://127.0.0.1:8088/api/v1/status 2>/dev/null)
+  if [ -n "$aud" ] && printf '%s' "$st" | grep -q '"head"' \
+     && [ -n "$pid_before" ] && [ "$pid_before" = "$pid_after" ]; then
+    printf '    ok   reload 가 새 토큰을 들였다 (PID %s 그대로)\n' "$pid_after"
+  else
+    printf '    NO   reload 뒤 새 토큰이 안 통하거나 데몬이 재시작됐다 (PID %s → %s)\n' "${pid_before:-?}" "${pid_after:-?}"
+    rc=1
+  fi
+  if printf '%s' "$st" | grep -q '"commit"'; then
+    printf '    ok   /status 가 설치된 판을 말한다\n'
+  else
+    printf '    NO   /status 에 build.commit 이 없다\n'
+    rc=1
+  fi
+
+  # ⑤-c **사람 계정이 설치에서 바로 선다** (공통 회원정책 1차). `--with-postgres` 는 같은 PG 에
+  #      `bary_accounts` 를 만들고 KEK 를 만들어 첫 관리자 링크를 낸다. 재는 것은 그 링크 하나로
+  #      **관리자 생성(TOTP 포함) → 로그인 → MFA → /me** 가 실제 데몬에서 끝까지 가는가다.
+  local link
+  link=$(sed -n 's/^  첫 관리자  \(http[^ ]*\/invite#[A-Za-z0-9_-]*\)$/\1/p' "/tmp/bary-install-$name.log" | tail -1)
+  if [ -z "$link" ]; then
+    printf '    NO   설치 요약에 첫 관리자 링크가 없다\n'
+    rc=1
+  elif docker exec "$c" node -e '
+    const crypto = require("crypto");
+    const [link] = process.argv.slice(1);
+    const base = "http://127.0.0.1:8088", tok = link.split("#")[1];
+    const H = { "content-type": "application/json", origin: base };
+    const b32 = (s) => { const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; let bits = 0, v = 0; const o = [];
+      for (const ch of s) { v = (v << 5) | A.indexOf(ch); bits += 5; if (bits >= 8) { o.push((v >>> (bits - 8)) & 255); bits -= 8; } }
+      return Buffer.from(o); };
+    const totp = (key, t) => { const m = Buffer.alloc(8); m.writeBigUInt64BE(BigInt(Math.floor(t / 30000)));
+      const h = crypto.createHmac("sha1", key).update(m).digest(); const f = h[h.length - 1] & 15;
+      return String((((h[f] & 127) << 24) | (h[f + 1] << 16) | (h[f + 2] << 8) | h[f + 3]) % 1e6).padStart(6, "0"); };
+    (async () => {
+      const post = (p, b, extra = {}) => fetch(base + p, { method: "POST", headers: { ...H, ...extra }, body: JSON.stringify(b) });
+      const pv = await (await post("/api/v1/invitations/preview", { token: tok })).json();
+      const key = b32(pv.totp.secret);
+      const acc = await post("/api/v1/invitations/accept", { token: tok, username: "root", password: "harness-admin-pass",
+        totp: { secret: pv.totp.secret, code: totp(key, Date.now()) } });
+      if (!acc.ok) throw new Error("accept " + acc.status);
+      const li = await post("/api/v1/session/login", { username: "root", password: "harness-admin-pass" });
+      if ((await li.json()).status !== "mfa_required") throw new Error("mfa 단계가 아니다");
+      const mfaC = li.headers.getSetCookie().find((x) => x.startsWith("bary_mfa=")).split(";")[0];
+      const mf = await post("/api/v1/session/mfa", { code: totp(key, Date.now() + 30000) }, { cookie: mfaC });
+      if (!mf.ok) throw new Error("mfa " + mf.status);
+      const sid = mf.headers.getSetCookie().find((x) => /^(__Host-)?bary_sid=/.test(x)).split(";")[0];
+      const me = await (await fetch(base + "/api/v1/me", { headers: { cookie: sid } })).json();
+      if (me.username !== "root" || me.role !== "admin") throw new Error("me " + JSON.stringify(me));
+    })().catch((e) => { console.error(e.message); process.exit(1); });
+  ' "$link" >/dev/null 2>&1; then
+    printf '    ok   첫 관리자 링크 → 관리자(TOTP) → 로그인 → MFA → /me\n'
+  else
+    printf '    NO   첫 관리자 흐름이 끝까지 안 갔다\n'
     rc=1
   fi
 

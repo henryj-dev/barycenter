@@ -118,6 +118,11 @@ export type Principal = {
   name: string;
   scopes: ReadonlySet<Scope>;
   role?: Role;
+  /**
+   * 사람 계정일 때만 있다(계정 PG 의 서버 세션). 토큰·mTLS·OIDC 메모리 세션은 없다 —
+   * `/me` 같은 「그 사람」 경로가 기계 신원을 사람으로 착각하지 않게 하는 표식이다.
+   */
+  account?: { userId: string; sessionHash: string; mfaAt?: number };
 };
 
 export type TokenSpec = {
@@ -231,8 +236,13 @@ function verifyJwtSig(
   }
 }
 
-/** OpenID Connect Core — 서명 · iss · aud · exp · sub. 실패하면 없음 (401). */
-export function principalFromIdToken(token: string, oidc: OidcSettings): Principal | undefined {
+/**
+ * OpenID Connect Core — 서명 · iss · aud · azp · exp · sub · nonce 를 지난 **클레임**. 역할은 보지 않는다.
+ *
+ * 사람 계정의 SSO(로컬 권한 정본)는 여기까지만 쓴다 — 누구인지(iss, sub)만 IdP 에게 묻고, 무엇을 할 수
+ * 있는지는 계정이 정한다. 역할 클레임까지 읽는 것은 `principalFromIdToken`(계정이 꺼진 배포의 현행 경로)이다.
+ */
+export function verifiedIdClaims(token: string, oidc: OidcSettings): Record<string, unknown> | undefined {
   const parts = token.split('.');
   if (parts.length !== 3) return undefined;
   const headerB64 = parts[0] ?? '';
@@ -275,6 +285,14 @@ export function principalFromIdToken(token: string, oidc: OidcSettings): Princip
   // **기대하면 반드시 있어야 한다.** 토큰에 nonce 가 없을 때 통과시키면, 검사를 켠
   // 배포가 nonce 를 안 돌려주는 IdP 앞에서 조용히 검사 없는 상태로 돌아간다.
   if (oidc.nonce !== undefined && payload['nonce'] !== oidc.nonce) return undefined;
+  return payload;
+}
+
+/** OpenID Connect Core — 서명 · iss · aud · exp · sub + **역할 클레임**. 실패하면 없음 (401). */
+export function principalFromIdToken(token: string, oidc: OidcSettings): Principal | undefined {
+  const payload = verifiedIdClaims(token, oidc);
+  if (payload === undefined) return undefined;
+  const sub = payload['sub'] as string;
   // 정했으면 그 클레임만. 안 정했으면 `role`. 떨어지지 않는다 — 위 주석 참조.
   const role = payload[oidc.roleClaim ?? 'role'];
   if (!isRole(role)) return undefined;
@@ -282,21 +300,42 @@ export function principalFromIdToken(token: string, oidc: OidcSettings): Princip
 }
 
 export class TokenAuth {
-  readonly #byHash = new Map<string, Principal>();
+  #byHash: Map<string, Principal>;
   readonly #oidc: OidcSettings | undefined;
 
   constructor(specs: readonly TokenSpec[], oidc?: OidcSettings) {
     this.#oidc = oidc;
+    this.#byHash = TokenAuth.#table(specs);
+  }
+
+  static #table(specs: readonly TokenSpec[]): Map<string, Principal> {
+    const out = new Map<string, Principal>();
     for (const s of specs) {
       if (!/^sha256:[0-9a-f]{64}$/.test(s.hash)) {
         throw new Error(`토큰 해시 모양이 아니다 (${s.name}): sha256:<64 hex> 여야 한다`);
       }
-      this.#byHash.set(s.hash, {
+      out.set(s.hash, {
         name: s.name,
         scopes: new Set(scopesOf(s)),
         ...(s.role === undefined ? {} : { role: s.role }),
       });
     }
+    return out;
+  }
+
+  /**
+   * **토큰 표를 재시작 없이 갈아 끼운다** (2026-10-18).
+   *
+   * 데몬과 엔진이 한 유닛이라 재시작은 데이터 플레인을 몇 초 끊는다. 그러면 토큰 하나를
+   * 철회할 때마다 「끊을지 기다릴지」를 골라야 하고, 대개 기다리게 된다 — 철회가 늦는다.
+   *
+   * **새 표를 다 만든 뒤 한 번에 바꾼다.** 반쯤 바뀐 표가 보이는 순간이 없고, 해독이
+   * 실패하면 던져서 **옛 표가 그대로 산다** (틀린 파일 하나로 아무도 못 들어오게 되지 않는다).
+   * 이미 연 브라우저 세션은 건드리지 않는다 — 세션은 OIDC 에서 온 것이다.
+   */
+  replace(specs: readonly TokenSpec[]): void {
+    if (specs.length === 0) throw new Error('토큰 명세가 비어 있다 — 아무도 못 들어온다');
+    this.#byHash = TokenAuth.#table(specs);
   }
 
   /**

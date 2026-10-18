@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import type { Scope } from './global/scope.svelte.ts';
+  import Writable from './global/Writable.svelte';
   import type { RoutesView } from '@web/routes-view';
   import AddRoute from './AddRoute.svelte';
   import AddRedirect from './AddRedirect.svelte';
@@ -32,6 +35,9 @@
     insertPt: (input: { key: string; listener: string; snis: string[]; pool: string }) => void;
     insertPtReject: (input: { key: string; listener: string; snis: string[] }) => void;
   } = $props();
+  // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
+  const scope = getContext<Scope | undefined>('scope');
+  const ro = $derived(scope?.readOnly === true);
 </script>
 
 {#if !live}
@@ -63,7 +69,9 @@
           <span class="cls mono">{row.matchClass}</span>
           <span class="key">{row.key}</span>
           <span class="pri mono">p{row.priority}</span>
+          {#if !ro}
           <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
+          {/if}
         </li>
       {/each}
     </ol>
@@ -79,16 +87,20 @@
           <span class="key">{row.key}</span>
           <span class="host mono">{row.snis.join(', ')}</span>
           <span class="cls mono">{row.action}</span>
+          {#if !ro}
           <button type="button" disabled={editing} onclick={() => withdrawPt(row.key)}>설정에서 뺀다</button>
+          {/if}
         </li>
       {/each}
     </ul>
   {/if}
+  <Writable>
   <AddRoute {listeners} {pools} {editing} add={insert} />
   <AddRedirect {listeners} {editing} add={insertRedirect} />
   <AddReject {listeners} {editing} add={insertReject} />
   <AddPassthroughRoute listeners={ptListeners} pools={tcpPools} {editing} add={insertPt} />
   <AddPassthroughReject listeners={ptListeners} {editing} add={insertPtReject} />
+  </Writable>
 {/if}
 
 <style>

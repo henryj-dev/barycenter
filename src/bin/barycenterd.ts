@@ -15,13 +15,23 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
+import type { Server } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { apiHandler, apiTlsOptions, createApi } from '../api/server.js';
+import {
+  apiHandler, apiTlsOptions, createApi, parseBuildInfo,
+  type ApiOptions, type BuildInfo, type GlobalApiOptions,
+} from '../api/server.js';
+import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
+import { Sealer } from '../accounts/seal.js';
+import { AccountService } from '../accounts/service.js';
+import { smtpMailer } from '../accounts/mail.js';
+import { loadRegistry } from '../global/registry.js';
+import { RegionRelay } from '../global/relay.js';
 import { JwksCache } from '../api/jwks.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore, type SecretStore } from '../dp/secrets.js';
@@ -173,6 +183,15 @@ function loadTokens(): TokenSpec[] {
   return parseTokenSpecs(JSON.parse(raw));
 }
 
+/** `$PREFIX/version` — 설치 스크립트가 쓴다. 없으면(컨테이너·개발) `null`. */
+function readBuildInfo(prefix: string): BuildInfo | null {
+  try {
+    return parseBuildInfo(readFileSync(join(prefix, 'version'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 /** http 평면 admin 에 적재하고 되읽는다. **유닉스 소켓이다** (검수 S-08b). */
 async function pushHttp(socket: string, epoch: string, body: string): Promise<string> {
   const call = adminFetch(socket);
@@ -243,7 +262,309 @@ function writeBootstrap(prefix: string, adminSocket: string, streamAdminSocket: 
   log.info('bootstrap.written', { membershipDict: caps.httpLua === true });
 }
 
+/**
+ * 사람 계정 (공통 회원정책 1차 · 계획 A). `BARY_ACCOUNTS_DSN` 이 있을 때만 켠다.
+ *
+ * **키 없이 켜지 않는다.** TOTP 비밀을 감쌀 `BARY_ACCOUNTS_KEK` 가 없으면 기동을 거부한다 — 계정은
+ * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다.
+ */
+async function accountsFromEnv(): Promise<AccountService | undefined> {
+  const dsn = env('BARY_ACCOUNTS_DSN', '');
+  if (dsn === '') return undefined;
+  const kek = env('BARY_ACCOUNTS_KEK', '');
+  if (kek === '') throw new Error('BARY_ACCOUNTS_DSN 을 켰으면 BARY_ACCOUNTS_KEK(32바이트 base64)도 필요하다');
+  const adb = new Db(dsn);
+  const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
+  if (applied.length > 0) log.info('accounts.migrate.applied', { migrations: applied });
+  /**
+   * 메일(초대·재설정·이메일 변경). **셋 다 있어야 켠다** — 링크 앞부분(`BARY_PUBLIC_URL`)이 없으면 메일 속
+   * 링크를 못 만들고, 보내는 주소가 없으면 받는 쪽이 스팸으로 버린다. 반만 켜면 조용히 안 가는 메일이 된다.
+   */
+  const smtp = env('BARY_SMTP_URL', '');
+  const from = env('BARY_MAIL_FROM', '');
+  const publicUrl = env('BARY_PUBLIC_URL', '');
+  let mail: { mailer: ReturnType<typeof smtpMailer>; publicUrl: string } | undefined;
+  if (smtp !== '' || from !== '') {
+    if (smtp === '' || from === '' || publicUrl === '') {
+      throw new Error('메일을 켜려면 BARY_SMTP_URL · BARY_MAIL_FROM · BARY_PUBLIC_URL 이 모두 필요하다');
+    }
+    mail = { mailer: smtpMailer(smtp, from), publicUrl };
+    log.info('accounts.mail.enabled', { from });
+  }
+  return new AccountService({
+    db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
+    ...(mail === undefined ? {} : mail),
+  });
+}
+
+/**
+ * **호스트 CLI** — `barycenterd account <bootstrap | recovery-link <아이디>>`.
+ *
+ * 사람 로그인 밖의 길이다. 첫 관리자를 만들고, 마지막 관리자가 비밀번호·인증 앱을 잃었을 때
+ * 살린다 — 메일(SMTP)이 없어도 된다. env 파일(DSN·KEK)을 읽을 수 있는 호스트 운영자만 쓸 수 있다.
+ * 링크는 화면에 한 번만 나온다.
+ */
+async function accountCli(args: string[]): Promise<void> {
+  const accounts = await accountsFromEnv();
+  if (accounts === undefined) throw new Error('BARY_ACCOUNTS_DSN 이 없다 — 사람 계정이 꺼져 있다');
+  const base = env('BARY_PUBLIC_URL', '').replace(/\/+$/, '');
+  const link = (t: string): string => `${base}/invite#${t}`;
+  const by = `host:${process.env['SUDO_USER'] ?? process.env['USER'] ?? 'unknown'}`;
+  const [cmd, arg] = args;
+  if (cmd === 'bootstrap') {
+    process.stdout.write(`첫 관리자 설정 링크 (24시간, 한 번만 쓸 수 있다):\n  ${link(await accounts.bootstrap(by))}\n`);
+  } else if (cmd === 'recovery-link' && arg !== undefined) {
+    const id = await accounts.userIdByName(arg);
+    if (id === undefined) throw new Error(`계정 '${arg}' 이 없다`);
+    process.stdout.write(`'${arg}' 복구 링크 (24시간, 한 번만 — 그 사람의 세션은 지금 끊겼다):\n  ${link(await accounts.recoveryLink(id, by))}\n`);
+  } else {
+    throw new Error('쓰는 법: barycenterd account bootstrap | barycenterd account recovery-link <아이디>');
+  }
+  if (base === '') process.stdout.write('  (BARY_PUBLIC_URL 이 없어 경로만 적었다 — 앞에 이 인스턴스의 주소를 붙인다)\n');
+}
+
+/**
+ * 토큰·OIDC (지역·전역 공통). 둘이 따로 들고 있으면 한쪽만 고쳐지는 날이 온다 — 그래서 한 자리다.
+ */
+async function authFromEnv(oidcJwksMs: number): Promise<{
+  auth: TokenAuth; oidcRp: OidcRpSettings | undefined; stopJwks: () => void;
+}> {
+  const oidcIss = env('BARY_OIDC_ISSUER', '');
+  const oidcAud = env('BARY_OIDC_AUD', '');
+  /**
+   * 검증 키 (검수 S-06).
+   *
+   * 전에는 `BARY_OIDC_KEY` 문자열만 있었고, 문자열은 HS256 으로만 검증된다 —
+   * **RS256 경로가 프로덕션에서 도달 불가였다.** 실물 IdP 는 거의 다 RS256 이다.
+   *
+   * 파일 쪽을 따로 두는 이유: PEM 은 여러 줄이라 환경변수에 넣으면 줄바꿈이
+   * 배포 도구마다 다르게 망가진다. 그래도 인라인 PEM 을 막지는 않는다 —
+   * `oidcKeyFrom` 이 접두사로 가른다.
+   */
+  const oidcKeyFile = env('BARY_OIDC_KEY_FILE', '');
+  const oidcKey = oidcKeyFile !== '' ? readFileSync(oidcKeyFile, 'utf8') : env('BARY_OIDC_KEY', '');
+  // 어느 클레임이 역할인지는 **배포가 정한다** (검수 S-07). 안 정하면 `role`.
+  const oidcRoleClaim = env('BARY_OIDC_ROLE_CLAIM', '');
+  /**
+   * **JWKS 로 키 회전을 따라간다** (검수 S-06 나머지).
+   *
+   * 안 켜면 지금까지처럼 고정 키다. 켜면 `kid` 로 고르고, 모르는 `kid` 는 거절한다 —
+   * 고정 키로 떨어지면 회전을 켠 배포가 실제로는 안 켠 상태로 돈다.
+   *
+   * **모르는 `kid` 에 다시 안 당긴다.** 이 검증은 Bearer 를 확인하기 *전에* 도는
+   * 자리라, 재조회를 넣으면 아무나 임의 `kid` 로 우리 아웃바운드를 흔들 수 있다.
+   * 당기는 것은 아래 타이머의 몫이다.
+   */
+  const jwksUrl = env('BARY_OIDC_JWKS_URL', '');
+  const jwks = jwksUrl === '' ? undefined : new JwksCache(jwksUrl);
+  let stopJwks = (): void => {};
+  if (jwks !== undefined) {
+    // **기동에서 한 번 기다린다.** 안 기다리면 첫 로그인 몇 개가 빈 캐시를 만나 401 이고,
+    // 그 증상은 "가끔 로그인이 안 된다" 라 원인을 못 찾는다.
+    const first = await jwks.refresh();
+    log.info('oidc.jwks.loaded', { url: jwksUrl, keys: first.keys });
+    if (first.keys === 0) {
+      // 던지지 않는다 — IdP 가 잠깐 죽었다고 컨트롤 플레인이 안 뜨면 그게 더 넓은 장애다.
+      // 다만 조용히 넘어가지도 않는다. 이 상태에서는 OIDC 로 아무도 못 들어온다.
+      log.warn('oidc.jwks.empty', { url: jwksUrl, reason: 'OIDC 로그인이 전부 거절된다' });
+    }
+    const jwksTimer = setInterval(() => {
+      void (async (): Promise<void> => {
+        const out = await jwks.refresh();
+        if (out.changed) log.info('oidc.jwks.rotated', { keys: out.keys });
+      })();
+    }, oidcJwksMs);
+    jwksTimer.unref?.();
+    stopJwks = (): void => clearInterval(jwksTimer);
+  }
+
+  const oidc: OidcSettings | undefined
+    = oidcIss !== '' && oidcAud !== '' && (oidcKey !== '' || jwks !== undefined)
+      ? {
+          issuer: oidcIss,
+          audience: oidcAud,
+          key: oidcKeyFrom(oidcKey),
+          ...(jwks === undefined ? {} : { keys: (kid: string | undefined) => jwks.keyFor(kid) }),
+          ...(oidcRoleClaim === '' ? {} : { roleClaim: oidcRoleClaim }),
+        }
+      : undefined;
+  const auth = oidc === undefined ? new TokenAuth(loadTokens()) : new TokenAuth(loadTokens(), oidc);
+  /**
+   * **SIGHUP 은 토큰 파일을 다시 읽는다** (2026-10-18).
+   *
+   * 재시작은 데이터 플레인을 몇 초 끊으므로(엔진과 한 유닛) 토큰 철회가 그 비용을 지면
+   * 철회가 늦어진다. 그리고 손잡이가 없던 동안 SIGHUP 은 Node 기본 동작대로 **프로세스를
+   * 죽였다** — `kill -HUP` 을 「다시 읽어라」로 알고 보낸 사람이 장애를 냈을 것이다.
+   *
+   * 파일로 받은 경우에만 뜻이 있다. `BARY_TOKENS`(env)는 프로세스가 살아 있는 동안 안
+   * 바뀌므로 다시 읽어도 같다 — 그래도 신호에 죽지는 않게 손잡이는 언제나 건다.
+   * 읽기·해독이 실패하면 **옛 표를 그대로 두고** 큰 소리로 말한다.
+   */
+  process.on('SIGHUP', () => {
+    if (process.env['BARY_TOKENS_FILE'] === undefined) {
+      log.warn('tokens.reload_skipped', { reason: 'BARY_TOKENS_FILE 이 아니라 env 로 받았다 — 바뀔 것이 없다' });
+      return;
+    }
+    try {
+      auth.replace(loadTokens());
+      log.info('tokens.reloaded', { tokens: auth.size });
+    } catch (e) {
+      log.error('tokens.reload_failed', {
+        reason: e instanceof Error ? e.message : String(e),
+        kept: auth.size,
+      });
+    }
+  });
+  const oidcAuthz = env('BARY_OIDC_AUTHORIZATION', '');
+  const oidcToken = env('BARY_OIDC_TOKEN', '');
+  const oidcClient = env('BARY_OIDC_CLIENT_ID', '');
+  const oidcRedirect = env('BARY_OIDC_REDIRECT_URI', '');
+  const oidcSecret = env('BARY_OIDC_CLIENT_SECRET', '');
+  const oidcRp: OidcRpSettings | undefined = oidc !== undefined
+    && oidcAuthz !== '' && oidcToken !== '' && oidcClient !== '' && oidcRedirect !== ''
+    ? {
+        ...oidc,
+        authorizationEndpoint: oidcAuthz,
+        tokenEndpoint: oidcToken,
+        clientId: oidcClient,
+        redirectUri: oidcRedirect,
+        ...(oidcSecret === '' ? {} : { clientSecret: oidcSecret }),
+      }
+    : undefined;
+
+  return { auth, oidcRp, stopJwks };
+}
+
+/** 화면(GUI) 산출물 자리. 명시했는데 없으면 기동 거부, 기본 자리에 없으면 API 만 연다. */
+function guiRootFromEnv(): string | undefined {
+  const explicitGui = process.env['BARY_GUI'];
+  const guiRoot = explicitGui !== undefined && explicitGui !== ''
+    ? explicitGui
+    : join(dirname(fileURLToPath(import.meta.url)), '../../gui/build');
+  if (explicitGui !== undefined && explicitGui !== '' && !existsSync(guiRoot)) {
+    throw new Error(`BARY_GUI (${guiRoot}) 가 없다`);
+  }
+  const serveRoot = existsSync(guiRoot) ? guiRoot : undefined;
+
+  return serveRoot;
+}
+
+/**
+ * 제어 API 를 연다 — TLS·평문 노출 가드·리슨·로그 (지역·전역 공통). `opts` 의 `plaintextExposed`·`sessionSecure`
+ * 를 여기서 정한다(쿠키의 Secure 가 실제 TLS 와 어긋나지 않게).
+ */
+async function listenApi(
+  host: string, port: number,
+  apiOpts: (ApiOptions | GlobalApiOptions) & { plaintextExposed?: boolean; sessionSecure?: boolean },
+  logFields: Record<string, unknown>,
+): Promise<Server> {
+  const tlsCert = env('BARY_TLS_CERT_FILE', '');
+  const tlsKey = env('BARY_TLS_KEY_FILE', '');
+  const tlsClientCa = env('BARY_TLS_CLIENT_CA_FILE', '');
+  const tlsOn = tlsCert !== '' || tlsKey !== '';
+  const allowPlaintextExposed = envBool('BARY_ALLOW_PLAINTEXT_EXPOSED');
+  const plaintextExposed = !tlsOn && !isLoopbackBind(host ?? '');
+  const exposureError = plaintextExposureError(host ?? '', tlsOn, allowPlaintextExposed);
+  if (exposureError !== undefined) throw new Error(exposureError);
+  apiOpts.plaintextExposed = plaintextExposed;
+  apiOpts.sessionSecure = tlsOn;
+  const server = tlsOn
+    ? createHttpsServer(
+        apiTlsOptions({
+          cert: tlsCert === '' ? '' : readFileSync(tlsCert, 'utf8'),
+          key: tlsKey === '' ? '' : readFileSync(tlsKey, 'utf8'),
+          ...(tlsClientCa === '' ? {} : { clientCa: readFileSync(tlsClientCa, 'utf8') }),
+        }),
+        apiHandler(apiOpts),
+      )
+    : createApi(apiOpts);
+  await new Promise<void>((resolve) => {
+    server.listen(port, host, resolve);
+  });
+  log.info('listening', {
+    host, port: Number(port), ...logFields,
+    // 켰다고 생각했는데 안 켜진 상태를 밖에서 확인할 수 있어야 한다.
+    tls: tlsOn ? (tlsClientCa === '' ? 'server' : 'server+client-ca') : false,
+  });
+  /**
+   * **루프백 밖에 묶었으면 말한다** (검수 S-05a).
+   *
+   * 이 API 로 개인키 PEM 이 본문에 담겨 올라가고 Bearer 토큰이 매 요청에 실린다.
+   * 그런데 TLS 가 없다. 컨테이너에서는 `0.0.0.0` 이 **필요한** 값이라(포트 퍼블리시가
+   * 루프백 바인드에 닿지 못한다) 막을 수는 없다 — 대신 드러낸다.
+   *
+   * 진짜 답은 서버 TLS 이고 그건 별건이다. 그때까지 이 줄이 자리를 지킨다.
+   */
+  if (plaintextExposed) {
+    log.warn('listen.exposed', {
+      host,
+      why: '제어 API 에 TLS 가 없다 — 개인키와 토큰이 평문으로 지나간다',
+      advice: allowPlaintextExposed
+        ? 'BARY_ALLOW_PLAINTEXT_EXPOSED=1 로 명시적으로 허용됨 — 앞단 TLS 종단을 확인하라'
+        : '앞단에서 TLS 를 종단하거나 루프백에만 퍼블리시하라',
+    });
+  }
+
+  return server;
+}
+
+/**
+ * 전역 모드에서 **쓰지 않는** 설정. 있으면 기동을 거부한다 — 켰다고 믿는데 아무것도 안 하는 상태를 만들지
+ * 않는다(설계 §2.6). 전역은 설정 DB·데이터 플레인·시크릿 저장소가 없다.
+ */
+const REGION_ONLY_ENV = ['BARY_DSN', 'BARY_DP_REMOTE_URL', 'BARY_SECRET_BACKEND', 'BARY_DRIVER'] as const;
+
+/**
+ * **전역 모드** (docs/design-global-mode.md). 지역 목록을 들고 지역들을 읽기 전용으로 중계한다.
+ * 설정 PG·데이터 플레인·리더 선출·ACME·프로버가 없다. 사람 계정은 공용 계정 PG 로 지역과 같다.
+ */
+async function mainGlobal(): Promise<void> {
+  for (const k of REGION_ONLY_ENV) {
+    if ((process.env[k] ?? '') !== '') throw new Error(`전역 모드는 ${k} 를 쓰지 않는다 — 지우거나 BARY_MODE 를 지역으로 둔다`);
+  }
+  const { host, port } = parseListen(env('BARY_LISTEN', '127.0.0.1:8088'));
+  const prefix = env('BARY_PREFIX', '/etc/barycenter');
+  const regions = loadRegistry(env('BARY_GLOBAL_REGIONS'));
+  const build = readBuildInfo(prefix);
+  const relay = new RegionRelay(regions, build?.commit === undefined ? {} : { ownCommit: build.commit });
+  const { auth, oidcRp, stopJwks } = await authFromEnv(readTimings().oidcJwksMs);
+  const serveRoot = guiRootFromEnv();
+  const accounts = await accountsFromEnv();
+  const apiOpts: GlobalApiOptions = {
+    global: relay, auth, build,
+    plaintextExposed: false, sessionSecure: false,
+    ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
+    ...(oidcRp === undefined ? {} : { oidcRp }),
+    ...(accounts === undefined ? {} : { accounts }),
+  };
+  const server = await listenApi(host, port, apiOpts, {
+    mode: 'global', regions: regions.map((r) => r.name), tokens: auth.size, gui: serveRoot ?? false,
+    accounts: accounts !== undefined,
+  });
+  const stop = (): void => {
+    relay.close();
+    setTimeout(() => {
+      log.warn('shutdown.deadline', { ms: SHUTDOWN_DEADLINE_MS });
+      process.exit(0);
+    }, SHUTDOWN_DEADLINE_MS).unref();
+    server.close(() => {
+      stopJwks();
+      process.exit(0);
+    });
+    server.closeAllConnections?.();
+  };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
+}
+
 export async function main(): Promise<void> {
+  if (process.argv[2] === 'account') {
+    await accountCli(process.argv.slice(3));
+    process.exit(0);
+  }
+  const mode = env('BARY_MODE', 'region');
+  if (mode === 'global') return mainGlobal();
+  if (mode !== 'region') throw new Error(`BARY_MODE 는 region 또는 global 이다 (받은 것: ${mode})`);
   const prefix = env('BARY_PREFIX', '/etc/barycenter');
   // **`split(':')` 이 아니다** (검수 G7). 그러면 IPv6 를 표현할 수 없고, 포트가 비거나
   // 숫자가 아니면 `listen(0)`·`listen(NaN)` 이 되어 **무작위 포트가 조용히 열린다.**
@@ -717,94 +1038,16 @@ export async function main(): Promise<void> {
     });
   }
 
-  const oidcIss = env('BARY_OIDC_ISSUER', '');
-  const oidcAud = env('BARY_OIDC_AUD', '');
-  /**
-   * 검증 키 (검수 S-06).
-   *
-   * 전에는 `BARY_OIDC_KEY` 문자열만 있었고, 문자열은 HS256 으로만 검증된다 —
-   * **RS256 경로가 프로덕션에서 도달 불가였다.** 실물 IdP 는 거의 다 RS256 이다.
-   *
-   * 파일 쪽을 따로 두는 이유: PEM 은 여러 줄이라 환경변수에 넣으면 줄바꿈이
-   * 배포 도구마다 다르게 망가진다. 그래도 인라인 PEM 을 막지는 않는다 —
-   * `oidcKeyFrom` 이 접두사로 가른다.
-   */
-  const oidcKeyFile = env('BARY_OIDC_KEY_FILE', '');
-  const oidcKey = oidcKeyFile !== '' ? readFileSync(oidcKeyFile, 'utf8') : env('BARY_OIDC_KEY', '');
-  // 어느 클레임이 역할인지는 **배포가 정한다** (검수 S-07). 안 정하면 `role`.
-  const oidcRoleClaim = env('BARY_OIDC_ROLE_CLAIM', '');
-  /**
-   * **JWKS 로 키 회전을 따라간다** (검수 S-06 나머지).
-   *
-   * 안 켜면 지금까지처럼 고정 키다. 켜면 `kid` 로 고르고, 모르는 `kid` 는 거절한다 —
-   * 고정 키로 떨어지면 회전을 켠 배포가 실제로는 안 켠 상태로 돈다.
-   *
-   * **모르는 `kid` 에 다시 안 당긴다.** 이 검증은 Bearer 를 확인하기 *전에* 도는
-   * 자리라, 재조회를 넣으면 아무나 임의 `kid` 로 우리 아웃바운드를 흔들 수 있다.
-   * 당기는 것은 아래 타이머의 몫이다.
-   */
-  const jwksUrl = env('BARY_OIDC_JWKS_URL', '');
-  const jwks = jwksUrl === '' ? undefined : new JwksCache(jwksUrl);
-  let stopJwks = (): void => {};
-  if (jwks !== undefined) {
-    // **기동에서 한 번 기다린다.** 안 기다리면 첫 로그인 몇 개가 빈 캐시를 만나 401 이고,
-    // 그 증상은 "가끔 로그인이 안 된다" 라 원인을 못 찾는다.
-    const first = await jwks.refresh();
-    log.info('oidc.jwks.loaded', { url: jwksUrl, keys: first.keys });
-    if (first.keys === 0) {
-      // 던지지 않는다 — IdP 가 잠깐 죽었다고 컨트롤 플레인이 안 뜨면 그게 더 넓은 장애다.
-      // 다만 조용히 넘어가지도 않는다. 이 상태에서는 OIDC 로 아무도 못 들어온다.
-      log.warn('oidc.jwks.empty', { url: jwksUrl, reason: 'OIDC 로그인이 전부 거절된다' });
-    }
-    const jwksTimer = setInterval(() => {
-      void (async (): Promise<void> => {
-        const out = await jwks.refresh();
-        if (out.changed) log.info('oidc.jwks.rotated', { keys: out.keys });
-      })();
-    }, t.oidcJwksMs);
-    jwksTimer.unref?.();
-    stopJwks = (): void => clearInterval(jwksTimer);
-  }
+  const { auth, oidcRp, stopJwks } = await authFromEnv(t.oidcJwksMs);
 
-  const oidc: OidcSettings | undefined
-    = oidcIss !== '' && oidcAud !== '' && (oidcKey !== '' || jwks !== undefined)
-      ? {
-          issuer: oidcIss,
-          audience: oidcAud,
-          key: oidcKeyFrom(oidcKey),
-          ...(jwks === undefined ? {} : { keys: (kid: string | undefined) => jwks.keyFor(kid) }),
-          ...(oidcRoleClaim === '' ? {} : { roleClaim: oidcRoleClaim }),
-        }
-      : undefined;
-  const auth = oidc === undefined ? new TokenAuth(loadTokens()) : new TokenAuth(loadTokens(), oidc);
-  const oidcAuthz = env('BARY_OIDC_AUTHORIZATION', '');
-  const oidcToken = env('BARY_OIDC_TOKEN', '');
-  const oidcClient = env('BARY_OIDC_CLIENT_ID', '');
-  const oidcRedirect = env('BARY_OIDC_REDIRECT_URI', '');
-  const oidcSecret = env('BARY_OIDC_CLIENT_SECRET', '');
-  const oidcRp: OidcRpSettings | undefined = oidc !== undefined
-    && oidcAuthz !== '' && oidcToken !== '' && oidcClient !== '' && oidcRedirect !== ''
-    ? {
-        ...oidc,
-        authorizationEndpoint: oidcAuthz,
-        tokenEndpoint: oidcToken,
-        clientId: oidcClient,
-        redirectUri: oidcRedirect,
-        ...(oidcSecret === '' ? {} : { clientSecret: oidcSecret }),
-      }
-    : undefined;
+  const serveRoot = guiRootFromEnv();
 
-  const explicitGui = process.env['BARY_GUI'];
-  const guiRoot = explicitGui !== undefined && explicitGui !== ''
-    ? explicitGui
-    : join(dirname(fileURLToPath(import.meta.url)), '../../gui/build');
-  if (explicitGui !== undefined && explicitGui !== '' && !existsSync(guiRoot)) {
-    throw new Error(`BARY_GUI (${guiRoot}) 가 없다`);
-  }
-  const serveRoot = existsSync(guiRoot) ? guiRoot : undefined;
-
+  const accounts = await accountsFromEnv();
+  if (accounts !== undefined) log.info('accounts.enabled', {});
   const apiOpts = {
     db, store, control, auth, election, secrets, events,
+    ...(accounts === undefined ? {} : { accounts }),
+    build: readBuildInfo(prefix),
     plaintextExposed: false,
     sessionSecure: false,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
@@ -820,53 +1063,7 @@ export async function main(): Promise<void> {
    * 선택이다 — 안 켜면 지금과 같다. 다만 반만 켜지지는 않는다(`apiTlsOptions` 가 던진다).
    * 클라이언트 CA 는 **망 관문**까지만 연다. 누구인지는 여전히 토큰이 답한다.
    */
-  const tlsCert = env('BARY_TLS_CERT_FILE', '');
-  const tlsKey = env('BARY_TLS_KEY_FILE', '');
-  const tlsClientCa = env('BARY_TLS_CLIENT_CA_FILE', '');
-  const tlsOn = tlsCert !== '' || tlsKey !== '';
-  const allowPlaintextExposed = envBool('BARY_ALLOW_PLAINTEXT_EXPOSED');
-  const plaintextExposed = !tlsOn && !isLoopbackBind(host ?? '');
-  const exposureError = plaintextExposureError(host ?? '', tlsOn, allowPlaintextExposed);
-  if (exposureError !== undefined) throw new Error(exposureError);
-  apiOpts.plaintextExposed = plaintextExposed;
-  apiOpts.sessionSecure = tlsOn;
-  const server = tlsOn
-    ? createHttpsServer(
-        apiTlsOptions({
-          cert: tlsCert === '' ? '' : readFileSync(tlsCert, 'utf8'),
-          key: tlsKey === '' ? '' : readFileSync(tlsKey, 'utf8'),
-          ...(tlsClientCa === '' ? {} : { clientCa: readFileSync(tlsClientCa, 'utf8') }),
-        }),
-        apiHandler(apiOpts),
-      )
-    : createApi(apiOpts);
-  await new Promise<void>((resolve) => {
-    server.listen(port, host, resolve);
-  });
-  log.info('listening', {
-    host, port: Number(port), prefix, adminSocket, tokens: auth.size,
-    gui: serveRoot ?? false,
-    // 켰다고 생각했는데 안 켜진 상태를 밖에서 확인할 수 있어야 한다.
-    tls: tlsOn ? (tlsClientCa === '' ? 'server' : 'server+client-ca') : false,
-  });
-  /**
-   * **루프백 밖에 묶었으면 말한다** (검수 S-05a).
-   *
-   * 이 API 로 개인키 PEM 이 본문에 담겨 올라가고 Bearer 토큰이 매 요청에 실린다.
-   * 그런데 TLS 가 없다. 컨테이너에서는 `0.0.0.0` 이 **필요한** 값이라(포트 퍼블리시가
-   * 루프백 바인드에 닿지 못한다) 막을 수는 없다 — 대신 드러낸다.
-   *
-   * 진짜 답은 서버 TLS 이고 그건 별건이다. 그때까지 이 줄이 자리를 지킨다.
-   */
-  if (plaintextExposed) {
-    log.warn('listen.exposed', {
-      host,
-      why: '제어 API 에 TLS 가 없다 — 개인키와 토큰이 평문으로 지나간다',
-      advice: allowPlaintextExposed
-        ? 'BARY_ALLOW_PLAINTEXT_EXPOSED=1 로 명시적으로 허용됨 — 앞단 TLS 종단을 확인하라'
-        : '앞단에서 TLS 를 종단하거나 루프백에만 퍼블리시하라',
-    });
-  }
+  const server = await listenApi(host, port, apiOpts, { prefix, adminSocket, tokens: auth.size, gui: serveRoot ?? false });
 
   /**
    * 종료 (검수 D9).

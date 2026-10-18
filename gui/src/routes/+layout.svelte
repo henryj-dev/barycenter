@@ -2,13 +2,44 @@
   import { setContext } from 'svelte';
   import { page } from '$app/state';
   import { pageOf } from '@web/page';
+  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { createDesk } from '$lib/desk.svelte.ts';
+  import { createSession } from '$lib/account/session.svelte.ts';
+  import StepUpDialog from '$lib/account/StepUpDialog.svelte';
+  import { createScope } from '$lib/global/scope.svelte.ts';
   import '../app.css';
 
   let { children } = $props();
 
-  const desk = createDesk();
+  // 전역 모드면 읽기 경로가 고른 지역으로 간다 — desk 보다 먼저 만든다.
+  const scope = createScope();
+  setContext('scope', scope);
+  const desk = createDesk(scope);
   setContext('desk', desk);
+  /** 전역인데 지역을 안 골랐다 — 설정 화면은 볼 것이 없다. 계정 화면은 그대로 쓴다. */
+  const needsRegion = $derived(
+    scope.mode === 'global' && scope.region === undefined
+      && !['regions', 'login', 'invite', 'account', 'users', 'reset', 'email'].includes(place),
+  );
+  $effect(() => { if (needsRegion) void goto('/regions'); });
+  // 사람 계정 — 쿠키 세션이면 `/me` 가 답한다. 토큰으로 붙었으면 비어 있다.
+  const session = createSession();
+  setContext('session', session);
+  let logoutNote = $state<string | undefined>();
+  onMount(async () => {
+    await scope.detect();
+    await session.refresh();
+    // 전역은 지역을 고른 뒤에 붙는다(`/regions` 가 desk.connect 를 부른다).
+    if (session.me !== undefined && scope.mode !== 'global') void desk.connect();
+  });
+  const logout = async (): Promise<void> => {
+    const r = await session.logout();
+    desk.disconnect();
+    // 서버가 철회를 확인 못 했으면(503) 그렇다고 말한다 — 「로그아웃됐다」로 덮지 않는다.
+    logoutNote = r.ok ? undefined : r.message;
+    await goto('/login');
+  };
   const place = $derived(pageOf(page.url.pathname));
 
   const connect = (): void => {
@@ -50,7 +81,31 @@
     },
     login: {
       h: '로그인',
-      p: 'IdP Authorization Code 로 들어오거나, 해시 토큰을 위 칸에 넣는다. 폴링하지 않는다.',
+      p: '계정으로 들어오거나(관리자는 인증 앱 코드까지), IdP 로 들어오거나, 해시 토큰을 위 칸에 넣는다.',
+    },
+    invite: {
+      h: '링크로 들어왔다',
+      p: '초대·첫 관리자·복구 링크는 한 번만 쓴다. 관리자는 인증 앱 등록까지 마쳐야 끝난다.',
+    },
+    account: {
+      h: '내 계정',
+      p: '비밀번호·인증 앱·열린 세션. 로그아웃은 서버에서 세션을 끊는다.',
+    },
+    reset: {
+      h: '비밀번호 재설정',
+      p: '계정 이메일로 링크를 받는다. 재설정은 인증 앱을 풀지 않는다.',
+    },
+    email: {
+      h: '이메일 확인',
+      p: '새 주소로 간 링크를 열면 바뀐다.',
+    },
+    regions: {
+      h: '지역',
+      p: '전역 화면은 읽기만 한다. 닿지 않는 지역은 「모른다」로 보인다. 설정은 그 지역의 GUI 에서 바꾼다.',
+    },
+    users: {
+      h: '사람과 초대',
+      p: '공개 가입은 없다. 역할 하향·정지는 그 사람의 다음 요청부터 막는다. 마지막 관리자는 강등·정지할 수 없다.',
     },
   };
 </script>
@@ -59,6 +114,11 @@
   <header class="mast">
     <p class="eyebrow">barycenter</p>
     <nav class="nav" aria-label="화면">
+      {#if scope.mode === 'global'}
+        <a href="/regions" aria-current={place === 'regions' ? 'page' : undefined}>
+          지역{scope.region !== undefined ? ` · ${scope.region.name}` : ''}
+        </a>
+      {/if}
       <a href="/" aria-current={place === 'impact' ? 'page' : undefined}>영향</a>
       <a href="/listeners" aria-current={place === 'listeners' ? 'page' : undefined}>리스너</a>
       <a href="/pools" aria-current={place === 'pools' ? 'page' : undefined}>풀</a>
@@ -67,8 +127,15 @@
       <a href="/status" aria-current={place === 'status' ? 'page' : undefined}>상태</a>
       <a href="/rendered" aria-current={place === 'rendered' ? 'page' : undefined}>산출물</a>
       <a href="/audit" aria-current={place === 'audit' ? 'page' : undefined}>기록</a>
-      <a href="/login" aria-current={place === 'login' ? 'page' : undefined}>로그인</a>
+      {#if session.me === undefined}
+        <a href="/login" aria-current={place === 'login' ? 'page' : undefined}>로그인</a>
+      {:else}
+        <a href="/account" aria-current={place === 'account' ? 'page' : undefined}>{session.me.username}</a>
+        {#if session.isAdmin}<a href="/users" aria-current={place === 'users' ? 'page' : undefined}>사람</a>{/if}
+        <button type="button" class="link" onclick={() => { void logout(); }}>로그아웃</button>
+      {/if}
     </nav>
+    {#if logoutNote !== undefined}<p class="err" role="alert">{logoutNote}</p>{/if}
     <h1>{lede[place]?.h}</h1>
     <p class="lede">{lede[place]?.p}</p>
   </header>
@@ -95,6 +162,7 @@
   </p>
 
   {@render children()}
+  <StepUpDialog />
 </div>
 
 <style>
@@ -118,6 +186,10 @@
     color: var(--mute);
     text-decoration: none;
     border-bottom: 1px solid transparent;
+  }
+  .nav .link {
+    font-family: var(--data); font-size: 0.8rem; color: var(--mute);
+    background: none; border: none; padding: 0; cursor: pointer;
   }
   .nav a[aria-current='page'] {
     color: var(--ink);

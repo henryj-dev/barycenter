@@ -32,6 +32,15 @@ export interface Queryable {
 
 const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 
+/**
+ * 마이그레이션 계열. 설정 DB 가 기본이고, 계정 DB(`account-migrations`)가 둘째 계열이다.
+ *
+ * **계열마다 기록 테이블과 잠금 키가 다르다.** 같은 PG 서버의 다른 DB 에 두는 것이 권장이지만
+ * 같은 DB 에 둬도 섞이지 않아야 한다 — 기록 테이블을 나누지 않으면 한쪽의 `001_…` 이
+ * 다른 쪽의 `001_…` 을 「이미 했다」로 건너뛴다.
+ */
+export type MigrationSet = { dir: string; table: string; lock: readonly [number, number] };
+
 export class Db {
   readonly #pool: pg.Pool;
 
@@ -115,14 +124,15 @@ export class Db {
    * 세션 잠금을 쓰고 `finally` 로 놓는다. 트랜잭션 잠금(`xact`)은 마이그레이션마다
    * 트랜잭션이 갈리므로 그 사이가 열린다.
    */
-  async migrate(): Promise<string[]> {
+  async migrate(set: MigrationSet = { dir: MIGRATIONS, table: 'schema_migrations', lock: Db.MIGRATE_LOCK }): Promise<string[]> {
+    if (!/^[a-z_]+$/.test(set.table)) throw new Error(`마이그레이션 기록 테이블 이름이 이상하다: ${set.table}`);
     const client = await this.#pool.connect();
     try {
-      const [hi, lo] = Db.MIGRATE_LOCK;
+      const [hi, lo] = set.lock;
       // **기다린다.** `try_` 로 두고 물러나면 진 쪽이 낡은 스키마로 서비스를 시작한다.
       await client.query('SELECT pg_advisory_lock($1::int, $2::int)', [hi, lo]);
       try {
-        return await this.#migrateLocked();
+        return await this.#migrateLocked(set);
       } finally {
         // 놓는 것을 잊으면 다음 기동이 영영 매달린다. 세션을 닫아도 풀리지만,
         // 이 커넥션은 풀로 **돌아가므로** 명시적으로 놓는다.
@@ -134,23 +144,23 @@ export class Db {
     }
   }
 
-  async #migrateLocked(): Promise<string[]> {
+  async #migrateLocked(set: MigrationSet): Promise<string[]> {
     await this.query(
-      `CREATE TABLE IF NOT EXISTS schema_migrations (
+      `CREATE TABLE IF NOT EXISTS ${set.table} (
          name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`,
     );
     const done = new Set(
-      (await this.query('SELECT name FROM schema_migrations')).rows.map((r) => String(r['name'])),
+      (await this.query(`SELECT name FROM ${set.table}`)).rows.map((r) => String(r['name'])),
     );
     const applied: string[] = [];
-    for (const name of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).sort()) {
+    for (const name of readdirSync(set.dir).filter((f) => f.endsWith('.sql')).sort()) {
       if (done.has(name)) continue;
-      const sql = readFileSync(join(MIGRATIONS, name), 'utf8');
+      const sql = readFileSync(join(set.dir, name), 'utf8');
       // 마이그레이션 하나가 **한 트랜잭션**이다. 중간에 깨지면 부분 적용된 스키마가 남고,
       // 그 상태는 어느 버전도 아니라 다음 실행이 무엇을 해야 할지 알 수 없다.
       await this.tx(async (c) => {
         await c.query(sql);
-        await c.query('INSERT INTO schema_migrations (name) VALUES ($1)', [name]);
+        await c.query(`INSERT INTO ${set.table} (name) VALUES ($1)`, [name]);
       });
       applied.push(name);
     }

@@ -123,6 +123,8 @@ describe('OpenAPI · DDL 동결', () => {
     const generated = `${JSON.stringify(openApiOf(table), null, 2)}\n`;
     expect(generated).toBe(readFileSync(join(root, 'SURFACE-API.json'), 'utf8'));
     expect(ddlFromMigrations(MIGRATIONS_DIR)).toBe(readFileSync(join(root, 'SURFACE-DDL.sql'), 'utf8'));
+    // 계정 DB 는 따로 고정한다 (공통 회원정책 1차).
+    expect(ddlFromMigrations(join(root, 'src/store/account-migrations'))).toBe(readFileSync(join(root, 'SURFACE-DDL-ACCOUNTS.sql'), 'utf8'));
     const drifted = openApiOf(table.slice(0, -1));
     expect(JSON.stringify(drifted)).not.toBe(JSON.stringify(openApiOf(table)));
   });
@@ -146,7 +148,7 @@ describe('Kit 경로', () => {
 
   it('Kit 자리가 라우트고 pageOf 가 같은 이름을 읽는다', () => {
     expect(KIT_ROUTES.some((r) => r.place === 'login' && r.path === '/login')).toBe(true);
-    expect(KIT_ROUTES).toHaveLength(9);
+    expect(KIT_ROUTES).toHaveLength(15); // + invite · account · users (계획 A) · reset · email (B1) · regions (전역)
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);

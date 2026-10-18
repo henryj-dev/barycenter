@@ -53,6 +53,10 @@ EXTRA_ENV=
 # 든 `KEY=` 에 걸린다. `MANAGED_ENV_KEYS` 와 같은 모양으로 둔다.
 EXTRA_ENV_KEYS=
 ROTATE_TOKEN=0
+ACCOUNTS_DSN=
+NO_ACCOUNTS=0
+MODE=region
+REGIONS_FILE=
 RESET_ENV=0
 # **여기서 미리 정한다** (검수 2026-08-29(2) · C). `env_line` 의 거절 메세지가 이 값을
 # 넣는데, 그 함수는 **인자 파싱 중에** `extra_env_add` 를 거쳐 불린다 — ⑩ 에서야
@@ -74,7 +78,8 @@ USER_SET=0
 # 이 스크립트가 스스로 정하는 키들. `--env` 로 덮어쓰지 못하게 한다 — 같은 키가 두 줄
 # 들어가면 어느 쪽이 이기는지 형식(systemd·sh)마다 다르고, 그건 나중에 찾기 나쁘다.
 MANAGED_ENV_KEYS="BARY_DSN BARY_PREFIX BARY_LISTEN BARY_TOKENS_FILE BARY_ENGINE_BIN
-BARY_GUI BARY_CONFIGTEST_CMD BARY_RELOAD_CMD BARY_TLS_CERT_FILE BARY_TLS_KEY_FILE"
+BARY_GUI BARY_CONFIGTEST_CMD BARY_RELOAD_CMD BARY_TLS_CERT_FILE BARY_TLS_KEY_FILE
+BARY_MODE BARY_GLOBAL_REGIONS"
 # **한 줄로 편다.** 대조가 `case " $MANAGED_ENV_KEYS " in *" $k "*` 라 구분자가 공백인데
 # 이 목록은 두 줄이었다 — 줄바꿈에 닿는 두 키(`BARY_ENGINE_BIN`·`BARY_GUI`)는 앞이나
 # 뒤가 공백이 아니라서 **가드를 그냥 지나갔다.** `--env BARY_GUI=...` 가 받아들여졌고,
@@ -96,6 +101,16 @@ barycenter 단일 인스턴스 설치
 PostgreSQL (택일 — 터미널에서는 안 주면 물어본다)
   --dsn <postgres://...>   이미 있는 PostgreSQL 을 쓴다
   --with-postgres          같은 호스트에 PostgreSQL 을 설치하고 role·db 를 만든다
+
+전역 모드 (docs/runbook-global.md — 지역들을 읽기 전용으로 모아 본다)
+  --mode global            설정 DB·엔진 없이 전역 barycenterd 를 깐다 (기본: region)
+  --regions <파일>         지역 목록(JSON). 전역 모드에서 필수
+                           계정을 쓰려면 --accounts-dsn 과 --env BARY_ACCOUNTS_KEK=… 를 **지역과 같은 값**으로 준다
+
+사람 계정 (공통 회원정책 — 자체 계정이 기본이다)
+  --accounts-dsn <DSN>     공용 계정 PG. 모든 지역·전역 인스턴스가 같은 값을 쓴다
+                           (안 주면 --with-postgres 일 때 같은 PG 에 bary_accounts DB 를 만든다)
+  --no-accounts            사람 계정을 켜지 않는다 (토큰·OIDC 만)
                            (유닉스 소켓 + peer 인증 — 비밀번호를 만들지 않는다)
 
 옵션
@@ -202,6 +217,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dsn)            DSN=${2:?--dsn 에 값이 필요하다}; PG_SET=1; shift 2 ;;
     --with-postgres)  WITH_PG=1; PG_SET=1; shift ;;
+    --accounts-dsn)   ACCOUNTS_DSN=${2:?--accounts-dsn 에 값이 필요하다}; shift 2 ;;
+    --no-accounts)    NO_ACCOUNTS=1; shift ;;
+    --mode)           MODE=${2:?--mode 에 값이 필요하다 (region | global)}; shift 2 ;;
+    --regions)        REGIONS_FILE=${2:?--regions 에 값이 필요하다}; shift 2 ;;
     --prefix)         PREFIX=${2:?--prefix 에 값이 필요하다}; PREFIX_SET=1; shift 2 ;;
     --app-dir)        APP_DIR=${2:?--app-dir 에 값이 필요하다}; APP_DIR_SET=1; shift 2 ;;
     --user)           SVC_USER=${2:?--user 에 값이 필요하다}; USER_SET=1; shift 2 ;;
@@ -325,7 +344,7 @@ fi
 #
 # `--interactive` 는 그 판단을 덮어 강제로 묻고, `--non-interactive` 는 절대 안 묻는다.
 if [ "$INTERACTIVE" = auto ]; then
-  if [ -z "$DSN" ] && [ "$WITH_PG" = 0 ] && [ -t 0 ]; then INTERACTIVE=1; else INTERACTIVE=0; fi
+  if [ "$MODE" = region ] && [ -z "$DSN" ] && [ "$WITH_PG" = 0 ] && [ -t 0 ]; then INTERACTIVE=1; else INTERACTIVE=0; fi
 fi
 
 if [ "$INTERACTIVE" = 1 ]; then
@@ -411,7 +430,20 @@ fi
 # 호스트에 쓰지 않을 PG 가 깔린다" 가 되고, 기본값으로 DSN 을 요구하면서 조용히
 # 넘어가면 데몬이 기동 시점에 `환경변수 BARY_DSN 이 필요하다` 로 죽는다 —
 # 그 메세지는 설치가 어디서 갈렸는지 말하지 않는다.
-if [ -z "$DSN" ] && [ "$WITH_PG" = 0 ]; then
+# **전역 모드**는 설정 DB·엔진이 없다(docs/runbook-global.md). 지역용 선택을 같이 주면 무엇을 깔지가
+# 흐려지므로 세운다. 지역 목록은 여기서 모양까지 본다 — 데몬이 기동에서 거부하기 전에.
+case "$MODE" in
+  region) WITH_ENGINE=1 ;;
+  global)
+    WITH_ENGINE=0
+    { [ -z "$DSN" ] && [ "$WITH_PG" = 0 ]; } || die "전역 모드는 설정 DB 를 쓰지 않는다 — --dsn·--with-postgres 를 뺀다"
+    [ -n "$REGIONS_FILE" ] && [ -r "$REGIONS_FILE" ] || die "전역 모드는 --regions <지역 목록 파일> 이 필요하다"
+    REGIONS_FILE=$(cd "$(dirname "$REGIONS_FILE")" && pwd)/$(basename "$REGIONS_FILE")
+    ;;
+  *) die "--mode 는 region 또는 global 이다 (받은 것: $MODE)" ;;
+esac
+
+if [ "$MODE" = region ] && [ -z "$DSN" ] && [ "$WITH_PG" = 0 ]; then
   usage >&2
   die "--dsn 이나 --with-postgres 중 하나가 필요하다 (터미널이면 물어봤을 것이다)"
 fi
@@ -559,37 +591,39 @@ install_packages_deb() {
   apt-get update -qq
   apt-get install -y -qq ca-certificates curl gnupg libcap2-bin >/dev/null
 
-  # **arm64 는 저장소 트리가 다르다.** openresty.org 의 `ubuntu/`·`debian/` 은
-  # `Architectures: i386 amd64 source` 다 — arm64 패키지는 `package/arm64/` 밑에
-  # 따로 산다. 이 한 줄을 모르면 `apt-get install openresty` 가
-  # "E: Unable to locate package" 로 죽고, 그 메세지는 이유를 말하지 않는다.
-  deb_arch=$(dpkg --print-architecture)
-  case "$deb_arch" in
-    amd64|i386) or_base="https://openresty.org/package/$OS_ID" ;;
-    arm64)      or_base="https://openresty.org/package/arm64/$OS_ID" ;;
-    *) die "OpenResty 가 이 아키텍처의 deb 를 안 낸다: $deb_arch" ;;
-  esac
-  [ -n "$OS_CODENAME" ] || die "VERSION_CODENAME 이 없다 — apt 저장소 suite 를 못 정한다"
+  if [ "$WITH_ENGINE" = 1 ]; then    # 엔진 저장소 — 전역 모드엔 엔진이 없다
+    # **arm64 는 저장소 트리가 다르다.** openresty.org 의 `ubuntu/`·`debian/` 은
+    # `Architectures: i386 amd64 source` 다 — arm64 패키지는 `package/arm64/` 밑에
+    # 따로 산다. 이 한 줄을 모르면 `apt-get install openresty` 가
+    # "E: Unable to locate package" 로 죽고, 그 메세지는 이유를 말하지 않는다.
+    deb_arch=$(dpkg --print-architecture)
+    case "$deb_arch" in
+      amd64|i386) or_base="https://openresty.org/package/$OS_ID" ;;
+      arm64)      or_base="https://openresty.org/package/arm64/$OS_ID" ;;
+      *) die "OpenResty 가 이 아키텍처의 deb 를 안 낸다: $deb_arch" ;;
+    esac
+    [ -n "$OS_CODENAME" ] || die "VERSION_CODENAME 이 없다 — apt 저장소 suite 를 못 정한다"
 
-  # **컴포넌트 이름이 배포판마다 다르다.** debian 트리는 `openresty`, ubuntu 트리는
-  # `main` 이다 (`dists/<codename>/Release` 의 `Components:`). 틀리면 apt 는 저장소를
-  # 조용히 건너뛰고 — `W: Skipping acquire of configured file 'main/binary-arm64/Packages'` —
-  # 그 다음 줄에서 `E: Unable to locate package openresty` 로 죽는다. 실측했다.
-  case "$OS_ID" in
-    debian) or_component=openresty ;;
-    *)      or_component=main ;;
-  esac
+    # **컴포넌트 이름이 배포판마다 다르다.** debian 트리는 `openresty`, ubuntu 트리는
+    # `main` 이다 (`dists/<codename>/Release` 의 `Components:`). 틀리면 apt 는 저장소를
+    # 조용히 건너뛰고 — `W: Skipping acquire of configured file 'main/binary-arm64/Packages'` —
+    # 그 다음 줄에서 `E: Unable to locate package openresty` 로 죽는다. 실측했다.
+    case "$OS_ID" in
+      debian) or_component=openresty ;;
+      *)      or_component=main ;;
+    esac
 
-  # **키를 둘 다 넣는다.** openresty 는 서명 키를 갈고 있고(`pubkey2.gpg`), 어느
-  # 저장소가 언제 넘어가는지는 우리가 정하지 않는다. 키링 하나에 둘을 담으면
-  # 그 전환이 이 스크립트를 안 깨뜨린다.
-  install -d -m 0755 /usr/share/keyrings
-  curl -fsSL https://openresty.org/package/pubkey.gpg -o /tmp/or1.asc
-  curl -fsSL https://openresty.org/package/pubkey2.gpg -o /tmp/or2.asc
-  cat /tmp/or1.asc /tmp/or2.asc | gpg --dearmor --yes -o /usr/share/keyrings/openresty.gpg
-  rm -f /tmp/or1.asc /tmp/or2.asc
-  printf 'deb [arch=%s signed-by=/usr/share/keyrings/openresty.gpg] %s %s %s\n' \
-    "$deb_arch" "$or_base" "$OS_CODENAME" "$or_component" > /etc/apt/sources.list.d/openresty.list
+    # **키를 둘 다 넣는다.** openresty 는 서명 키를 갈고 있고(`pubkey2.gpg`), 어느
+    # 저장소가 언제 넘어가는지는 우리가 정하지 않는다. 키링 하나에 둘을 담으면
+    # 그 전환이 이 스크립트를 안 깨뜨린다.
+    install -d -m 0755 /usr/share/keyrings
+    curl -fsSL https://openresty.org/package/pubkey.gpg -o /tmp/or1.asc
+    curl -fsSL https://openresty.org/package/pubkey2.gpg -o /tmp/or2.asc
+    cat /tmp/or1.asc /tmp/or2.asc | gpg --dearmor --yes -o /usr/share/keyrings/openresty.gpg
+    rm -f /tmp/or1.asc /tmp/or2.asc
+    printf 'deb [arch=%s signed-by=/usr/share/keyrings/openresty.gpg] %s %s %s\n' \
+      "$deb_arch" "$or_base" "$OS_CODENAME" "$or_component" > /etc/apt/sources.list.d/openresty.list
+  fi
 
   # **NodeSource 저장소를 손으로 건다.** 공식 안내는 `curl ... | bash` 인데, 그
   # 한 줄은 설치 스크립트가 하는 일을 검토 불가능하게 만든다. 저장소 등록은
@@ -605,7 +639,7 @@ install_packages_deb() {
   fi
 
   apt-get update -qq
-  apt-get install -y -qq openresty >/dev/null
+  if [ "$WITH_ENGINE" = 1 ]; then apt-get install -y -qq openresty >/dev/null; fi
   node_version_ok || apt-get install -y -qq nodejs >/dev/null
 }
 
@@ -616,17 +650,18 @@ install_packages_el() {
   dnf install -y -q libcap >/dev/null
   command -v curl >/dev/null 2>&1 || dnf install -y -q curl >/dev/null
 
-  # `$releasever` 를 그대로 쓰지 않는다 — Alma·Rocky·CentOS Stream 에서 값이
-  # `9`·`9.5`·`9-stream` 으로 갈리는데 openresty 저장소에는 `9/` 만 있다. 어느 트리를
-  # 쓸지는 ① 의 표가 정한다 (EL 10 도 `rocky/9` 다 — 이유는 표 위 주석).
-  #
-  # **키는 `pubkey2.gpg` 다.** 옛 `pubkey.gpg` 는 자체서명이 SHA1(digest algo 2)이고,
-  # RHEL9 의 기본 암호 정책은 그걸 거부한다:
-  #   `warning: Signature not supported. Hash algorithm SHA1 not available.`
-  #   `error: .../pubkey.gpg: key 1 import failed.`
-  # 실측했다. 새 키는 SHA256(algo 8)이라 정책을 손대지 않고 지나간다 —
-  # `update-crypto-policies --set DEFAULT:SHA1` 로 호스트 전체를 낮추는 것보다 낫다.
-  cat > /etc/yum.repos.d/openresty.repo <<EOF
+  if [ "$WITH_ENGINE" = 1 ]; then    # 엔진 저장소·패키지
+    # `$releasever` 를 그대로 쓰지 않는다 — Alma·Rocky·CentOS Stream 에서 값이
+    # `9`·`9.5`·`9-stream` 으로 갈리는데 openresty 저장소에는 `9/` 만 있다. 어느 트리를
+    # 쓸지는 ① 의 표가 정한다 (EL 10 도 `rocky/9` 다 — 이유는 표 위 주석).
+    #
+    # **키는 `pubkey2.gpg` 다.** 옛 `pubkey.gpg` 는 자체서명이 SHA1(digest algo 2)이고,
+    # RHEL9 의 기본 암호 정책은 그걸 거부한다:
+    #   `warning: Signature not supported. Hash algorithm SHA1 not available.`
+    #   `error: .../pubkey.gpg: key 1 import failed.`
+    # 실측했다. 새 키는 SHA256(algo 8)이라 정책을 손대지 않고 지나간다 —
+    # `update-crypto-policies --set DEFAULT:SHA1` 로 호스트 전체를 낮추는 것보다 낫다.
+    cat > /etc/yum.repos.d/openresty.repo <<EOF
 [openresty]
 name=Official OpenResty Open Source Repository
 baseurl=https://openresty.org/package/${OR_SRC#openresty.org/}/\$basearch
@@ -636,8 +671,9 @@ repo_gpgcheck=0
 gpgkey=https://openresty.org/package/pubkey2.gpg
 enabled=1
 EOF
-  rpm --import https://openresty.org/package/pubkey2.gpg
-  dnf install -y -q openresty >/dev/null
+    rpm --import https://openresty.org/package/pubkey2.gpg
+    dnf install -y -q openresty >/dev/null
+  fi
 
   # EL 9 는 AppStream 모듈(`nodejs:22`)을 켜야 하고, EL 10 은 모듈 없이 기본이 22 다
   # (EL 10 의 dnf 는 모듈을 더 안 쓰는 방향이라 `module enable` 이 실패한다).
@@ -680,15 +716,16 @@ install_packages_amzn() {
   dnf install -y -q libcap >/dev/null
   command -v curl >/dev/null 2>&1 || dnf install -y -q curl >/dev/null
 
-  amzn_arch=$(uname -m)
-  amzn_dir=$(amzn_pick_repo "$amzn_arch") \
-    || die "openresty 의 amazon 저장소에 $amzn_arch 스냅샷이 없다"
-  # **키가 트리마다 다르다** (실측). amazon 트리의 rpm 은 아직 **옛 키**(`pubkey.gpg`)
-  # 로 서명돼 있어서 새 키만 넣으면 `GPG check FAILED` 로 죽는다. 반대로 RHEL9 은 그
-  # 옛 키를 **들이지도 못한다**(자체서명이 SHA1). 즉 어느 한쪽으로 통일할 수가 없다.
-  # AL2023 의 암호 정책은 옛 키를 받으므로 여기서는 **둘 다** 넣는다 — 지금 도는 것과
-  # 회전한 뒤가 모두 지나간다.
-  cat > /etc/yum.repos.d/openresty.repo <<EOF
+  if [ "$WITH_ENGINE" = 1 ]; then    # 엔진 저장소·패키지
+    amzn_arch=$(uname -m)
+    amzn_dir=$(amzn_pick_repo "$amzn_arch") \
+      || die "openresty 의 amazon 저장소에 $amzn_arch 스냅샷이 없다"
+    # **키가 트리마다 다르다** (실측). amazon 트리의 rpm 은 아직 **옛 키**(`pubkey.gpg`)
+    # 로 서명돼 있어서 새 키만 넣으면 `GPG check FAILED` 로 죽는다. 반대로 RHEL9 은 그
+    # 옛 키를 **들이지도 못한다**(자체서명이 SHA1). 즉 어느 한쪽으로 통일할 수가 없다.
+    # AL2023 의 암호 정책은 옛 키를 받으므로 여기서는 **둘 다** 넣는다 — 지금 도는 것과
+    # 회전한 뒤가 모두 지나간다.
+    cat > /etc/yum.repos.d/openresty.repo <<EOF
 [openresty]
 name=Official OpenResty Open Source Repository for Amazon Linux
 baseurl=https://openresty.org/package/amazon/$amzn_dir/$amzn_arch
@@ -698,9 +735,10 @@ repo_gpgcheck=0
 gpgkey=https://openresty.org/package/pubkey.gpg https://openresty.org/package/pubkey2.gpg
 enabled=1
 EOF
-  rpm --import https://openresty.org/package/pubkey.gpg
-  rpm --import https://openresty.org/package/pubkey2.gpg || true
-  dnf install -y -q openresty >/dev/null
+    rpm --import https://openresty.org/package/pubkey.gpg
+    rpm --import https://openresty.org/package/pubkey2.gpg || true
+    dnf install -y -q openresty >/dev/null
+  fi
   # AL2023 은 모듈이 아니라 **버전이 이름에 붙은 패키지**다 (`nodejs22`).
   # 맨 `nodejs` 는 18 이라 여기서 쓰면 버전 검사에서 죽는다.
   #
@@ -720,7 +758,11 @@ install_packages_apk() {
   # alpine 은 openresty.org 저장소를 안 쓴다 — 거기 트리는 v3.18 에서 멈췄고,
   # 그 뒤로는 community 에 openresty 가 들어왔다. 남의 저장소를 붙이는 것보다
   # 배포판이 관리하는 쪽이 낫다.
-  apk add --no-cache openresty nodejs npm libcap curl >/dev/null
+  if [ "$WITH_ENGINE" = 1 ]; then
+    apk add --no-cache openresty nodejs npm libcap curl >/dev/null
+  else
+    apk add --no-cache nodejs npm curl >/dev/null
+  fi
 }
 
 # **엔진은 찾는다, 정하지 않는다.** 경로가 배포판마다 다르다 — openresty.org 의
@@ -757,7 +799,7 @@ else
     amzn) install_packages_amzn ;;
     apk)  install_packages_apk ;;
   esac
-  ok "openresty · nodejs 설치됨"
+  if [ "$WITH_ENGINE" = 1 ]; then ok "openresty · nodejs 설치됨"; else ok "nodejs 설치됨 (전역 모드 — 엔진 없음)"; fi
 fi
 
 # ── ③ 설치된 것을 확인한다 ───────────────────────────────────────────────
@@ -773,9 +815,13 @@ ok "node $(node -v) — $NODE_BIN"
 
 # **OpenResty 여야 한다.** 맨 nginx 로도 렌더는 되지만 멤버십 평면(Lua)이 없다 —
 # 그러면 백엔드 하나 바꿀 때마다 reload 가 돌고, 그건 이 설계의 전제가 아니다.
-detect_engine || die "OpenResty 를 못 찾았다 — 설치가 안 됐거나 맨 nginx 만 있다"
-ENGINE_V=$("$ENGINE_BIN" -V 2>&1 || true)
-ok "$(printf '%s' "$ENGINE_V" | head -1) — $ENGINE_BIN"
+if [ "$WITH_ENGINE" = 1 ]; then
+  detect_engine || die "OpenResty 를 못 찾았다 — 설치가 안 됐거나 맨 nginx 만 있다"
+  ENGINE_V=$("$ENGINE_BIN" -V 2>&1 || true)
+  ok "$(printf '%s' "$ENGINE_V" | head -1) — $ENGINE_BIN"
+else
+  ok "엔진 — 없다 (전역 모드)"
+fi
 
 # ── ④ 서비스 유저와 디렉터리 ────────────────────────────────────────────
 
@@ -810,6 +856,9 @@ ok "$PREFIX (logs · state · generations · run · secrets)"
 # 그리고 유닛에 `NoNewPrivileges=yes` 를 **넣지 않는다.** 넣으면 파일 capability 로
 # 권한을 얻는 경로가 통째로 막혀서, 이 setcap 이 무효가 된다.
 
+ENGINE_PID_FILE="$PREFIX/logs/nginx.pid"
+ENGINE_RUN_DIR=
+if [ "$WITH_ENGINE" = 1 ]; then
 step "⑤ 특권 포트 (setcap)"
 # 심볼릭 링크에 걸면 조용히 아무 일도 안 난다. 실제 ELF 를 찾아 건다.
 ENGINE_REAL=$(readlink -f "$ENGINE_BIN")
@@ -900,6 +949,9 @@ fi
 # **체크아웃 안에서 빌드하지 않는다.** root 로 `npm ci` 를 돌리면 운영자의 저장소에
 # root 소유 `node_modules` 가 남고, 그 다음부터 사람이 그 저장소에서 뭘 할 때마다
 # 권한으로 걸린다. 스테이징 디렉터리에 필요한 것만 복사해서 거기서 짓는다.
+else
+  step "⑤⑥ 엔진 — 건너뛴다 (전역 모드)"
+fi
 
 step "⑦ 빌드"
 BUILD_DIR=$(mktemp -d)
@@ -1025,7 +1077,13 @@ install_postgres() {
   su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='$SVC_USER'\"" \
     | grep -q 1 || su postgres -c "createdb -O '$SVC_USER' '$SVC_USER'"
 
+  # **계정 DB 도 같이 만든다** (공통 회원정책). 설정 DB 와 다른 DB 다 — 계정은 지역에 속하지 않고,
+  # 나중에 공용 계정 PG 로 옮길 때 이 DB 만 떼어 가면 된다.
+  su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='bary_accounts'\"" \
+    | grep -q 1 || su postgres -c "createdb -O '$SVC_USER' bary_accounts"
+
   sock=$(pg_socket_dir) || die "PostgreSQL 유닉스 소켓을 못 찾았다"
+  LOCAL_ACCOUNTS_DSN="postgres:///bary_accounts?host=$sock"
   DSN="postgres:///$SVC_USER?host=$sock"
   ok "로컬 PostgreSQL — $DSN (peer 인증, 비밀번호 없음)"
 }
@@ -1056,7 +1114,9 @@ svc_start() {   # svc_start <이름>
 }
 
 step "⑨ PostgreSQL"
-if [ "$WITH_PG" = 1 ]; then
+if [ "$MODE" = global ]; then
+  ok "설정 DB 가 없다 (전역 모드) — 계정은 --accounts-dsn 의 공용 계정 PG"
+elif [ "$WITH_PG" = 1 ]; then
   install_postgres
 else
   ok "외부 DSN 을 쓴다 — 건드리지 않는다"
@@ -1182,6 +1242,46 @@ carry_env_lines() {             # carry_env_lines <파일>
   done < "$1"
 }
 
+# ── 사람 계정을 켤까 (공통 회원정책 1차) ─────────────────────────────────
+#
+# 두 줄(DSN·KEK)은 **관리 키가 아니라 이어 가는 줄**이다. 재실행이 곧 업데이트라서 KEK 를 다시
+# 만들면 모든 사람의 인증 앱(TOTP)이 그 자리에서 못 쓰게 된다 — 그래서 없을 때만 만든다.
+ACCOUNTS_STATE=
+LOCAL_ACCOUNTS_DSN=${LOCAL_ACCOUNTS_DSN:-}
+_prev_adsn=$(env_get BARY_ACCOUNTS_DSN)
+if [ "$MODE" = global ] && [ -n "$ACCOUNTS_DSN$_prev_adsn" ] \
+   && ! case " $EXTRA_ENV_KEYS " in *" BARY_ACCOUNTS_KEK "*) true ;; *) false ;; esac \
+   && [ -z "$(env_get BARY_ACCOUNTS_KEK)" ]; then
+  # 전역은 지역과 **같은** 계정 PG·같은 KEK 를 써야 한다 — 여기서 새로 만들면 지역에서 등록한 인증 앱을 못 연다.
+  die "전역 모드에서 계정을 켜려면 --env BARY_ACCOUNTS_KEK=… 를 지역과 같은 값으로 준다"
+fi
+if [ "$NO_ACCOUNTS" = 1 ]; then
+  ACCOUNTS_STATE="꺼짐 (--no-accounts)"
+  [ -n "$_prev_adsn" ] && warn "$ENV_FILE 에 BARY_ACCOUNTS_DSN 이 이미 있다 — 끄려면 그 줄을 지운다"
+elif [ -n "$ACCOUNTS_DSN" ]; then
+  extra_env_add "BARY_ACCOUNTS_DSN=$ACCOUNTS_DSN"
+  ACCOUNTS_STATE="켜짐 — $ACCOUNTS_DSN"
+elif [ -n "$_prev_adsn" ]; then
+  ACCOUNTS_STATE="켜짐 — 쓰던 것을 이어 간다"
+elif [ -n "$LOCAL_ACCOUNTS_DSN" ]; then
+  extra_env_add "BARY_ACCOUNTS_DSN=$LOCAL_ACCOUNTS_DSN"
+  ACCOUNTS_STATE="켜짐 — 같은 호스트의 bary_accounts"
+else
+  ACCOUNTS_STATE="꺼짐 — 외부 PG 면 --accounts-dsn 으로 공용 계정 PG 를 준다"
+fi
+case "$ACCOUNTS_STATE" in
+  켜짐*)
+    case " $EXTRA_ENV_KEYS " in
+      *" BARY_ACCOUNTS_KEK "*) : ;;
+      *)
+        if [ -z "$(env_get BARY_ACCOUNTS_KEK)" ]; then
+          extra_env_add "BARY_ACCOUNTS_KEK=$("$NODE_BIN" -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64"))')"
+          warn "BARY_ACCOUNTS_KEK 을 새로 만들었다 — 잃으면 인증 앱이 전부 못 쓰게 된다. env 파일과 같이 백업한다"
+        fi ;;
+    esac ;;
+esac
+ok "사람 계정 $ACCOUNTS_STATE"
+
 CARRIED_ENV=
 if [ -f "$ENV_FILE" ]; then
   if [ "$RESET_ENV" = 1 ]; then
@@ -1197,18 +1297,26 @@ fi
 # 백엔드를 쓰면 `--env BARY_SECRET_KEK=...` 로 **KEK 가 여기 들어온다** (§4.8.1).
 (umask 077
 {
-  env_line BARY_DSN "$DSN"
+  if [ "$MODE" = global ]; then
+    # 전역은 설정 DB·엔진 키를 **적지 않는다** — 데몬이 그 키를 보면 기동을 거부한다(켰다고 믿는 상태 방지).
+    env_line BARY_MODE global
+    env_line BARY_GLOBAL_REGIONS "$REGIONS_FILE"
+  else
+    env_line BARY_DSN "$DSN"
+  fi
   env_line BARY_PREFIX "$PREFIX"
   env_line BARY_LISTEN "$LISTEN"
   env_line BARY_TOKENS_FILE "$TOKENS_FILE"
-  env_line BARY_ENGINE_BIN "$ENGINE_BIN"
   env_line BARY_GUI "$APP_DIR/gui/build"
-  env_line BARY_CONFIGTEST_CMD \
-    "$ENGINE_BIN -p $PREFIX -c $PREFIX/generations/{generation}/nginx.conf -t"
-  # **pid 가 기본 자리에 없을 때만 적는다.** 기본이면 데몬이 `$PREFIX/logs/nginx.pid` 를
-  # 읽어 직접 HUP 을 보낸다(`effects-boot.ts`) — 같은 값을 두 자리에 두지 않는다.
-  if [ "$ENGINE_PID_FILE" != "$PREFIX/logs/nginx.pid" ]; then
-    env_line BARY_RELOAD_CMD "kill -HUP \$(cat $ENGINE_PID_FILE)"
+  if [ "$WITH_ENGINE" = 1 ]; then
+    env_line BARY_ENGINE_BIN "$ENGINE_BIN"
+    env_line BARY_CONFIGTEST_CMD \
+      "$ENGINE_BIN -p $PREFIX -c $PREFIX/generations/{generation}/nginx.conf -t"
+    # **pid 가 기본 자리에 없을 때만 적는다.** 기본이면 데몬이 `$PREFIX/logs/nginx.pid` 를
+    # 읽어 직접 HUP 을 보낸다(`effects-boot.ts`) — 같은 값을 두 자리에 두지 않는다.
+    if [ "$ENGINE_PID_FILE" != "$PREFIX/logs/nginx.pid" ]; then
+      env_line BARY_RELOAD_CMD "kill -HUP \$(cat $ENGINE_PID_FILE)"
+    fi
   fi
   if [ -n "$TLS_CERT" ]; then
     env_line BARY_TLS_CERT_FILE "$TLS_CERT"
@@ -1249,8 +1357,15 @@ write_systemd_unit() {
   # `/run` 밑이고 거기는 tmpfs 라 **재부팅마다 사라진다** — 설치 때 한 번 만들어 두는
   # 것으로는 모자라고, 유닛은 비-root 로 돌아 스스로 만들 수 없다.
   RUNDIR_PRE=""
+  # 전역 모드에는 엔진이 없다 — 부트스트랩 세대도 엔진 기동도 안 한다.
+  ENGINE_PRE=""
   if [ -n "$ENGINE_RUN_DIR" ]; then
     RUNDIR_PRE="ExecStartPre=+/usr/bin/install -d -m 0755 -o $SVC_USER -g $SVC_USER $ENGINE_RUN_DIR"
+  fi
+  if [ "$WITH_ENGINE" = 1 ]; then
+    ENGINE_PRE="$RUNDIR_PRE
+ExecStartPre=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js --write-bootstrap
+ExecStartPre=$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf"
   fi
   cat > /etc/systemd/system/barycenterd.service <<EOF
 [Unit]
@@ -1277,10 +1392,10 @@ Type=exec
 User=$SVC_USER
 Group=$SVC_USER
 EnvironmentFile=$ENV_FILE
-$RUNDIR_PRE
-ExecStartPre=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js --write-bootstrap
-ExecStartPre=$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf
+$ENGINE_PRE
 ExecStart=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js
+# 토큰 파일만 다시 읽는다 — 엔진은 안 건드린다. 재시작은 데이터 플레인을 끊는다.
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15
@@ -1294,6 +1409,13 @@ EOF
 }
 
 write_openrc_unit() {
+  OPENRC_PRE=""
+  if [ "$WITH_ENGINE" = 1 ]; then
+    OPENRC_PRE="	${ENGINE_RUN_DIR:+checkpath -d -m 0755 -o \"$SVC_USER:$SVC_USER\" \"$ENGINE_RUN_DIR\" || return 1}
+	su -s /bin/sh \"$SVC_USER\" -c \"$NODE_BIN $APP_DIR/dist/bin/barycenterd.js --write-bootstrap\" || return 1
+	su -s /bin/sh \"$SVC_USER\" -c \"$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf\" || return 1
+"
+  fi
   cat > /etc/init.d/barycenterd <<EOF
 #!/sbin/openrc-run
 name="barycenterd"
@@ -1318,10 +1440,17 @@ depend() {
 }
 
 start_pre() {
-	# systemd 유닛의 ExecStartPre 와 같은 순서·같은 명령이다.
-	${ENGINE_RUN_DIR:+checkpath -d -m 0755 -o "$SVC_USER:$SVC_USER" "$ENGINE_RUN_DIR" || return 1}
-	su -s /bin/sh "$SVC_USER" -c "$NODE_BIN $APP_DIR/dist/bin/barycenterd.js --write-bootstrap" || return 1
-	su -s /bin/sh "$SVC_USER" -c "$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf" || return 1
+	# systemd 유닛의 ExecStartPre 와 같은 순서·같은 명령이다(전역 모드엔 엔진이 없어 비어 있다).
+$OPENRC_PRE	return 0
+}
+
+extra_started_commands="reload"
+
+# 토큰 파일만 다시 읽는다 — 엔진은 안 건드린다. 재시작은 데이터 플레인을 끊는다.
+reload() {
+	ebegin "Reloading \${RC_SVCNAME} tokens"
+	start-stop-daemon --signal HUP --pidfile "\$pidfile"
+	eend \$?
 }
 
 stop_post() {
@@ -1399,7 +1528,17 @@ else
   #
   # 조용히 건너뛰지 않는 이유: 통과 신호를 위조하는 것이 이 저장소가 반복해서 피해 온
   # 실패 모양이다. 안 잰 것은 안 잰다고 적는다.
-  if [ "$TOKEN_KEPT" = 1 ]; then
+  if [ "$MODE" = global ]; then
+    # 전역은 지역 경로(`/status`)가 없다 — `bary status` 대신 **전역이라고 답하는가**와 **지역 목록을 토큰으로
+    # 읽는가**를 잰다. 지역이 닿는지는 재지 않는다(전역의 준비와 무관하다 — readyz 와 같은 판단).
+    curl -fsS $CURL_OPTS --max-time 3 "$URL/readyz" | grep -Eq '"mode": *"global"' \
+      || die "$URL/readyz 가 전역 모드라고 답하지 않는다"
+    if [ "$TOKEN_KEPT" = 0 ]; then
+      code=$(curl -s $CURL_OPTS --max-time 10 -o /dev/null -w '%{http_code}' -H "authorization: Bearer $TOKEN_PLAIN" "$URL/api/v1/regions" || true)
+      [ "$code" = 200 ] || die "토큰으로 /api/v1/regions 를 못 읽었다 ($code)"
+    fi
+    ok "전역 모드 — /readyz · /api/v1/regions"
+  elif [ "$TOKEN_KEPT" = 1 ]; then
     code=$(curl -s $CURL_OPTS --max-time 3 -o /dev/null -w '%{http_code}' "$URL/api/v1/config/head" || true)
     [ "$code" = 401 ] || die "인증 없는 요청에 401 이 아니라 $code 가 왔다 — 토큰 평면이 안 섰다"
     ok "인증 평면 (401) — 기존 토큰을 그대로 뒀으므로 bary status 는 안 쟀다"
@@ -1409,6 +1548,22 @@ else
     ok "bary status"
   fi
 fi
+
+# **첫 관리자 링크** — 계정이 켜졌고 활성 관리자가 아직 없을 때만 나온다(호스트 CLI 와 같은 길).
+# 이미 있으면 데몬이 거절하고, 그건 실패가 아니다.
+BOOTSTRAP_LINK=
+case "$ACCOUNTS_STATE" in
+  켜짐*)
+    if _out=$(su -s /bin/sh "$SVC_USER" -c "set -a; . '$ENV_FILE'; set +a; BARY_PUBLIC_URL='${URL:-}' '$NODE_BIN' '$APP_DIR/dist/bin/barycenterd.js' account bootstrap" 2>&1); then
+      BOOTSTRAP_LINK=$(printf '%s\n' "$_out" | sed -n 's/^  \(.*\/invite#.*\)$/\1/p' | head -1)
+      ok "첫 관리자 링크를 만들었다 (24시간, 한 번)"
+    else
+      case "$_out" in
+        *admin_exists*|*'활성 관리자가 이미 있다'*) ok "관리자가 이미 있다 — 첫 관리자 링크는 안 만든다" ;;
+        *) warn "첫 관리자 링크를 못 만들었다: $(printf '%s' "$_out" | tail -1)" ;;
+      esac
+    fi ;;
+esac
 
 case "$INIT" in
   systemd) SVC_HINT="systemctl status barycenterd" ;;
@@ -1436,6 +1591,8 @@ else cat <<TOK
     $TOKEN_PLAIN
 TOK
 fi)
+
+  계정       $ACCOUNTS_STATE$(if [ -n "$BOOTSTRAP_LINK" ]; then printf '\n  첫 관리자  %s\n             (24시간, 한 번 — 아이디·비밀번호·인증 앱을 정한다)' "$BOOTSTRAP_LINK"; fi)
 
 CLI:
 
