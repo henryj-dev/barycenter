@@ -320,6 +320,23 @@ async function accountsFromEnv(): Promise<AccountService | undefined> {
  * 링크는 화면에 한 번만 나온다.
  */
 async function accountCli(args: string[]): Promise<void> {
+  /**
+   * `account migrate` — 계정 마이그레이션**만** 적용한다(KEK 불필요, 데몬 기동 없음). 논리 복제 사본(stardust R2
+   * dev)은 DDL 이 복제되지 않으므로 주보다 **먼저** 이것으로 같은 순서를 적용한다(`docs/runbook-accounts.md`).
+   */
+  if (args[0] === 'migrate') {
+    const dsn = env('BARY_ACCOUNTS_DSN', '');
+    if (dsn === '') throw new Error('BARY_ACCOUNTS_DSN 이 없다 — 어느 계정 DB 에 적용할지 모른다');
+    const adb = new Db(dsn);
+    try {
+      const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
+      process.stdout.write(applied.length === 0 ? '계정 마이그레이션: 적용할 것이 없다(이미 최신)\n'
+        : `계정 마이그레이션 적용: ${applied.join(', ')}\n`);
+    } finally {
+      await adb.close();
+    }
+    return;
+  }
   const accounts = await accountsFromEnv();
   if (accounts === undefined) throw new Error('BARY_ACCOUNTS_DSN 이 없다 — 사람 계정이 꺼져 있다');
   const base = env('BARY_PUBLIC_URL', '').replace(/\/+$/, '');
@@ -333,7 +350,7 @@ async function accountCli(args: string[]): Promise<void> {
     if (id === undefined) throw new Error(`계정 '${arg}' 이 없다`);
     process.stdout.write(`'${arg}' 복구 링크 (24시간, 한 번만 — 그 사람의 세션은 지금 끊겼다):\n  ${link(await accounts.recoveryLink(id, by))}\n`);
   } else {
-    throw new Error('쓰는 법: barycenterd account bootstrap | barycenterd account recovery-link <아이디>');
+    throw new Error('쓰는 법: barycenterd account bootstrap | barycenterd account recovery-link <아이디> | barycenterd account migrate');
   }
   if (base === '') process.stdout.write('  (BARY_PUBLIC_URL 이 없어 경로만 적었다 — 앞에 이 인스턴스의 주소를 붙인다)\n');
 }
