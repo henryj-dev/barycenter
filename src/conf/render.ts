@@ -844,7 +844,7 @@ function locationBody(
  */
 function realipNodes(listener: Listener): ConfNode[] {
   const pp = listener.protocol === 'udp' ? undefined : listener.acceptProxyProtocol;
-  if (pp === undefined) return [];
+  if (pp === undefined) return realipHeaderNodes(listener);
   return [
     ...pp.trustedCidrs.map((cidr) => directive('set_real_ip_from', [lit(cidr)])),
     // **`real_ip_header` 는 http 전용이다.** stream 의 realip 모듈에는 그 디렉티브가
@@ -864,6 +864,32 @@ function realipNodes(listener: Listener): ConfNode[] {
     ...(listener.protocol === 'http' || listener.protocol === 'https'
       ? [directive('real_ip_header', [lit('proxy_protocol')])]
       : []),
+  ];
+}
+
+/**
+ * 헤더로 받는 원본 IP (§4.7 의 HTTP 판).
+ *
+ * PROXY 판과 같은 잠금이다: `set_real_ip_from` 이 없으면 **누구의 헤더든** `$remote_addr`
+ * 가 된다. 그래서 신뢰 대역·헤더 이름·recursive 셋이 **함께** 나간다 — 모델이 대역 없는
+ * 헤더를 표현하지 못하므로 여기서 하나만 나갈 수가 없다.
+ *
+ * `real_ip_recursive on` 은 `X-Forwarded-For` 를 위해서다. 끄면 맨 오른쪽(바로 앞 홉)을
+ * 쓰므로 앞단이 둘 이상일 때 앞단 주소가 클라이언트가 된다. 켜면 오른쪽부터 신뢰 대역
+ * 주소를 걷어 내고 처음 만난 불신 주소를 쓴다. 값이 하나뿐인 헤더(`CF-Connecting-IP`)에는
+ * 영향이 없다.
+ *
+ * PROXY 수신과 같이 적힌 리스너는 검증기가 막는다. 막히기 전에 렌더러에 오면 PROXY 쪽이
+ * 나가고 이 함수는 안 불린다 — 출처가 둘 섞인 server 블록은 만들지 않는다.
+ */
+function realipHeaderNodes(listener: Listener): ConfNode[] {
+  if (listener.protocol !== 'http' && listener.protocol !== 'https') return [];
+  const rh = listener.realIpFromHeader;
+  if (rh === undefined) return [];
+  return [
+    ...rh.trustedCidrs.map((cidr) => directive('set_real_ip_from', [lit(cidr)])),
+    directive('real_ip_header', [lit(rh.header)]),
+    directive('real_ip_recursive', [lit('on')]),
   ];
 }
 

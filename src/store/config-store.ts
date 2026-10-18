@@ -40,6 +40,7 @@ import type {
   HttpProfile,
   ProxyLimits,
   RateLimit,
+  RealIpHeaderName,
 } from '../model/provisional.js';
 import type { Db, Queryable, Row } from './pg.js';
 import {
@@ -290,6 +291,7 @@ async function readModel(c: Queryable): Promise<Model> {
 
   const listeners = (await c.query(
     `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2,
+            l.real_ip_header, l.real_ip_header_cidrs,
             l.proxy_limits, l.header_rules, l.rate_limit, l.http_strict_priority,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
             l.on_no_sni_reject,
@@ -314,6 +316,12 @@ async function readModel(c: Queryable): Promise<Model> {
     const cidrs = r['accept_proxy_cidrs'];
     const pp = Array.isArray(cidrs) && cidrs.length > 0
       ? { acceptProxyProtocol: { trustedCidrs: cidrs as string[] } }
+      : {};
+    // 헤더 realip (024). 두 컬럼은 함께만 있다 — DB 가 CHECK 으로 건다.
+    const rhName = maybeText(r, 'real_ip_header');
+    const rhCidrs = r['real_ip_header_cidrs'];
+    const rh = rhName !== undefined && Array.isArray(rhCidrs) && rhCidrs.length > 0
+      ? { realIpFromHeader: { header: rhName as RealIpHeaderName, trustedCidrs: rhCidrs as string[] } }
       : {};
     const protocol = text(r, 'protocol');
     /**
@@ -348,11 +356,11 @@ async function readModel(c: Queryable): Promise<Model> {
       };
     };
     if (protocol === 'http') {
-      return { ...base, protocol: 'http', ...pp, ...httpProfile() };
+      return { ...base, protocol: 'http', ...pp, ...rh, ...httpProfile() };
     }
     if (protocol === 'https') {
       return {
-        ...base, protocol: 'https', ...pp, ...httpProfile(),
+        ...base, protocol: 'https', ...pp, ...rh, ...httpProfile(),
         tls: {
           policy: text(r, 'tls_policy'),
           defaultCertificate: text(r, 'tls_default_certificate'),
@@ -652,10 +660,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
                                 default_pool_id,default_pool_cls,
                                 tls_policy_id,tls_default_cert_id,http2,proxy_limits,header_rules,
                                 rate_limit,on_no_sni_pool,on_no_sni_cls,on_no_sni_reject,
-                                http_strict_priority,
+                                http_strict_priority,real_ip_header,real_ip_header_cidrs,
                                 created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$29,$20,$20,$21)
+                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$20,$20,$21)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
@@ -679,6 +687,8 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            on_no_sni_cls=EXCLUDED.on_no_sni_cls,
            on_no_sni_reject=EXCLUDED.on_no_sni_reject,
            http_strict_priority=EXCLUDED.http_strict_priority,
+           real_ip_header=EXCLUDED.real_ip_header,
+           real_ip_header_cidrs=EXCLUDED.real_ip_header_cidrs,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
@@ -708,7 +718,12 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           // $29 — S10. **http 계열에만.** stream 에는 server_name 이 없다.
           // `false` 는 안 적는다 — "안 정함" 과 구분할 필요가 없고 DB 도 그렇게 막는다.
           (protocol === 'http' || protocol === 'https')
-            && obj(b['http'])['strictPriority'] === true ? true : null],
+            && obj(b['http'])['strictPriority'] === true ? true : null,
+          // $30·$31 — 헤더 realip (024). **http 계열에만**, 둘은 함께만 (DB 도 같은 CHECK).
+          (protocol === 'http' || protocol === 'https')
+            ? (obj(b['realIpFromHeader'])['header'] ?? null) : null,
+          (protocol === 'http' || protocol === 'https')
+            ? (obj(b['realIpFromHeader'])['trustedCidrs'] ?? null) : null],
       );
       return;
     }

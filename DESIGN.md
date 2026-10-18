@@ -1030,8 +1030,17 @@ type SniCertificateBinding = ResourceMeta & {
 | stream + `stream_realip` 없음 | **검증기가 막는다** — 신뢰 경계를 걸 방법이 없는 조합이다 |
 | DB | `accept_proxy_cidrs text[]`, 빈 배열 금지. **옛 `true` 는 옮기지 않고 끈다** — 신뢰 경계를 지어낼 수 없다 |
 
-아직 없는 것: `real_ip_from_header` · `forwarded_header_policy`. HTTP 헤더 파생은
-모델에 없다. **엔진 capability 는 기동에서 묻는다** (`src/engine/probe.ts`).
+**헤더 파생 (2026-10-18).** PROXY 를 안 보내는 앞단(Cloudflare 일반 프록시 등)은 원본 IP 를
+HTTP 헤더로 넘긴다. 그 자리를 같은 잠금으로 열었다:
+
+| | 지금 |
+|---|---|
+| 모델 | http·https 리스너의 `realIpFromHeader?: { header, trustedCidrs }`. `header` 는 `CF-Connecting-IP` \| `X-Forwarded-For` \| `X-Real-IP` 중 하나(오타가 realip 을 조용히 끄지 않게). 대역은 필수·비어 있을 수 없다 |
+| 렌더 | `set_real_ip_from` 들 + `real_ip_header <header>` + `real_ip_recursive on` 이 **함께** 나간다. recursive 는 XFF 에서 오른쪽부터 신뢰 대역을 걷어 내고 처음 만난 불신 주소를 쓴다 |
+| 검증기 | stream 리스너에 적힌 값, **PROXY 수신과 함께 적힌 리스너**를 막는다 — `real_ip_header` 는 server 마다 하나라 출처가 둘이면 어느 쪽이 이기는지가 렌더 순서에 달린다 |
+| DB | `real_ip_header` · `real_ip_header_cidrs` (024). 둘은 함께만, http 계열에만, `accept_proxy_cidrs` 와 배타 |
+
+아직 없는 것: `forwarded_header_policy`. **엔진 capability 는 기동에서 묻는다** (`src/engine/probe.ts`).
 못 물으면 `streamRealip: false` 로 보수적으로 답하고, stream PROXY 수신은 그때
 막힌다.
 
