@@ -1412,14 +1412,12 @@ async function handle(
    */
   let session: Principal | undefined;
   if (bearer === undefined && api.accounts !== undefined) {
-    const sid = cookieValue(req.headers.cookie, accountCookie(api));
-    if (sid !== undefined && sid !== '') {
-      try {
-        session = await api.accounts.authenticate(sid);
-      } catch (e) {
-        if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
-        throw e;
-      }
+    // 쿠키 유무로 가르지 않는다 — `authenticate` 가 빈 값을 스스로 거른다(DB 에 묻지 않고 undefined).
+    try {
+      session = await api.accounts.authenticate(cookieValue(req.headers.cookie, accountCookie(api)));
+    } catch (e) {
+      if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
+      throw e;
     }
   }
   session ??= bearer === undefined
