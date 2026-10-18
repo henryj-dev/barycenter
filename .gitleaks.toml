@@ -12,3 +12,9 @@ description = "OIDC 서명 경로를 재는 테스트의 고정 문자열. HS256
 condition = "AND"
 paths = ['''^tests/unit/oidc-.*\.test\.ts$''']
 regexes = ['''oidc-hs256-secret''']
+
+[[allowlists]]
+description = "사람 계정 SSO 테스트의 가짜 IdP 서명값. 테스트 안의 가짜 IdP 가 HS256 ID 토큰을 만들 때만 쓴다 — 어떤 실제 공급자·배포에도 붙지 않는다. (공용 검사는 모든 브랜치를 훑으므로, 그 테스트가 있는 브랜치보다 먼저 main 에 들어가야 한다.)"
+condition = "AND"
+paths = ['''^tests/store/accounts-sso\.test\.ts$''']
+regexes = ['''idp-hs256-secret''']
