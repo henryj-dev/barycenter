@@ -84,6 +84,9 @@ MANAGED_ENV_KEYS=$(printf '%s' "$MANAGED_ENV_KEYS" | tr '\n' ' ')
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
+# 사람이 읽는 요약이다. **판단은 ① 의 DISTRO_TABLE 이 한다** — 줄을 더하면 여기도 고친다.
+SUPPORTED_DISTROS='Debian 11+ · Ubuntu 20.04+ · RHEL 계열 9·10 (Rocky·Alma·RHEL·CentOS Stream) · Amazon Linux 2023 · Alpine 3.19+'
+
 usage() {
   cat <<'EOF'
 barycenter 단일 인스턴스 설치
@@ -129,10 +132,8 @@ PostgreSQL (택일 — 터미널에서는 안 주면 물어본다)
 
   **옵션으로 준 값은 안 묻는다.** 대화는 다른 모드가 아니라 빈 칸을 채우는 절차다 —
   그래서 같은 스크립트가 사람 앞에서도 CI 에서도 같은 뜻이다.
-
-지원 배포판: Debian 11+ · Ubuntu 20.04+ · RHEL 계열 9 (Rocky·Alma·CentOS Stream)
-             · Amazon Linux 2023 · Alpine 3.19+
 EOF
+  printf '\n지원 배포판: %s\n             (버전별 판단은 ① 의 DISTRO_TABLE)\n' "$SUPPORTED_DISTROS"
 }
 
 say()  { printf '%s\n' "$*"; }
@@ -442,6 +443,90 @@ if [ -n "$TLS_KEY" ]  && [ ! -r "$TLS_KEY" ];  then die "--tls-key $TLS_KEY 를 
 #
 # `uname` 으로는 못 가른다. `/etc/os-release` 가 정본이고(systemd 이전부터 사실상
 # 표준이다), `ID_LIKE` 는 파생 배포판(Alma·Rocky·CentOS Stream)을 한 갈래로 모은다.
+#
+# **지원·거절은 아래 표 한 곳에서 정한다.** 전에는 조건문 여러 곳에 흩어져 있었고
+# (EL 9 고정, `rocky/9` 하드코딩) 새 버전 하나를 들이려면 어디를 고쳐야 하는지부터
+# 찾아야 했다. 이제 새 버전은 표에 한 줄을 더하는 일이다.
+#
+#   키        배포판 묶음. el 은 RHEL 파생 전부(Rocky·Alma·RHEL·CentOS Stream·Oracle)
+#   버전      `VERSION_ID` 에 대는 case 패턴. 공백으로 여럿을 쓴다. 위에서부터 첫 일치
+#   OpenResty 엔진 출처. `-` 이면 **거절**이고 마지막 칸이 그 이유다
+#   nodejs    22 이상을 어디서 받는가 (② 의 설치 함수가 이 값으로 가른다)
+#   PG        `--with-postgres` 가 깔 패키지 (쉼표로 여럿)
+#
+# 표에 없는 (키, 버전) 은 **거절한다.** 모르는 조합을 조용히 진행시키면 나중에
+# 저장소 404 나 버전 검사로 죽고, 그때는 원인이 훨씬 멀다.
+#
+# **EL 10 은 EL 9 의 OpenResty RPM 을 쓴다.** openresty.org 는 EL 10 트리를 아직 안
+# 낸다 — `rocky/10`·`rhel/10`·`centos/10`·`almalinux/10` 이 모두 404 다(2026-10-18).
+# 엔진은 `balancer_by_lua` 를 쓰므로 배포판 nginx 로는 대신할 수 없다. 그런데
+# OpenResty RPM 은 openssl·pcre2·zlib 를 자기 패키지(`openresty-openssl3` 등)로 들고
+# 오므로 EL 9 판이 EL 10 에서 그대로 선다 — Rocky 10.2 에서 설치·`ldd`·`-t` 와
+# 설치 하네스(`tests/install/run.sh rocky10`)로 실측했다. nodejs 는 EL 10 에서
+# 모듈이 아니라 AppStream 기본 패키지가 22 다.
+#
+# EL 8 은 표에 없다. 예전에는 "nodejs 22 모듈이 없다" 가 이유였는데 지금은 있다
+# (2026-10-18 확인). 남은 이유는 **아무도 시험하지 않았다**는 것뿐이다 — 들이려면
+# 하네스에 판을 더하고 이 표에 줄을 더한다.
+DISTRO_TABLE='
+# 키   | 버전                 | OpenResty           | nodejs     | PG                                | 거절 이유
+debian | 1[1-9]               | openresty.org/apt   | nodesource | postgresql                        |
+ubuntu | 2[0-9].*             | openresty.org/apt   | nodesource | postgresql                        |
+el     | 9 9.*                | openresty.org/rocky/9 | module-22 | postgresql-server,postgresql     |
+el     | 10 10.*              | openresty.org/rocky/9 | appstream | postgresql-server,postgresql     |
+amzn   | 2023                 | openresty.org/amazon | nodejs22  | postgresql16-server,postgresql16  |
+amzn   | 2                    | -                   | -          | -                                 | Amazon Linux 2 는 수명이 끝났고 nodejs 22 를 안 낸다 — 2023 을 쓴다
+alpine | 3.19.* 3.2[0-9].*    | community           | community  | postgresql,postgresql-contrib     |
+'
+
+# os-release 의 ID·ID_LIKE → 표의 키와 패키지 계열(FAMILY).
+distro_key() {                  # distro_key <ID> <ID_LIKE>
+  case "$1" in
+    debian|ubuntu)               DISTRO_KEY=$1;     FAMILY=deb ;;
+    rocky|almalinux|rhel|centos) DISTRO_KEY=el;     FAMILY=el ;;
+    amzn)                        DISTRO_KEY=amzn;   FAMILY=amzn ;;
+    alpine)                      DISTRO_KEY=alpine; FAMILY=apk ;;
+    *)
+      case " $2 " in
+        *" rhel "*|*" fedora "*) DISTRO_KEY=el; FAMILY=el ;;
+        # debian 파생(mint·raspbian…)은 openresty.org 에 자기 트리가 없다 — 표에서 거절된다.
+        *" debian "*)            DISTRO_KEY=$1; FAMILY=deb ;;
+        *) return 1 ;;
+      esac ;;
+  esac
+}
+
+# 표에서 (키, 버전) 의 첫 일치 줄을 찾는다.
+#   0 = 지원 (OR_SRC·NODE_SRC·PG_PKGS 를 채운다)
+#   1 = 표에 없다
+#   2 = 거절 줄에 걸렸다 (DISTRO_REASON 을 채운다)
+distro_lookup() {               # distro_lookup <키> <버전>
+  # 패턴을 공백으로 쪼갤 때 `9.*` 가 현재 디렉터리의 파일명으로 펼쳐지지 않게 한다.
+  _f=0; case $- in *f*) _f=1 ;; esac
+  set -f
+  _rc=1
+  while IFS='|' read -r _k _v _or _node _pg _why; do
+    _k=$(printf '%s' "$_k" | tr -d ' ')
+    case "$_k" in ''|'#'*) continue ;; esac
+    [ "$_k" = "$1" ] || continue
+    for _g in $_v; do
+      # shellcheck disable=SC2254  # 패턴으로 쓰려고 일부러 따옴표를 안 친다
+      case "$2" in
+        $_g)
+          OR_SRC=$(printf '%s' "$_or" | tr -d ' ')
+          NODE_SRC=$(printf '%s' "$_node" | tr -d ' ')
+          PG_PKGS=$(printf '%s' "$_pg" | tr -d ' ' | tr ',' ' ')
+          DISTRO_REASON=$(printf '%s' "$_why" | sed 's/^ *//; s/ *$//')
+          if [ "$OR_SRC" = - ]; then _rc=2; else _rc=0; fi
+          break 2 ;;
+      esac
+    done
+  done <<EOF
+$DISTRO_TABLE
+EOF
+  [ "$_f" = 1 ] || set +f
+  return "$_rc"
+}
 
 step "① 배포판 판별"
 [ -r /etc/os-release ] || die "/etc/os-release 가 없다 — 배포판을 판별할 수 없다"
@@ -452,29 +537,18 @@ OS_VER=${VERSION_ID:-}
 OS_CODENAME=${VERSION_CODENAME:-}
 OS_LIKE=${ID_LIKE:-}
 
-case "$OS_ID" in
-  debian|ubuntu)                     FAMILY=deb ;;
-  rocky|almalinux|rhel|centos)       FAMILY=el ;;
-  amzn)                              FAMILY=amzn ;;
-  alpine)                            FAMILY=apk ;;
-  *)
-    case " $OS_LIKE " in
-      *" rhel "*|*" fedora "*)       FAMILY=el ;;
-      *" debian "*)                  FAMILY=deb ;;
-      *) die "지원하지 않는 배포판: $OS_ID $OS_VER (ID_LIKE=$OS_LIKE)" ;;
-    esac ;;
-esac
-ok "$OS_ID $OS_VER ($FAMILY) · $(uname -m)"
-
-# EL 계열은 9 만 본다. 8 은 OpenResty 저장소는 있지만 AppStream 의 nodejs 모듈이
-# 22 를 안 내므로 여기서 갈린다 — 조용히 진행해서 나중에 버전 검사로 죽는 것보다
-# 지금 이름 지어 세우는 편이 낫다.
-if [ "$FAMILY" = el ]; then
-  case "$OS_VER" in
-    9|9.*) : ;;
-    *) die "EL 계열은 9 만 지원한다 (지금 $OS_VER) — nodejs 22 모듈이 9 부터다" ;;
+distro_key "$OS_ID" "$OS_LIKE" \
+  || die "지원하지 않는 배포판: $OS_ID $OS_VER (ID_LIKE=$OS_LIKE)"
+OR_SRC=; NODE_SRC=; PG_PKGS=; DISTRO_REASON=
+if distro_lookup "$DISTRO_KEY" "$OS_VER"; then
+  :
+else
+  case $? in
+    2) die "$OS_ID $OS_VER 은 지원하지 않는다 — $DISTRO_REASON" ;;
+    *) die "$OS_ID $OS_VER ($DISTRO_KEY) 은 지원 표에 없다 — 지원: $SUPPORTED_DISTROS" ;;
   esac
 fi
+ok "$OS_ID $OS_VER ($DISTRO_KEY) · $(uname -m) — openresty: $OR_SRC · nodejs: $NODE_SRC"
 
 # ── ② 패키지 ─────────────────────────────────────────────────────────────
 
@@ -543,7 +617,8 @@ install_packages_el() {
   command -v curl >/dev/null 2>&1 || dnf install -y -q curl >/dev/null
 
   # `$releasever` 를 그대로 쓰지 않는다 — Alma·Rocky·CentOS Stream 에서 값이
-  # `9`·`9.5`·`9-stream` 으로 갈리는데 openresty 저장소에는 `9/` 만 있다.
+  # `9`·`9.5`·`9-stream` 으로 갈리는데 openresty 저장소에는 `9/` 만 있다. 어느 트리를
+  # 쓸지는 ① 의 표가 정한다 (EL 10 도 `rocky/9` 다 — 이유는 표 위 주석).
   #
   # **키는 `pubkey2.gpg` 다.** 옛 `pubkey.gpg` 는 자체서명이 SHA1(digest algo 2)이고,
   # RHEL9 의 기본 암호 정책은 그걸 거부한다:
@@ -554,7 +629,7 @@ install_packages_el() {
   cat > /etc/yum.repos.d/openresty.repo <<EOF
 [openresty]
 name=Official OpenResty Open Source Repository
-baseurl=https://openresty.org/package/rocky/9/\$basearch
+baseurl=https://openresty.org/package/${OR_SRC#openresty.org/}/\$basearch
 skip_if_unavailable=False
 gpgcheck=1
 repo_gpgcheck=0
@@ -564,9 +639,16 @@ EOF
   rpm --import https://openresty.org/package/pubkey2.gpg
   dnf install -y -q openresty >/dev/null
 
+  # EL 9 는 AppStream 모듈(`nodejs:22`)을 켜야 하고, EL 10 은 모듈 없이 기본이 22 다
+  # (EL 10 의 dnf 는 모듈을 더 안 쓰는 방향이라 `module enable` 이 실패한다).
   if ! node_version_ok; then
-    dnf module reset -y -q nodejs >/dev/null 2>&1 || true
-    dnf module enable -y -q nodejs:22 >/dev/null
+    case "$NODE_SRC" in
+      module-22)
+        dnf module reset -y -q nodejs >/dev/null 2>&1 || true
+        dnf module enable -y -q nodejs:22 >/dev/null ;;
+      appstream) : ;;
+      *) die "표의 nodejs 출처를 모른다: $NODE_SRC" ;;
+    esac
     dnf install -y -q nodejs npm >/dev/null
   fi
 }
@@ -894,17 +976,16 @@ install_postgres() {
   case "$FAMILY" in
     deb)
       export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y -qq postgresql >/dev/null
+      # shellcheck disable=SC2086
+      apt-get install -y -qq $PG_PKGS >/dev/null
       PG_UNIT=postgresql ;;
     el|amzn)
       # **패키지 이름이 갈린다.** RHEL 계열은 `postgresql-server` 로 기본 메이저를
       # 가리키지만, AL2023 에는 그 이름이 아예 없고 메이저가 이름에 붙는다
       # (`postgresql16-server`). 없는 이름을 부르면 `No match for argument` 로 죽는다.
-      if [ "$FAMILY" = amzn ]; then
-        dnf install -y -q postgresql16-server postgresql16 >/dev/null
-      else
-        dnf install -y -q postgresql-server postgresql >/dev/null
-      fi
+      # 이름은 ① 의 표(PG 칸)가 들고 있다.
+      # shellcheck disable=SC2086  # 패키지 여럿을 낱낱이 넘긴다
+      dnf install -y -q $PG_PKGS >/dev/null
       # RHEL 계열은 데이터 디렉터리를 **패키지가 안 만든다.** 이 한 줄이 빠지면
       # `systemctl start postgresql` 이 "Data directory is not initialized" 로 죽는다.
       if [ ! -f /var/lib/pgsql/data/PG_VERSION ]; then
@@ -912,7 +993,8 @@ install_postgres() {
       fi
       PG_UNIT=postgresql ;;
     apk)
-      apk add --no-cache postgresql postgresql-contrib >/dev/null
+      # shellcheck disable=SC2086
+      apk add --no-cache $PG_PKGS >/dev/null
       # alpine 은 데이터 디렉터리 경로가 **패키지 버전에 매여 있고**
       # (`/var/lib/postgresql/<major>/data`), 그 값을 아는 것은 `/etc/conf.d/postgresql` 다.
       # 여기서 손으로 정하면 initdb 는 되는데 서비스는 다른 곳을 보게 되고, 그 어긋남은
