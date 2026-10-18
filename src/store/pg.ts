@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 import pg from 'pg';
 
+import { log } from '../obs/log.js';
+
 /**
  * `bigint`(OID 20)를 **문자열로** 받는다.
  *
@@ -46,6 +48,16 @@ export class Db {
 
   constructor(connectionString: string) {
     this.#pool = new pg.Pool({ connectionString, max: 8 });
+    /**
+     * **쉬던 연결이 끊긴 것으로 프로세스가 죽지 않게 한다.** PG 가 재시작되거나 연결을 끊으면(`57P01` 등) 풀에서
+     * 쉬던 연결이 `error` 를 낸다. 처리기가 없으면 Node 는 그것을 처리되지 않은 오류로 던져 **데몬이 죽는다** —
+     * 계정 PG 가 잠깐 재시작해도 모든 지역·전역이 같이 죽는다. 공통 정책은 「확인할 수 없으면 거부(503)」지
+     * 「죽는다」가 아니다. 풀은 그 연결을 버리고 다음 요청에 새로 맺는다. 진행 중인 쿼리의 실패는 그 쿼리의
+     * 호출자가 받는다(여기서 삼키는 것은 쉬던 연결의 사건뿐이다). 계정 PG 장애를 e2e 가 재다가 잡았다.
+     */
+    this.#pool.on('error', (e) => {
+      log.warn('pg.idle_client_error', { error: e.message, code: (e as { code?: string }).code });
+    });
   }
 
   async query(text: string, values?: readonly unknown[]): Promise<{ rows: Row[]; rowCount: number | null }> {
