@@ -123,6 +123,8 @@ describe('OpenAPI · DDL 동결', () => {
     const generated = `${JSON.stringify(openApiOf(table), null, 2)}\n`;
     expect(generated).toBe(readFileSync(join(root, 'SURFACE-API.json'), 'utf8'));
     expect(ddlFromMigrations(MIGRATIONS_DIR)).toBe(readFileSync(join(root, 'SURFACE-DDL.sql'), 'utf8'));
+    // 계정 DB 는 따로 고정한다 (공통 회원정책 1차).
+    expect(ddlFromMigrations(join(root, 'src/store/account-migrations'))).toBe(readFileSync(join(root, 'SURFACE-DDL-ACCOUNTS.sql'), 'utf8'));
     const drifted = openApiOf(table.slice(0, -1));
     expect(JSON.stringify(drifted)).not.toBe(JSON.stringify(openApiOf(table)));
   });

@@ -22,6 +22,9 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { apiHandler, apiTlsOptions, createApi, parseBuildInfo, type BuildInfo } from '../api/server.js';
+import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
+import { Sealer } from '../accounts/seal.js';
+import { AccountService } from '../accounts/service.js';
 import { JwksCache } from '../api/jwks.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore, type SecretStore } from '../dp/secrets.js';
@@ -252,7 +255,54 @@ function writeBootstrap(prefix: string, adminSocket: string, streamAdminSocket: 
   log.info('bootstrap.written', { membershipDict: caps.httpLua === true });
 }
 
+/**
+ * 사람 계정 (공통 회원정책 1차 · 계획 A). `BARY_ACCOUNTS_DSN` 이 있을 때만 켠다.
+ *
+ * **키 없이 켜지 않는다.** TOTP 비밀을 감쌀 `BARY_ACCOUNTS_KEK` 가 없으면 기동을 거부한다 — 계정은
+ * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다.
+ */
+async function accountsFromEnv(): Promise<AccountService | undefined> {
+  const dsn = env('BARY_ACCOUNTS_DSN', '');
+  if (dsn === '') return undefined;
+  const kek = env('BARY_ACCOUNTS_KEK', '');
+  if (kek === '') throw new Error('BARY_ACCOUNTS_DSN 을 켰으면 BARY_ACCOUNTS_KEK(32바이트 base64)도 필요하다');
+  const adb = new Db(dsn);
+  const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
+  if (applied.length > 0) log.info('accounts.migrate.applied', { migrations: applied });
+  return new AccountService({ db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter') });
+}
+
+/**
+ * **호스트 CLI** — `barycenterd account <bootstrap | recovery-link <아이디>>`.
+ *
+ * 사람 로그인 밖의 길이다. 첫 관리자를 만들고, 마지막 관리자가 비밀번호·인증 앱을 잃었을 때
+ * 살린다 — 메일(SMTP)이 없어도 된다. env 파일(DSN·KEK)을 읽을 수 있는 호스트 운영자만 쓸 수 있다.
+ * 링크는 화면에 한 번만 나온다.
+ */
+async function accountCli(args: string[]): Promise<void> {
+  const accounts = await accountsFromEnv();
+  if (accounts === undefined) throw new Error('BARY_ACCOUNTS_DSN 이 없다 — 사람 계정이 꺼져 있다');
+  const base = env('BARY_PUBLIC_URL', '').replace(/\/+$/, '');
+  const link = (t: string): string => `${base}/invite#${t}`;
+  const by = `host:${process.env['SUDO_USER'] ?? process.env['USER'] ?? 'unknown'}`;
+  const [cmd, arg] = args;
+  if (cmd === 'bootstrap') {
+    process.stdout.write(`첫 관리자 설정 링크 (24시간, 한 번만 쓸 수 있다):\n  ${link(await accounts.bootstrap(by))}\n`);
+  } else if (cmd === 'recovery-link' && arg !== undefined) {
+    const id = await accounts.userIdByName(arg);
+    if (id === undefined) throw new Error(`계정 '${arg}' 이 없다`);
+    process.stdout.write(`'${arg}' 복구 링크 (24시간, 한 번만 — 그 사람의 세션은 지금 끊겼다):\n  ${link(await accounts.recoveryLink(id, by))}\n`);
+  } else {
+    throw new Error('쓰는 법: barycenterd account bootstrap | barycenterd account recovery-link <아이디>');
+  }
+  if (base === '') process.stdout.write('  (BARY_PUBLIC_URL 이 없어 경로만 적었다 — 앞에 이 인스턴스의 주소를 붙인다)\n');
+}
+
 export async function main(): Promise<void> {
+  if (process.argv[2] === 'account') {
+    await accountCli(process.argv.slice(3));
+    process.exit(0);
+  }
   const prefix = env('BARY_PREFIX', '/etc/barycenter');
   // **`split(':')` 이 아니다** (검수 G7). 그러면 IPv6 를 표현할 수 없고, 포트가 비거나
   // 숫자가 아니면 `listen(0)`·`listen(NaN)` 이 되어 **무작위 포트가 조용히 열린다.**
@@ -838,8 +888,11 @@ export async function main(): Promise<void> {
   }
   const serveRoot = existsSync(guiRoot) ? guiRoot : undefined;
 
+  const accounts = await accountsFromEnv();
+  if (accounts !== undefined) log.info('accounts.enabled', {});
   const apiOpts = {
     db, store, control, auth, election, secrets, events,
+    ...(accounts === undefined ? {} : { accounts }),
     build: readBuildInfo(prefix),
     plaintextExposed: false,
     sessionSecure: false,
