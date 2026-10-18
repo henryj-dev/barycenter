@@ -75,55 +75,81 @@ sudo -u bary env $(cat /etc/barycenter/env | xargs) node /opt/barycenter/dist/bi
 `barycenterd account …` CLI 다. 전역 조회는 감사를 남길 수 없으므로 **토큰으로도 503**(`audit_unavailable`)이다 —
 `docs/runbook-global.md` 「조회 감사」. 이 길들은 사람 계정과 무관하게 살아 있어야 하므로 토큰 파일을 지우지 않는다.
 
-## 계정 PG 배치와 수동 승격 (2026-10-18 사용자 결정, stardust 와 같은 원칙)
+## 계정 PG 배치와 수동 승격 (2026-10-18·19 사용자 결정, stardust 와 같은 원칙)
 
-- **주는 az01**, **복제본은 dev 쪽**(스트리밍 복제, 읽기 전용). 모든 지역·전역의 `BARY_ACCOUNTS_DSN` 은 **주**를 가리킨다.
-- 인증·권한·철회 판단은 **언제나 주를 동기로 읽는다.** 복제본을 읽어 로그인을 받지 않는다 — 복제 지연 동안 정지·
-  로그아웃이 안 보일 수 있다. 그래서 주가 죽은 동안 사람 요청은 거부되고(위 절), 이것이 정상 동작이다.
-- **자동 승격은 없다.** 승격은 사람이 아래 절차로 결정한다.
-- **인스턴스는 stardust R2 계정 PG 와 같이 쓴다**(2026-10-19 사용자 결정, orc 경유) — 같은 PG 인스턴스(주 az01·복제본 dev)에
-  **별도 DB `bary_accounts` 와 전용 롤**로 둔다. 다른 제품의 DB·롤과 권한을 나누지 않는다. 구성(1단계)은 stardust 가 맡고,
-  백업 주기는 stardust R2 가 제안해 승인받는다(보존 30일). 그래서 승격·옛 주 차단은 **stardust 와 함께** 한다 —
-  인스턴스를 승격하면 두 제품의 주가 함께 바뀐다.
+- **주는 az01**, **사본은 dev**. 모든 지역·전역의 `BARY_ACCOUNTS_DSN` 은 **주**를 가리킨다. dev 사본은 승격 대비용이다.
+- **인스턴스는 stardust R2 계정 PG 와 같이 쓴다**(2026-10-19) — 같은 PG 인스턴스에 **별도 DB `bary_accounts` 와 전용 롤**.
+  구성은 stardust 가 맡고, 백업은 stardust R2 제안(하루 1회 안, 보존 30일 — 승인 전)을 따른다.
+- **dev 사본은 논리 복제다**(물리 복제가 아니다) — dev PG 는 자기 지역 테이블에 써야 해서 클러스터 전체가 읽기 전용이
+  되는 물리 복제를 쓸 수 없다(stardust `docs/design/2026-10-18-region-db-split.md`). `bary_accounts` 는 별도 PUBLICATION·
+  SUBSCRIPTION 으로 옮긴다. 승격 정본은 stardust `docs/runbook/2026-10-18-account-pg-promote.md` 이고, 아래는 barycenter 몫이다.
+- 인증·권한·철회 판단은 **언제나 주를 동기로 읽는다.** 사본을 읽어 로그인을 받지 않는다. 주가 죽은 동안 사람 요청은
+  거부되고(위 절), 이것이 정상 동작이다. **자동 승격은 없다.**
 - 운영 적용(D단계 1~8)은 az01 기동(2026-10-29 이후) 뒤 한 번에 한다.
+
+### 논리 복제 — 무엇을 옮기나
+
+| 옮긴다 (PUBLICATION 에 넣는다) | 옮기지 않는다 |
+|---|---|
+| `users` · `user_identities` · `mfa_totp` · `mfa_recovery_codes` · `invitations` · `password_resets` · `email_changes` · `sso_providers` · `account_audit` | `account_schema_migrations` · `sessions` · `login_flows` · `auth_throttle` |
+
+- **`account_schema_migrations` 는 넣지 않는다.** 넣으면 주의 기록 행이 사본의 같은 행과 PK 로 부딪쳐 복제가 멈춘다.
+  사본은 자기 기록을 따로 가진다.
+- **세션·로그인 흐름·시도 계수는 옮기지 않는다** — 승격하면 모든 세션이 끝나 **모두 다시 로그인**한다. 의도다: 복제가
+  늦어 빠진 로그아웃·「세션 끊기」가 새 주에서 되살아나는 일이 없다. 그 대신 계정 상태(정지·역할)는 `users` 로 옮겨진다.
+- 모든 표에 PK 가 있다(REPLICA IDENTITY 기본값으로 충분하다). 큰 객체(large object)는 쓰지 않는다.
+- 시퀀스는 `account_audit.id`(bigserial) 하나다 — 승격 때 앞으로 당긴다(아래 절차 3).
+
+### DDL — 마이그레이션 적용 순서
+
+DDL 은 복제되지 않는다. barycenter 를 올릴 때 계정 마이그레이션이 새로 있으면(`src/store/account-migrations/`):
+
+1. **사본(dev) 먼저**: `BARY_ACCOUNTS_DSN=<dev 사본 DSN> barycenterd account migrate` — 마이그레이션만 적용한다(KEK·기동 불필요).
+   새 칼럼·표가 사본에 먼저 있어야 주에서 오는 행을 받는다.
+2. **새 표가 옮길 대상이면** 주에서 `ALTER PUBLICATION … ADD TABLE …`, 사본에서 `ALTER SUBSCRIPTION … REFRESH PUBLICATION`.
+3. **그다음 주**: 새 판의 barycenterd 가 기동하며 주에 적용한다(또는 같은 `account migrate` 를 주 DSN 으로).
+
+누가: barycenter 를 올리는 사람이 1·3, PUBLICATION·SUBSCRIPTION 변경(2)은 stardust 와 함께. 지금까지의 표는 `001`~`005` 다
+(`005` 가 `auth_throttle` 을 더했다 — 옮기지 않는 표라 2 는 없다).
 
 ### 승격 판단 기준
 
 다음이 **모두** 맞을 때만 승격한다. 하나라도 아니면 주 복구를 기다린다(사람 로그인 503 은 데이터 플레인에 영향이 없다).
 
 1. 주가 **복구 불가**이거나 복구 예상 시간이 사람 로그인 중단을 감수할 수 있는 시간(운영 판단)을 넘는다.
-2. 복제본의 마지막 반영 위치를 확인했다 — `SELECT pg_last_wal_replay_lsn(), pg_last_xact_replay_timestamp();`.
-   주가 죽기 직전까지의 계정 변경(정지·역할 하향·로그아웃)이 **빠졌을 수 있다**는 것을 받아들인다. 빠진 변경은
-   승격 뒤 확인 항목 3 에서 다시 한다.
-3. **옛 주를 막을 수 있다**(다음 절 1단계). 막을 수 없으면 승격하지 않는다 — 주가 둘이 되면 철회가 갈라진다.
+2. 사본의 반영 상태를 확인했다 — 사본에서 `SELECT subname, received_lsn, latest_end_time FROM pg_stat_subscription;`.
+   주가 죽기 직전까지의 계정 변경(정지·역할 하향)이 **빠졌을 수 있다**는 것을 받아들인다(승격 뒤 확인 3).
+3. **옛 주를 막을 수 있다**(절차 1). 막을 수 없으면 승격하지 않는다 — 주가 둘이 되면 철회가 갈라진다.
 
-### 절차
+### 절차 (stardust 승격 런북과 함께)
 
-1. **옛 주 차단.** 옛 주가 다시 살아나 쓰기를 받지 못하게 한다: 옛 주 호스트의 PG 를 멈추고 자동 기동을 끈다
-   (`systemctl disable --now postgresql…`). 호스트에 닿지 않으면 망(heliopause)에서 그 호스트의 5432 를 막는다.
-   **이 단계가 끝나기 전에 2단계로 가지 않는다.**
-2. **승격.** 복제본에서 `SELECT pg_promote();` → `SELECT pg_is_in_recovery();` 가 `f` 인지 본다.
-3. **연결 문자열 전환.** 모든 지역·전역 호스트에서 `/etc/barycenter/env` 의 `BARY_ACCOUNTS_DSN` 호스트를 새 주로
-   바꾸고 **재시작**한다(`systemctl restart barycenterd`). DSN 은 기동 때만 읽는다 — `reload`(SIGHUP)는 토큰만 다시 읽는다.
+1. **옛 주 차단.** 옛 주의 `bary_accounts` 가 쓰기를 받지 못하게 한다 — 옛 주 PG 를 멈추거나(stardust 판단), 닿지 않으면
+   망(heliopause)에서 그 호스트의 5432 를 막는다. **이 단계가 끝나기 전에 2단계로 가지 않는다.**
+2. **구독 끊기.** 사본에서 `ALTER SUBSCRIPTION <이름> DISABLE;` 뒤 `ALTER SUBSCRIPTION <이름> SET (slot_name = NONE); DROP SUBSCRIPTION <이름>;`
+   (옛 주에 닿지 않으므로 슬롯은 사본 쪽에서만 놓는다).
+3. **시퀀스 당기기.** 사본에서 `SELECT setval('account_audit_id_seq', (SELECT coalesce(max(id), 0) + 1000 FROM account_audit));`
+4. **연결 문자열 전환.** 모든 지역·전역 호스트에서 `/etc/barycenter/env` 의 `BARY_ACCOUNTS_DSN` 을 새 주(dev)로 바꾸고 **재시작**한다
+   (`systemctl restart barycenterd`). DSN 은 기동 때만 읽는다 — `reload`(SIGHUP)는 토큰만 다시 읽는다.
    - 지역은 데몬과 엔진이 한 유닛이라 **재시작 동안 데이터 플레인이 몇 초 끊긴다.** 지역을 하나씩 돌린다.
    - 전역은 데이터 플레인이 없어 바로 돌려도 된다.
-   - `BARY_ACCOUNTS_KEK` 는 그대로다(키는 DB 에 없다). 계정 DB 를 새로 만드는 게 아니므로 설치 스크립트를 다시 돌리지 않는다.
-4. **복제 다시 세우기.** 옛 주 호스트를 비우고 새 주의 복제본으로 다시 만든다(`pg_basebackup`). 옛 데이터 디렉터리를
-   그대로 복제본으로 붙이지 않는다 — 갈라진 WAL 이 있을 수 있다.
+   - `BARY_ACCOUNTS_KEK` 는 그대로다(키는 DB 에 없다). 설치 스크립트를 다시 돌리지 않는다.
+5. **세션 표는 비어 있다** — 모두 다시 로그인한다(위 「무엇을 옮기나」). 공지한다.
+6. **복제 다시 세우기.** 옛 주가 돌아오면 그 `bary_accounts` 를 비우고(갈라진 쓰기가 있을 수 있다) 새 주를 PUBLICATION 으로,
+   옛 주를 SUBSCRIPTION 으로 다시 만든다. 그 전에 옛 주에 `account migrate` 를 먼저 적용한다(DDL 순서와 같다).
 
 ### 승격 뒤 확인
 
 1. 각 인스턴스 `/readyz` 200, 로그에 `pg.idle_client_error` 가 이어지지 않는다.
 2. 사람 로그인 → MFA → `/me` 가 지역·전역 모두에서 된다. 전역 요약 조회가 200 이고 `account_audit` 에 `global.view` 가 남는다.
-3. **빠졌을 수 있는 철회를 다시 한다.** 주가 죽기 직전에 한 정지·역할 하향·「모든 기기에서 로그아웃」을 운영 기록에서
-   찾아 새 주에 다시 적용한다. 의심되면 관련 사람의 세션을 「사람 → 세션 끊기」로 모두 끊는다.
+3. **빠졌을 수 있는 계정 변경을 다시 한다.** 주가 죽기 직전에 한 정지·역할 하향·탈퇴를 운영 기록에서 찾아 새 주에 다시
+   적용한다(세션은 승격으로 이미 모두 끝났다).
 4. `account_audit` 의 마지막 행 시각이 승격 직전과 이어지는지 본다(빠진 구간을 기록에 남긴다).
 
 ### 되돌리기
 
-승격을 되돌리는 것은 **또 한 번의 승격**이다 — 옛 주로 바로 돌아가지 않는다. 옛 주 호스트를 새 주의 복제본으로
-다시 세운 뒤(절차 4), 같은 판단 기준·절차로 옮긴다. 3단계 전에 멈췄다면(아직 DSN 을 안 바꿨다면) 새 주를 멈추고
-옛 주의 차단을 풀어 원래대로 돌릴 수 있다 — 단, 그 사이 새 주가 쓰기를 받지 않았을 때만이다.
+승격을 되돌리는 것은 **또 한 번의 승격**이다 — 옛 주로 바로 돌아가지 않는다. 옛 주를 새 주의 사본으로 다시 세운 뒤(절차 6),
+같은 판단 기준·절차로 옮긴다. 4단계 전에 멈췄다면(아직 DSN 을 안 바꿨다면) 사본을 그대로 두고 옛 주의 차단을 풀어 원래대로
+돌릴 수 있다 — 단, 구독을 지웠다면 다시 만들어야 하고(초기 복사부터), 그 사이 사본이 쓰기를 받지 않았을 때만이다.
 
 ## 메일 (B1)
 
