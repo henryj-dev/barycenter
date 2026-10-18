@@ -13,6 +13,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { scopesOfRole, type Principal, type Role } from '../api/auth.js';
 import type { Db, Queryable, Row } from '../store/pg.js';
 import { burnPasswordTime, hashPassword, needsRehash, passwordProblem, verifyPassword } from './password.js';
+import { mailText, type Mailer } from './mail.js';
 import type { Sealer } from './seal.js';
 import { base32Encode, newTotpSecret, otpauthUri, verifyTotp } from './totp.js';
 
@@ -24,6 +25,12 @@ const RECOVERY_TTL_MS = 24 * 60 * 60 * 1000;
 const LOCK_AFTER = 5;
 const LOCK_MAX_MS = 60 * 60 * 1000;
 const RECOVERY_CODES = 10;
+const RESET_TTL_MS = 30 * 60 * 1000;
+const EMAIL_CHANGE_TTL_MS = 24 * 60 * 60 * 1000;
+/** 같은 사람에게 재설정 메일을 연달아 보내지 않는다 — 메일 폭탄의 손잡이가 되지 않게. */
+const RESET_EVERY_MS = 5 * 60 * 1000;
+/** 민감 작업은 이만큼 안에 MFA 를 지난 세션만 (공통 정책 · 수치는 미정, 권장 기본). */
+export const STEP_UP_MAX_AGE_MS = 15 * 60 * 1000;
 /** last_seen 을 요청마다 쓰지 않는다 — 읽기 화면의 요청마다 쓰기가 생긴다. */
 const TOUCH_EVERY_MS = 60_000;
 
@@ -60,6 +67,10 @@ export type AccountServiceOptions = {
   /** 인증 앱에 보이는 이름. */
   issuer?: string;
   now?: () => number;
+  /** 없으면 메일 기능(초대 메일·재설정·이메일 변경)이 꺼진다. */
+  mailer?: Mailer;
+  /** 메일 속 링크의 앞부분(`BARY_PUBLIC_URL`). 메일을 켜려면 같이 있어야 한다. */
+  publicUrl?: string;
 };
 
 export class AccountService {
@@ -67,12 +78,20 @@ export class AccountService {
   readonly #sealer: Sealer;
   readonly #issuer: string;
   readonly #now: () => number;
+  readonly #mail: { mailer: Mailer; base: string } | undefined;
 
   constructor(o: AccountServiceOptions) {
     this.#db = o.db;
     this.#sealer = o.sealer;
     this.#issuer = o.issuer ?? 'barycenter';
     this.#now = o.now ?? Date.now;
+    this.#mail = o.mailer !== undefined && o.publicUrl !== undefined && o.publicUrl !== ''
+      ? { mailer: o.mailer, base: o.publicUrl.replace(/\/+$/, '') } : undefined;
+  }
+
+  /** 화면이 「비밀번호를 잊었다」를 그릴지 고른다. 비밀이 아니다. */
+  features(): { mail: boolean } {
+    return { mail: this.#mail !== undefined };
   }
 
   // ── 저장소 접근 — 실패는 전부 「못 물었다」 ─────────────────────────────
@@ -124,7 +143,7 @@ export class AccountService {
     });
   }
 
-  async invite(input: { email?: string; role: string }, by: string, meta: Meta = {}): Promise<{ id: string; token: string; expiresAt: string }> {
+  async invite(input: { email?: string; role: string }, by: string, meta: Meta = {}): Promise<{ id: string; token: string; expiresAt: string; mailed: boolean }> {
     if (!isRole(input.role)) throw new AccountError(400, 'malformed', '역할은 auditor | operator | admin 이다');
     const email = input.email === undefined ? null : normEmail(input.email);
     const t = token();
@@ -137,6 +156,110 @@ export class AccountService {
       )).rows[0]!;
       await this.#audit(c, by, 'account.invite', null, meta, { role: input.role, email: email !== null });
       return { id: str(r, 'id'), token: t, expiresAt: at.toISOString() };
+    }).then(async (out) => {
+      // 커밋한 **뒤에** 보낸다 — 보낸 메일의 링크가 롤백된 행을 가리키지 않게. 실패해도 초대는 산다
+      // (관리자에게 링크가 있다). 보냈는지를 그대로 말한다.
+      let mailed = false;
+      if (email !== null && this.#mail !== undefined) {
+        const [subject, text] = mailText.invite(`${this.#mail.base}/invite#${out.token}`, input.role, INVITE_TTL_MS / 3600_000);
+        mailed = await this.#mail.mailer.send(email, subject, text).then(() => true, () => false);
+      }
+      return { ...out, mailed };
+    });
+  }
+
+  // ── 메일 링크: 비밀번호 재설정 · 이메일 변경 ──────────────────────────
+
+  /**
+   * **언제나 조용히 끝난다** — 주소가 있든 없든, 메일이 꺼졌든 같다(열거 방지). 보낼 수 있는 경우에만
+   * 보낸다: active 계정, 그 주소, 최근 5분 안에 보낸 적 없음.
+   */
+  async requestPasswordReset(emailIn: string, meta: Meta = {}): Promise<void> {
+    if (this.#mail === undefined) return;
+    let email: string;
+    try { email = normEmail(emailIn); } catch { return; }
+    const u = (await this.#q(
+      `SELECT u.id, (SELECT max(created_at) FROM password_resets r WHERE r.user_id=u.id) AS last
+         FROM users u WHERE u.email=$1 AND u.status='active'`, [email],
+    ))[0];
+    if (u === undefined) return;
+    if (u['last'] !== null && this.#now() - new Date(String(u['last'])).getTime() < RESET_EVERY_MS) return;
+    const t = token();
+    await this.#tx(async (c) => {
+      await c.query(`UPDATE password_resets SET used_at=now() WHERE user_id=$1 AND used_at IS NULL`, [str(u, 'id')]);
+      await c.query(
+        // 만든 시각도 **앱 시계**로 적는다 — 5분 간격 비교를 같은 시계로 하려고.
+        `INSERT INTO password_resets (token_hash, user_id, created_at, expires_at, ip) VALUES ($1,$2,$3,$4,$5)`,
+        [sha(t), str(u, 'id'), new Date(this.#now()), new Date(this.#now() + RESET_TTL_MS), meta.ip ?? null],
+      );
+      await this.#audit(c, 'anonymous', 'account.reset_request', str(u, 'id'), meta);
+    });
+    const [subject, text] = mailText.reset(`${this.#mail.base}/reset#${t}`, RESET_TTL_MS / 60_000);
+    // 보내기 실패를 밖에 알리지 않는다 — 알리면 「그 주소는 계정이 있다」가 드러난다.
+    await this.#mail.mailer.send(email, subject, text).catch(() => undefined);
+  }
+
+  /** 새 비밀번호를 정한다. **MFA 는 그대로다.** 그 사람의 세션은 전부 끊긴다. */
+  async confirmPasswordReset(t: string, password: string, meta: Meta = {}): Promise<void> {
+    const problem = passwordProblem(password);
+    if (problem !== undefined) throw new AccountError(400, 'weak_password', problem);
+    const hash = await hashPassword(password);
+    await this.#tx(async (c) => {
+      const r = (await c.query(
+        `SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id
+          WHERE r.token_hash=$1 AND r.used_at IS NULL AND r.expires_at > now() AND u.status='active'
+          FOR UPDATE OF r`, [sha(t)],
+      )).rows[0];
+      if (r === undefined) throw new AccountError(404, 'link_invalid', '링크가 없거나 만료됐거나 이미 쓰였다');
+      const userId = str(r, 'user_id');
+      await c.query(`UPDATE password_resets SET used_at=now() WHERE token_hash=$1`, [sha(t)]);
+      await c.query(`UPDATE users SET password_hash=$2, failed_logins=0, locked_until=NULL, updated_at=now() WHERE id=$1`, [userId, hash]);
+      await c.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId]);
+      await this.#audit(c, `user:${userId}`, 'account.reset_confirm', userId, meta);
+    });
+  }
+
+  /** 새 주소로 확인 링크를 보낸다. 옛 주소에는 「요청이 왔다」를 알린다. 확인 전까지 주소는 그대로다. */
+  async requestEmailChange(userId: string, newEmailIn: string, password: string, meta: Meta = {}): Promise<void> {
+    if (this.#mail === undefined) throw new AccountError(409, 'mail_disabled', '메일이 꺼져 있어 주소를 확인할 수 없다 — 관리자에게 부탁한다');
+    const newEmail = normEmail(newEmailIn);
+    await this.#requirePassword(userId, password);
+    const t = token();
+    const old = await this.#tx(async (c) => {
+      const taken = (await c.query(`SELECT 1 FROM users WHERE email=$1`, [newEmail])).rows.length > 0;
+      // 쓰이는 주소여도 **같은 응답**이다 — 확인 메일은 안 보낸다(그 주소의 주인에게 묻지 않는다).
+      const u = (await c.query(`SELECT email FROM users WHERE id=$1`, [userId])).rows[0];
+      if (!taken) {
+        await c.query(`UPDATE email_changes SET used_at=now() WHERE user_id=$1 AND used_at IS NULL`, [userId]);
+        await c.query(
+          `INSERT INTO email_changes (token_hash, user_id, new_email, expires_at) VALUES ($1,$2,$3,$4)`,
+          [sha(t), userId, newEmail, new Date(this.#now() + EMAIL_CHANGE_TTL_MS)],
+        );
+      }
+      await this.#audit(c, `user:${userId}`, 'account.email_change_request', userId, meta);
+      return { taken, old: u === undefined ? null : opt(u, 'email') };
+    });
+    if (old.taken) return;
+    const [subject, text] = mailText.emailChange(`${this.#mail.base}/email#${t}`, EMAIL_CHANGE_TTL_MS / 3600_000);
+    const sent = await this.#mail.mailer.send(newEmail, subject, text).then(() => true, () => false);
+    if (!sent) throw new AccountError(502, 'mail_failed', '확인 메일을 보내지 못했다 — 잠시 뒤 다시 한다');
+    if (old.old !== null) {
+      const [s2, t2] = mailText.emailChangedNotice(newEmail);
+      await this.#mail.mailer.send(old.old, s2, t2).catch(() => undefined);
+    }
+  }
+
+  async confirmEmailChange(t: string, meta: Meta = {}): Promise<void> {
+    await this.#tx(async (c) => {
+      const r = (await c.query(
+        `SELECT e.user_id, e.new_email FROM email_changes e JOIN users u ON u.id=e.user_id
+          WHERE e.token_hash=$1 AND e.used_at IS NULL AND e.expires_at > now() AND u.status='active'
+          FOR UPDATE OF e`, [sha(t)],
+      )).rows[0];
+      if (r === undefined) throw new AccountError(404, 'link_invalid', '링크가 없거나 만료됐거나 이미 쓰였다');
+      await c.query(`UPDATE email_changes SET used_at=now() WHERE token_hash=$1`, [sha(t)]);
+      await c.query(`UPDATE users SET email=$2, updated_at=now() WHERE id=$1`, [str(r, 'user_id'), str(r, 'new_email')]);
+      await this.#audit(c, `user:${str(r, 'user_id')}`, 'account.email_change_confirm', str(r, 'user_id'), meta);
     });
   }
 
@@ -335,23 +458,7 @@ export class AccountService {
       )).rows[0];
       if (s === undefined || str(s, 'status') !== 'active') return { kind: 'denied' } as const;
       const userId = str(s, 'user_id');
-      let method: string | undefined;
-      if (s['secret_sealed'] !== null) {
-        const secret = this.#sealer.open(str(s, 'secret_sealed'), `totp:${userId}`);
-        const step = verifyTotp(secret, code, now, Number(s['last_step']));
-        if (step !== undefined) {
-          // 조건부 갱신 — 같은 창의 코드가 동시에 두 번 와도 한쪽만 이긴다.
-          const won = (await c.query(`UPDATE mfa_totp SET last_step=$2 WHERE user_id=$1 AND last_step < $2`, [userId, step])).rowCount;
-          if (won === 1) method = 'totp';
-        }
-      }
-      if (method === undefined && /^[a-z0-9]{4}-[a-z0-9]{4}$/i.test(code.trim())) {
-        const used = (await c.query(
-          `UPDATE mfa_recovery_codes SET used_at=now() WHERE user_id=$1 AND code_hash=$2 AND used_at IS NULL`,
-          [userId, sha(code.trim().toLowerCase())],
-        )).rowCount;
-        if (used === 1) method = 'recovery';
-      }
+      const method = await this.#secondFactor(c, userId, code, s['secret_sealed'] === null ? null : str(s, 'secret_sealed'), Number(s['last_step']));
       if (method === undefined) {
         await c.query(`UPDATE users SET failed_logins=failed_logins+1 WHERE id=$1`, [userId]);
         return { kind: 'denied' } as const;
@@ -367,6 +474,62 @@ export class AccountService {
       await this.#audit(c, `user:${str(s, 'username')}`, 'session.login', userId, meta, { mfa: method });
       return { kind: 'session', sessionId: sid, maxAgeS: SESSION_MAX_MS / 1000 } as const;
     });
+  }
+
+  /**
+   * 둘째 인증 수단 하나 — TOTP 또는 복구 코드. 로그인 MFA 와 step-up 이 같은 문을 쓴다.
+   * 성공한 수단 이름, 아니면 undefined.
+   */
+  async #secondFactor(c: Queryable, userId: string, code: string, sealed: string | null, lastStep: number): Promise<string | undefined> {
+    if (sealed !== null) {
+      const step = verifyTotp(this.#sealer.open(sealed, `totp:${userId}`), code, this.#now(), lastStep);
+      if (step !== undefined) {
+        // 조건부 갱신 — 같은 창의 코드가 동시에 두 번 와도 한쪽만 이긴다.
+        const won = (await c.query(`UPDATE mfa_totp SET last_step=$2 WHERE user_id=$1 AND last_step < $2`, [userId, step])).rowCount;
+        if (won === 1) return 'totp';
+      }
+    }
+    if (/^[a-z0-9]{4}-[a-z0-9]{4}$/i.test(code.trim())) {
+      const used = (await c.query(
+        `UPDATE mfa_recovery_codes SET used_at=now() WHERE user_id=$1 AND code_hash=$2 AND used_at IS NULL`,
+        [userId, sha(code.trim().toLowerCase())],
+      )).rowCount;
+      if (used === 1) return 'recovery';
+    }
+    return undefined;
+  }
+
+  /**
+   * **민감 작업 앞의 재확인** (step-up). 지금 세션에 MFA 시각을 새로 찍는다 — 세션을 새로 만들지 않는다.
+   * 인증 앱이 없으면 할 수 없다(먼저 등록한다).
+   */
+  async stepUp(sessionHash: string, userId: string, code: string, meta: Meta = {}): Promise<void> {
+    await this.#tx(async (c) => {
+      const t = (await c.query(
+        `SELECT t.secret_sealed, t.last_step FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL FOR UPDATE`, [userId],
+      )).rows[0];
+      if (t === undefined) throw new AccountError(409, 'no_totp', '인증 앱을 먼저 등록한다 — 민감 작업은 MFA 가 필요하다');
+      const method = await this.#secondFactor(c, userId, code, str(t, 'secret_sealed'), Number(t['last_step']));
+      if (method === undefined) {
+        await c.query(`UPDATE users SET failed_logins=failed_logins+1 WHERE id=$1`, [userId]);
+        throw new AccountError(403, 'step_up_failed', '인증 코드가 맞지 않는다');
+      }
+      await c.query(
+        `UPDATE sessions SET mfa_at=now(), auth_methods = array_append(auth_methods, $2)
+          WHERE id_hash=$1 AND revoked_at IS NULL`, [sessionHash, `step-up:${method}`],
+      );
+      await this.#audit(c, `user:${userId}`, 'session.step_up', userId, meta, { method });
+    });
+  }
+
+  /** 열린 SSE 의 하트비트가 묻는다. 못 물으면 던진다 — 스트림 쪽이 닫는다. */
+  async sessionAlive(sessionHash: string): Promise<boolean> {
+    const r = await this.#q(
+      `SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id
+        WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending AND u.status='active'`,
+      [sessionHash],
+    );
+    return r.length > 0;
   }
 
   async #newSession(userId: string, expiresAt: number, pending: boolean, methods: string[], meta: Meta): Promise<string> {

@@ -1256,8 +1256,9 @@ KEK 를 읽는 규칙은 `resolveKek`(§4.8.2) 한 자리를 그대로 쓴다 �
   요청이 계정 PG 로 세션·계정·역할을 확인**한다: 로그아웃·정지·역할 하향이 다음 요청부터 반영되고, 확인할
   수 없으면 503 으로 거부한다(캐시로 넘기지 않는다). 관리자는 TOTP(RFC 6238)를 지난 세션만 관리자가 된다.
   기계 신원(토큰·mTLS)은 그대로이고 사람이 아니다(`/me` 는 404 `not_a_person`). 계정 경로는 지역 리더 규칙
-  밖이다. SSO 연결·IdP 권한 정본·IdP MFA·메일 재설정은 B 단계다(IdP 쪽 계약 미해결 —
-  `docs/runbook-accounts.md`).
+  밖이다. **B1**: 메일(초대·재설정·이메일 변경, nodemailer — 재설정은 MFA 를 풀지 않는다), 민감 작업의
+  최근 MFA(15분, step-up), 열린 SSE 의 세션 재확인. SSO 연결·IdP 권한 정본·IdP MFA 는 B 의 나머지다
+  (IdP 쪽 계약 미해결 — `docs/runbook-accounts.md`).
 - 모든 변경은 감사 로그(who/what/before/after/revision).
 
 **상태 코드 4분할** (v1 의 "도메인 제약 위반=409" 는 부정확했다):

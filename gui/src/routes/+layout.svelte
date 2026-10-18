@@ -6,6 +6,7 @@
   import { goto } from '$app/navigation';
   import { createDesk } from '$lib/desk.svelte.ts';
   import { createSession } from '$lib/account/session.svelte.ts';
+  import StepUpDialog from '$lib/account/StepUpDialog.svelte';
   import '../app.css';
 
   let { children } = $props();
@@ -78,6 +79,14 @@
       h: '내 계정',
       p: '비밀번호·인증 앱·열린 세션. 로그아웃은 서버에서 세션을 끊는다.',
     },
+    reset: {
+      h: '비밀번호 재설정',
+      p: '계정 이메일로 링크를 받는다. 재설정은 인증 앱을 풀지 않는다.',
+    },
+    email: {
+      h: '이메일 확인',
+      p: '새 주소로 간 링크를 열면 바뀐다.',
+    },
     users: {
       h: '사람과 초대',
       p: '공개 가입은 없다. 역할 하향·정지는 그 사람의 다음 요청부터 막는다. 마지막 관리자는 강등·정지할 수 없다.',
@@ -132,6 +141,7 @@
   </p>
 
   {@render children()}
+  <StepUpDialog />
 </div>
 
 <style>

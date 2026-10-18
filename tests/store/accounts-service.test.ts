@@ -55,7 +55,8 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.query('DROP TABLE IF EXISTS account_audit, mfa_recovery_codes, mfa_totp, invitations, sessions, users, account_schema_migrations CASCADE');
+  // 테이블을 나열하지 않는다 — 마이그레이션이 늘 때마다 빠진 이름이 다음 스위트를 깨뜨린다.
+  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   await db.migrate(ACCOUNT_MIGRATIONS);
 });
 
