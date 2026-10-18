@@ -94,7 +94,33 @@ export type ApiOptions = {
   sessions?: BrowserSessions;
   /** HTTPS 서버에서만 Secure 쿠키를 붙인다. */
   sessionSecure?: boolean;
+  /**
+   * 설치된 판 (`$PREFIX/version`, 설치 스크립트가 쓴다). `/status` 의 `build` 로 나간다.
+   *
+   * 전역 모드가 지역 응답을 **해석하지 않고** 넘기므로(docs/design-global-mode.md §2.3),
+   * 판이 갈리면 화면이 어긋날 수 있다. 그 어긋남을 드러내려면 지역이 자기 판을 말해야 한다.
+   * 없으면 `null` — 모른다는 것이지 판이 없다는 것이 아니다.
+   */
+  build?: BuildInfo | null;
 };
+
+export type BuildInfo = { commit?: string; describe?: string; installedAt?: string };
+
+/** `key=value` 줄들. 모르는 키는 버린다 — 이 파일은 설치 스크립트가 쓰는 메모다. */
+export function parseBuildInfo(text: string): BuildInfo | null {
+  const out: BuildInfo = {};
+  for (const line of text.split('\n')) {
+    const at = line.indexOf('=');
+    if (at <= 0) continue;
+    const k = line.slice(0, at).trim();
+    const v = line.slice(at + 1).trim();
+    if (v === '') continue;
+    if (k === 'commit') out.commit = v;
+    else if (k === 'describe') out.describe = v;
+    else if (k === 'installed_at') out.installedAt = v;
+  }
+  return Object.keys(out).length === 0 ? null : out;
+}
 
 export function plaintextExposureMetric(exposed: boolean): LabeledGauge {
   return {
@@ -686,7 +712,7 @@ const ROUTES: Route[] = [
   }),
 
   route('GET', '/api/v1/status', 'read', async (c, api) => {
-    json(c.res, 200, await api.control.status());
+    json(c.res, 200, { ...await api.control.status(), build: api.build ?? null });
   }),
 
   /**

@@ -282,21 +282,42 @@ export function principalFromIdToken(token: string, oidc: OidcSettings): Princip
 }
 
 export class TokenAuth {
-  readonly #byHash = new Map<string, Principal>();
+  #byHash: Map<string, Principal>;
   readonly #oidc: OidcSettings | undefined;
 
   constructor(specs: readonly TokenSpec[], oidc?: OidcSettings) {
     this.#oidc = oidc;
+    this.#byHash = TokenAuth.#table(specs);
+  }
+
+  static #table(specs: readonly TokenSpec[]): Map<string, Principal> {
+    const out = new Map<string, Principal>();
     for (const s of specs) {
       if (!/^sha256:[0-9a-f]{64}$/.test(s.hash)) {
         throw new Error(`토큰 해시 모양이 아니다 (${s.name}): sha256:<64 hex> 여야 한다`);
       }
-      this.#byHash.set(s.hash, {
+      out.set(s.hash, {
         name: s.name,
         scopes: new Set(scopesOf(s)),
         ...(s.role === undefined ? {} : { role: s.role }),
       });
     }
+    return out;
+  }
+
+  /**
+   * **토큰 표를 재시작 없이 갈아 끼운다** (2026-10-18).
+   *
+   * 데몬과 엔진이 한 유닛이라 재시작은 데이터 플레인을 몇 초 끊는다. 그러면 토큰 하나를
+   * 철회할 때마다 「끊을지 기다릴지」를 골라야 하고, 대개 기다리게 된다 — 철회가 늦는다.
+   *
+   * **새 표를 다 만든 뒤 한 번에 바꾼다.** 반쯤 바뀐 표가 보이는 순간이 없고, 해독이
+   * 실패하면 던져서 **옛 표가 그대로 산다** (틀린 파일 하나로 아무도 못 들어오게 되지 않는다).
+   * 이미 연 브라우저 세션은 건드리지 않는다 — 세션은 OIDC 에서 온 것이다.
+   */
+  replace(specs: readonly TokenSpec[]): void {
+    if (specs.length === 0) throw new Error('토큰 명세가 비어 있다 — 아무도 못 들어온다');
+    this.#byHash = TokenAuth.#table(specs);
   }
 
   /**
