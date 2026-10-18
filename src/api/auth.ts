@@ -236,8 +236,13 @@ function verifyJwtSig(
   }
 }
 
-/** OpenID Connect Core — 서명 · iss · aud · exp · sub. 실패하면 없음 (401). */
-export function principalFromIdToken(token: string, oidc: OidcSettings): Principal | undefined {
+/**
+ * OpenID Connect Core — 서명 · iss · aud · azp · exp · sub · nonce 를 지난 **클레임**. 역할은 보지 않는다.
+ *
+ * 사람 계정의 SSO(로컬 권한 정본)는 여기까지만 쓴다 — 누구인지(iss, sub)만 IdP 에게 묻고, 무엇을 할 수
+ * 있는지는 계정이 정한다. 역할 클레임까지 읽는 것은 `principalFromIdToken`(계정이 꺼진 배포의 현행 경로)이다.
+ */
+export function verifiedIdClaims(token: string, oidc: OidcSettings): Record<string, unknown> | undefined {
   const parts = token.split('.');
   if (parts.length !== 3) return undefined;
   const headerB64 = parts[0] ?? '';
@@ -280,6 +285,14 @@ export function principalFromIdToken(token: string, oidc: OidcSettings): Princip
   // **기대하면 반드시 있어야 한다.** 토큰에 nonce 가 없을 때 통과시키면, 검사를 켠
   // 배포가 nonce 를 안 돌려주는 IdP 앞에서 조용히 검사 없는 상태로 돌아간다.
   if (oidc.nonce !== undefined && payload['nonce'] !== oidc.nonce) return undefined;
+  return payload;
+}
+
+/** OpenID Connect Core — 서명 · iss · aud · exp · sub + **역할 클레임**. 실패하면 없음 (401). */
+export function principalFromIdToken(token: string, oidc: OidcSettings): Principal | undefined {
+  const payload = verifiedIdClaims(token, oidc);
+  if (payload === undefined) return undefined;
+  const sub = payload['sub'] as string;
   // 정했으면 그 클레임만. 안 정했으면 `role`. 떨어지지 않는다 — 위 주석 참조.
   const role = payload[oidc.roleClaim ?? 'role'];
   if (!isRole(role)) return undefined;

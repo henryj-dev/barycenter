@@ -5,15 +5,18 @@
   import ChangePassword from '$lib/account/ChangePassword.svelte';
   import TotpManage from '$lib/account/TotpManage.svelte';
   import ChangeEmail from '$lib/account/ChangeEmail.svelte';
+  import SsoIdentities from '$lib/account/SsoIdentities.svelte';
 
   const session = getContext<Session>('session');
   let note = $state<string | undefined>();
   let mailOn = $state(false);
+  let ssoOn = $state(false);
 
   onMount(async () => {
     void session.refresh();
     const f = await accountApi.features();
     mailOn = f.ok && f.data.mail;
+    ssoOn = f.ok && f.data.sso;
   });
 
   const logoutAll = async (): Promise<void> => {
@@ -34,6 +37,7 @@
   <ChangePassword />
   {#if mailOn}<ChangeEmail />{/if}
   <TotpManage {me} onChanged={session.refresh} />
+  {#if ssoOn}<SsoIdentities {me} onChanged={session.refresh} />{/if}
   <section>
     <h2>열린 세션</h2>
     <ul>

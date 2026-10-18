@@ -63,13 +63,21 @@
         credentials: 'same-origin',
         body: JSON.stringify({ code, state }),
       });
-      const body = (await r.json()) as { authenticated?: unknown; message?: unknown };
-      if (!r.ok || body.authenticated !== true) {
+      const body = (await r.json()) as { authenticated?: unknown; status?: unknown; message?: unknown };
+      // 콜백 주소에서 code·state 를 지운다 — 한 번 쓴 값이 기록·공유 화면에 남지 않게.
+      history.replaceState(null, '', '/login');
+      if (!r.ok) {
         startError = typeof body.message === 'string' ? body.message : `token ${r.status}`;
         return;
       }
-      await desk.connect();
-      await goto('/');
+      // 사람 계정: SSO 뒤에도 관리자·인증 앱 등록자는 로컬 코드 단계다(IdP 의 MFA 는 인정하지 않는다).
+      if (body.status === 'mfa_required') { step = 'mfa'; return; }
+      if (body.status === 'linked') { await goto('/account'); return; }
+      if (body.authenticated !== true) {
+        startError = `token ${r.status}`;
+        return;
+      }
+      await signedIn();
     } catch (e) {
       startError = e instanceof Error ? e.message : String(e);
     } finally {

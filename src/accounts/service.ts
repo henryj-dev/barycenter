@@ -53,6 +53,11 @@ export type LoginOutcome =
   | { kind: 'mfa'; sessionId: string; maxAgeS: number }
   | { kind: 'denied' };
 
+/** IdP 가 서명한 클레임 중 우리가 쓰는 것. 검증은 호출자(`verifiedIdClaims`)가 끝냈다. */
+export type SsoClaims = { iss: string; sub: string; preferredUsername?: string };
+
+export type SsoOutcome = LoginOutcome | { kind: 'linked' } | { kind: 'not_linked' };
+
 export type InvitePreview = { kind: string; role: Role; email: string | null; username?: string; needsTotp: boolean; totp?: { secret: string; uri: string } };
 
 const sha = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -387,6 +392,149 @@ export class AccountService {
     return inv;
   }
 
+  // ── SSO (로컬 권한 정본) ─────────────────────────────────────────────
+
+  /**
+   * OIDC 흐름을 연다. `link` 는 로그인한 사람이 **비밀번호를 다시 넣어야** 연다(공통 정책: 연결은 재인증 뒤).
+   * 비밀번호가 없는 계정(JIT 로 생긴 것)은 더 연결하지 못한다 — 그 사람의 유일한 증거가 IdP 다.
+   */
+  async beginSso(intent: 'login' | 'link', state: string, nonce: string, codeVerifier: string,
+    link?: { userId: string; password: string }): Promise<string> {
+    if (intent === 'link') {
+      if (link === undefined) throw new AccountError(400, 'malformed', '연결은 로그인한 사람만 한다');
+      const r = (await this.#q(`SELECT password_hash FROM users WHERE id=$1`, [link.userId]))[0];
+      if (r === undefined || r['password_hash'] === null) {
+        throw new AccountError(409, 'needs_password', '비밀번호가 없는 계정은 SSO 를 더 잇지 못한다');
+      }
+      await this.#requirePassword(link.userId, link.password);
+    }
+    const id = token();
+    await this.#q(`DELETE FROM login_flows WHERE expires_at < now()`);
+    await this.#q(
+      `INSERT INTO login_flows (id_hash, state, nonce, code_verifier, intent, user_id, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [sha(id), state, nonce, codeVerifier, intent, intent === 'link' ? link!.userId : null, new Date(this.#now() + 10 * 60_000)],
+    );
+    return id;
+  }
+
+  /** 흐름을 꺼낸다 — **한 번만.** state 가 맞아야 PKCE 검증값·nonce 를 내준다. */
+  async takeSsoFlow(flowId: string | undefined, state: string):
+    Promise<{ codeVerifier: string; nonce: string; intent: 'login' | 'link'; userId: string | null } | undefined> {
+    if (flowId === undefined || flowId === '') return undefined;
+    const r = (await this.#q(
+      `DELETE FROM login_flows WHERE id_hash=$1 RETURNING state, nonce, code_verifier, intent, user_id, expires_at`,
+      [sha(flowId)],
+    ))[0];
+    if (r === undefined || str(r, 'state') !== state || new Date(String(r['expires_at'])).getTime() <= this.#now()) return undefined;
+    return {
+      codeVerifier: str(r, 'code_verifier'), nonce: str(r, 'nonce'),
+      intent: str(r, 'intent') as 'login' | 'link', userId: opt(r, 'user_id'),
+    };
+  }
+
+  /**
+   * IdP 가 확인해 준 (iss, sub) 로 끝낸다.
+   *   login: 연결된 계정 → 로그인(관리자·인증 앱 등록자는 **로컬 TOTP** 단계 — IdP MFA 는 인정하지 않는다).
+   *          연결이 없으면 그 공급자에 JIT 가 켜졌을 때만 auditor 계정을 새로 만들고, 아니면 `not_linked`.
+   *   link : 다른 계정에 이미 묶인 identity 면 거절.
+   */
+  async completeSso(intent: 'login' | 'link', userIdForLink: string | null, claims: SsoClaims, meta: Meta = {}): Promise<SsoOutcome> {
+    if (intent === 'link') {
+      await this.#tx(async (c) => {
+        const cur = (await c.query(`SELECT user_id FROM user_identities WHERE issuer=$1 AND subject=$2`, [claims.iss, claims.sub])).rows[0];
+        if (cur !== undefined && str(cur, 'user_id') !== userIdForLink) {
+          throw new AccountError(409, 'identity_taken', '그 SSO 계정은 이미 다른 사람에게 연결돼 있다');
+        }
+        if (cur === undefined) {
+          await c.query(
+            `INSERT INTO user_identities (issuer, subject, user_id, linked_by) VALUES ($1,$2,$3,$4)`,
+            [claims.iss, claims.sub, userIdForLink, `user:${userIdForLink}`],
+          );
+        }
+        await this.#audit(c, `user:${userIdForLink}`, 'account.sso_link', userIdForLink, meta, { issuer: claims.iss });
+      });
+      return { kind: 'linked' };
+    }
+    let row = (await this.#q(
+      `SELECT u.id, u.username, u.role, u.status, t.confirmed_at AS totp_at
+         FROM user_identities i JOIN users u ON u.id=i.user_id LEFT JOIN mfa_totp t ON t.user_id=u.id
+        WHERE i.issuer=$1 AND i.subject=$2`, [claims.iss, claims.sub],
+    ))[0];
+    if (row === undefined) {
+      const p = (await this.#q(`SELECT jit_enabled FROM sso_providers WHERE issuer=$1`, [claims.iss]))[0];
+      if (p === undefined || p['jit_enabled'] !== true) return { kind: 'not_linked' };
+      const userId = await this.#jitCreate(claims, meta);
+      row = { id: userId, username: '', role: 'auditor', status: 'active', totp_at: null };
+    }
+    if (str(row, 'status') !== 'active') return { kind: 'denied' };
+    const userId = str(row, 'id');
+    await this.#q(`UPDATE user_identities SET last_login_at=now() WHERE issuer=$1 AND subject=$2`, [claims.iss, claims.sub]);
+    const hasTotp = row['totp_at'] !== null;
+    if (str(row, 'role') === 'admin' && !hasTotp) return { kind: 'denied' };
+    if (hasTotp) {
+      const sid = await this.#newSession(userId, this.#now() + MFA_PENDING_MS, true, ['sso'], meta);
+      return { kind: 'mfa', sessionId: sid, maxAgeS: MFA_PENDING_MS / 1000 };
+    }
+    const sid = await this.#newSession(userId, this.#now() + SESSION_MAX_MS, false, ['sso'], meta);
+    await this.#audit(undefined, `user:${userId}`, 'session.login', userId, meta, { sso: claims.iss });
+    return { kind: 'session', sessionId: sid, maxAgeS: SESSION_MAX_MS / 1000 };
+  }
+
+  /**
+   * JIT — **새 계정만** 만든다(이름·이메일이 같은 기존 계정에 붙이지 않는다). 역할은 auditor 고정, 비밀번호 없음,
+   * 이메일은 안 받는다(IdP 의 이메일을 확인된 주소로 믿지 않는다). 이름이 겹치면 짧은 접미사를 붙인다.
+   */
+  async #jitCreate(claims: SsoClaims, meta: Meta): Promise<string> {
+    const base = (claims.preferredUsername ?? '').toLowerCase().replace(/[^a-z0-9._-]/g, '').replace(/^[^a-z0-9]+/, '').slice(0, 50)
+      || `sso-${sha(`${claims.iss}|${claims.sub}`).slice(0, 8)}`;
+    return this.#tx(async (c) => {
+      let name = base.length >= 2 ? base : `${base}-u`;
+      for (let i = 0; (await c.query(`SELECT 1 FROM users WHERE username=$1`, [name])).rows.length > 0; i++) {
+        if (i > 5) throw new AccountError(409, 'conflict', '쓸 수 있는 이름을 못 골랐다');
+        name = `${base.slice(0, 50)}-${randomBytes(2).toString('hex')}`;
+      }
+      const id = str((await c.query(
+        `INSERT INTO users (username, role, created_by) VALUES ($1,'auditor',$2) RETURNING id`, [name, `sso:${claims.iss}`],
+      )).rows[0]!, 'id');
+      await c.query(
+        `INSERT INTO user_identities (issuer, subject, user_id, linked_by) VALUES ($1,$2,$3,'jit')`, [claims.iss, claims.sub, id],
+      );
+      await this.#audit(c, `sso:${claims.iss}`, 'account.jit_create', id, meta);
+      return id;
+    });
+  }
+
+  /** 다른 로그인 수단(비밀번호 또는 다른 identity)이 남을 때만 끊는다 — 스스로 잠기지 않게. */
+  async unlinkIdentity(userId: string, issuer: string, subject: string, password: string, meta: Meta = {}): Promise<void> {
+    await this.#requirePassword(userId, password);
+    await this.#tx(async (c) => {
+      const n = (await c.query(`DELETE FROM user_identities WHERE issuer=$1 AND subject=$2 AND user_id=$3`, [issuer, subject, userId])).rowCount;
+      if (n === 0) throw new AccountError(404, 'no_identity', '그 연결이 없다');
+      await this.#audit(c, `user:${userId}`, 'account.sso_unlink', userId, meta, { issuer });
+    });
+  }
+
+  async providers(): Promise<unknown[]> {
+    return (await this.#q(`SELECT issuer, jit_enabled, jit_role, updated_at, updated_by FROM sso_providers ORDER BY issuer`)).map((r) => ({
+      issuer: str(r, 'issuer'), jitEnabled: r['jit_enabled'] === true, jitRole: str(r, 'jit_role'),
+      updatedAt: iso(r['updated_at']), updatedBy: str(r, 'updated_by'),
+    }));
+  }
+
+  /** 공급자별 JIT — 관리자가 **명시적으로** 켠다(공통 정책). 켜도 auditor 만. */
+  async setProviderJit(issuer: string, enabled: boolean, by: string, meta: Meta = {}): Promise<void> {
+    if (issuer.trim() === '') throw new AccountError(400, 'malformed', 'issuer 가 비었다');
+    await this.#tx(async (c) => {
+      await c.query(
+        `INSERT INTO sso_providers (issuer, jit_enabled, updated_by) VALUES ($1,$2,$3)
+         ON CONFLICT (issuer) DO UPDATE SET jit_enabled=EXCLUDED.jit_enabled, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        [issuer, enabled, by],
+      );
+      await this.#audit(c, by, 'account.sso_jit', null, meta, { issuer, enabled });
+    });
+  }
+
   // ── 로그인 · MFA · 세션 ────────────────────────────────────────────────
 
   /**
@@ -608,7 +756,12 @@ export class AccountService {
       createdAt: iso(s['created_at']), lastSeenAt: iso(s['last_seen_at']), expiresAt: iso(s['expires_at']),
       methods: s['auth_methods'], ip: opt(s, 'ip'), userAgent: opt(s, 'user_agent'),
     }));
+    const identities = (await this.#q(
+      `SELECT issuer, subject, linked_at, last_login_at FROM user_identities WHERE user_id=$1 ORDER BY linked_at`, [userId],
+    )).map((i) => ({ issuer: str(i, 'issuer'), subject: str(i, 'subject'), linkedAt: iso(i['linked_at']), lastLoginAt: isoOpt(i['last_login_at']) }));
+    const hasPassword = (await this.#q(`SELECT password_hash IS NOT NULL AS p FROM users WHERE id=$1`, [userId]))[0]?.['p'] === true;
     return {
+      identities, hasPassword,
       id: str(u, 'id'), username: str(u, 'username'), displayName: opt(u, 'display_name'),
       email: opt(u, 'email'), role: str(u, 'role'), roleAuthority: str(u, 'role_authority'),
       createdAt: iso(u['created_at']),
@@ -765,6 +918,8 @@ export class AccountService {
       await c.query('DELETE FROM mfa_recovery_codes WHERE user_id=$1', [userId]);
       await c.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId]);
       await c.query(`UPDATE invitations SET revoked_at=now() WHERE for_user=$1 AND used_at IS NULL`, [userId]);
+      // SSO 연결도 끊는다 — 묘비가 IdP 로 다시 살아나지 않게.
+      await c.query(`DELETE FROM user_identities WHERE user_id=$1`, [userId]);
       await this.#audit(c, by, 'account.delete', userId, meta);
     });
   }
