@@ -174,7 +174,7 @@ any other daemon setting into the environment file. Under a pipe it never prompt
 the usage and exits, because a prompt no one can answer is a hang, not a question.
 
 It ends by proving the thing it installed: it waits for `/readyz` — engine attached, driver
-answering — and runs `bary status` against the token it just minted. Debian · Ubuntu · RHEL 9
+answering — and runs `bary status` against the token it just minted. Debian · Ubuntu · RHEL 9/10
 derivatives · Amazon Linux 2023 · Alpine. `./tests/install/run.sh` runs the script inside a
 real container of each, boots the service under systemd (OpenRC on Alpine), and asserts the
 daemon answers — **including after a restart**, which is the only way to know the bootstrap
@@ -296,7 +296,7 @@ Run all the checks with `./scripts/verify.sh` (or `--quick` to skip the Docker-b
 | `npm run test:golden` | 10 | rendered output must pass `nginx -t` **on the real engine** |
 | `npm run test:e2e` | 35 | the whole chain on real nginx — HTTP, TCP, UDP and SNI pass-through |
 | `npm run test:engine` | 65 | nginx/OpenResty behaviours the design takes for granted |
-| `./tests/install/run.sh` | 5 | `deploy/install.sh` on real Debian · Ubuntu · Rocky · Amazon Linux · Alpine |
+| `./tests/install/run.sh` | 6 | `deploy/install.sh` on real Debian · Ubuntu · Rocky 9 · Rocky 10 · Amazon Linux · Alpine |
 | `./spike/s1-s5/run.sh` | 8 | reload-free membership changes across HTTP/TCP/UDP |
 | `./spike/s7/run.sh` | 9 | proving a reload actually took effect |
 | `./spike/s8/run.sh` | 11 | rolling a certificate back to an earlier generation |
