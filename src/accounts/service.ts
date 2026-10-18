@@ -54,7 +54,11 @@ export type LoginOutcome =
   | { kind: 'denied' };
 
 /** IdP 가 서명한 클레임 중 우리가 쓰는 것. 검증은 호출자(`verifiedIdClaims`)가 끝냈다. */
-export type SsoClaims = { iss: string; sub: string; preferredUsername?: string };
+export type SsoClaims = {
+  iss: string; sub: string; preferredUsername?: string;
+  /** 서명 검증을 지난 클레임 전체 — IdP 권한 정본 계정의 역할 클레임을 여기서 읽는다(B3). */
+  raw?: Record<string, unknown>;
+};
 
 export type SsoOutcome = LoginOutcome | { kind: 'linked' } | { kind: 'not_linked' };
 
@@ -457,7 +461,7 @@ export class AccountService {
       return { kind: 'linked' };
     }
     let row = (await this.#q(
-      `SELECT u.id, u.username, u.role, u.status, t.confirmed_at AS totp_at
+      `SELECT u.id, u.username, u.role, u.role_authority, u.status, t.confirmed_at AS totp_at
          FROM user_identities i JOIN users u ON u.id=i.user_id LEFT JOIN mfa_totp t ON t.user_id=u.id
         WHERE i.issuer=$1 AND i.subject=$2`, [claims.iss, claims.sub],
     ))[0];
@@ -465,10 +469,16 @@ export class AccountService {
       const p = (await this.#q(`SELECT jit_enabled FROM sso_providers WHERE issuer=$1`, [claims.iss]))[0];
       if (p === undefined || p['jit_enabled'] !== true) return { kind: 'not_linked' };
       const userId = await this.#jitCreate(claims, meta);
-      row = { id: userId, username: '', role: 'auditor', status: 'active', totp_at: null };
+      row = { id: userId, username: '', role: 'auditor', role_authority: 'local', status: 'active', totp_at: null };
     }
+    // 로컬 정지·삭제가 **언제나 우선**이다 — IdP 가 뭐라 하든.
     if (str(row, 'status') !== 'active') return { kind: 'denied' };
     const userId = str(row, 'id');
+    if (str(row, 'role_authority') === 'idp') {
+      const synced = await this.#syncIdpRole(userId, str(row, 'role') as Role, row['totp_at'] !== null, claims, meta);
+      if (synced === undefined) return { kind: 'denied' };
+      row = { ...row, role: synced };
+    }
     await this.#q(`UPDATE user_identities SET last_login_at=now() WHERE issuer=$1 AND subject=$2`, [claims.iss, claims.sub]);
     const hasTotp = row['totp_at'] !== null;
     if (str(row, 'role') === 'admin' && !hasTotp) return { kind: 'denied' };
@@ -479,6 +489,46 @@ export class AccountService {
     const sid = await this.#newSession(userId, this.#now() + SESSION_MAX_MS, false, ['sso'], meta);
     await this.#audit(undefined, `user:${userId}`, 'session.login', userId, meta, { sso: claims.iss });
     return { kind: 'session', sessionId: sid, maxAgeS: SESSION_MAX_MS / 1000 };
+  }
+
+  /**
+   * **IdP 권한 정본 계정의 역할 맞추기** (B3). 공급자의 역할 클레임(문자열 또는 원소 하나짜리 배열)을 매핑으로
+   * 바꿔 계정 역할에 쓴다. 맞출 수 없으면 undefined — 호출자가 **그 로그인을 거부**한다:
+   *   · 공급자에 클레임 이름·매핑이 없다 / 클레임이 없다 / 원소가 둘 이상이다 / 매핑에 없는 값이다
+   *   · 마지막 활성 관리자를 내리려 한다(관리자가 0 이 되지 않게 — 내리지 않고 거부)
+   *   · 관리자로 올리는데 인증 앱(TOTP)이 없다(관리자는 로컬 MFA 가 필수)
+   * 맞춘 역할은 그 사람의 **다른 세션에도** 다음 요청부터 보인다(`authenticate` 가 역할을 매번 읽는다).
+   */
+  async #syncIdpRole(userId: string, current: Role, hasTotp: boolean, claims: SsoClaims, meta: Meta): Promise<Role | undefined> {
+    const refuse = async (why: string): Promise<undefined> => {
+      await this.#audit(undefined, `sso:${claims.iss}`, 'account.idp_role_refused', userId, meta, { why });
+      return undefined;
+    };
+    const p = (await this.#q(`SELECT role_claim, role_map FROM sso_providers WHERE issuer=$1`, [claims.iss]))[0];
+    if (p === undefined || p['role_claim'] === null) return refuse('공급자에 역할 클레임이 설정되지 않았다');
+    const v = claims.raw?.[str(p, 'role_claim')];
+    const key = typeof v === 'string' ? v : Array.isArray(v) && v.length === 1 && typeof v[0] === 'string' ? v[0] : undefined;
+    if (key === undefined) return refuse('역할 클레임이 없거나 값이 하나가 아니다');
+    const map = (p['role_map'] ?? {}) as Record<string, unknown>;
+    const mapped = map[key];
+    if (!isRole(mapped)) return refuse(`매핑에 없는 역할 값: ${key}`);
+    if (mapped === current) return mapped;
+    if (mapped === 'admin' && !hasTotp) return refuse('관리자로 올리려면 인증 앱이 먼저 있어야 한다');
+    return this.#tx(async (c) => {
+      if (current === 'admin') {
+        await c.query(`SELECT id FROM users WHERE role='admin' AND status='active' FOR UPDATE`);
+        const others = (await c.query(
+          `SELECT count(*) AS n FROM users WHERE role='admin' AND status='active' AND id <> $1`, [userId],
+        )).rows[0]!;
+        if (Number(others['n']) === 0) {
+          await this.#audit(c, `sso:${claims.iss}`, 'account.idp_role_refused', userId, meta, { why: '마지막 활성 관리자를 내리려 했다' });
+          return undefined;
+        }
+      }
+      await c.query(`UPDATE users SET role=$2, updated_at=now() WHERE id=$1`, [userId, mapped]);
+      await this.#audit(c, `sso:${claims.iss}`, 'account.idp_role_sync', userId, meta, { from: current, to: mapped });
+      return mapped;
+    });
   }
 
   /**
@@ -516,10 +566,35 @@ export class AccountService {
   }
 
   async providers(): Promise<unknown[]> {
-    return (await this.#q(`SELECT issuer, jit_enabled, jit_role, updated_at, updated_by FROM sso_providers ORDER BY issuer`)).map((r) => ({
+    return (await this.#q(
+      `SELECT issuer, jit_enabled, jit_role, role_claim, role_map, updated_at, updated_by FROM sso_providers ORDER BY issuer`,
+    )).map((r) => ({
       issuer: str(r, 'issuer'), jitEnabled: r['jit_enabled'] === true, jitRole: str(r, 'jit_role'),
+      roleClaim: opt(r, 'role_claim'), roleMap: r['role_map'] ?? {},
       updatedAt: iso(r['updated_at']), updatedBy: str(r, 'updated_by'),
     }));
+  }
+
+  /**
+   * 공급자의 역할 클레임·매핑 (B3). 매핑 값은 auditor | operator | admin 만. 클레임을 비우면(null) 그 공급자의
+   * IdP 정본 계정은 로그인이 거부된다 — 맞출 근거가 없으니까.
+   */
+  async setProviderRoles(issuer: string, roleClaim: string | null, roleMap: Record<string, unknown>, by: string, meta: Meta = {}): Promise<void> {
+    if (issuer.trim() === '') throw new AccountError(400, 'malformed', 'issuer 가 비었다');
+    if (roleClaim !== null && !/^[A-Za-z0-9_.:/-]{1,200}$/.test(roleClaim)) throw new AccountError(400, 'malformed', '역할 클레임 이름 모양이 아니다');
+    for (const [k, v] of Object.entries(roleMap)) {
+      if (k === '' || k.length > 200) throw new AccountError(400, 'malformed', '매핑의 IdP 역할 값이 비었거나 너무 길다');
+      if (!isRole(v)) throw new AccountError(400, 'malformed', `매핑 값은 auditor | operator | admin 이다 (${k} → ${String(v)})`);
+    }
+    await this.#tx(async (c) => {
+      await c.query(
+        `INSERT INTO sso_providers (issuer, role_claim, role_map, updated_by) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (issuer) DO UPDATE SET role_claim=EXCLUDED.role_claim, role_map=EXCLUDED.role_map,
+                                            updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        [issuer, roleClaim, JSON.stringify(roleMap), by],
+      );
+      await this.#audit(c, by, 'account.sso_roles', null, meta, { issuer, roleClaim, keys: Object.keys(roleMap).length });
+    });
   }
 
   /** 공급자별 JIT — 관리자가 **명시적으로** 켠다(공통 정책). 켜도 auditor 만. */
@@ -873,8 +948,11 @@ export class AccountService {
    * 역할·상태를 바꾼다. **마지막 활성 admin 은 강등·정지할 수 없다.** admin 으로 올리려면 그 사람이
    * TOTP 를 등록해 둬야 한다. 정지는 그 사람 세션을 즉시 철회한다(역할 하향은 다음 요청의 재읽기로 반영).
    */
-  async updateUser(userId: string, patch: { role?: string; status?: string }, by: string, meta: Meta = {}): Promise<void> {
+  async updateUser(userId: string, patch: { role?: string; status?: string; roleAuthority?: string }, by: string, meta: Meta = {}): Promise<void> {
     if (patch.role !== undefined && !isRole(patch.role)) throw new AccountError(400, 'malformed', '역할은 auditor | operator | admin 이다');
+    if (patch.roleAuthority !== undefined && patch.roleAuthority !== 'local' && patch.roleAuthority !== 'idp') {
+      throw new AccountError(400, 'malformed', '권한 정본은 local | idp 다');
+    }
     if (patch.status !== undefined && patch.status !== 'active' && patch.status !== 'suspended') {
       throw new AccountError(400, 'malformed', '상태는 active | suspended 다 (삭제는 따로)');
     }
@@ -882,10 +960,20 @@ export class AccountService {
       // admin 행을 잠근다 — 둘이 동시에 서로를 강등해 관리자가 0 이 되는 경합을 막는다.
       await c.query(`SELECT id FROM users WHERE role='admin' AND status='active' FOR UPDATE`);
       const u = (await c.query(
-        `SELECT u.role, u.status, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u`,
+        `SELECT u.role, u.status, u.role_authority, t.confirmed_at,
+                EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id=u.id) AS has_identity
+           FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u`,
         [userId],
       )).rows[0];
       if (u === undefined || str(u, 'status') === 'deleted') throw new AccountError(404, 'no_user', '그런 계정이 없다');
+      const authority = patch.roleAuthority ?? str(u, 'role_authority');
+      // IdP 가 정본이면 역할은 SSO 로그인이 맞춘다 — 관리자가 손으로 바꾸면 다음 로그인에 덮인다. 그러니 막는다.
+      if (authority === 'idp' && patch.role !== undefined) {
+        throw new AccountError(409, 'role_from_idp', '이 계정의 역할은 IdP 가 정한다 — 먼저 권한 정본을 local 로 바꾼다');
+      }
+      if (authority === 'idp' && u['has_identity'] !== true) {
+        throw new AccountError(409, 'no_identity', 'SSO 가 연결되지 않은 계정은 IdP 를 권한 정본으로 둘 수 없다');
+      }
       const role = patch.role ?? str(u, 'role');
       const status = patch.status ?? str(u, 'status');
       if (str(u, 'role') === 'admin' && str(u, 'status') === 'active' && (role !== 'admin' || status !== 'active')) {
@@ -894,11 +982,11 @@ export class AccountService {
       if (role === 'admin' && str(u, 'role') !== 'admin' && u['confirmed_at'] === null) {
         throw new AccountError(409, 'admin_needs_mfa', '관리자로 올리려면 그 사람이 먼저 인증 앱을 등록해야 한다');
       }
-      await c.query(`UPDATE users SET role=$2, status=$3, updated_at=now() WHERE id=$1`, [userId, role, status]);
+      await c.query(`UPDATE users SET role=$2, status=$3, role_authority=$4, updated_at=now() WHERE id=$1`, [userId, role, status, authority]);
       if (status === 'suspended') {
         await c.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId]);
       }
-      await this.#audit(c, by, 'account.update', userId, meta, { role, status });
+      await this.#audit(c, by, 'account.update', userId, meta, { role, status, roleAuthority: authority });
     });
   }
 
