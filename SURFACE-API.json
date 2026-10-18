@@ -502,6 +502,178 @@
           }
         }
       }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "GET:/api/v1/me",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/session/logout-all": {
+      "post": {
+        "operationId": "POST:/api/v1/session/logout-all",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/password": {
+      "post": {
+        "operationId": "POST:/api/v1/me/password",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/totp": {
+      "post": {
+        "operationId": "POST:/api/v1/me/mfa/totp",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/totp/confirm": {
+      "post": {
+        "operationId": "POST:/api/v1/me/mfa/totp/confirm",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/totp/remove": {
+      "post": {
+        "operationId": "POST:/api/v1/me/mfa/totp/remove",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/recovery-codes": {
+      "post": {
+        "operationId": "POST:/api/v1/me/mfa/recovery-codes",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "operationId": "GET:/api/v1/users",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "patch": {
+        "operationId": "PATCH:/api/v1/users/:id",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "DELETE:/api/v1/users/:id",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/revoke-sessions": {
+      "post": {
+        "operationId": "POST:/api/v1/users/:id/revoke-sessions",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/recovery-link": {
+      "post": {
+        "operationId": "POST:/api/v1/users/:id/recovery-link",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/invitations": {
+      "get": {
+        "operationId": "GET:/api/v1/invitations",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "post": {
+        "operationId": "POST:/api/v1/invitations",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/invitations/{id}": {
+      "delete": {
+        "operationId": "DELETE:/api/v1/invitations/:id",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/account-audit": {
+      "get": {
+        "operationId": "GET:/api/v1/account-audit",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
     }
   }
 }

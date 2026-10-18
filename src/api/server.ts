@@ -39,6 +39,7 @@ import { count, render as renderMetrics, type LabeledGauge } from '../obs/metric
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
+import { AccountError, AccountStoreUnavailable, type AccountService, type Meta as AccountMeta } from '../accounts/service.js';
 import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
@@ -94,6 +95,11 @@ export type ApiOptions = {
   sessions?: BrowserSessions;
   /** HTTPS 서버에서만 Secure 쿠키를 붙인다. */
   sessionSecure?: boolean;
+  /**
+   * 사람 계정 (공통 회원정책 1차 · 계획 A). 공용 계정 PG 에 산다. 없으면 계정 경로는 404
+   * `accounts_disabled` 이고 사람 로그인은 지금처럼 OIDC 메모리 세션뿐이다.
+   */
+  accounts?: AccountService;
 };
 
 export function plaintextExposureMetric(exposed: boolean): LabeledGauge {
@@ -143,6 +149,11 @@ type Route = {
   keys: string[];
   scope: Scope;
   handle: (c: Ctx, api: ApiOptions) => Promise<void>;
+  /**
+   * 리더가 아니어도 받는다. 계정 쓰기는 **계정 PG** 에 가고 지역 리더십과 무관하다 — 스탠바이에서
+   * 비밀번호를 못 바꾸면 사람이 그 이유를 알 길이 없다.
+   */
+  leaderFree?: boolean;
 };
 
 const json = (res: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}): void => {
@@ -161,6 +172,7 @@ const json = (res: ServerResponse, status: number, value: unknown, headers: Reco
 function route(
   method: string, path: string, scope: Scope,
   handle: (c: Ctx, api: ApiOptions) => Promise<void>,
+  opts: { leaderFree?: boolean } = {},
 ): Route {
   const keys: string[] = [];
   const pattern = new RegExp(
@@ -169,7 +181,7 @@ function route(
       return '([^/]+)';
     }) + '$',
   );
-  return { method, path, pattern, keys, scope, handle };
+  return { method, path, pattern, keys, scope, handle, ...(opts.leaderFree === true ? { leaderFree: true } : {}) };
 }
 
 /** 구현된 REST 표면. OpenAPI 동결이 이 표를 본다. */
@@ -828,6 +840,94 @@ const ROUTES: Route[] = [
       revision: r['revision'] === null ? null : String(r['revision']),
     })));
   }),
+
+  // ── 사람 계정 (공통 회원정책 1차 · 계획 A) ─────────────────────────────
+  //
+  // 「나」 경로는 사람 세션에만 뜻이 있다(`personOf`). 관리 경로는 `admin` 스코프 — 사람 admin 은
+  // MFA 를 지난 세션이고(`AccountService.authenticate`), 기계 토큰의 admin 은 비상 경로다.
+  // 전부 `leaderFree` 다: 계정 PG 는 지역 리더십과 무관하다.
+
+  route('GET', '/api/v1/me', 'read', async (c, api) => {
+    json(c.res, 200, await accountsOf(api).me(personOf(c.who).userId));
+  }, { leaderFree: true }),
+
+  route('POST', '/api/v1/session/logout-all', 'read', async (c, api) => {
+    const n = await accountsOf(api).logoutAll(personOf(c.who).userId, c.who.name, metaOf(c.req));
+    c.res.setHeader('set-cookie', expiredCookie(accountCookie(api), api.sessionSecure === true));
+    json(c.res, 200, { revoked: n });
+  }, { leaderFree: true }),
+
+  route('POST', '/api/v1/me/password', 'read', async (c, api) => {
+    const p = personOf(c.who);
+    await accountsOf(api).changePassword(p.userId, bodyStr(c.body, 'current'), bodyStr(c.body, 'next'), p.sessionHash, metaOf(c.req));
+    json(c.res, 200, { changed: true });
+  }, { leaderFree: true }),
+
+  route('POST', '/api/v1/me/mfa/totp', 'read', async (c, api) => {
+    json(c.res, 200, await accountsOf(api).beginTotp(personOf(c.who).userId, c.who.name.replace(/^user:/, '')));
+  }, { leaderFree: true }),
+
+  route('POST', '/api/v1/me/mfa/totp/confirm', 'read', async (c, api) => {
+    json(c.res, 200, { recoveryCodes: await accountsOf(api).confirmTotp(personOf(c.who).userId, bodyStr(c.body, 'code'), metaOf(c.req)) });
+  }, { leaderFree: true }),
+
+  route('POST', '/api/v1/me/mfa/totp/remove', 'read', async (c, api) => {
+    await accountsOf(api).removeTotp(personOf(c.who).userId, bodyStr(c.body, 'password'), metaOf(c.req));
+    json(c.res, 200, { removed: true });
+  }, { leaderFree: true }),
+
+  route('POST', '/api/v1/me/mfa/recovery-codes', 'read', async (c, api) => {
+    json(c.res, 200, { recoveryCodes: await accountsOf(api).regenerateRecoveryCodes(personOf(c.who).userId, bodyStr(c.body, 'password'), metaOf(c.req)) });
+  }, { leaderFree: true }),
+
+  route('GET', '/api/v1/users', 'admin', async (c, api) => {
+    json(c.res, 200, await accountsOf(api).listUsers());
+  }, { leaderFree: true }),
+
+  route('PATCH', '/api/v1/users/:id', 'admin', async (c, api) => {
+    const b = (c.body ?? {}) as Record<string, unknown>;
+    await accountsOf(api).updateUser(c.params['id'] ?? '', {
+      ...(typeof b['role'] === 'string' ? { role: b['role'] } : {}),
+      ...(typeof b['status'] === 'string' ? { status: b['status'] } : {}),
+    }, c.who.name, metaOf(c.req));
+    json(c.res, 200, { updated: true });
+  }, { leaderFree: true }),
+
+  route('DELETE', '/api/v1/users/:id', 'admin', async (c, api) => {
+    await accountsOf(api).deleteUser(c.params['id'] ?? '', c.who.name, metaOf(c.req));
+    json(c.res, 200, { deleted: true });
+  }, { leaderFree: true }),
+
+  route('POST', '/api/v1/users/:id/revoke-sessions', 'admin', async (c, api) => {
+    json(c.res, 200, { revoked: await accountsOf(api).logoutAll(c.params['id'] ?? '', c.who.name, metaOf(c.req)) });
+  }, { leaderFree: true }),
+
+  /** 관리자 MFA 초기화·복구 — 링크는 이 응답에만 한 번 나온다. 대상 세션은 즉시 끊긴다. */
+  route('POST', '/api/v1/users/:id/recovery-link', 'admin', async (c, api) => {
+    json(c.res, 200, { token: await accountsOf(api).recoveryLink(c.params['id'] ?? '', c.who.name, metaOf(c.req)) });
+  }, { leaderFree: true }),
+
+  route('GET', '/api/v1/invitations', 'admin', async (c, api) => {
+    json(c.res, 200, await accountsOf(api).listInvitations());
+  }, { leaderFree: true }),
+
+  /** 초대 링크는 이 응답에만 한 번 나온다(메일 발송은 B 단계). 공개 가입은 없다. */
+  route('POST', '/api/v1/invitations', 'admin', async (c, api) => {
+    const b = (c.body ?? {}) as Record<string, unknown>;
+    json(c.res, 200, await accountsOf(api).invite({
+      role: typeof b['role'] === 'string' ? b['role'] : '',
+      ...(typeof b['email'] === 'string' && b['email'] !== '' ? { email: b['email'] } : {}),
+    }, c.who.name, metaOf(c.req)));
+  }, { leaderFree: true }),
+
+  route('DELETE', '/api/v1/invitations/:id', 'admin', async (c, api) => {
+    await accountsOf(api).revokeInvitation(c.params['id'] ?? '', c.who.name, metaOf(c.req));
+    json(c.res, 200, { revoked: true });
+  }, { leaderFree: true }),
+
+  route('GET', '/api/v1/account-audit', 'admin', async (c, api) => {
+    json(c.res, 200, await accountsOf(api).accountAudit(Number(c.url.searchParams.get('limit') ?? '100') || 100));
+  }, { leaderFree: true }),
 ];
 
 async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
@@ -983,6 +1083,58 @@ function crossSite(res: ServerResponse): void {
   });
 }
 
+// ── 사람 계정 도우미 ──────────────────────────────────────────────────────
+
+/**
+ * 계정 세션 쿠키 이름. TLS 면 `__Host-` 접두 — 브라우저가 Secure·Path=/·Domain 없음을 강제해서,
+ * 형제 서브도메인이 같은 이름의 쿠키를 심어 덮는 길(쿠키 토싱)이 막힌다.
+ */
+const accountCookie = (api: { sessionSecure?: boolean }): string =>
+  api.sessionSecure === true ? '__Host-bary_sid' : 'bary_sid';
+/** MFA 대기 표 — MFA 단계에만 실린다. */
+const MFA_COOKIE = 'bary_mfa';
+const MFA_PATH = '/api/v1/session/mfa';
+
+function accountsOf(api: { accounts?: AccountService }): AccountService {
+  if (api.accounts === undefined) {
+    throw new StoreError(404, 'accounts_disabled', '이 배포에는 사람 계정이 켜져 있지 않다 (BARY_ACCOUNTS_DSN)');
+  }
+  return api.accounts;
+}
+
+function personOf(who: Principal): { userId: string; sessionHash: string } {
+  if (who.account === undefined) {
+    throw new StoreError(404, 'not_a_person', '사람 계정으로 로그인한 세션에서만 쓴다 (토큰·인증서는 사람이 아니다)');
+  }
+  return who.account;
+}
+
+function metaOf(req: IncomingMessage): AccountMeta {
+  const ua = req.headers['user-agent'];
+  return {
+    ...(req.socket.remoteAddress === undefined ? {} : { ip: req.socket.remoteAddress }),
+    ...(typeof ua === 'string' ? { userAgent: ua.slice(0, 200) } : {}),
+  };
+}
+
+function bodyStr(body: unknown, key: string): string {
+  const v = body !== null && typeof body === 'object' ? (body as Record<string, unknown>)[key] : undefined;
+  if (typeof v !== 'string') throw new StoreError(400, 'malformed', `본문에 '${key}' 문자열이 필요하다`);
+  return v;
+}
+
+/** 계정 PG 를 못 물었다 — **거부한다**(공통 정책: 확인 불가 시 거부). 캐시로 넘기지 않는다. */
+function accountStoreDown(res: ServerResponse): void {
+  json(res, 503, {
+    code: 'account_store_unavailable',
+    message: '계정 저장소에 닿지 못해 세션을 확인할 수 없다 — 사람 로그인은 잠시 막힌다 (API 토큰은 그대로다)',
+  }, { 'retry-after': '5' });
+}
+
+function mfaCookie(value: string, secure: boolean, maxAge: number): string {
+  return `${MFA_COOKIE}=${value}; Max-Age=${maxAge}; Path=${MFA_PATH}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
+}
+
 export function createApi(api: ApiOptions): Server {
   return createServer(apiHandler(api));
 }
@@ -1027,12 +1179,99 @@ async function handle(
   if (req.method === 'POST' && url.pathname === '/api/v1/session/logout') {
     // 남이 로그아웃시키는 것도 막는다 — 피해는 작지만 쿠키가 걸린 POST 의 규칙은 하나다.
     if (!sameOriginWrite(req)) { crossSite(res); return; }
-    res.setHeader('set-cookie', [
+    const clear = [
       expiredCookie(SESSION_COOKIE, api.sessionSecure === true),
       expiredCookie(LOGIN_COOKIE, api.sessionSecure === true),
-    ]);
+      expiredCookie(accountCookie(api), api.sessionSecure === true),
+    ];
+    /**
+     * **쿠키를 지운 것으로 로그아웃을 끝내지 않는다**(공통 정책). 사람 계정이면 서버에서 그 세션을
+     * 철회하고, 철회를 확인하지 못하면 그렇다고 말한다 — 쿠키는 지우되 503 이다. 「로그아웃됐다」고
+     * 답했는데 훔친 쿠키가 계속 통하는 상태를 만들지 않는다.
+     */
+    if (api.accounts !== undefined) {
+      try {
+        await api.accounts.logout(cookieValue(req.headers.cookie, accountCookie(api)), metaOf(req));
+      } catch (e) {
+        if (!(e instanceof AccountStoreUnavailable)) throw e;
+        res.setHeader('set-cookie', clear);
+        accountStoreDown(res);
+        return;
+      }
+    }
+    res.setHeader('set-cookie', clear);
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  /**
+   * **사람 계정 로그인** (공통 회원정책 1차 · 계획 A). 인증 앞이라 여기서 받는다.
+   *
+   * 셋 다 쿠키를 만드는 POST 라 같은 출처 검사를 지난다(로그인 CSRF). 실패는 IP 단위 제한
+   * (`authFailures`)과 계정 단위 잠금(계정 PG) 둘에 걸린다. 응답은 계정 유무와 무관하게 같다.
+   */
+  if (req.method === 'POST' && (url.pathname === '/api/v1/session/login' || url.pathname === MFA_PATH
+    || url.pathname === '/api/v1/invitations/preview' || url.pathname === '/api/v1/invitations/accept')) {
+    if (!sameOriginWrite(req)) { crossSite(res); return; }
+    const accounts = api.accounts;
+    if (accounts === undefined) {
+      json(res, 404, { code: 'accounts_disabled', message: '이 배포에는 사람 계정이 켜져 있지 않다' });
+      return;
+    }
+    const ipKey = req.socket.remoteAddress ?? 'unknown';
+    try {
+      const body = await readBody(req, max);
+      const secure = api.sessionSecure === true;
+      if (url.pathname === '/api/v1/invitations/preview') {
+        json(res, 200, await accounts.previewLink(bodyStr(body, 'token')));
+        return;
+      }
+      if (url.pathname === '/api/v1/invitations/accept') {
+        const b = (body ?? {}) as Record<string, unknown>;
+        const totp = b['totp'] as { secret?: unknown; code?: unknown } | undefined;
+        json(res, 200, await accounts.acceptLink({
+          token: bodyStr(body, 'token'),
+          password: bodyStr(body, 'password'),
+          ...(typeof b['username'] === 'string' ? { username: b['username'] } : {}),
+          ...(typeof b['displayName'] === 'string' ? { displayName: b['displayName'] } : {}),
+          ...(totp !== undefined && typeof totp.secret === 'string' && typeof totp.code === 'string'
+            ? { totp: { secret: totp.secret, code: totp.code } } : {}),
+        }, metaOf(req)));
+        return;
+      }
+      const out = url.pathname === MFA_PATH
+        ? await accounts.completeMfa(cookieValue(req.headers.cookie, MFA_COOKIE), bodyStr(body, 'code'), metaOf(req))
+        : await accounts.login(bodyStr(body, 'username'), bodyStr(body, 'password'), metaOf(req));
+      if (out.kind === 'denied') {
+        count('bary_auth_failures_total');
+        const retryAfter = authFailures.record(ipKey);
+        if (retryAfter !== undefined) {
+          json(res, 429, { code: 'rate_limited', message: '실패가 너무 많다 — 잠시 뒤 다시 시도하라' }, { 'retry-after': String(retryAfter) });
+        } else {
+          json(res, 401, { code: 'login_failed', message: '아이디·비밀번호 또는 인증 코드가 맞지 않는다' });
+        }
+        return;
+      }
+      authFailures.clear(ipKey);
+      if (out.kind === 'mfa') {
+        res.setHeader('set-cookie', mfaCookie(out.sessionId, secure, out.maxAgeS));
+        json(res, 200, { status: 'mfa_required' });
+        return;
+      }
+      res.setHeader('set-cookie', [
+        sessionCookie(accountCookie(api), out.sessionId, secure, out.maxAgeS),
+        mfaCookie('', secure, 0),
+      ]);
+      json(res, 200, { status: 'ok' });
+    } catch (e) {
+      if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
+      if (e instanceof AccountError || e instanceof StoreError) {
+        json(res, e.status, { code: e.code, message: e.message });
+        return;
+      }
+      throw e;
+    }
     return;
   }
 
@@ -1141,7 +1380,23 @@ async function handle(
    * 그 규칙을 진다.
    */
   const bearer = api.auth.authenticate(req.headers.authorization);
-  const session = bearer === undefined
+  /**
+   * 사람 계정 세션은 **요청마다 계정 PG 로 확인**한다 — 로그아웃·정지·역할 하향이 다음 요청부터
+   * 반영되는 자리다. 못 물으면 거부한다(503). OIDC 메모리 세션(현행)은 그 뒤에 본다.
+   */
+  let session: Principal | undefined;
+  if (bearer === undefined && api.accounts !== undefined) {
+    const sid = cookieValue(req.headers.cookie, accountCookie(api));
+    if (sid !== undefined && sid !== '') {
+      try {
+        session = await api.accounts.authenticate(sid);
+      } catch (e) {
+        if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
+        throw e;
+      }
+    }
+  }
+  session ??= bearer === undefined
     ? api.sessions!.get(cookieValue(req.headers.cookie, SESSION_COOKIE))
     : undefined;
   // 쿠키가 신원이 된 요청만 출처를 본다 (위 `sameOriginWrite`).
@@ -1199,7 +1454,7 @@ async function handle(
   //
   // **503 이지 403 이 아니다.** 권한이 없는 것이 아니라 *여기서는* 못 하는 것이고,
   // 다른 인스턴스에서는 되고 이 인스턴스도 승격되면 된다.
-  if (hit.r.scope !== 'read' && !api.election.state.isLeader) {
+  if (hit.r.scope !== 'read' && hit.r.leaderFree !== true && !api.election.state.isLeader) {
     const s = api.election.state;
     json(res, 503, {
       code: 'not_leader',
@@ -1234,6 +1489,14 @@ async function handle(
         code: e.code, message: e.message,
         ...(e.detail === undefined ? {} : { detail: e.detail }),
       });
+      return;
+    }
+    if (e instanceof AccountError) {
+      json(res, e.status, { code: e.code, message: e.message });
+      return;
+    }
+    if (e instanceof AccountStoreUnavailable) {
+      accountStoreDown(res);
       return;
     }
     // 라우팅 시점에 리더였는데 부작용 직전에 아니게 된 경우다. 창이 있다는 사실

@@ -14,6 +14,8 @@ rm -rf dist dist-testing
 npx tsc -p tsconfig.build.json
 mkdir -p dist/store/migrations
 cp src/store/migrations/*.sql dist/store/migrations/
+mkdir -p dist/store/account-migrations
+cp src/store/account-migrations/*.sql dist/store/account-migrations/
 # **진입점 전부에 건다** (검수 N1). 전에는 이름을 손으로 들고 있었고, `bary-dp-agent`
 # 가 `package.json` 의 `bin` 에 들어온 회차에 이 줄이 안 따라왔다 — 선언은 있는데
 # 실행 권한이 없는 산출물이 나갔다. 이 파일 머리말이 *"빌드가 조용히 반쪽짜리

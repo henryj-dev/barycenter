@@ -118,6 +118,11 @@ export type Principal = {
   name: string;
   scopes: ReadonlySet<Scope>;
   role?: Role;
+  /**
+   * 사람 계정일 때만 있다(계정 PG 의 서버 세션). 토큰·mTLS·OIDC 메모리 세션은 없다 —
+   * `/me` 같은 「그 사람」 경로가 기계 신원을 사람으로 착각하지 않게 하는 표식이다.
+   */
+  account?: { userId: string; sessionHash: string; mfaAt?: number };
 };
 
 export type TokenSpec = {
