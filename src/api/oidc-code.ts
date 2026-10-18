@@ -20,7 +20,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 
-import { principalFromIdToken, type OidcSettings, type Principal } from './auth.js';
+import { principalFromIdToken, verifiedIdClaims, type OidcSettings, type Principal } from './auth.js';
 
 const b64url = (b: Buffer): string =>
   b.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -109,12 +109,23 @@ export type CodeExchangeOptions = {
  * Token Endpoint 에 code 를 넘기고, 돌아온 `id_token` 을 기존 검증에 넣는다.
  * 없거나 거절되면 없음.
  */
-export async function exchangeAuthorizationCode(
+/**
+ * 코드 → **검증된 클레임**(역할은 안 본다). 사람 계정 SSO 가 쓴다 — 누구인지만 IdP 에게 묻는다.
+ */
+export async function exchangeForClaims(
   rp: OidcRpSettings,
   code: string,
   fetchImpl: typeof fetch,
   opts: CodeExchangeOptions = {},
-): Promise<CodeExchange | undefined> {
+): Promise<Record<string, unknown> | undefined> {
+  const idToken = await fetchIdToken(rp, code, fetchImpl, opts);
+  if (idToken === undefined) return undefined;
+  return verifiedIdClaims(idToken, opts.nonce === undefined ? rp : { ...rp, nonce: opts.nonce });
+}
+
+async function fetchIdToken(
+  rp: OidcRpSettings, code: string, fetchImpl: typeof fetch, opts: CodeExchangeOptions,
+): Promise<string | undefined> {
   const res = await fetchImpl(rp.tokenEndpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -129,7 +140,17 @@ export async function exchangeAuthorizationCode(
   }
   if (payload === null || typeof payload !== 'object') return undefined;
   const idToken = (payload as Record<string, unknown>)['id_token'];
-  if (typeof idToken !== 'string' || idToken === '') return undefined;
+  return typeof idToken === 'string' && idToken !== '' ? idToken : undefined;
+}
+
+export async function exchangeAuthorizationCode(
+  rp: OidcRpSettings,
+  code: string,
+  fetchImpl: typeof fetch,
+  opts: CodeExchangeOptions = {},
+): Promise<CodeExchange | undefined> {
+  const idToken = await fetchIdToken(rp, code, fetchImpl, opts);
+  if (idToken === undefined) return undefined;
   // nonce 는 **검증기 안에서** 본다. 여기서 페이로드를 한 번 더 까면 서명 검증을 지나지
   // 않은 값을 읽는 자리가 하나 생기고, 그 자리는 언젠가 다른 판단에도 쓰인다.
   const principal = principalFromIdToken(

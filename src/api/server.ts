@@ -58,7 +58,7 @@ import {
   BrowserSessions, LOGIN_COOKIE, SESSION_COOKIE, cookieValue, expiredCookie, sessionCookie,
 } from './browser-session.js';
 import {
-  authorizationRequest, exchangeAuthorizationCode, pkceChallenge, pkceVerifier,
+  authorizationRequest, exchangeAuthorizationCode, exchangeForClaims, pkceChallenge, pkceVerifier,
   type OidcRpSettings,
 } from './oidc-code.js';
 
@@ -932,6 +932,45 @@ const ROUTES: Route[] = [
     json(c.res, 202, { sent: true });
   }, { leaderFree: true }),
 
+  /**
+   * SSO 연결 시작 — **비밀번호를 다시 넣어야** 연다(공통 정책). 돌아온 콜백(`/oidc/token`)이 그 사람에게 잇는다.
+   */
+  route('POST', '/api/v1/me/identities/link', 'read', async (c, api) => {
+    const rp = api.oidcRp;
+    if (rp === undefined) throw new StoreError(404, 'oidc_not_configured', 'SSO 공급자가 설정되지 않았다');
+    const state = randomBytes(16).toString('hex');
+    const nonce = randomBytes(16).toString('hex');
+    const codeVerifier = pkceVerifier();
+    const flowId = await accountsOf(api).beginSso('link', state, nonce, codeVerifier,
+      { userId: personOf(c.who).userId, password: bodyStr(c.body, 'password') });
+    c.res.setHeader('set-cookie', ssoCookie(flowId, api.sessionSecure === true, 600));
+    json(c.res, 200, {
+      url: authorizationRequest(rp, { state, nonce, codeChallenge: pkceChallenge(codeVerifier) }).toString(),
+      state,
+    });
+  }, { leaderFree: true }),
+
+  route('POST', '/api/v1/me/identities/unlink', 'read', async (c, api) => {
+    await accountsOf(api).unlinkIdentity(personOf(c.who).userId, bodyStr(c.body, 'issuer'), bodyStr(c.body, 'subject'),
+      bodyStr(c.body, 'password'), metaOf(c.req));
+    json(c.res, 200, { unlinked: true });
+  }, { leaderFree: true }),
+
+  route('GET', '/api/v1/sso-providers', 'admin', async (c, api) => {
+    json(c.res, 200, {
+      configured: api.oidcRp?.issuer ?? null,
+      providers: await accountsOf(api).providers(),
+    });
+  }, { leaderFree: true }),
+
+  /** 공급자별 JIT — 관리자가 명시해서 켠다. 켜도 auditor 로만 만든다. */
+  route('POST', '/api/v1/sso-providers', 'admin', async (c, api) => {
+    const b = (c.body ?? {}) as Record<string, unknown>;
+    if (typeof b['jitEnabled'] !== 'boolean') throw new StoreError(400, 'malformed', "본문에 'jitEnabled' 불리언이 필요하다");
+    await accountsOf(api).setProviderJit(bodyStr(c.body, 'issuer'), b['jitEnabled'], c.who.name, metaOf(c.req));
+    json(c.res, 200, { updated: true });
+  }, { leaderFree: true, sensitive: true }),
+
   route('GET', '/api/v1/users', 'admin', async (c, api) => {
     json(c.res, 200, await accountsOf(api).listUsers());
   }, { leaderFree: true }),
@@ -1188,6 +1227,64 @@ function accountStoreDown(res: ServerResponse): void {
   }, { 'retry-after': '5' });
 }
 
+/** OIDC 흐름 id — 콜백 교환에만 실린다. 상태는 계정 PG 에 있다. */
+const SSO_COOKIE = 'bary_sso';
+function ssoCookie(value: string, secure: boolean, maxAge: number): string {
+  return `${SSO_COOKIE}=${value}; Max-Age=${maxAge}; Path=/api/v1/oidc; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
+}
+
+/**
+ * 사람 계정의 SSO 콜백 (계획 B2 — **로컬 권한 정본**). IdP 에게는 누구인지(iss, sub)만 묻고 역할 클레임은 안 읽는다.
+ * IdP 의 MFA 도 인정하지 않는다 — 관리자·인증 앱 등록자는 이어서 로컬 TOTP 단계다(공급자 계약 미해결).
+ */
+async function finishAccountSso(
+  req: IncomingMessage, res: ServerResponse, api: ApiOptions, accounts: AccountService,
+  rp: OidcRpSettings, code: string, state: string,
+): Promise<void> {
+  const secure = api.sessionSecure === true;
+  const clearFlow = ssoCookie('', secure, 0);
+  const flow = await accounts.takeSsoFlow(cookieValue(req.headers.cookie, SSO_COOKIE), state);
+  if (flow === undefined) {
+    res.setHeader('set-cookie', clearFlow);
+    json(res, 401, { code: 'unauthenticated', message: '로그인 흐름이 없거나 만료됐다' });
+    return;
+  }
+  const claims = await exchangeForClaims(rp, code, api.oidcFetch ?? fetch, { codeVerifier: flow.codeVerifier, nonce: flow.nonce });
+  if (claims === undefined || typeof claims['iss'] !== 'string' || typeof claims['sub'] !== 'string') {
+    res.setHeader('set-cookie', clearFlow);
+    json(res, 401, { code: 'unauthenticated', message: 'ID Token 이 거절됐다' });
+    return;
+  }
+  const pref = claims['preferred_username'];
+  const out = await accounts.completeSso(flow.intent, flow.userId, {
+    iss: claims['iss'], sub: claims['sub'], ...(typeof pref === 'string' ? { preferredUsername: pref } : {}),
+  }, metaOf(req));
+  switch (out.kind) {
+    case 'session':
+      res.setHeader('set-cookie', [clearFlow, sessionCookie(accountCookie(api), out.sessionId, secure, out.maxAgeS)]);
+      json(res, 200, { status: 'ok', authenticated: true });
+      return;
+    case 'mfa':
+      res.setHeader('set-cookie', [clearFlow, mfaCookie(out.sessionId, secure, out.maxAgeS)]);
+      json(res, 200, { status: 'mfa_required' });
+      return;
+    case 'linked':
+      res.setHeader('set-cookie', clearFlow);
+      json(res, 200, { status: 'linked' });
+      return;
+    case 'not_linked':
+      res.setHeader('set-cookie', clearFlow);
+      json(res, 403, {
+        code: 'sso_not_linked',
+        message: '이 SSO 계정에 연결된 barycenter 계정이 없다 — 관리자 초대를 받거나, 로그인해서 내 계정에서 SSO 를 연결한다',
+      });
+      return;
+    default:
+      res.setHeader('set-cookie', clearFlow);
+      json(res, 401, { code: 'login_failed', message: '로그인할 수 없는 계정이다' });
+  }
+}
+
 function mfaCookie(value: string, secure: boolean, maxAge: number): string {
   return `${MFA_COOKIE}=${value}; Max-Age=${maxAge}; Path=${MFA_PATH}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
 }
@@ -1264,7 +1361,10 @@ async function handle(
 
   // 화면이 「비밀번호를 잊었다」를 그릴지 고른다. 비밀이 아니다.
   if (req.method === 'GET' && url.pathname === '/api/v1/account/features') {
-    json(res, 200, api.accounts === undefined ? { accounts: false, mail: false } : { accounts: true, ...api.accounts.features() });
+    json(res, 200, {
+      ...(api.accounts === undefined ? { accounts: false, mail: false } : { accounts: true, ...api.accounts.features() }),
+      sso: api.oidcRp !== undefined,
+    });
     return;
   }
 
@@ -1391,8 +1491,19 @@ async function handle(
     const state = randomBytes(16).toString('hex');
     const nonce = randomBytes(16).toString('hex');
     const codeVerifier = pkceVerifier();
-    const loginId = api.sessions!.beginLogin({ state, nonce, codeVerifier });
-    res.setHeader('set-cookie', sessionCookie(LOGIN_COOKIE, loginId, api.sessionSecure === true, 600));
+    if (api.accounts !== undefined) {
+      // 사람 계정이 켜졌으면 로그인 중 상태를 **계정 PG** 에 둔다 — 시작과 콜백이 다른 인스턴스로 가도 된다.
+      try {
+        const flowId = await api.accounts.beginSso('login', state, nonce, codeVerifier);
+        res.setHeader('set-cookie', ssoCookie(flowId, api.sessionSecure === true, 600));
+      } catch (e) {
+        if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
+        throw e;
+      }
+    } else {
+      const loginId = api.sessions!.beginLogin({ state, nonce, codeVerifier });
+      res.setHeader('set-cookie', sessionCookie(LOGIN_COOKIE, loginId, api.sessionSecure === true, 600));
+    }
     json(res, 200, {
       url: authorizationRequest(rp, {
         state, nonce, codeChallenge: pkceChallenge(codeVerifier),
@@ -1438,6 +1549,16 @@ async function handle(
         code: 'malformed',
         message: 'state 가 필요하다 — authorization-request 가 준 값을 되보낸다',
       });
+      return;
+    }
+    if (api.accounts !== undefined) {
+      try {
+        await finishAccountSso(req, res, api, api.accounts, rp, code, state);
+      } catch (e) {
+        if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
+        if (e instanceof AccountError) { json(res, e.status, { code: e.code, message: e.message }); return; }
+        throw e;
+      }
       return;
     }
     // state와 로그인 쿠키가 모두 있어야 서버가 보관한 PKCE verifier·nonce를 꺼낸다.

@@ -16,7 +16,11 @@ export type Me = {
   role: Role; roleAuthority: string; createdAt: string;
   mfa: { totp: boolean; recoveryCodesLeft: number };
   sessions: { createdAt: string; lastSeenAt: string; expiresAt: string; methods: string[]; ip: string | null; userAgent: string | null }[];
+  identities: { issuer: string; subject: string; linkedAt: string; lastLoginAt: string | null }[];
+  hasPassword: boolean;
 };
+
+export type SsoProviders = { configured: string | null; providers: { issuer: string; jitEnabled: boolean; jitRole: string }[] };
 
 export type LinkPreview = {
   kind: 'invite' | 'bootstrap' | 'recovery'; role: Role; email: string | null; username?: string;
@@ -64,7 +68,12 @@ export const accountApi = {
     call<{ status: 'ok' | 'mfa_required' }>('POST', '/api/v1/session/login', { username, password }),
   mfa: (code: string) => call<{ status: 'ok' }>('POST', '/api/v1/session/mfa', { code }),
   logout: () => call<undefined>('POST', '/api/v1/session/logout', {}),
-  features: () => call<{ accounts: boolean; mail: boolean }>('GET', '/api/v1/account/features'),
+  features: () => call<{ accounts: boolean; mail: boolean; sso: boolean }>('GET', '/api/v1/account/features'),
+  linkSso: (password: string) => call<{ url: string; state: string }>('POST', '/api/v1/me/identities/link', { password }),
+  unlinkSso: (issuer: string, subject: string, password: string) =>
+    call<{ unlinked: true }>('POST', '/api/v1/me/identities/unlink', { issuer, subject, password }),
+  ssoProviders: () => call<SsoProviders>('GET', '/api/v1/sso-providers'),
+  setJit: (issuer: string, jitEnabled: boolean) => call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, jitEnabled }),
   stepUp: (code: string) => call<{ stepUp: true }>('POST', '/api/v1/session/step-up', { code }, true),
   requestReset: (email: string) => call<{ accepted: true }>('POST', '/api/v1/account/password-reset', { email }),
   confirmReset: (token: string, password: string) => call<{ reset: true }>('POST', '/api/v1/account/password-reset/confirm', { token, password }),

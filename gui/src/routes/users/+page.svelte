@@ -6,6 +6,7 @@
   import { getContext, onMount } from 'svelte';
   import { accountApi, linkFor, type InvitationRow, type Role, type UserRow } from '$lib/account/api';
   import type { Session } from '$lib/account/session.svelte.ts';
+  import SsoJit from '$lib/account/SsoJit.svelte';
 
   const session = getContext<Session>('session');
   const ROLES: Role[] = ['auditor', 'operator', 'admin'];
@@ -76,6 +77,8 @@
       {/each}
     </ul>
   </section>
+
+  <SsoJit />
 
   <section>
     <h2>사람</h2>

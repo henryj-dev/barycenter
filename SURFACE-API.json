@@ -602,6 +602,48 @@
         }
       }
     },
+    "/api/v1/me/identities/link": {
+      "post": {
+        "operationId": "POST:/api/v1/me/identities/link",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/me/identities/unlink": {
+      "post": {
+        "operationId": "POST:/api/v1/me/identities/unlink",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/sso-providers": {
+      "get": {
+        "operationId": "GET:/api/v1/sso-providers",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "post": {
+        "operationId": "POST:/api/v1/sso-providers",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/users": {
       "get": {
         "operationId": "GET:/api/v1/users",
