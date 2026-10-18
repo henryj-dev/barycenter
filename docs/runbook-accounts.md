@@ -17,6 +17,13 @@
 
 ## 첫 관리자
 
+**설치 스크립트가 이미 해 준다.** `deploy/install.sh --with-postgres` 는 같은 PG 에 `bary_accounts` 를 만들고
+`BARY_ACCOUNTS_DSN`·`BARY_ACCOUNTS_KEK` 을 env 파일에 적고(없을 때만 — 재실행이 KEK 를 바꾸지 않는다),
+관리자가 없으면 설치 요약 끝에 **첫 관리자 링크**를 낸다. 외부 PG(`--dsn`)면 `--accounts-dsn` 으로 공용 계정
+PG 를 준다. 계정을 안 쓰려면 `--no-accounts`.
+
+손으로 다시 만들 때:
+
 ```sh
 sudo -u bary env $(cat /etc/barycenter/env | xargs) node /opt/barycenter/dist/bin/barycenterd.js account bootstrap
 ```

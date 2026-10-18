@@ -12,6 +12,10 @@ Debian 11+ · Ubuntu 20.04+ · RHEL 계열 9·10 · Amazon Linux 2023 · Alpine 
 EL 10 은 openresty.org 가 EL 10 판을 안 내서 **EL 9 의 OpenResty RPM 을 쓴다** (실측으로 선다).
 node 는 **22 가 바닥**이고 스크립트가 없으면 깐다.
 
+**사람 계정이 기본으로 켜진다**(공통 회원정책). `--with-postgres` 면 같은 PG 의 `bary_accounts` 에, 외부 PG 면
+`--accounts-dsn` 으로 준 공용 계정 PG 에 둔다. 설치가 끝나면 **첫 관리자 링크**가 한 번 나온다 —
+[`runbook-accounts.md`](./runbook-accounts.md).
+
 ## 1. 깔기 전에 정할 것
 
 | | 고르는 것 | 뒤에 바꾸는 비용 |

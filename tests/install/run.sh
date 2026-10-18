@@ -18,6 +18,7 @@
 #                                             않는다는 것은 재기동해 봐야만 안다
 #   5. `bary status` 가 답하는가            — 토큰 해시와 API 가 맞물렸는가
 #   5-b. reload 가 재시작 없이 토큰을 들이는가 — PID 가 그대로여야 한다. `/status` 의 판 표시도
+#   5-c. 사람 계정이 설치에서 바로 서는가 — 첫 관리자 링크 → TOTP 관리자 → 로그인 → MFA → /me
 #   6. apply 가 :80 을 여는가                — `setcap` 이 걸렸다는 것과 특권 포트가
 #                                             열린다는 것은 다른 사실이다
 #
@@ -268,6 +269,48 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
     printf '    ok   /status 가 설치된 판을 말한다\n'
   else
     printf '    NO   /status 에 build.commit 이 없다\n'
+    rc=1
+  fi
+
+  # ⑤-c **사람 계정이 설치에서 바로 선다** (공통 회원정책 1차). `--with-postgres` 는 같은 PG 에
+  #      `bary_accounts` 를 만들고 KEK 를 만들어 첫 관리자 링크를 낸다. 재는 것은 그 링크 하나로
+  #      **관리자 생성(TOTP 포함) → 로그인 → MFA → /me** 가 실제 데몬에서 끝까지 가는가다.
+  local link
+  link=$(sed -n 's/^  첫 관리자  \(http[^ ]*\/invite#[A-Za-z0-9_-]*\)$/\1/p' "/tmp/bary-install-$name.log" | tail -1)
+  if [ -z "$link" ]; then
+    printf '    NO   설치 요약에 첫 관리자 링크가 없다\n'
+    rc=1
+  elif docker exec "$c" node -e '
+    const crypto = require("crypto");
+    const [link] = process.argv.slice(1);
+    const base = "http://127.0.0.1:8088", tok = link.split("#")[1];
+    const H = { "content-type": "application/json", origin: base };
+    const b32 = (s) => { const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; let bits = 0, v = 0; const o = [];
+      for (const ch of s) { v = (v << 5) | A.indexOf(ch); bits += 5; if (bits >= 8) { o.push((v >>> (bits - 8)) & 255); bits -= 8; } }
+      return Buffer.from(o); };
+    const totp = (key, t) => { const m = Buffer.alloc(8); m.writeBigUInt64BE(BigInt(Math.floor(t / 30000)));
+      const h = crypto.createHmac("sha1", key).update(m).digest(); const f = h[h.length - 1] & 15;
+      return String((((h[f] & 127) << 24) | (h[f + 1] << 16) | (h[f + 2] << 8) | h[f + 3]) % 1e6).padStart(6, "0"); };
+    (async () => {
+      const post = (p, b, extra = {}) => fetch(base + p, { method: "POST", headers: { ...H, ...extra }, body: JSON.stringify(b) });
+      const pv = await (await post("/api/v1/invitations/preview", { token: tok })).json();
+      const key = b32(pv.totp.secret);
+      const acc = await post("/api/v1/invitations/accept", { token: tok, username: "root", password: "harness-admin-pass",
+        totp: { secret: pv.totp.secret, code: totp(key, Date.now()) } });
+      if (!acc.ok) throw new Error("accept " + acc.status);
+      const li = await post("/api/v1/session/login", { username: "root", password: "harness-admin-pass" });
+      if ((await li.json()).status !== "mfa_required") throw new Error("mfa 단계가 아니다");
+      const mfaC = li.headers.getSetCookie().find((x) => x.startsWith("bary_mfa=")).split(";")[0];
+      const mf = await post("/api/v1/session/mfa", { code: totp(key, Date.now() + 30000) }, { cookie: mfaC });
+      if (!mf.ok) throw new Error("mfa " + mf.status);
+      const sid = mf.headers.getSetCookie().find((x) => /^(__Host-)?bary_sid=/.test(x)).split(";")[0];
+      const me = await (await fetch(base + "/api/v1/me", { headers: { cookie: sid } })).json();
+      if (me.username !== "root" || me.role !== "admin") throw new Error("me " + JSON.stringify(me));
+    })().catch((e) => { console.error(e.message); process.exit(1); });
+  ' "$link" >/dev/null 2>&1; then
+    printf '    ok   첫 관리자 링크 → 관리자(TOTP) → 로그인 → MFA → /me\n'
+  else
+    printf '    NO   첫 관리자 흐름이 끝까지 안 갔다\n'
     rc=1
   fi
 
