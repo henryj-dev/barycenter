@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import type { Scope } from './global/scope.svelte.ts';
+  import Writable from './global/Writable.svelte';
   import type { ListenerOptionFlags } from '@web/edit';
   import type { ListenersView } from '@web/listeners-view';
   import type { TlsVersion, UdpPreset } from '@web/edit';
@@ -32,6 +35,9 @@
       policy: string, certificate: string, opts: ListenerOptionFlags,
     ) => void;
   } = $props();
+  // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
+  const scope = getContext<Scope | undefined>('scope');
+  const ro = $derived(scope?.readOnly === true);
 
   const label = (mark: string): string => {
     if (mark === 'join') return '적용하면 열린다';
@@ -54,29 +60,37 @@
           <span class="key">{row.mark === 'leave' ? row.socket : row.key}</span>
           <span class="mark">{label(row.mark)}</span>
           {#if row.mark !== 'leave'}
+            {#if !ro}
             <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
+            {/if}
           {/if}
         </li>
       {/each}
     </ul>
   {/if}
+  <Writable>
   <AddListener {pools} {editing} add={insert} />
   <AddTcpListener pools={tcpPools} {editing} add={insertTcp} />
   <AddPassthroughListener pools={tcpPools} {editing} add={insertPassthrough} />
   <AddUdpListener pools={udpPools} {editing} add={insertUdp} />
+  </Writable>
   {#if policies.length > 0}
     <h2>TLS 정책</h2>
     <ul class="policies">
       {#each policies as key (key)}
         <li>
           <span class="key">{key}</span>
+          {#if !ro}
           <button type="button" disabled={editing} onclick={() => withdrawPolicy(key)}>설정에서 뺀다</button>
+          {/if}
         </li>
       {/each}
     </ul>
   {/if}
+  <Writable>
   <AddTlsPolicy {editing} add={insertPolicy} />
   <AddHttpsListener {pools} {policies} {certificates} {editing} add={insertHttps} />
+  </Writable>
 {/if}
 
 <style>
