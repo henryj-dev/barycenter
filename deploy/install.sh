@@ -1281,6 +1281,8 @@ $RUNDIR_PRE
 ExecStartPre=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js --write-bootstrap
 ExecStartPre=$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf
 ExecStart=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js
+# 토큰 파일만 다시 읽는다 — 엔진은 안 건드린다. 재시작은 데이터 플레인을 끊는다.
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15
@@ -1322,6 +1324,15 @@ start_pre() {
 	${ENGINE_RUN_DIR:+checkpath -d -m 0755 -o "$SVC_USER:$SVC_USER" "$ENGINE_RUN_DIR" || return 1}
 	su -s /bin/sh "$SVC_USER" -c "$NODE_BIN $APP_DIR/dist/bin/barycenterd.js --write-bootstrap" || return 1
 	su -s /bin/sh "$SVC_USER" -c "$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf" || return 1
+}
+
+extra_started_commands="reload"
+
+# 토큰 파일만 다시 읽는다 — 엔진은 안 건드린다. 재시작은 데이터 플레인을 끊는다.
+reload() {
+	ebegin "Reloading \${RC_SVCNAME} tokens"
+	start-stop-daemon --signal HUP --pidfile "\$pidfile"
+	eend \$?
 }
 
 stop_post() {

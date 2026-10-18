@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { apiHandler, apiTlsOptions, createApi } from '../api/server.js';
+import { apiHandler, apiTlsOptions, createApi, parseBuildInfo, type BuildInfo } from '../api/server.js';
 import { JwksCache } from '../api/jwks.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore, type SecretStore } from '../dp/secrets.js';
@@ -171,6 +171,15 @@ function loadTokens(): TokenSpec[] {
   // **캐스팅하지 않는다.** `role` 오타 하나가 전권 토큰이 되던 자리다 (검수 S-03) —
   // 해독은 `parseTokenSpecs` 가 한다. 모델 경계와 같은 규칙이다.
   return parseTokenSpecs(JSON.parse(raw));
+}
+
+/** `$PREFIX/version` — 설치 스크립트가 쓴다. 없으면(컨테이너·개발) `null`. */
+function readBuildInfo(prefix: string): BuildInfo | null {
+  try {
+    return parseBuildInfo(readFileSync(join(prefix, 'version'), 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 /** http 평면 admin 에 적재하고 되읽는다. **유닉스 소켓이다** (검수 S-08b). */
@@ -777,6 +786,32 @@ export async function main(): Promise<void> {
         }
       : undefined;
   const auth = oidc === undefined ? new TokenAuth(loadTokens()) : new TokenAuth(loadTokens(), oidc);
+  /**
+   * **SIGHUP 은 토큰 파일을 다시 읽는다** (2026-10-18).
+   *
+   * 재시작은 데이터 플레인을 몇 초 끊으므로(엔진과 한 유닛) 토큰 철회가 그 비용을 지면
+   * 철회가 늦어진다. 그리고 손잡이가 없던 동안 SIGHUP 은 Node 기본 동작대로 **프로세스를
+   * 죽였다** — `kill -HUP` 을 「다시 읽어라」로 알고 보낸 사람이 장애를 냈을 것이다.
+   *
+   * 파일로 받은 경우에만 뜻이 있다. `BARY_TOKENS`(env)는 프로세스가 살아 있는 동안 안
+   * 바뀌므로 다시 읽어도 같다 — 그래도 신호에 죽지는 않게 손잡이는 언제나 건다.
+   * 읽기·해독이 실패하면 **옛 표를 그대로 두고** 큰 소리로 말한다.
+   */
+  process.on('SIGHUP', () => {
+    if (process.env['BARY_TOKENS_FILE'] === undefined) {
+      log.warn('tokens.reload_skipped', { reason: 'BARY_TOKENS_FILE 이 아니라 env 로 받았다 — 바뀔 것이 없다' });
+      return;
+    }
+    try {
+      auth.replace(loadTokens());
+      log.info('tokens.reloaded', { tokens: auth.size });
+    } catch (e) {
+      log.error('tokens.reload_failed', {
+        reason: e instanceof Error ? e.message : String(e),
+        kept: auth.size,
+      });
+    }
+  });
   const oidcAuthz = env('BARY_OIDC_AUTHORIZATION', '');
   const oidcToken = env('BARY_OIDC_TOKEN', '');
   const oidcClient = env('BARY_OIDC_CLIENT_ID', '');
@@ -805,6 +840,7 @@ export async function main(): Promise<void> {
 
   const apiOpts = {
     db, store, control, auth, election, secrets, events,
+    build: readBuildInfo(prefix),
     plaintextExposed: false,
     sessionSecure: false,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
