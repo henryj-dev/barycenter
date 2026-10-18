@@ -59,3 +59,16 @@ sudo deploy/install.sh --mode global --regions /etc/barycenter-global/regions.js
 첫 화면은 「지역」이다. 닿지 않는 지역은 **모른다**로, 판이 다르면 「판 다름」으로 보인다. 지역을 고르면 그 지역의
 읽기 화면을 본다. 설정 쓰기 버튼은 없고 그 자리에 「<지역> 에서 편집」 링크가 있다. SSE 는 지역마다 상류 연결
 하나를 나눠 쓰고, 보는 사람의 세션은 15초마다 다시 확인한다.
+
+## 조회 감사
+
+지역·전역 대시보드 공통 정책 1차(2026-10-18 사용자 결정 4번)에 따라, 전역에서 **누가 어느 지역의 어느 화면을
+언제 봤는지** 공용 계정 PG 의 `account_audit` 에 남긴다.
+
+- `action` 은 `global.view`(요약·읽기 화면 한 번)나 `global.events_open`(SSE 접속 한 번)이다. `detail` 에는
+  `{region, path}` 만 적는다 — 응답 본문·쿼리·비밀값은 싣지 않는다. `actor` 는 사람이면 `user:<이름>`,
+  토큰이면 토큰 이름이다.
+- **기록을 남기지 못하면 그 조회를 거부한다**(503 `audit_unavailable`). 계정 PG 가 죽으면 토큰으로도 전역
+  조회는 안 된다. 그때의 비상 경로는 지역 인스턴스(토큰)와 호스트 CLI 다.
+- 전역에 계정 PG(`BARY_ACCOUNTS_DSN`)가 없으면 공용 저장소가 없으므로 프로세스 로그(`global.view`)로만 남는다.
+- 조회: 관리자 화면 「사람 → 감사」나 `GET /api/v1/account-audit`.

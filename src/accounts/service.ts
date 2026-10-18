@@ -1026,6 +1026,19 @@ export class AccountService {
     return r === undefined ? undefined : str(r, 'id');
   }
 
+  /**
+   * **전역 조회 감사** (지역·전역 대시보드 공통 정책 1차 4번, 2026-10-18 사용자 결정). 전역에서 누가 어느 지역의
+   * 어느 화면을 언제 봤는지 공용 감사 저장소에 남긴다. SSE 는 접속 단위다. **응답 본문·쿼리·비밀값은 싣지 않는다** —
+   * 지역 이름과 경로(허용 목록의 이름)뿐이다. 못 남기면 던진다 — 호출자가 그 조회를 거부한다.
+   */
+  async recordGlobalView(actor: string, view: { region: string | null; path: string; stream?: boolean }, subjectUser: string | null, meta: Meta = {}): Promise<void> {
+    await this.#q(
+      'INSERT INTO account_audit (actor, action, subject_user, ip, detail) VALUES ($1,$2,$3,$4,$5)',
+      [actor, view.stream === true ? 'global.events_open' : 'global.view', subjectUser, meta.ip ?? null,
+        JSON.stringify({ region: view.region, path: view.path })],
+    );
+  }
+
   async accountAudit(limit: number): Promise<unknown[]> {
     return (await this.#q(
       `SELECT id, at, actor, action, subject_user, ip FROM account_audit ORDER BY at DESC, id DESC LIMIT $1`,
