@@ -390,10 +390,10 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
       const post = (p, b, extra = {}) => fetch(base + p, { method: "POST", headers: { ...H, ...extra }, body: JSON.stringify(b) });
       const pv = await (await post("/api/v1/invitations/preview", { token: tok })).json();
       const key = b32(pv.totp.secret);
-      const acc = await post("/api/v1/invitations/accept", { token: tok, username: "root", password: "harness-admin-pass",
+      const acc = await post("/api/v1/invitations/accept", { token: tok, username: "root", password: "Harness-admin-pass1",
         totp: { secret: pv.totp.secret, code: totp(key, Date.now()) } });
       if (!acc.ok) throw new Error("accept " + acc.status);
-      const li = await post("/api/v1/session/login", { username: "root", password: "harness-admin-pass" });
+      const li = await post("/api/v1/session/login", { username: "root", password: "Harness-admin-pass1" });
       if ((await li.json()).status !== "mfa_required") throw new Error("mfa 단계가 아니다");
       const mfaC = li.headers.getSetCookie().find((x) => x.startsWith("bary_mfa=")).split(";")[0];
       const mf = await post("/api/v1/session/mfa", { code: totp(key, Date.now() + 30000) }, { cookie: mfaC });
