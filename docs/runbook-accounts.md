@@ -189,7 +189,7 @@ IdP 에게 묻는다. 역할은 계정이 정하고, IdP 의 역할 클레임·M
 - 끊기는 비밀번호 재확인 뒤, 다른 로그인 수단(비밀번호)이 남을 때만. 삭제된 계정의 연결은 함께 지운다.
 
 **OIDC 클라이언트 하나를 지역·전역이 함께 쓴다** (2026-10-18 공통 정책 1차). lodestar 에 클라이언트 하나,
-redirect URI 둘(정확 일치): `https://dev-icn-vtr.barycenter.tinyuniver.se/login`, `https://barycenter.tinyuniver.se/login`.
+redirect URI 둘(정확 일치): `https://dev-icn-vtr.barycenter.tinyuniver.se:8443/login`, `https://barycenter.tinyuniver.se:9443/login`.
 각 인스턴스의 `BARY_OIDC_REDIRECT_URI` 는 자기 주소다. 로그아웃·role-change 통지 URI 는 쓰지 않는다(철회는 계정 PG 가 판단).
 ⚠️ **클라이언트 비밀이 하나다.** 한 호스트에서 새면 지역·전역 모두 영향을 받는다 — 새어 나간 의심이 들면 lodestar 에서
 비밀을 바꾸고 **모든** 지역·전역의 `/etc/barycenter/env`(0640) `BARY_OIDC_CLIENT_SECRET` 을 같은 값으로 바꾼 뒤 재시작한다

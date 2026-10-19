@@ -93,9 +93,9 @@ expect() {                     # expect <설명> <컨테이너> <명령...>
 }
 
 # `/readyz` 가 답할 때까지 기다린다. 고정 sleep 은 느린 머신에서 거짓 실패를 만든다.
-wait_ready() {                 # wait_ready <컨테이너>
-  local c="$1" i=0
-  until docker exec "$c" curl -fsS --max-time 2 http://127.0.0.1:8088/readyz >/dev/null 2>&1; do
+wait_ready() {                 # wait_ready <컨테이너> [포트]
+  local c="$1" port="${2:-8088}" i=0
+  until docker exec "$c" curl -fsS --max-time 2 "http://127.0.0.1:$port/readyz" >/dev/null 2>&1; do
     i=$((i + 1))
     if [ "$i" -gt 60 ]; then return 1; fi
     sleep 1
@@ -103,20 +103,29 @@ wait_ready() {                 # wait_ready <컨테이너>
   return 0
 }
 
-# **전역 모드 판** (docs/runbook-global.md). 엔진·설정 DB 없이 전역 barycenterd 만 깐다. 지역 목록에는 **닿지
-# 않는 지역** 하나만 둔다 — 재는 것은 지역 중계가 아니라(그건 단위 테스트가 가짜 지역으로 잰다) **설치가 전역을
-# 세우는가**다: 서비스 · readyz 의 mode · 못 닿은 지역을 「모른다」로 · 엔진이 없음 · 지역 전용 설정이면 기동 거부.
+# **전역 모드 판 — 지역 호스트에 함께** (docs/runbook-global.md, 2026-10-19 사용자 결정). 지역을 먼저 깔고 같은
+# 호스트에 전역을 **별도 서비스·별도 포트**로 더한다. 지역 목록에는 **닿지 않는 지역** 하나만 둔다 — 재는 것은 중계가
+# 아니라(그건 단위 테스트가 잰다) **설치가 둘을 서로 건드리지 않게 세우는가**다:
+#   두 서비스 active · 포트별 readyz 의 mode · 못 닿은 지역을 「모른다」로 · 전역 유닛은 엔진을 안 띄운다 ·
+#   **지역 재시작·재설치가 전역 프로세스를 안 바꾼다** · **전역을 내려도 지역 엔진이 산다** · 지역 전용 설정이면 기동 거부.
 run_global() {                 # run_global <컨테이너> <이름>
-  local c="$1" name="$2" rc=0 d token
+  local c="$1" name="$2" rc=0 d token gpid gpid2
+  printf '  ..    install.sh --with-postgres --no-accounts (지역 먼저, 몇 분 걸린다)\n'
+  if ! docker exec "$c" sh /repo/deploy/install.sh --with-postgres --no-accounts > "/tmp/bary-install-$name-region.log" 2>&1; then
+    printf '    NO   지역 install.sh 가 실패했다 — 마지막 30줄:\n'
+    tail -n 30 "/tmp/bary-install-$name-region.log" | sed 's/^/         /'
+    return 1
+  fi
+  printf '    ok   지역 install.sh\n'
   d=$(mktemp -d)
   openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=127.0.0.1 \
     -keyout "$d/k.pem" -out "$d/ca.pem" >/dev/null 2>&1 || { printf '    NO   시험용 CA 를 못 만들었다\n'; return 1; }
   printf 'region-token' > "$d/t"
-  printf '[{"name":"faraway","api":"https://127.0.0.1:1","gui":"https://faraway.example","ca":"/etc/barycenter-global/ca.pem","token":"/etc/barycenter-global/t"}]\n' > "$d/r.json"
+  printf '[{"name":"faraway","api":"https://127.0.0.1:1","gui":"https://faraway.example:8443","ca":"/etc/barycenter-global/ca.pem","token":"/etc/barycenter-global/t"}]\n' > "$d/r.json"
   docker exec "$c" mkdir -p /etc/barycenter-global
   for f in ca.pem t r.json; do docker cp "$d/$f" "$c:/etc/barycenter-global/$f"; done
   rm -rf "$d"
-  printf '  ..    install.sh --mode global (패키지·빌드로 몇 분 걸린다)\n'
+  printf '  ..    install.sh --mode global (같은 호스트)\n'
   if ! docker exec "$c" sh /repo/deploy/install.sh --mode global --regions /etc/barycenter-global/r.json --no-accounts \
        > "/tmp/bary-install-$name.log" 2>&1; then
     printf '    NO   install.sh --mode global 이 실패했다 — 마지막 30줄:\n'
@@ -125,32 +134,57 @@ run_global() {                 # run_global <컨테이너> <이름>
   fi
   printf '    ok   install.sh --mode global\n'
   # 데몬이 지역 목록을 읽어야 하므로 서비스 유저에게 읽기를 준다(운영도 같다 — 런북).
-  docker exec "$c" sh -c 'chown -R root:bary /etc/barycenter-global && chmod 0640 /etc/barycenter-global/*' >/dev/null 2>&1
-  docker exec "$c" systemctl restart barycenterd >/dev/null 2>&1
-  expect "서비스 active" "$c" systemctl is-active --quiet barycenterd || rc=1
-  if wait_ready "$c" && docker exec "$c" curl -s --max-time 3 http://127.0.0.1:8088/readyz | grep -Eq '"mode": *"global"'; then
-    printf '    ok   /readyz 가 전역이라고 답한다\n'
+  docker exec "$c" sh -c 'chown -R root:bary /etc/barycenter-global && chmod 0640 /etc/barycenter-global/ca.pem /etc/barycenter-global/t /etc/barycenter-global/r.json' >/dev/null 2>&1
+  docker exec "$c" systemctl restart barycenter-global >/dev/null 2>&1
+  expect "지역 서비스 active (barycenterd)" "$c" systemctl is-active --quiet barycenterd || rc=1
+  expect "전역 서비스 active (barycenter-global)" "$c" systemctl is-active --quiet barycenter-global || rc=1
+  if wait_ready "$c" 9088 && docker exec "$c" curl -s --max-time 3 http://127.0.0.1:9088/readyz | grep -Eq '"mode": *"global"'; then
+    printf '    ok   전역 /readyz(9088) 가 전역이라고 답한다\n'
   else
-    printf '    NO   /readyz 가 전역 모드가 아니다\n'; rc=1
+    printf '    NO   9088 의 /readyz 가 전역 모드가 아니다\n'; rc=1
+  fi
+  if wait_ready "$c" 8088 && ! docker exec "$c" curl -s --max-time 3 http://127.0.0.1:8088/readyz | grep -q '"mode"'; then
+    printf '    ok   지역 /readyz(8088) 는 그대로 지역이다\n'
+  else
+    printf '    NO   8088 이 지역으로 답하지 않는다\n'; rc=1
   fi
   token=$(sed -n 's/^ *\([A-Za-z0-9_-]\{20,\}\) *$/\1/p' "/tmp/bary-install-$name.log" | tail -1)
-  if docker exec "$c" curl -s --max-time 10 -H "authorization: Bearer $token" http://127.0.0.1:8088/api/v1/regions \
-       | tr -d ' \n' | grep -q '"name":"faraway","gui":"https://faraway.example","reachable":false'; then
+  if docker exec "$c" curl -s --max-time 10 -H "authorization: Bearer $token" http://127.0.0.1:9088/api/v1/regions \
+       | tr -d ' \n' | grep -q '"name":"faraway","gui":"https://faraway.example:8443","reachable":false'; then
     printf '    ok   못 닿은 지역을 「모른다」로 싣는다\n'
   else
     printf '    NO   /api/v1/regions 가 기대한 모양이 아니다\n'; rc=1
   fi
-  if ! docker exec "$c" sh -c 'command -v openresty || [ -x /usr/local/openresty/bin/openresty ]' >/dev/null 2>&1 \
-     && ! docker exec "$c" systemctl cat barycenterd 2>/dev/null | grep -q ExecStartPre; then
-    printf '    ok   엔진이 없고 유닛이 엔진을 안 띄운다\n'
+  if ! docker exec "$c" systemctl cat barycenter-global 2>/dev/null | grep -q ExecStartPre \
+     && docker exec "$c" test -f /etc/barycenter-global/env -a -d /opt/barycenter-global/dist; then
+    printf '    ok   전역은 자기 자리(/etc·/opt barycenter-global)에 있고 엔진을 안 띄운다\n'
   else
-    printf '    NO   전역 모드인데 엔진이 깔렸거나 유닛이 엔진을 띄운다\n'; rc=1
+    printf '    NO   전역 유닛이 엔진을 띄우거나 자리가 지역과 같다\n'; rc=1
+  fi
+  # **지역을 다시 세워도 전역은 그대로다** — 재시작, 그리고 재설치($APP_DIR 를 지우고 다시 깐다).
+  gpid=$(docker exec "$c" systemctl show -p MainPID --value barycenter-global | tr -d ' \n')
+  docker exec "$c" systemctl restart barycenterd >/dev/null 2>&1
+  printf '  ..    지역 재설치 (같은 호스트, 전역은 그대로여야 한다)\n'
+  docker exec "$c" sh /repo/deploy/install.sh --no-accounts > "/tmp/bary-install-$name-region2.log" 2>&1 || rc=1
+  gpid2=$(docker exec "$c" systemctl show -p MainPID --value barycenter-global | tr -d ' \n')
+  if [ -n "$gpid" ] && [ "$gpid" = "$gpid2" ] && docker exec "$c" curl -fsS --max-time 3 http://127.0.0.1:9088/readyz >/dev/null 2>&1; then
+    printf '    ok   지역 재시작·재설치가 전역 프로세스를 안 바꾼다 (PID %s)\n' "$gpid"
+  else
+    printf '    NO   지역을 다시 세우자 전역이 바뀌었거나 죽었다 (PID %s → %s)\n' "${gpid:-?}" "${gpid2:-?}"; rc=1
+  fi
+  # **전역을 내려도 지역 엔진은 산다** — 전역 유닛이 엔진을 내리면 지역 데이터 플레인이 멈춘다.
+  docker exec "$c" systemctl stop barycenter-global >/dev/null 2>&1
+  sleep 2
+  if wait_ready "$c" 8088 && docker exec "$c" sh -c 'pgrep -f "nginx: master" >/dev/null || pgrep openresty >/dev/null'; then
+    printf '    ok   전역을 내려도 지역 데몬·엔진이 산다\n'
+  else
+    printf '    NO   전역을 내리자 지역 엔진이나 데몬이 멈췄다\n'; rc=1
   fi
   # 지역 전용 설정이 섞이면 **기동을 거부**한다 — 켰다고 믿는데 아무것도 안 하는 상태를 막는다.
-  docker exec "$c" sh -c "printf \"BARY_DSN='postgres:///x'\\n\" >> /etc/barycenter/env && systemctl restart barycenterd" >/dev/null 2>&1
+  docker exec "$c" sh -c "printf \"BARY_DSN='postgres:///x'\\n\" >> /etc/barycenter-global/env && systemctl restart barycenter-global" >/dev/null 2>&1
   sleep 3
-  if ! docker exec "$c" systemctl is-active --quiet barycenterd \
-     && docker exec "$c" journalctl -u barycenterd --no-pager -n 30 2>/dev/null | grep -q 'BARY_DSN 를 쓰지 않는다'; then
+  if ! docker exec "$c" systemctl is-active --quiet barycenter-global \
+     && docker exec "$c" journalctl -u barycenter-global --no-pager -n 30 2>/dev/null | grep -q 'BARY_DSN 를 쓰지 않는다'; then
     printf '    ok   지역 전용 설정(BARY_DSN)이 있으면 기동을 거부한다\n'
   else
     printf '    NO   BARY_DSN 이 섞였는데 떴다\n'; rc=1
@@ -356,10 +390,10 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
       const post = (p, b, extra = {}) => fetch(base + p, { method: "POST", headers: { ...H, ...extra }, body: JSON.stringify(b) });
       const pv = await (await post("/api/v1/invitations/preview", { token: tok })).json();
       const key = b32(pv.totp.secret);
-      const acc = await post("/api/v1/invitations/accept", { token: tok, username: "root", password: "harness-admin-pass",
+      const acc = await post("/api/v1/invitations/accept", { token: tok, username: "root", password: "Harness-admin-pass1",
         totp: { secret: pv.totp.secret, code: totp(key, Date.now()) } });
       if (!acc.ok) throw new Error("accept " + acc.status);
-      const li = await post("/api/v1/session/login", { username: "root", password: "harness-admin-pass" });
+      const li = await post("/api/v1/session/login", { username: "root", password: "Harness-admin-pass1" });
       if ((await li.json()).status !== "mfa_required") throw new Error("mfa 단계가 아니다");
       const mfaC = li.headers.getSetCookie().find((x) => x.startsWith("bary_mfa=")).split(";")[0];
       const mf = await post("/api/v1/session/mfa", { code: totp(key, Date.now() + 30000) }, { cookie: mfaC });
