@@ -18,11 +18,20 @@
 지역 목록 파일(`BARY_GLOBAL_REGIONS`):
 
 ```json
-[{ "name": "dev-icn-vtr", "api": "https://10.17.47.52:8443", "gui": "https://dev-icn-vtr.barycenter.example",
+[{ "name": "dev-icn-vtr", "api": "https://dev-icn-vtr.barycenter.tinyuniver.se:8443",
+   "gui": "https://dev-icn-vtr.barycenter.tinyuniver.se:8443",
    "ca": "/etc/barycenter/global/dev-icn-vtr-ca.pem", "token": "/etc/barycenter/global/dev-icn-vtr.token" }]
 ```
 
 토큰 파일은 0600. 모르는 키·겹치는 이름·https 아닌 주소는 **기동 거부**다.
+
+- **`api` 는 IP 가 아니라 이름으로 적는다.** 전역은 그 지역의 `ca` 파일**만** 믿고(시스템 신뢰 저장소를 쓰지 않는다),
+  인증서 이름을 `api` 의 호스트로 검사한다. 공개 CA(Let's Encrypt) 인증서에는 IP 가 없으므로 IP 로 적으면 실패한다.
+  공개 CA 면 `ca` 에는 루트(ISRG Root X1, 필요하면 X2)를 넣는다 — 중간 인증서가 바뀌어도 그대로 된다.
+  전역 노드는 그 이름을 메시 내부 DNS 로 풀 수 있어야 한다.
+- **`gui` 에는 `:8443` 을 붙인다.** 포트가 없으면 브라우저가 443 으로 가는데, 지역 호스트의 443 은 대시보드가 아니라
+  데이터 플레인(공개 사이트)이다. Cloudflare 앞단을 쓰는 데이터 플레인은 Origin Pull 클라이언트 인증서를 요구하므로
+  브라우저에서는 `ERR_BAD_SSL_CLIENT_AUTH_CERT` 로 거절된다 — 고장이 아니라 다른 문으로 간 것이다.
 
 env:
 
