@@ -104,6 +104,8 @@ PostgreSQL (택일 — 터미널에서는 안 주면 물어본다)
 
 전역 모드 (docs/runbook-global.md — 지역들을 읽기 전용으로 모아 본다)
   --mode global            설정 DB·엔진 없이 전역 barycenterd 를 깐다 (기본: region)
+                           서비스 barycenter-global · /etc·/opt/barycenter-global · 루프백 9088 —
+                           지역과 같은 호스트에 함께 깔 수 있다. 메시에는 --listen <IP>:9443
   --regions <파일>         지역 목록(JSON). 전역 모드에서 필수
                            계정을 쓰려면 --accounts-dsn 과 --env BARY_ACCOUNTS_KEK=… 를 **지역과 같은 값**으로 준다
 
@@ -243,6 +245,22 @@ done
 
 [ "$(id -u)" = 0 ] || die "root 로 돌려야 한다 (sudo deploy/install.sh ...)"
 
+# ── 인스턴스 자리 ────────────────────────────────────────────────────────
+#
+# **전역은 지역 호스트에 함께 둘 수 있다** (2026-10-19 사용자 결정). 조건은 별도 프로세스·별도 포트이고, 관리
+# 화면이 데이터 플레인 엔진을 거치지 않는 것이다. 그래서 전역 모드는 **서비스 이름·설정 자리·앱 자리를 따로**
+# 갖는다 — 지역의 재설치(`$APP_DIR` 를 지우고 다시 깐다)·재시작이 전역을 건드리지 않는다. 전용 노드에 깔아도
+# 같은 이름이라 운영 절차가 하나다. 루프백 기본 포트도 다르다(지역 8088, 전역 9088). 메시에 열 때는
+# 모든 전역이 **같은 포트 9443** 을 쓴다 — DNS 다중 A 는 포트를 싣지 않는다(docs/runbook-global.md).
+# 이 갈림은 ⓪-a(옛 설정 이어받기)보다 **먼저**여야 한다 — 이어받기가 `$PREFIX/env` 를 읽는다.
+SVC_NAME=barycenterd
+if [ "$MODE" = global ]; then
+  SVC_NAME=barycenter-global
+  [ "$PREFIX_SET" = 1 ] || PREFIX=/etc/barycenter-global
+  [ "$APP_DIR_SET" = 1 ] || APP_DIR=/opt/barycenter-global
+  [ "$LISTEN_SET" = 1 ] || LISTEN=127.0.0.1:9088
+fi
+
 if [ -n "$DSN" ] && [ "$WITH_PG" = 1 ]; then
   die "--dsn 과 --with-postgres 는 같이 못 쓴다 — 어느 PG 를 쓸지 하나만 정한다"
 fi
@@ -305,7 +323,11 @@ fi
 # prefix 는 env 를 찾는 자리라 닭이 먼저다. 유저는 env 에 없다. 대신 **$PREFIX 의
 # 소유자**가 그 답을 들고 있으므로, 어긋나면 안내하고 죽는다. 안 그러면 남의 유저로
 # 깔린 설치를 `bary` 로 다시 chown 해 버린다.
-if [ "$USER_SET" = 0 ] && [ -d "$PREFIX" ]; then
+#
+# **설치가 있을 때만 본다**(`$PREFIX/env`). 자리만 있는 것은 설치가 아니다 — 전역은 지역 목록·CA·토큰을
+# 설치 **전에** `/etc/barycenter-global` 에 root 로 놓는 것이 정상 절차라(runbook-global), 그 폴더를 옛 설치로
+# 읽으면 첫 설치가 거부된다(설치 하네스 global 판이 잡았다).
+if [ "$USER_SET" = 0 ] && [ -f "$ENV_FILE" ]; then
   _owner=$(stat -c %U "$PREFIX" 2>/dev/null || true)
   if [ -n "$_owner" ] && [ "$_owner" != "$SVC_USER" ]; then
     die "$PREFIX 의 소유자는 $_owner 인데 서비스 유저 기본값은 $SVC_USER 다 — 처음 설치에 --user $_owner 를 줬다면 이번에도 준다"
@@ -1367,9 +1389,9 @@ write_systemd_unit() {
 ExecStartPre=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js --write-bootstrap
 ExecStartPre=$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf"
   fi
-  cat > /etc/systemd/system/barycenterd.service <<EOF
+  cat > "/etc/systemd/system/$SVC_NAME.service" <<EOF
 [Unit]
-Description=barycenter control plane (nginx)
+Description=barycenter control plane ($MODE)
 # network-online.target 을 **안 쓴다.** 쓰면 그 타깃을 채우는
 # systemd-networkd-wait-online 이 못 끝나는 환경에서 start 작업이 queued 인 채로
 # 매달린다 — AL2023 판에서 실측했다: "systemctl enable --now" 가 0 을 냈는데 서비스는
@@ -1394,7 +1416,7 @@ Group=$SVC_USER
 EnvironmentFile=$ENV_FILE
 $ENGINE_PRE
 ExecStart=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js
-# 토큰 파일만 다시 읽는다 — 엔진은 안 건드린다. 재시작은 데이터 플레인을 끊는다.
+# 토큰 파일과 관리 포트 인증서를 다시 읽는다 — 엔진은 안 건드린다. 재시작은 데이터 플레인을 끊는다.
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -1416,10 +1438,16 @@ write_openrc_unit() {
 	su -s /bin/sh \"$SVC_USER\" -c \"$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf\" || return 1
 "
   fi
-  cat > /etc/init.d/barycenterd <<EOF
+  # 엔진은 지역 유닛만 내린다. 전역 유닛이 같은 호스트의 엔진을 내리면 지역 데이터 플레인이 멈춘다.
+  OPENRC_STOP=""
+  if [ "$WITH_ENGINE" = 1 ]; then
+    OPENRC_STOP="	[ -f \"$ENGINE_PID_FILE\" ] && kill -QUIT \"\$(cat \"$ENGINE_PID_FILE\")\" 2>/dev/null
+"
+  fi
+  cat > "/etc/init.d/$SVC_NAME" <<EOF
 #!/sbin/openrc-run
-name="barycenterd"
-description="barycenter control plane (nginx)"
+name="$SVC_NAME"
+description="barycenter control plane ($MODE)"
 
 # **최상위에서 읽는다.** start_pre 안에서 export 하면 그 셸 밖으로 안 나간다.
 set -a
@@ -1430,7 +1458,7 @@ command="$NODE_BIN"
 command_args="$APP_DIR/dist/bin/barycenterd.js"
 command_user="$SVC_USER:$SVC_USER"
 command_background=true
-pidfile="/run/barycenterd.pid"
+pidfile="/run/$SVC_NAME.pid"
 output_log="$PREFIX/logs/daemon.log"
 error_log="$PREFIX/logs/daemon.log"
 
@@ -1455,17 +1483,16 @@ reload() {
 
 stop_post() {
 	# 엔진은 이 유닛이 띄웠으므로 이 유닛이 내린다. 안 내리면 제어 없는 nginx 가
-	# 남고, 그게 옛 세대를 계속 서빙한다.
-	[ -f "$ENGINE_PID_FILE" ] && kill -QUIT "\$(cat "$ENGINE_PID_FILE")" 2>/dev/null
-	return 0
+	# 남고, 그게 옛 세대를 계속 서빙한다(전역 유닛엔 엔진이 없어 비어 있다).
+$OPENRC_STOP	return 0
 }
 EOF
-  chmod +x /etc/init.d/barycenterd
+  chmod +x "/etc/init.d/$SVC_NAME"
 }
 
 case "$INIT" in
-  systemd) write_systemd_unit; ok "/etc/systemd/system/barycenterd.service" ;;
-  openrc)  write_openrc_unit;  ok "/etc/init.d/barycenterd" ;;
+  systemd) write_systemd_unit; ok "/etc/systemd/system/$SVC_NAME.service" ;;
+  openrc)  write_openrc_unit;  ok "/etc/init.d/$SVC_NAME" ;;
   none)
     warn "초기화 시스템을 못 찾았다 (systemd·OpenRC 둘 다) — 유닛을 쓰지 않는다"
     NO_SERVICE=1 ;;
@@ -1480,8 +1507,8 @@ if [ "$NO_SERVICE" = 1 ]; then
   say "    sudo -u $SVC_USER env \$(grep -v '^#' $ENV_FILE | tr -d \"'\" | xargs) \\"
   say "      $NODE_BIN $APP_DIR/dist/bin/barycenterd.js"
 else
-  svc_start barycenterd
-  ok "barycenterd 시작"
+  svc_start "$SVC_NAME"
+  ok "$SVC_NAME 시작"
 fi
 
 # ── ⑫ 검증 ──────────────────────────────────────────────────────────────
@@ -1500,7 +1527,7 @@ else
     if [ "$i" -gt 60 ]; then
       say ""
       case "$INIT" in
-        systemd) journalctl -u barycenterd --no-pager -n 40 >&2 || true ;;
+        systemd) journalctl -u "$SVC_NAME" --no-pager -n 40 >&2 || true ;;
         openrc)  tail -n 40 "$PREFIX/logs/daemon.log" >&2 || true ;;
       esac
       die "데몬이 60초 안에 $URL/healthz 에 안 답했다"
@@ -1566,8 +1593,8 @@ case "$ACCOUNTS_STATE" in
 esac
 
 case "$INIT" in
-  systemd) SVC_HINT="systemctl status barycenterd" ;;
-  openrc)  SVC_HINT="rc-service barycenterd status" ;;
+  systemd) SVC_HINT="systemctl status $SVC_NAME" ;;
+  openrc)  SVC_HINT="rc-service $SVC_NAME status" ;;
   *)       SVC_HINT="(없음 — 손으로 띄운다)" ;;
 esac
 
