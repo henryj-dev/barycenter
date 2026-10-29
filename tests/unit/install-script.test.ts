@@ -102,6 +102,27 @@ describe('비밀 파일', () => {
   });
 });
 
+describe('umask (#98)', () => {
+  /**
+   * 호출한 셸의 umask 를 물려받으면, 좁은 umask(077·027)의 호스트에서 `/opt/barycenter` 가
+   * root 전용으로 복사되고 서비스 유저가 못 읽는다. 실물 확인은 하네스의 rocky10 판
+   * (umask 077 셸)이 한다. 여기서는 **무엇보다 먼저 정하는가**를 잰다.
+   */
+  it('**루트 확인 직후, 무엇을 만들기 전에 `umask 022` 를 정한다**', () => {
+    const rootCheck = src.indexOf('[ "$(id -u)" = 0 ] || die');
+    const umask = src.search(/^umask 022$/m);
+    expect(rootCheck).toBeGreaterThan(-1);
+    expect(umask, '최상위에 `umask 022` 가 있어야 한다').toBeGreaterThan(rootCheck);
+    // 주석 줄은 뺀다 — 이 규칙을 설명하는 주석이 `cp -R` 을 말한다.
+    const code = src.replace(/^\s*#.*$/gm, (m) => ' '.repeat(m.length));
+    for (const make of ['cp -R', 'install -d', 'useradd', 'adduser', 'mktemp']) {
+      const at = code.indexOf(make);
+      expect(at, `${make} 가 스크립트에 있어야 한다`).toBeGreaterThan(-1);
+      expect(umask, `${make} 보다 앞이어야 한다`).toBeLessThan(at);
+    }
+  });
+});
+
 describe('오류 경로', () => {
   /**
    * **C.** `env_line` 의 거절 메세지가 `$ENV_FILE` 을 넣는데, 이 함수는 **인자 파싱
