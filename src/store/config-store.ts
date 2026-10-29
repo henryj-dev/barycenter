@@ -26,6 +26,7 @@ import { PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { ModelValidationError } from '../validate/model.js';
 import type {
+  AddressSet,
   Backend,
   HttpRoute,
   Listener,
@@ -44,6 +45,7 @@ import type {
   RealIpHeaderName,
 } from '../model/provisional.js';
 import type { Db, Queryable, Row } from './pg.js';
+import { referencedSets } from '../model/address-sets.js';
 import {
   exportManifest, importPatch, parseManifest, type ImportMode, type Manifest,
 } from './manifest.js';
@@ -54,6 +56,8 @@ export const RENDERER_VERSION = 'v0.1';
 export type ResourceKind =
   | 'pool' | 'backend' | 'listener' | 'httpRoute' | 'passthroughRoute'
   | 'certificate' | 'tlsPolicy' | 'sniBinding'
+  /** 주소 집합 (#114). 리스너보다 먼저 만들고 나중에 지운다. */
+  | 'addressSet'
   /**
    * 전역 엔진 설정. **리소스가 아니다** — key 가 없고 하나뿐이다 (검수 B-01).
    *
@@ -536,10 +540,20 @@ async function readModel(c: Queryable): Promise<Model> {
         ...(acmeKb === undefined ? {} : { acmeDictKb: acmeKb }),
       };
 
+  // 주소 집합 (027). **없으면 키를 안 만든다** — 이 기능 전의 모델과 같은 모양이 된다.
+  const addressSets = (await c.query(
+    `SELECT key, cidrs, source FROM address_sets ORDER BY key`,
+  )).rows.map((r): AddressSet => ({
+    key: text(r, 'key'),
+    cidrs: r['cidrs'] as string[],
+    ...(maybeText(r, 'source') === undefined ? {} : { source: text(r, 'source') as 'cloudflare' }),
+  }));
+
   return {
     ...(engine === undefined ? {} : { engine }),
     listeners, httpRoutes, passthroughRoutes, pools, backends,
     certificates, tlsPolicies, sniBindings,
+    ...(addressSets.length === 0 ? {} : { addressSets }),
   };
 }
 
@@ -591,7 +605,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       pool: 'pools', backend: 'backends', listener: 'listeners',
       httpRoute: 'http_routes', passthroughRoute: 'passthrough_routes',
       certificate: 'certificates', tlsPolicy: 'tls_policies',
-      sniBinding: 'sni_certificate_bindings',
+      sniBinding: 'sni_certificate_bindings', addressSet: 'address_sets',
     }[op.kind];
     const r = await c.query(`DELETE FROM ${table} WHERE key = $1`, [op.key]);
     if (r.rowCount === 0) {
@@ -854,6 +868,19 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           b['membershipDictKb'] ?? null, b['acmeDictKb'] ?? null],
       );
       return;
+
+    case 'addressSet': {
+      await c.query(
+        `INSERT INTO address_sets (id,key,cidrs,source,created_by,updated_by,revision)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$4,$5)
+         ON CONFLICT (key) DO UPDATE SET
+           cidrs=EXCLUDED.cidrs, source=EXCLUDED.source,
+           version=address_sets.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
+           revision=EXCLUDED.revision`,
+        [op.key, b['cidrs'], b['source'] ?? null, by, revision],
+      );
+      return;
+    }
 
     case 'sniBinding': {
       const [lid, lproto] = await listenerRef(c, String(b['listener']), `sniBinding '${op.key}'`);
@@ -1381,6 +1408,8 @@ export class ConfigStore {
       await c.query(`DELETE FROM pools`);
       await c.query(`DELETE FROM certificates`);
       await c.query(`DELETE FROM tls_policies`);
+      // 리스너 뒤에 지운다 — FK 는 없지만 순서를 opsOf 의 반대로 맞춘다 (#114).
+      await c.query(`DELETE FROM address_sets`);
       // **엔진 설정도 되돌린다** (011). 안 지우면 engine 이 없던 리비전으로 롤백해도
       // 옛 값이 그대로 남는다 — 그건 롤백이 아니다.
       await c.query(`DELETE FROM engine_settings`);
@@ -1493,6 +1522,8 @@ function opsOf(model: Model): PatchOp[] {
     ...model.backends.map((b) => put('backend', b.key, b)),
     ...model.certificates.map((c) => put('certificate', c.key, c)),
     ...model.tlsPolicies.map((t) => put('tlsPolicy', t.key, t)),
+    // 리스너가 `@이름` 으로 참조한다 — 리스너보다 먼저 (#114).
+    ...(model.addressSets ?? []).map((a) => put('addressSet', a.key, a)),
     ...model.listeners.map((l) => put('listener', l.key, l)),
     ...model.httpRoutes.map((r) => put('httpRoute', r.key, r)),
     ...model.passthroughRoutes.map((r) => put('passthroughRoute', r.key, r)),
@@ -1526,6 +1557,7 @@ function shapeCheck(op: PatchOp): void {
     pool: 'pools', backend: 'backends', listener: 'listeners',
     httpRoute: 'httpRoutes', passthroughRoute: 'passthroughRoutes',
     certificate: 'certificates', tlsPolicy: 'tlsPolicies', sniBinding: 'sniBindings',
+    addressSet: 'addressSets',
   }[op.kind] as keyof Model;
   const body = { ...obj(op.body), key: op.key };
   const probe = { ...empty, [key]: [body] };
@@ -1697,6 +1729,9 @@ function listenerClosure(model: Model, l: Listener): string {
   parts.push([...policies].sort().map((k) => model.tlsPolicies.find((p) => p.key === k) ?? null));
   parts.push([...certs].sort().map((k) => model.certificates.find((c) => c.key === k) ?? null));
   parts.push(model.engine ?? null);
+  // **참조한 주소 집합도 폐포다** (#114). 리스너는 그대로인데 `@cloudflare` 의 대역이 바뀌면
+  // 렌더가 바뀐다 — 그 리스너를 「변경」으로 실어야 한다.
+  parts.push(referencedSets(l).map((k) => (model.addressSets ?? []).find((x) => x.key === k) ?? null));
   return JSON.stringify(canon(parts));
 }
 

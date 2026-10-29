@@ -27,6 +27,7 @@ import {
 import { coversHost, parseHostPattern } from '../validate/strings.js';
 import { parseRef } from '../dp/secrets.js';
 import { ModelValidationError, validateModel } from '../validate/model.js';
+import { expandAddressSets } from '../model/address-sets.js';
 import { decodeModel } from '../model/decode.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
@@ -1488,7 +1489,10 @@ function streamServerBlock(
 
 // ──────────────────────────────────────────────────────────── render ───────
 
-export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): RenderedConfig {
+export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): RenderedConfig {
+  // 주소 집합 참조(`@이름`)는 검증한 뒤 **대역으로 펼친다** (#114). 아래의 렌더 코드는
+  // 펼친 모델만 본다 — 참조를 아는 곳은 `expandAddressSets` 하나다.
+  let model = input;
   // fail closed. 검증 실패를 렌더가 흡수하면 의미가 바뀐다 (4차 검수 Critical).
   //
   // **해독을 여기서도 한 번 더 한다.** 타입이 `Model` 이라는 것은 컴파일 타임의 약속일
@@ -1502,6 +1506,7 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
     ...(caps.http2 === undefined ? {} : { http2: caps.http2 }),
   });
   if (issues.length > 0) throw new ModelValidationError(issues);
+  model = expandAddressSets(model);
 
   const pools = new Map(model.pools.map((p) => [p.key, p]));
   // **http 블록 밖에 둔다.** 업스트림 TLS 의 신뢰 번들을 stream 쪽도 쓴다 (§4.3) —
