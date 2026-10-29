@@ -23,7 +23,8 @@
  * 끝나면** 낡은 결과가 최신 판정을 덮는다. 그래서 프로브마다 시작 순번을 싣고, 그 번호가
  * 마지막 반영값보다 클 때만 적용한다.
  */
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { connect } from 'node:net';
 
 import type { Model } from '../model/provisional.js';
@@ -113,6 +114,23 @@ export type HttpProbeOpts = {
    * 산 백엔드가 죽은 것으로 보인다.
    */
   hostHeader?: string;
+  /**
+   * **TLS 로 찌른다** (2026-10-29). 풀의 `upstreamTls` 가 켜져 있고 데이터 포트를 찌를 때다.
+   *
+   * 전에는 프로브가 언제나 평문이었다. 그래서 HTTPS 백엔드(예: `api.example.com:443`)에
+   * 평문 GET 을 보냈고, 서버는 400 을 주거나 끊었다 — **산 백엔드가 비정상이 되어
+   * 트래픽에서 빠졌다.** 데이터 경로(nginx)는 TLS 로 잘 붙는데 프로브만 틀렸다.
+   *
+   * `servername` 은 SNI 다. 없으면 SNI 를 안 보낸다(IP 로 찌르므로 노드가 보낼 이름이 없다).
+   *
+   * **인증서를 검증한다** (CodeQL `js/disabling-certificate-validation`). 처음엔 검증을 껐다 —
+   * 「살았나」만 물으면 된다고 봤다. 그러나 검증을 끈 TLS 클라이언트는 중간자에게 무엇이든
+   * 「살았다」고 듣는다. 기본은 시스템 신뢰 저장소다. 공개 인증서를 쓰는 외부 API 는 그대로
+   * 통과한다. 사설 CA 나 자체 서명이면 `ca` 로 신뢰 번들을 주거나, 헬스체크를
+   * `tcp_connect` 로 둔다 — 실패 사유가 그 길을 말한다. 그 경우는 고치기 전에도 (평문이라)
+   * 실패했으므로 나빠지는 배포는 없다.
+   */
+  tls?: { servername?: string; ca?: string };
 };
 
 /**
@@ -129,11 +147,22 @@ export function probeHttp(
   host: string, port: number, timeoutMs: number, opts: HttpProbeOpts,
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
-    const req = httpRequest({
+    // Host 는 지정값 → (TLS 면) SNI 이름 → 노드 기본(찌르는 주소) 순서다. 이름 기반
+    // 가상호스팅 HTTPS 서버는 SNI 와 같은 Host 를 기대한다.
+    const hostHeader = opts.hostHeader ?? opts.tls?.servername;
+    const common: RequestOptions = {
       host, port, path: opts.path, method: 'GET', timeout: timeoutMs,
       // **있을 때만 얹는다.** 빈 값을 넣으면 노드가 채우던 기본이 사라진다.
-      ...(opts.hostHeader === undefined ? {} : { headers: { Host: opts.hostHeader } }),
-    }, (res) => {
+      ...(hostHeader === undefined ? {} : { headers: { Host: hostHeader } }),
+    };
+    const send = (cb: (res: IncomingMessage) => void): ClientRequest => (opts.tls === undefined
+      ? httpRequest(common, cb)
+      : httpsRequest({
+        ...common,
+        ...(opts.tls.servername === undefined ? {} : { servername: opts.tls.servername }),
+        ...(opts.tls.ca === undefined ? {} : { ca: opts.tls.ca }),
+      }, cb));
+    const req = send((res) => {
       /**
        * **판정이 나면 그 자리에서 끊는다** (검수 D10).
        *
@@ -191,7 +220,14 @@ export function probeHttp(
       req.destroy();
       resolve(`${timeoutMs}ms 안에 응답이 없다`);
     });
-    req.on('error', (e) => resolve(e.message));
+    req.on('error', (e) => {
+      // 인증서 실패는 **고칠 길을 함께** 말한다. 이 문구가 운영자가 보는 「왜 빠졌나」다.
+      const code = (e as NodeJS.ErrnoException).code ?? '';
+      const tlsTrust = /CERT|SELF_SIGNED|UNABLE_TO_(GET|VERIFY)|ALTNAME|HOSTNAME|SIGNATURE|TOO_WEAK|KEY_TOO_SMALL/.test(code);
+      resolve(opts.tls !== undefined && tlsTrust
+        ? `인증서를 검증하지 못했다 (${code}). 사설 CA 면 healthCheck.protocol 을 tcp_connect 로 둔다`
+        : e.message);
+    });
     req.end();
   });
 }
@@ -247,11 +283,21 @@ export function probePlanOf(model: Model, poolKey: string): ProbePlan {
   const spec = pool?.healthCheck;
   // **기본은 옛 규칙이다.** `protocolClass` 가 정하던 그것 — 안 적은 배포가 안 바뀐다.
   const protocol = spec?.protocol ?? (pool?.protocolClass === 'http' ? 'http' : 'tcp_connect');
+  /**
+   * **데이터 포트를 찌를 때만 TLS 를 따른다.** 별도 헬스 포트(`port`)나 사이드카
+   * (`hostOverride`)는 데이터 경로가 아니다 — 거기가 TLS 인지 모델이 말하지 않으므로
+   * 옛 동작(평문)을 그대로 둔다. 안 쓰는 배포의 판정이 안 바뀐다.
+   */
+  const ut = pool?.upstreamTls;
+  const tls = ut?.enabled === true && spec?.port === undefined && spec?.hostOverride === undefined
+    ? (ut.sni === undefined ? {} : { servername: ut.sni })
+    : undefined;
   const http: HttpProbeOpts | undefined = protocol === 'http' ? {
     path: spec?.path ?? HTTP_PROBE_PATH,
     ...(spec?.expectStatus === undefined ? {} : { expectStatus: spec.expectStatus }),
     ...(spec?.expectBody === undefined ? {} : { expectBody: spec.expectBody }),
     ...(spec?.hostHeader === undefined ? {} : { hostHeader: spec.hostHeader }),
+    ...(tls === undefined ? {} : { tls }),
   } : undefined;
   return {
     mode: spec?.mode ?? 'active',
