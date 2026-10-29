@@ -1,7 +1,7 @@
 <script lang="ts">
   /** 새 이메일 확인 — 새 주소로 간 링크를 열면 바뀐다. 다른 기기에서 열어도 된다(로그인 불필요). */
   import { onMount } from 'svelte';
-  import { accountApi } from '$lib/account/api';
+  import { accountApi } from '#lib/account/api';
 
   let note = $state<{ ok: boolean; text: string } | undefined>();
 

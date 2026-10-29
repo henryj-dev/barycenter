@@ -4,10 +4,10 @@
   import { pageOf } from '@web/page';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { createDesk } from '$lib/desk.svelte.ts';
-  import { createSession } from '$lib/account/session.svelte.ts';
-  import StepUpDialog from '$lib/account/StepUpDialog.svelte';
-  import { createScope } from '$lib/global/scope.svelte.ts';
+  import { createDesk } from '#lib/desk.svelte.ts';
+  import { createSession } from '#lib/account/session.svelte.ts';
+  import StepUpDialog from '#lib/account/StepUpDialog.svelte';
+  import { createScope } from '#lib/global/scope.svelte.ts';
   import '../app.css';
 
   let { children } = $props();

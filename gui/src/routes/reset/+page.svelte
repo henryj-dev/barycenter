@@ -5,7 +5,7 @@
    * 재설정은 인증 앱을 풀지 않는다(관리자는 로그인 때 코드가 그대로 필요하다).
    */
   import { onMount } from 'svelte';
-  import { accountApi } from '$lib/account/api';
+  import { accountApi } from '#lib/account/api';
 
   let token = $state('');
   let email = $state('');

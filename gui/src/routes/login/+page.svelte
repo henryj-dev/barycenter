@@ -2,11 +2,11 @@
   import { getContext, onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import type { createDesk } from '$lib/desk.svelte.ts';
-  import type { Session } from '$lib/account/session.svelte.ts';
-  import PasswordStep from '$lib/account/PasswordStep.svelte';
-  import MfaStep from '$lib/account/MfaStep.svelte';
-  import { accountApi } from '$lib/account/api';
+  import type { createDesk } from '#lib/desk.svelte.ts';
+  import type { Session } from '#lib/account/session.svelte.ts';
+  import PasswordStep from '#lib/account/PasswordStep.svelte';
+  import MfaStep from '#lib/account/MfaStep.svelte';
+  import { accountApi } from '#lib/account/api';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const session = getContext<Session>('session');

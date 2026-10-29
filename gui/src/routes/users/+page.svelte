@@ -4,9 +4,9 @@
    * 지금은 링크를 복사해 전한다. 마지막 관리자 보호·관리자 승격의 MFA 조건은 서버가 진다.
    */
   import { getContext, onMount } from 'svelte';
-  import { accountApi, linkFor, type InvitationRow, type Role, type UserRow } from '$lib/account/api';
-  import type { Session } from '$lib/account/session.svelte.ts';
-  import SsoJit from '$lib/account/SsoJit.svelte';
+  import { accountApi, linkFor, type InvitationRow, type Role, type UserRow } from '#lib/account/api';
+  import type { Session } from '#lib/account/session.svelte.ts';
+  import SsoJit from '#lib/account/SsoJit.svelte';
 
   const session = getContext<Session>('session');
   const ROLES: Role[] = ['auditor', 'operator', 'admin'];
