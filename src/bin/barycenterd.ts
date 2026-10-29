@@ -52,6 +52,7 @@ import { publishIssued } from '../control/acme-publish.js';
 import { collectSecretRoots } from '../control/secret-roots.js';
 import { sweepSecrets } from '../dp/secret-gc.js';
 import { sweepSecretsPg } from '../dp/secret-gc-pg.js';
+import { ClusterNode } from '../control/cluster.js';
 import { ControlPlane, defaultStreamSocket } from '../control/plane.js';
 import { LeaderElection } from '../control/leader.js';
 import { bootDrivers, readDriverBootSource } from '../dp/boot.js';
@@ -710,6 +711,12 @@ export async function main(): Promise<void> {
    * 있어야 한다 (검수 B-05).
    */
   const secretBackend = env('BARY_SECRET_BACKEND', 'fs');
+  // **클러스터 모드는 pg 시크릿을 요구한다** (ADR-CLUSTER, #118). fs 저장소는 호스트마다 따로라
+  // 팔로워가 인증서 자료를 못 읽는다 — 그 세대는 리더에서만 선다.
+  const clusterOn = env('BARY_CLUSTER', '') === '1';
+  if (clusterOn && secretBackend !== 'pg') {
+    throw new Error('BARY_CLUSTER=1 은 BARY_SECRET_BACKEND=pg 가 필요하다 — 팔로워가 인증서 자료를 읽어야 한다');
+  }
   let secrets: SecretStore;
   let refreshSecretFacts: (() => Promise<number>) | undefined;
   if (secretBackend === 'pg') {
@@ -794,7 +801,8 @@ export async function main(): Promise<void> {
   // **못 되면 죽지 않는다.** 스탠바이는 읽기로 서비스하면서 기다린다 — §11.4 의 콜드
   // 스탠바이가 그 모양이다. 죽어 버리면 오케스트레이터가 재시작 루프를 돌고, 그건
   // "리더가 아니다" 가 아니라 "고장" 으로 보인다.
-  const election = new LeaderElection(dsn, env('BARY_NODE_NAME', `${hostname()}:${port}`));
+  const nodeName = env('BARY_NODE_NAME', `${hostname()}:${port}`);
+  const election = new LeaderElection(dsn, nodeName);
   const became = await election.tryAcquire();
 
   if (became) {
@@ -868,6 +876,17 @@ export async function main(): Promise<void> {
     log.info('prober.started', { intervalMs: t.probeMs });
   } else {
     log.info('prober.disabled', { reason: '멤버십 평면이 꺼진 배포 — 반영할 곳이 없다' });
+  }
+
+  // **클러스터 팔로워** (ADR-CLUSTER, #118). 리더가 아니면 주기마다 PG 의 활성 세대를 자기
+  // nginx 에 옮기고 멤버십을 다시 투영한다. 리더도 자기 행을 쓴다(노드 상태 표).
+  const clusterSyncMs = Number(env('BARY_CLUSTER_SYNC_MS', '3000'));
+  const clusterNode = clusterOn
+    ? new ClusterNode(db, control, driver, election, nodeName, env('BARY_NODE_URL', '') || undefined)
+    : undefined;
+  if (clusterNode !== undefined) {
+    clusterNode.start(clusterSyncMs);
+    log.info('cluster.started', { node: nodeName, intervalMs: clusterSyncMs });
   }
 
   /**
@@ -1099,6 +1118,8 @@ export async function main(): Promise<void> {
   }
   const apiOpts = {
     db, store, control, auth, election, secrets, events,
+    // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.
+    ...(clusterOn ? { cluster: { node: nodeName, staleAfterMs: clusterSyncMs * 5 } } : {}),
     ...(accounts === undefined ? {} : { accounts }),
     build: readBuildInfo(prefix),
     plaintextExposed: false,
@@ -1158,6 +1179,7 @@ export async function main(): Promise<void> {
       stopDbRetention();
       stopSecretFacts();
       stopJwks();
+      clusterNode?.stop();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은
       // 주인을 가려내는 `/proc` 폴백에 기댄다 — 그 파일을 못 읽는 플랫폼에서는
       // `stillHolding` 이 안전한 쪽(살아 있다)으로 틀려 기동이 막힌다.
