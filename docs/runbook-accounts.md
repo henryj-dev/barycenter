@@ -130,7 +130,7 @@ DDL 은 복제되지 않는다. barycenter 를 올릴 때 계정 마이그레이
 3. **시퀀스 당기기.** 사본에서 `SELECT setval('account_audit_id_seq', (SELECT coalesce(max(id), 0) + 1000 FROM account_audit));`
 4. **연결 문자열 전환.** 모든 지역·전역 호스트에서 `/etc/barycenter/env` 의 `BARY_ACCOUNTS_DSN` 을 새 주(dev)로 바꾸고 **재시작**한다
    (`systemctl restart barycenterd`). DSN 은 기동 때만 읽는다 — `reload`(SIGHUP)는 토큰만 다시 읽는다.
-   - 지역은 데몬과 엔진이 한 유닛이라 **재시작 동안 데이터 플레인이 몇 초 끊긴다.** 지역을 하나씩 돌린다.
+   - systemd 지역은 엔진이 별도 유닛이라 재시작해도 트래픽이 안 끊긴다(#122). OpenRC 지역은 몇 초 끊긴다 — 하나씩 돌린다.
    - 전역은 데이터 플레인이 없어 바로 돌려도 된다.
    - `BARY_ACCOUNTS_KEK` 는 그대로다(키는 DB 에 없다). 설치 스크립트를 다시 돌리지 않는다.
 5. **세션 표는 비어 있다** — 모두 다시 로그인한다(위 「무엇을 옮기나」). 공지한다.
