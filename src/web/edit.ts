@@ -283,7 +283,8 @@ export type PutHttpListenerOp = {
     enabled: true;
     sourceAllow?: string[];
     http: {
-      defaultAction: { pool: string };
+      /** 리스너를 새로 여는 폼은 언제나 풀이다. URL 프록시가 라우트를 만들 때만 'reject' (#112). */
+      defaultAction: { pool: string } | 'reject';
       limits?: ProxyLimitsInput;
       headers?: HeaderRulesInput;
       rateLimit?: RateLimitInput;
@@ -651,6 +652,8 @@ export type PutPoolOp = {
     protocolClass: ProtocolClass;
     algorithm: KeylessAlgorithm;
     upstreamTls?: UpstreamTlsInput;
+    /** URL 프록시가 `tcp_connect` 로 둔다 (#112). 다른 빌더는 안 싣는다. */
+    healthCheck?: { protocol: 'tcp_connect' };
   };
 };
 
@@ -1059,4 +1062,102 @@ export function putPassthroughRejectPatch(input: {
       action: { kind: 'reject' },
     },
   }];
+}
+
+/**
+ * **URL 하나 → 풀·백엔드·리스너(또는 라우트)** (#112).
+ *
+ * nginx 의 `proxy_pass https://example.com/v1/;` 한 줄을 옮긴다. 모델은 바꾸지 않는다 —
+ * barycenter 는 모든 프록시 대상을 풀로 다루고(헬스체크·드레인·reload 없는 교체), 그
+ * 원칙을 지키면서 **입력만** 펼친다. CLI `bary proxy create` 와 GUI 가 이 함수 하나를 쓴다.
+ *
+ * 만드는 것 (이 순서가 곧 참조 순서다 — 저장소는 적힌 순서대로 처리한다):
+ *   풀 `name`        https 면 `upstreamTls`(SNI = URL 호스트, IP 면 SNI 없음).
+ *                    헬스체크는 `tcp_connect` — 외부 사이트의 `/` 는 2xx 가 아닐 수 있다.
+ *   백엔드 `name-1`  URL 호스트·포트(기본 443 / 80)
+ *   리스너 `name`    `listen` 을 줬을 때만. 호스트가 없으면 기본 동작이 풀이다.
+ *   라우트 `name`    호스트를 줬을 때. `Host` 헤더와 `rewritePrefix`(URL 경로)를 싣는다.
+ *
+ * 리스너 기본 동작에는 경로 바꾸기가 없다. 그래서 URL 에 `/` 가 아닌 경로가 있으면 라우트가
+ * 필요하고, 라우트에는 호스트가 필요하다 — 그 조합은 미리 거절한다.
+ */
+export type ProxyFromUrlInput = {
+  name: string;
+  url: string;
+  /** 새 HTTP 리스너. `listener` 와 둘 중 하나. */
+  listen?: { bind: string; port: number };
+  /** 이미 있는 HTTP·HTTPS 리스너에 라우트를 붙인다. `hosts` 가 필요하다. */
+  listener?: string;
+  /** 있으면 라우트를 만든다. */
+  hosts?: readonly string[];
+  /** 라우트의 경로 접두사. 없으면 `/`. */
+  pathPrefix?: string;
+  /** 새 리스너의 출발지 제한. */
+  sourceAllow?: string[];
+};
+
+export type ProxyFromUrlOp = PutPoolOp | PutBackendOp | PutHttpListenerOp | PutHttpRouteOp;
+
+export function proxyFromUrlPatch(input: ProxyFromUrlInput): ProxyFromUrlOp[] {
+  const name = input.name.trim();
+  if (name === '') throw new Error('이름이 비어 있다');
+  let u: URL;
+  try { u = new URL(input.url.trim()); } catch {
+    throw new Error(`URL 이 아니다: ${JSON.stringify(input.url)} — 예: https://example.com/`);
+  }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('https:// 나 http:// 만 받는다');
+  if (u.username !== '' || u.password !== '') throw new Error('URL 에 사용자 정보를 넣지 않는다 — 인증은 요청 헤더로 건다');
+  if (u.search !== '' || u.hash !== '') throw new Error('URL 에 ? 나 # 를 넣지 않는다 — 요청의 질의 문자열은 그대로 간다');
+  const tls = u.protocol === 'https:';
+  // `new URL` 은 IPv6 를 `[::1]` 로 낸다. 백엔드 host 는 괄호 없이 적는다.
+  const host = u.hostname.replace(/^\[(.*)\]$/, '$1');
+  const port = u.port === '' ? (tls ? 443 : 80) : Number(u.port);
+  const isIp = /^[0-9.]+$/.test(host) || host.includes(':');
+  // Host 헤더는 기본 포트면 이름만, 아니면 `이름:포트` 다 — 브라우저가 보내는 모양과 같다.
+  const hostHeader = u.port === '' ? u.hostname : `${u.hostname}:${u.port}`;
+  const path = u.pathname === '' ? '/' : u.pathname;
+
+  const hosts = (input.hosts ?? []).map((h) => h.trim()).filter((h) => h !== '');
+  if ((input.listen === undefined) === (input.listener === undefined)) {
+    throw new Error('--listen(새 리스너) 과 --listener(기존 리스너) 중 하나만 준다');
+  }
+  if (input.listener !== undefined && hosts.length === 0) {
+    throw new Error('기존 리스너에 붙이려면 --host 가 필요하다 — 라우트로 만든다');
+  }
+  if (hosts.length === 0 && path !== '/') {
+    throw new Error(`URL 경로(${path})를 쓰려면 --host 가 필요하다 — 경로 바꾸기는 라우트에만 있다`);
+  }
+
+  const ops: ProxyFromUrlOp[] = [
+    {
+      op: 'put', kind: 'pool', key: name,
+      body: {
+        protocolClass: 'http', algorithm: 'round_robin',
+        ...(tls ? upstreamTlsField(isIp ? { enabled: true } : { enabled: true, sni: host }) : {}),
+        healthCheck: { protocol: 'tcp_connect' },
+      },
+    },
+    ...putBackendPatch(`${name}-1`, { pool: name, host, port }),
+  ];
+  const hostRule = [{ name: 'Host', value: hostHeader }];
+  if (input.listen !== undefined) {
+    // 라우트를 만들면 리스너 기본 동작은 거절(444)이다 — 모르는 Host 가 외부로 새지 않게.
+    const [l] = putHttpListenerPatch(name, {
+      bind: input.listen.bind, port: input.listen.port, pool: name,
+      ...(hosts.length === 0 ? { headers: { request: hostRule } } : {}),
+      ...(input.sourceAllow === undefined ? {} : { sourceAllow: input.sourceAllow }),
+    });
+    if (hosts.length > 0) l!.body.http = { ...l!.body.http, defaultAction: 'reject' };
+    ops.push(l!);
+  }
+  if (hosts.length > 0) {
+    ops.push(...putHttpRoutePatch({
+      key: name, listener: input.listener ?? name, hosts, pool: name,
+      ...(input.pathPrefix === undefined ? {} : { pathPrefix: input.pathPrefix }),
+      requestHeaders: hostRule,
+      // `/` → `/` 는 바꾸는 것이 없다. 렌더 바이트를 늘리지 않는다.
+      ...(path === '/' && (input.pathPrefix ?? '/') === '/' ? {} : { rewritePrefix: path }),
+    }));
+  }
+  return ops;
 }

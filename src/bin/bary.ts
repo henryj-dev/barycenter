@@ -37,6 +37,7 @@ import {
 import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete, parseListenerOptions } from '../cli/listener.js';
 import { parseSourceAllow } from '../web/edit.js';
+import { parseListen, proxyCreate } from '../cli/proxy.js';
 import { poolCreate, poolDelete } from '../cli/pool.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
 import {
@@ -136,6 +137,12 @@ const usage = (): never => {
                                    --route-header 'Host: api.example.com'   (여러 번) 이 라우트에만. 같은 이름이면 리스너 것을 대신한다
                                    --rewrite-prefix /v1/                   맞은 --path-prefix 를 이 값으로 바꿔 보낸다 (끝 '/' 가 같아야 한다)
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
+  bary proxy create              --name --url https://example.com/v1/ (--listen 127.0.0.1:8080 | --listener <키>) (#112)
+                                 URL 하나를 풀·백엔드·리스너(또는 라우트)로 펼쳐 변경 하나로 commit 한다. apply 는 아니다
+                                   --host a.example.com,…   있으면 라우트를 만든다 (Host 헤더·경로 바꾸기를 라우트에 싣는다)
+                                   --path-prefix /api/      라우트의 경로 접두사 (없으면 /)
+                                   --allow · --allow-file   새 리스너의 출발지 제한
+                                 URL 경로가 / 가 아니면 --host 가 필요하다 — 경로 바꾸기는 라우트에만 있다
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
   bary backend delete            --name
   bary backend drain             --name [--deadline 초]. 새 트래픽을 끊는다. apply 가 아니다
@@ -254,6 +261,35 @@ async function main(): Promise<void> {
     case 'audit': {
       const n = arg ?? '30';
       show(must(await call('GET', `/api/v1/audit?limit=${encodeURIComponent(n)}`), 'audit'));
+      return;
+    }
+    case 'proxy': {
+      if ((arg ?? usage()) !== 'create') usage();
+      const name = flag(argv, '--name') ?? usage();
+      const url = flag(argv, '--url') ?? usage();
+      const listenRaw = flag(argv, '--listen');
+      const listenerKey = flag(argv, '--listener');
+      const hostsRaw = flag(argv, '--host');
+      const pathPrefix = flag(argv, '--path-prefix');
+      const allowFile = flag(argv, '--allow-file');
+      try {
+        const sourceAllow = parseSourceAllow([
+          ...flagAll(argv, '--allow'),
+          ...(allowFile === undefined ? [] : [readFileSync(allowFile, 'utf8')]),
+        ]);
+        const out = await proxyCreate(call, {
+          name, url,
+          ...(listenRaw === undefined ? {} : { listen: parseListen(listenRaw) }),
+          ...(listenerKey === undefined ? {} : { listener: listenerKey }),
+          ...(hostsRaw === undefined ? {} : { hosts: hostsRaw.split(',') }),
+          ...(pathPrefix === undefined ? {} : { pathPrefix }),
+          ...(sourceAllow === undefined ? {} : { sourceAllow }),
+        });
+        console.error(`proxy ${name} committed r${out.revision} — ${out.created.join(', ')}`);
+        show(out);
+      } catch (e) {
+        die(e);
+      }
       return;
     }
     case 'listener': {
