@@ -159,6 +159,32 @@ ok()   { printf '  OK    %s\n' "$*"; }
 warn() { printf '  WARN  %s\n' "$*" >&2; }
 die()  { printf '  FAIL  %s\n' "$*" >&2; exit 1; }
 
+# **끝날 때 한 자리에서 치운다** (#99). 전에는 ⑦ 의 `trap` 이 빌드 디렉터리만 지웠다.
+#
+# 토큰 평문은 맨 끝 요약에서만 한 번 보인다. 그런데 ⑩ 이 토큰을 발급해 해시를 쓴 **뒤**
+# ⑪·⑫ 에서 죽으면, 평문은 어디에도 안 남는다. 그러면 재실행은 「재실행 = 업데이트」 규칙대로
+# 그 파일을 보존하고 「쓰던 것을 계속 쓴다」고 말한다 — 첫 설치에게는 쓰던 것이 없다.
+# 그래서 **이번 실행이 발급했고 실패로 끝나면** 여기서 평문을 낸다. 「한 번만 보인다」는
+# 그대로다: 성공하면 요약이, 실패하면 이 자리가 낸다.
+#
+# INT·TERM 은 `exit` 로 바꿔 이 EXIT 처리 하나로 모은다 — dash 는 INT 핸들러가 돌고 나면
+# 스크립트를 **계속** 돌린다. 지운 빌드 디렉터리 위에서 이어 가던 자리다.
+BUILD_DIR=
+TOKEN_PLAIN=
+TOKEN_ISSUED=0
+on_exit() {
+  _rc=$?
+  [ -n "$BUILD_DIR" ] && rm -rf "$BUILD_DIR"
+  if [ "$_rc" != 0 ] && [ "$TOKEN_ISSUED" = 1 ]; then
+    printf '\n  설치는 실패했지만 ops 토큰은 이미 발급됐다 — 평문은 **지금 한 번만** 보인다:\n    %s\n' "$TOKEN_PLAIN" >&2
+    printf '  원인을 고치고 다시 돌리면 이 토큰을 그대로 이어 간다 (잃었으면 --rotate-token).\n' >&2
+  fi
+  exit "$_rc"
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # 값에 작은따옴표를 두르는 것은 취향이 아니라 **양쪽을 만족시키기 위해서다** —
 # systemd 의 `EnvironmentFile` 도 sh 의 `.` 도 이 형식을 읽는다(OpenRC 쪽 init
 # 스크립트가 이 파일을 그대로 source 한다).
@@ -983,8 +1009,7 @@ fi
 
 step "⑦ 빌드"
 BUILD_DIR=$(mktemp -d)
-# shellcheck disable=SC2064
-trap "rm -rf '$BUILD_DIR'" EXIT INT TERM
+# 지우는 것은 맨 위의 `on_exit` 이다.
 
 for f in package.json package-lock.json tsconfig.json tsconfig.build.json tsconfig.testing.json; do
   [ -f "$REPO/$f" ] || die "$REPO/$f 가 없다 — 저장소 체크아웃 안에서 돌려야 한다"
@@ -1226,6 +1251,8 @@ else
 fi
 chown root:"$SVC_USER" "$TOKENS_FILE"
 chmod 0640 "$TOKENS_FILE"
+# 이 실행이 평문을 들고 있는가 — 실패하면 `on_exit` 가 낸다.
+[ -n "$TOKEN_PLAIN" ] && TOKEN_ISSUED=1
 
 # 한 줄 한 줄을 `env_line` 이 만든다 — 인용 규칙이 한 자리에만 있게 하려는 것이다.
 # heredoc 으로 늘어놓던 때는 값에 따옴표가 든 경우(암호를 담은 DSN)가 조용히 깨졌다.
