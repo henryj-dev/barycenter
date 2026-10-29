@@ -794,7 +794,11 @@ export type PutHttpRouteOp = {
     hosts: string[];
     priority: number;
     pathPrefix?: string;
-    action: { kind: 'proxy'; pool: string; websocket: boolean };
+    action: {
+      kind: 'proxy'; pool: string; websocket: boolean;
+      requestHeaders?: HeaderRuleInput[];
+      rewritePrefix?: string;
+    };
   };
 };
 
@@ -810,6 +814,10 @@ export function putHttpRoutePatch(input: {
   pathPrefix?: string;
   priority?: number;
   websocket?: boolean;
+  /** 이 라우트에만 거는 요청 헤더. 같은 이름이면 리스너 것을 대신한다 (#109). */
+  requestHeaders?: HeaderRuleInput[];
+  /** 맞은 경로 접두사를 이 값으로 바꿔 보낸다 (#109). */
+  rewritePrefix?: string;
 }): PutHttpRouteOp[] {
   if (input.key === '') throw new Error('키가 비어 있다');
   if (input.listener === '') throw new Error('리스너가 비어 있다');
@@ -828,7 +836,34 @@ export function putHttpRoutePatch(input: {
     action: { kind: 'proxy', pool: input.pool, websocket: input.websocket === true },
   };
   if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
+  // **안 적으면 키를 안 만든다** — 빈 목록·빈 문자열을 실으면 해독기가 거절하거나 렌더가 바뀐다.
+  const requestHeaders = headerList(input.requestHeaders);
+  if (requestHeaders !== undefined) body.action.requestHeaders = requestHeaders;
+  const rewritePrefix = input.rewritePrefix?.trim();
+  if (rewritePrefix !== undefined && rewritePrefix !== '') {
+    // 해독기와 같은 규칙을 미리 건다 — 저장 못 하는 patch 를 만들지 않는다.
+    if ((pathPrefix === undefined || pathPrefix === '' ? '/' : pathPrefix).endsWith('/') !== rewritePrefix.endsWith('/')) {
+      throw new Error("경로 바꾸기의 끝 '/' 가 경로 접두사와 같아야 한다");
+    }
+    body.action.rewritePrefix = rewritePrefix;
+  }
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
+}
+
+/**
+ * `이름: 값` 줄들 → 헤더 규칙 (#109). GUI 의 여러 줄 입력과 CLI `--route-header` 가 같이 쓴다.
+ * 첫 `:` 에서 끊는다 — 값에는 `:` 가 들어갈 수 있다(`Authorization: Basic …`).
+ */
+export function parseHeaderLines(text: string | readonly string[] | undefined): HeaderRuleInput[] | undefined {
+  if (text === undefined) return undefined;
+  const lines = (typeof text === 'string' ? text.split('\n') : [...text]).map((l) => l.trim()).filter((l) => l !== '');
+  const out: HeaderRuleInput[] = [];
+  for (const l of lines) {
+    const at = l.indexOf(':');
+    if (at <= 0) throw new Error(`'이름: 값' 모양이 아니다: ${JSON.stringify(l)}`);
+    out.push({ name: l.slice(0, at).trim(), value: l.slice(at + 1).trim() });
+  }
+  return out.length === 0 ? undefined : out;
 }
 
 export type RedirectStatus = 301 | 302 | 307 | 308;

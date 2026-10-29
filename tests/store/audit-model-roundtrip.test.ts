@@ -101,7 +101,13 @@ const rich = (): Model => ({
   httpRoutes: [
     {
       key: 'r-api', listener: 'secure', hosts: ['a.test'], priority: 10,
-      pathPrefix: '/api/', action: { kind: 'proxy', pool: 'app', websocket: true },
+      pathPrefix: '/api/',
+      // 026 — 라우트 헤더(jsonb)와 경로 바꾸기(text)가 같은 모양으로 돌아와야 한다.
+      action: {
+        kind: 'proxy', pool: 'app', websocket: true,
+        requestHeaders: [{ name: 'Host', value: 'api.example.com' }, { name: 'X-Tenant', value: 'acme' }],
+        rewritePrefix: '/v1/',
+      },
     },
     {
       key: 'r-old', listener: 'secure', hosts: ['a.test'], priority: 5,

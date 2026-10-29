@@ -704,7 +704,27 @@ export type Backend = {
 };
 
 export type HttpAction =
-  | { kind: 'proxy'; pool: string; websocket: boolean }
+  | {
+    kind: 'proxy'; pool: string; websocket: boolean;
+    /**
+     * **이 라우트에만** 거는 요청 헤더 (2026-10-29). 리스너의 `http.headers.request` 뒤에
+     * 나가고, 같은 이름이면 리스너 것을 **대신한다** — 렌더가 리스너 줄을 뺀다.
+     *
+     * 빼는 이유는 실측이다: nginx 는 같은 이름의 `proxy_set_header` 를 둘 다 보낸다
+     * (`X-A: one` 과 `X-A: two` 가 함께 간다). `Host` 만 예외로 마지막 하나가 간다.
+     * 예: 외부 API 로 보내는 라우트의 `Host: api.example.com`.
+     */
+    requestHeaders?: HeaderRule[];
+    /**
+     * **맞은 경로 접두사를 이 값으로 바꿔 보낸다** (2026-10-29). nginx 의
+     * `location /api/ { proxy_pass http://up/v1/; }` 다 — `/api/users` 가 `/v1/users` 가 된다.
+     * 라우트에 `pathPrefix` 가 없으면 `/` 를 바꾼다(앞에 붙는다).
+     *
+     * 끝의 `/` 는 `pathPrefix` 와 **같아야 한다.** 다르면 `/v1users`·`/v1//users` 가 된다.
+     * 해독기가 막는다.
+     */
+    rewritePrefix?: string;
+  }
   | { kind: 'redirect'; to: string; status: 301 | 302 | 307 | 308 }
   | { kind: 'reject'; status: 403 | 404 | 444 };
 
