@@ -60,7 +60,9 @@ export class ClusterNode {
       let result: FollowResult | Error | undefined;
       if (!isLeader) {
         try {
-          result = await this.control.followActive(`cluster:${this.name}`);
+          // 활성화가 수 초 걸릴 수 있다 — 그동안 화면은 「따라가는 중」을 본다 (#120).
+          result = await this.control.followActive(`cluster:${this.name}`,
+            async () => { await this.report(false, 'following'); });
           if (result.kind === 'in_sync') await this.control.projectHealth();
           if (result.kind === 'applied') {
             log.info('cluster.followed', { node: this.name, generation: result.generation, phase: result.phase });
@@ -109,6 +111,11 @@ export type ClusterNodeView = {
   name: string; url?: string; role: 'leader' | 'follower';
   activeEpoch?: string; activeGeneration?: string;
   state: NodeState; lastError?: string; lastSeen: string; stale: boolean;
+  /**
+   * **리더와 다른 epoch 을 서빙한다** (#120 「뒤처짐」). 둘 다 알 때만 참이다 — 모르는 것을
+   * 뒤처졌다고 하지 않는다. 따라가는 중인 노드도 잠깐 참이다; 화면은 state 를 먼저 본다.
+   */
+  behind: boolean;
 };
 
 export async function listClusterNodes(db: Db, staleAfterMs: number): Promise<ClusterNodeView[]> {
@@ -117,6 +124,7 @@ export async function listClusterNodes(db: Db, staleAfterMs: number): Promise<Cl
             last_seen, (now() - last_seen) > ($1::text || ' milliseconds')::interval AS stale
        FROM cluster_nodes ORDER BY name`, [String(staleAfterMs)],
   )).rows;
+  const leaderEpoch = rows.find((r) => r['role'] === 'leader' && r['epoch'] != null)?.['epoch'];
   return rows.map((r) => ({
     name: String(r['name']),
     ...(r['url'] == null ? {} : { url: String(r['url']) }),
@@ -127,5 +135,36 @@ export async function listClusterNodes(db: Db, staleAfterMs: number): Promise<Cl
     ...(r['last_error'] == null ? {} : { lastError: String(r['last_error']) }),
     lastSeen: new Date(r['last_seen'] as string).toISOString(),
     stale: r['stale'] === true,
+    behind: r['role'] === 'follower' && leaderEpoch != null && r['epoch'] != null
+      && String(r['epoch']) !== String(leaderEpoch),
   }));
+}
+
+/** 지금 리더와 리더가 된 시각 (#120). `leadership` 은 관측용 기록이다 — 락 자체가 아니다. */
+export async function currentLeader(db: Db): Promise<{ name: string; since: string } | undefined> {
+  const r = (await db.query(
+    `SELECT holder, acquired_at FROM leadership WHERE released_at IS NULL ORDER BY token DESC LIMIT 1`,
+  )).rows[0];
+  if (r === undefined) return undefined;
+  return { name: String(r['holder']), since: new Date(r['acquired_at'] as string).toISOString() };
+}
+
+/** 노드 하나의 최근 적용 기록 (#120). 팔로워의 `cluster.follow` 감사 행이다. */
+export type NodeApplyRecord = { at: string; revision?: string; generation?: string; phase?: string };
+
+export async function nodeHistory(db: Db, name: string, limit = 20): Promise<NodeApplyRecord[]> {
+  const rows = (await db.query(
+    `SELECT at, revision::text AS revision, after FROM audit
+      WHERE principal = $1 AND action = 'cluster.follow'
+      ORDER BY at DESC LIMIT $2`, [`cluster:${name}`, limit],
+  )).rows;
+  return rows.map((r) => {
+    const after = (r['after'] ?? {}) as { generation?: string; phase?: string };
+    return {
+      at: new Date(r['at'] as string).toISOString(),
+      ...(r['revision'] == null ? {} : { revision: String(r['revision']) }),
+      ...(after.generation === undefined ? {} : { generation: after.generation }),
+      ...(after.phase === undefined ? {} : { phase: after.phase }),
+    };
+  });
 }

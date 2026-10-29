@@ -495,7 +495,11 @@ export class ControlPlane {
    *   · 오퍼레이션 id 는 리더의 것을 그대로 쓴다. 노드마다 저널이 따로라 겹치지 않고,
    *     같은 id 로 다시 부르면 에이전트가 진행된 만큼 건너뛴다(재진입).
    */
-  async followActive(by: string): Promise<FollowResult> {
+  async followActive(
+    by: string,
+    /** 활성화를 **시작하기 직전**에 부른다 — 노드 상태를 「따라가는 중」으로 적는 자리다 (#120). */
+    onStart?: (target: { revision: string; epoch: string; generation: string }) => Promise<void>,
+  ): Promise<FollowResult> {
     const r = (await this.db.query(
       `SELECT id, revision::text AS revision, activation_epoch::text AS epoch, generation,
               envelope->>'leaderToken' AS token
@@ -531,6 +535,7 @@ export class ControlPlane {
     const seqToken = BigInt(String(t?.['t'] ?? '0'));
     const opToken = /^\d+$/.test(String(r['token'] ?? '')) ? BigInt(String(r['token'])) : 0n;
     const leaderToken = (seqToken > opToken ? seqToken : opToken).toString();
+    if (onStart !== undefined) await onStart(active);
     await this.driver.fence(leaderToken);
     const op: ApplyOperation = {
       leaderToken,
@@ -543,6 +548,11 @@ export class ControlPlane {
     };
     const result = await this.driver.applyConfig(op);
     count(`bary_cluster_follow_total{phase="${result.phase}"}`);
+    // **노드별 적용 기록** (#120). 작업자가 `cluster:<노드>` 라 노드마다 걸러 읽는다.
+    // 기록이 실패해도 적용은 끝났다 — 삼키되 조용히 두지 않는다.
+    await this.store.audit(by, 'cluster.follow', active.id, undefined,
+      { generation: active.generation, epoch: active.epoch, phase: result.phase }, active.revision)
+      .catch((e: unknown) => count(`bary_cluster_follow_audit_failed_total{error="${String(e).slice(0, 40).replace(/"/g, '')}"}`));
     if (result.phase === 'activated') {
       await this.projectHealth().catch(() => undefined);
       await this.sweep(active.generation, by, model);

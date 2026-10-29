@@ -20,7 +20,7 @@ import { join } from 'node:path';
 
 import { ConfigStore, type PatchOp } from '../../src/store/config-store.js';
 import { ControlPlane } from '../../src/control/plane.js';
-import { ClusterNode, listClusterNodes, nodeStateOf } from '../../src/control/cluster.js';
+import { ClusterNode, currentLeader, listClusterNodes, nodeHistory, nodeStateOf } from '../../src/control/cluster.js';
 import { LeaderElection } from '../../src/control/leader.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation, ApplyResult } from '../../src/dp/operation.js';
@@ -215,6 +215,50 @@ describe('노드 상태 (cluster_nodes)', () => {
     await db.query(`INSERT INTO cluster_nodes (name, role, state, last_seen) VALUES ('web-09', 'follower', 'in_sync', now() - interval '1 hour')`);
     const [row] = await listClusterNodes(db, 60_000);
     expect(row).toMatchObject({ name: 'web-09', stale: true });
+  });
+});
+
+describe('화면이 쓰는 데이터 (#120)', () => {
+  it('**활성화하는 동안 노드 행이 following 이다**', async () => {
+    await commitAndApply(MODEL);
+    let seen: string | undefined;
+    const orig = dpB.driver.applyConfig;
+    dpB.driver.applyConfig = async (op) => {
+      seen = String((await db.query(`SELECT state FROM cluster_nodes WHERE name = 'web-02'`)).rows[0]?.['state']);
+      return orig(op);
+    };
+    const b = new ClusterNode(db, follower, dpB.driver, electionB, 'web-02', undefined);
+    expect(await b.tick()).toBe('in_sync');
+    expect(seen).toBe('following');
+  });
+
+  it('리더와 다른 epoch 을 서빙하는 팔로워는 behind 다 — 모르면 아니다', async () => {
+    await commitAndApply(MODEL);
+    const a = new ClusterNode(db, leader, dpA.driver, electionA, 'web-01', undefined);
+    await a.tick();
+    await db.query(`INSERT INTO cluster_nodes (name, role, active_epoch, state) VALUES
+      ('web-02', 'follower', 0, 'failed'), ('web-03', 'follower', NULL, 'standalone')`);
+    const byName = Object.fromEntries((await listClusterNodes(db, 60_000)).map((n) => [n.name, n.behind]));
+    expect(byName).toEqual({ 'web-01': false, 'web-02': true, 'web-03': false });
+  });
+
+  it('지금 리더와 리더가 된 시각을 준다', async () => {
+    // reset 이 leadership 을 비운다 — 획득이 쓰는 것과 같은 행을 넣는다. 놓은 리더는 빼야 한다.
+    await db.query(`INSERT INTO leadership (token, holder, released_at) VALUES (1, 'web-00', now())`);
+    await db.query(`INSERT INTO leadership (token, holder) VALUES (2, 'web-01')`);
+    const l = await currentLeader(db);
+    expect(l?.name).toBe('web-01');
+    expect(Number.isNaN(Date.parse(l!.since))).toBe(false);
+  });
+
+  it('**팔로워의 적용이 노드별 기록으로 남는다** — 리더 기록과 섞이지 않는다', async () => {
+    const g1 = await commitAndApply(MODEL);
+    await follower.followActive('cluster:web-02');
+    const g2 = await commitAndApply([{ op: 'put', kind: 'listener', key: 'front2', body: { protocol: 'http', bind: '0.0.0.0', port: 8081, enabled: true, http: { defaultAction: { pool: 'app' } } } }]);
+    await follower.followActive('cluster:web-02');
+    const h = await nodeHistory(db, 'web-02');
+    expect(h.map((x) => [x.generation, x.phase])).toEqual([[g2, 'activated'], [g1, 'activated']]);
+    expect(await nodeHistory(db, 'web-01')).toEqual([]);
   });
 });
 

@@ -28,6 +28,9 @@ export function getPath(what: string): string | undefined {
   if (what === 'backends/status') return '/api/v1/backends/status';
   if (LISTS.has(what)) return `/api/v1/${what}`;
   if (what === 'metrics') return '/metrics';
+  // 클러스터 노드 하나의 최근 적용 기록 (#120).
+  const nodeHist = /^cluster\/nodes\/([^/]+)\/history$/.exec(what);
+  if (nodeHist?.[1] !== undefined) return `/api/v1/cluster/nodes/${encodeURIComponent(nodeHist[1])}/history`;
   const pool = /^pools\/([^/]+)\/backends$/.exec(what);
   if (pool?.[1] !== undefined) return `/api/v1/pools/${encodeURIComponent(pool[1])}/backends`;
   const backend = /^backends\/([^/]+)\/status$/.exec(what);
