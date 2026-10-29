@@ -87,11 +87,15 @@ const rich = (): Model => ({
       // 헤더 realip (024) — 두 컬럼이 같은 모양으로 돌아와야 한다.
       key: 'cf', protocol: 'http', bind: '0.0.0.0', port: 8080, enabled: false,
       realIpFromHeader: { header: 'CF-Connecting-IP', trustedCidrs: ['173.245.48.0/20', '2400:cb00::/32'] },
+      // 출발지 제한 (025) — **적은 문자열 그대로** 돌아와야 한다. `cidr` 타입이었다면
+      // `203.0.113.7` 이 `203.0.113.7/32` 로 돌아와 plan 이 매번 바뀐 것으로 봤다.
+      sourceAllow: ['173.245.48.0/20', '2400:cb00::/32', '203.0.113.7'],
       http: { defaultAction: 'reject' },
     },
     {
       key: 'stream', protocol: 'tcp', bind: '127.0.0.1', port: 9443, enabled: false,
       defaultPool: 'l4',
+      sourceAllow: ['10.0.0.0/8'],
     },
   ],
   httpRoutes: [

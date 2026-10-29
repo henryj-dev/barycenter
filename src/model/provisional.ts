@@ -252,6 +252,25 @@ type ListenerBase = {
   bind: string;
   port: number;
   enabled: boolean;
+  /**
+   * **이 리스너에 연결할 수 있는 출발지** (2026-10-29). 없으면 누구나 연결한다.
+   *
+   * CIDR 또는 주소 하나의 목록이고 **비어 있을 수 없다** — 아무도 못 들어오는 리스너는
+   * `enabled: false` 다. 예: Cloudflare 프록시 뒤의 오리진은 Cloudflare 대역만 받는다.
+   *
+   * **보는 것은 연결한 상대(바로 앞 홉)다.** 원본 IP 가 아니다. realip 이 `$remote_addr`
+   * 를 원본 IP 로 바꿔도 이 검사는 바뀌기 전 주소를 본다 — 그래서 Cloudflare 대역만
+   * 받으면서 `realIpFromHeader` 로 방문자 IP 를 꺼내는 조합이 그대로 성립한다.
+   *
+   *   http·https  `geo $realip_remote_addr` + server 레벨 `if … return 444`.
+   *               `allow` 를 안 쓰는 이유가 둘이다: access 단계라 realip 뒤의 주소를 보고,
+   *               rewrite 단계의 `return`(redirect·reject 라우트)보다 늦게 돈다.
+   *   stream      `allow …; deny all;` — stream 에는 `if` 가 없다. 그래서 PROXY 수신과는
+   *               같이 못 쓴다(stream realip 이 주소를 바꾼 뒤 검사한다). 검증기가 막는다.
+   *
+   * ⚠️ ACME http-01 은 CA 가 직접 :80 에 온다. 그 리스너에 대역을 걸면 발급이 막힌다.
+   */
+  sourceAllow?: string[];
 };
 
 /**

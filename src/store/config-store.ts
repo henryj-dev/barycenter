@@ -291,7 +291,7 @@ async function readModel(c: Queryable): Promise<Model> {
 
   const listeners = (await c.query(
     `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2,
-            l.real_ip_header, l.real_ip_header_cidrs,
+            l.real_ip_header, l.real_ip_header_cidrs, l.source_allow,
             l.proxy_limits, l.header_rules, l.rate_limit, l.http_strict_priority,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
             l.on_no_sni_reject,
@@ -312,6 +312,9 @@ async function readModel(c: Queryable): Promise<Model> {
       bind: text(r, 'bind'),
       port: num(r, 'port'),
       enabled: bool(r, 'enabled'),
+      // 출발지 제한 (025). NULL 이면 키 자체를 안 만든다 — 안 정한 것과 빈 목록은 다르다.
+      ...(Array.isArray(r['source_allow']) && (r['source_allow'] as unknown[]).length > 0
+        ? { sourceAllow: r['source_allow'] as string[] } : {}),
     };
     const cidrs = r['accept_proxy_cidrs'];
     const pp = Array.isArray(cidrs) && cidrs.length > 0
@@ -661,9 +664,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
                                 tls_policy_id,tls_default_cert_id,http2,proxy_limits,header_rules,
                                 rate_limit,on_no_sni_pool,on_no_sni_cls,on_no_sni_reject,
                                 http_strict_priority,real_ip_header,real_ip_header_cidrs,
+                                source_allow,
                                 created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$20,$20,$21)
+                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$20,$20,$21)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
@@ -689,6 +693,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            http_strict_priority=EXCLUDED.http_strict_priority,
            real_ip_header=EXCLUDED.real_ip_header,
            real_ip_header_cidrs=EXCLUDED.real_ip_header_cidrs,
+           source_allow=EXCLUDED.source_allow,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
@@ -723,7 +728,9 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           (protocol === 'http' || protocol === 'https')
             ? (obj(b['realIpFromHeader'])['header'] ?? null) : null,
           (protocol === 'http' || protocol === 'https')
-            ? (obj(b['realIpFromHeader'])['trustedCidrs'] ?? null) : null],
+            ? (obj(b['realIpFromHeader'])['trustedCidrs'] ?? null) : null,
+          // $32 — 출발지 제한 (025). 모든 프로토콜. 해독기가 모양을 이미 봤다.
+          Array.isArray(b['sourceAllow']) ? b['sourceAllow'] : null],
       );
       return;
     }

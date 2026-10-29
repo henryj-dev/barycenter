@@ -23,16 +23,16 @@
     certificates: string[];
     withdraw: (key: string) => void;
     withdrawPolicy: (key: string) => void;
-    insert: (key: string, bind: string, port: number, pool: string, opts: ListenerOptionFlags) => void;
-    insertTcp: (key: string, bind: string, port: number, pool: string) => void;
+    insert: (key: string, bind: string, port: number, pool: string, opts: ListenerOptionFlags, allow?: string) => void;
+    insertTcp: (key: string, bind: string, port: number, pool: string, allow?: string) => void;
     insertPassthrough: (
-      key: string, bind: string, port: number, pool?: string, noSniPool?: string,
+      key: string, bind: string, port: number, pool?: string, noSniPool?: string, allow?: string,
     ) => void;
-    insertUdp: (key: string, bind: string, port: number, pool: string, preset: UdpPreset) => void;
+    insertUdp: (key: string, bind: string, port: number, pool: string, preset: UdpPreset, allow?: string) => void;
     insertPolicy: (key: string, minVersion: TlsVersion) => void;
     insertHttps: (
       key: string, bind: string, port: number, pool: string,
-      policy: string, certificate: string, opts: ListenerOptionFlags,
+      policy: string, certificate: string, opts: ListenerOptionFlags, allow?: string,
     ) => void;
   } = $props();
   // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
@@ -59,6 +59,9 @@
           <span class="proto mono">{row.protocol}</span>
           <span class="key">{row.mark === 'leave' ? row.socket : row.key}</span>
           <span class="mark">{label(row.mark)}</span>
+          {#if row.sourceAllow.length > 0}
+            <span class="allow mono" title={row.sourceAllow.join('\n')}>출발지 {row.sourceAllow.length}개만</span>
+          {/if}
           {#if row.mark !== 'leave'}
             {#if !ro}
             <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
@@ -98,7 +101,7 @@
   .ports { list-style: none; margin: 1.5rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
   li {
     display: grid;
-    grid-template-columns: 11rem 5.5rem 1fr auto auto;
+    grid-template-columns: 11rem 5.5rem 1fr auto auto auto;
     gap: 0.6rem;
     align-items: baseline;
     padding: 0.7rem 0;
@@ -109,6 +112,8 @@
   .proto { color: var(--mute); font-size: 0.8rem; }
   .key { color: var(--mute); font-size: 0.85rem; }
   .mark { font-size: 0.75rem; color: var(--mute); }
+  /* 출발지 제한 — 목록은 title 로 펼친다. 줄에 다 싣기엔 길다(Cloudflare 만 스물두 개). */
+  .allow { font-size: 0.72rem; color: var(--amber, var(--mute)); cursor: help; }
   button {
     background: transparent;
     border: 1px solid var(--rule);

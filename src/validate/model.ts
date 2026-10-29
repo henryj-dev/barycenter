@@ -305,6 +305,22 @@ export function validateModel(
       });
     };
     notHere('acceptProxyProtocol', l.protocol === 'udp' && l.acceptProxyProtocol !== undefined);
+    // **stream 의 출발지 제한은 `allow` 다** (http 계열은 `geo $realip_remote_addr`).
+    // stream realip 이 PROXY 헤더로 `$remote_addr` 를 바꾸면 `allow` 는 바뀐 주소 — 원본
+    // 클라이언트 — 를 본다. 앞단 대역을 적은 목록이 방문자 IP 검사로 바뀌어 전부 막힌다.
+    // stream 에는 `$realip_remote_addr` 로 갈라 낼 `if` 가 없으므로 조합 자체를 막는다.
+    if (l.sourceAllow !== undefined && l.acceptProxyProtocol !== undefined
+      && (l.protocol === 'tcp' || l.protocol === 'tls_passthrough')) {
+      issues.push({
+        code: 'option_not_supported',
+        subjects: [l.key],
+        message:
+          `${l.protocol} 리스너 '${l.key}' 에 sourceAllow 와 acceptProxyProtocol 을 같이 적었다. ` +
+          `stream 에서는 PROXY 헤더가 주소를 바꾼 뒤에 검사하므로 앞단 대역이 아니라 원본 ` +
+          `클라이언트를 보게 된다. 앞단만 받으려면 acceptProxyProtocol.trustedCidrs 가 이미 그 ` +
+          `경계이고, 출발지 제한은 방화벽에서 건다.`,
+      });
+    }
     // 헤더는 HTTP 를 푼 뒤에만 보인다 — stream 리스너에 적힌 값은 아무도 안 읽는다.
     notHere('realIpFromHeader',
       l.protocol !== 'http' && l.protocol !== 'https' && l.realIpFromHeader !== undefined);

@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { UdpPreset } from '@web/edit';
+  import SourceAllow from './SourceAllow.svelte';
 
   let { pools, editing, add }: {
     pools: string[];
     editing: boolean;
-    add: (key: string, bind: string, port: number, pool: string, preset: UdpPreset) => void;
+    add: (key: string, bind: string, port: number, pool: string, preset: UdpPreset, allow?: string) => void;
   } = $props();
 
   let key = $state('');
@@ -12,9 +13,10 @@
   let port = $state('53');
   let pool = $state('');
   let preset = $state<UdpPreset>('dns');
+  let allow = $state('');
 
   const submit = (): void => {
-    add(key.trim(), bind.trim(), Number(port), pool, preset);
+    add(key.trim(), bind.trim(), Number(port), pool, preset, allow);
   };
 </script>
 
@@ -35,6 +37,7 @@
     {/each}
   </select>
   <button type="submit" disabled={editing || pools.length === 0}>UDP 포트를 연다</button>
+  <SourceAllow {editing} bind:value={allow} />
 </form>
 
 <style>

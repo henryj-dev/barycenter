@@ -11,6 +11,8 @@ export type ListenerFact = {
   bind: string;
   port: number;
   enabled?: boolean;
+  /** 출발지 제한 (2026-10-29). 없으면 누구나. */
+  sourceAllow?: string[];
 };
 
 export type SocketDelta = { added: string[]; removed: string[] };
@@ -25,6 +27,8 @@ export type ListenerRow = {
   enabled: boolean;
   socket: string;
   mark: ListenerMark;
+  /** 빈 배열 = 제한 없음. 화면이 「출발지 N개만」 을 그린다. */
+  sourceAllow: string[];
 };
 
 export type ListenersView = {
@@ -52,6 +56,7 @@ export function viewOfListeners(
       enabled: l.enabled !== false,
       socket,
       mark: added.has(socket) ? 'join' : 'stay',
+      sourceAllow: l.sourceAllow ?? [],
     };
   });
   for (const socket of pending?.removed ?? []) {
@@ -65,6 +70,7 @@ export function viewOfListeners(
       enabled: true,
       socket,
       mark: 'leave',
+      sourceAllow: [],
     });
   }
   rows.sort((a, b) => a.port - b.port || a.key.localeCompare(b.key) || a.socket.localeCompare(b.socket));

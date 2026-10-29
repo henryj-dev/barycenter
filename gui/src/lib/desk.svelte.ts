@@ -19,7 +19,7 @@ import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs } from '@web/reconnect';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, type ListenerOptionFlags } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import { needsStepUp, stepUp } from '$lib/account/step-up.svelte';
 
@@ -462,16 +462,26 @@ export function createDesk(scope?: { api(path: string): string }) {
     }
   };
 
+  /**
+   * 출발지 제한 칸의 문자열 → patch 조각. 끊기·검사는 `parseSourceAllow` 한 자리다(CLI 와 같다).
+   * **try 안에서 부른다** — 잘못된 대역은 폼 위의 오류 한 줄로 끝난다.
+   */
+  const allowOf = (allow: string | undefined): { sourceAllow?: string[] } => {
+    const list = parseSourceAllow(allow);
+    return list === undefined ? {} : { sourceAllow: list };
+  };
+
   const insertHttpListener = async (
     key: string,
     body: { bind: string; port: number; pool: string },
     opts?: ListenerOptionFlags,
+    allow?: string,
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
       // 단위 해석은 `parseListenerOptions` 한 자리다 — CLI 와 같은 것을 쓴다.
-      return await commitPatch(putHttpListenerPatch(key, { ...body, ...parseListenerOptions(opts ?? {}) }));
+      return await commitPatch(putHttpListenerPatch(key, { ...body, ...parseListenerOptions(opts ?? {}), ...allowOf(allow) }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;
@@ -483,11 +493,12 @@ export function createDesk(scope?: { api(path: string): string }) {
   const insertTcpListener = async (
     key: string,
     body: { bind: string; port: number; pool: string },
+    allow?: string,
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
-      return await commitPatch(putTcpListenerPatch(key, body));
+      return await commitPatch(putTcpListenerPatch(key, { ...body, ...allowOf(allow) }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;
@@ -499,11 +510,12 @@ export function createDesk(scope?: { api(path: string): string }) {
   const insertPassthroughListener = async (
     key: string,
     body: { bind: string; port: number; pool?: string; noSniPool?: string },
+    allow?: string,
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
-      return await commitPatch(putPassthroughListenerPatch(key, body));
+      return await commitPatch(putPassthroughListenerPatch(key, { ...body, ...allowOf(allow) }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;
@@ -576,11 +588,12 @@ export function createDesk(scope?: { api(path: string): string }) {
     key: string,
     body: { bind: string; port: number; pool: string; policy: string; certificate: string },
     opts?: ListenerOptionFlags,
+    allow?: string,
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
-      return await commitPatch(putHttpsListenerPatch(key, { ...body, ...parseListenerOptions(opts ?? {}) }));
+      return await commitPatch(putHttpsListenerPatch(key, { ...body, ...parseListenerOptions(opts ?? {}), ...allowOf(allow) }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;
@@ -592,11 +605,12 @@ export function createDesk(scope?: { api(path: string): string }) {
   const insertUdpListener = async (
     key: string,
     body: { bind: string; port: number; pool: string; preset: UdpPreset },
+    allow?: string,
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
-      return await commitPatch(putUdpListenerPatch(key, body));
+      return await commitPatch(putUdpListenerPatch(key, { ...body, ...allowOf(allow) }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;

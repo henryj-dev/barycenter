@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ListenerOptionFlags } from '@web/edit';
   import ListenerOptions from './ListenerOptions.svelte';
+  import SourceAllow from './SourceAllow.svelte';
 
   let { pools, policies, certificates, editing, add }: {
     pools: string[];
@@ -9,7 +10,7 @@
     editing: boolean;
     add: (
       key: string, bind: string, port: number, pool: string,
-      policy: string, certificate: string, opts: ListenerOptionFlags,
+      policy: string, certificate: string, opts: ListenerOptionFlags, allow?: string,
     ) => void;
   } = $props();
 
@@ -21,11 +22,12 @@
   let certificate = $state('');
   // **HTTP 와 같은 컴포넌트를 쓴다.** 두 벌로 두면 한쪽만 고치는 날이 온다.
   let opts = $state<ListenerOptionFlags>({});
+  let allow = $state('');
 
   const ready = $derived(pools.length > 0 && policies.length > 0 && certificates.length > 0);
 
   const submit = (): void => {
-    add(key.trim(), bind.trim(), Number(port), pool, policy, certificate, opts);
+    add(key.trim(), bind.trim(), Number(port), pool, policy, certificate, opts, allow);
   };
 </script>
 

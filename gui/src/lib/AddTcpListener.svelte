@@ -1,17 +1,20 @@
 <script lang="ts">
+  import SourceAllow from './SourceAllow.svelte';
+
   let { pools, editing, add }: {
     pools: string[];
     editing: boolean;
-    add: (key: string, bind: string, port: number, pool: string) => void;
+    add: (key: string, bind: string, port: number, pool: string, allow?: string) => void;
   } = $props();
 
   let key = $state('');
   let bind = $state('0.0.0.0');
   let port = $state('9000');
   let pool = $state('');
+  let allow = $state('');
 
   const submit = (): void => {
-    add(key.trim(), bind.trim(), Number(port), pool);
+    add(key.trim(), bind.trim(), Number(port), pool, allow);
   };
 </script>
 
@@ -26,6 +29,7 @@
     {/each}
   </select>
   <button type="submit" disabled={editing || pools.length === 0}>TCP 포트를 연다</button>
+  <SourceAllow {editing} bind:value={allow} />
 </form>
 
 <style>
