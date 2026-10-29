@@ -29,7 +29,7 @@ import { readFileSync } from 'node:fs';
 import { createSecureContext, type SecureContextOptions } from 'node:tls';
 import { createHash, randomBytes, randomUUID, X509Certificate } from 'node:crypto';
 
-import { listClusterNodes } from '../control/cluster.js';
+import { currentLeader, listClusterNodes, nodeHistory } from '../control/cluster.js';
 import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.js';
@@ -776,7 +776,18 @@ const ROUTES: Route[] = [
       json(c.res, 200, { enabled: false, nodes: [] });
       return;
     }
-    json(c.res, 200, { enabled: true, self: cl.node, nodes: await listClusterNodes(api.db, cl.staleAfterMs) });
+    const leader = await currentLeader(api.db);
+    json(c.res, 200, {
+      enabled: true, self: cl.node,
+      ...(leader === undefined ? {} : { leader }),
+      nodes: await listClusterNodes(api.db, cl.staleAfterMs),
+    });
+  }),
+  // 노드 하나의 최근 적용 기록 (#120). 클러스터가 꺼져 있으면 빈 목록이다.
+  route('GET', '/api/v1/cluster/nodes/:name/history', 'read', async (c, api) => {
+    const cl = 'cluster' in api ? api.cluster : undefined;
+    if (cl === undefined || !('db' in api)) { json(c.res, 200, []); return; }
+    json(c.res, 200, await nodeHistory(api.db, c.params['name'] ?? ''));
   }),
   route('GET', '/api/v1/status', 'read', async (c, api) => {
     json(c.res, 200, { ...await api.control.status(), build: api.build ?? null });

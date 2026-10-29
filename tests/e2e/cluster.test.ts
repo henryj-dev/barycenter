@@ -171,6 +171,12 @@ describe('클러스터 (ADR-CLUSTER)', () => {
     expect(r.body.self).toBe('web-02');
     expect(r.body.nodes.map((n: { name: string; role: string }) => [n.name, n.role]))
       .toEqual([['web-01', 'leader'], ['web-02', 'follower']]);
+    // #120 — 리더와 리더가 된 시각, 뒤처짐 없음, 팔로워의 적용 기록.
+    expect(r.body.leader?.name).toBe('web-01');
+    expect(r.body.nodes.every((n: { behind: boolean }) => n.behind === false)).toBe(true);
+    const h = await api(W1.api, 'GET', '/api/v1/cluster/nodes/web-02/history');
+    expect(h.status).toBe(200);
+    expect(h.body[0]).toMatchObject({ generation: r.body.nodes[0].activeGeneration, phase: 'activated' });
   }, 60_000);
 
   it('③ 팔로워에 쓰면 503 not_leader 다', async () => {
