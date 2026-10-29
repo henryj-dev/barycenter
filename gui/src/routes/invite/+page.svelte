@@ -4,9 +4,9 @@
    * 접근 로그에 남지 않는다. 미리보기는 링크를 **쓰지 않는다.**
    */
   import { onMount } from 'svelte';
-  import { accountApi, type LinkPreview } from '$lib/account/api';
-  import TotpSetup from '$lib/account/TotpSetup.svelte';
-  import RecoveryCodes from '$lib/account/RecoveryCodes.svelte';
+  import { accountApi, type LinkPreview } from '#lib/account/api';
+  import TotpSetup from '#lib/account/TotpSetup.svelte';
+  import RecoveryCodes from '#lib/account/RecoveryCodes.svelte';
 
   let token = $state('');
   let preview = $state<LinkPreview | undefined>();
