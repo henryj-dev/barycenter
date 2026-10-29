@@ -1948,6 +1948,12 @@ http {
 외부 HTTPS 대상은 풀의 `upstreamTls`(`sni`)와 백엔드 `host:443` 으로 표현한다. 그 풀의 HTTP
 프로브는 TLS 로 찌른다(#107).
 
+**URL 하나로 만들기 (#112).** `bary proxy create --name N --url https://example.com/v1/ --listen 127.0.0.1:8080
+[--host …] [--path-prefix …]` 가 위 조합을 펼쳐 **변경 하나**로 commit 한다. 모델은 바꾸지 않는다 —
+펼치기(`proxyFromUrlPatch`)만 있다. 풀(`upstreamTls`·헬스체크 `tcp_connect`) → 백엔드 → 리스너(기본
+동작 + `Host`) 또는 라우트(`Host` + `rewritePrefix`). URL 경로가 `/` 가 아니면 라우트가 필요하므로
+`--host` 를 요구한다. 라우트를 만들면 새 리스너의 기본 동작은 거절(444)이다.
+
 ### 7.2 파일 레이아웃 — 인증서를 세대에 결박한다
 
 ```
