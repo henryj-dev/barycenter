@@ -137,3 +137,54 @@ describe('parseListen', () => {
     expect(() => parseListen(v)).toThrow();
   });
 });
+
+describe('HTTPS 리스너 (#116)', () => {
+  const REF = `store://web@${'a'.repeat(32)}`;
+  const tlsBits = {
+    certificates: [{ key: 'web', materialRef: REF, chainDigest: `sha256:${'a'.repeat(64)}`, keyDigest: `sha256:${'b'.repeat(64)}` }],
+    tlsPolicies: [{ key: 'modern', minVersion: '1.2' }],
+  };
+  const withTls = (ops: ProxyFromUrlOp[], sni: unknown[] = []): unknown =>
+    ({ ...(modelOf(ops) as object), ...tlsBits, sniBindings: sni });
+  const tls = { policy: 'modern', certificate: 'web' };
+
+  it('정책과 인증서를 싣는다', () => {
+    const ops = proxyFromUrlPatch({ name: 'api', url: 'https://api.example.com/', listen: { bind: '0.0.0.0', port: 443 }, protocol: 'https', tls });
+    const l = ops.find((o) => o.kind === 'listener')!;
+    expect(l.body).toMatchObject({ protocol: 'https', tls: { policy: 'modern', defaultCertificate: 'web' } });
+  });
+
+  it('렌더: 리스너는 ssl 로 열고 업스트림은 https 다', () => {
+    const r = decodeModel(withTls(proxyFromUrlPatch({ name: 'api', url: 'https://api.example.com/', listen: { bind: '0.0.0.0', port: 443 }, protocol: 'https', tls })));
+    if (!r.ok) throw new Error(JSON.stringify(r.issues));
+    expect(validateModel(r.model)).toEqual([]);
+    const c = render(r.model).conf;
+    expect(c).toMatch(/listen 443 ssl/);
+    expect(c).toMatch(/proxy_pass https:\/\/[a-z0-9_]+;/);
+  });
+
+  it('**호스트를 주면 SNI 바인딩도 만든다** — 없으면 검증기가 sni_binding_missing 으로 막는다', () => {
+    const ops = proxyFromUrlPatch({ name: 'api', url: 'https://api.example.com/', listen: { bind: '0.0.0.0', port: 443 }, protocol: 'https', tls, hosts: ['app.example.com'] });
+    expect(ops.map((o) => o.kind)).toEqual(['pool', 'backend', 'listener', 'sniBinding', 'httpRoute']);
+    const binding = ops.find((o) => o.kind === 'sniBinding')!;
+    expect(binding.body).toEqual({ listener: 'api', hosts: ['app.example.com'], certificate: 'web' });
+    const sni = ops.filter((o) => o.kind === 'sniBinding').map((o) => ({ key: o.key, ...o.body }));
+    const rest = ops.filter((o) => o.kind !== 'sniBinding');
+    const r = decodeModel(withTls(rest, sni));
+    if (!r.ok) throw new Error(JSON.stringify(r.issues));
+    expect(validateModel(r.model)).toEqual([]);
+  });
+
+  it.each([
+    [{ protocol: 'https' as const }, /--policy/],
+    [{ protocol: 'https' as const, tls: { policy: 'modern', certificate: '' } }, /--certificate/],
+    [{ tls }, /https 리스너에만/],
+  ])('%j 는 거절한다', (extra, msg) => {
+    expect(() => proxyFromUrlPatch({ name: 'p', url: 'https://x.test/', listen, ...extra })).toThrow(msg);
+  });
+
+  it('기존 리스너에 붙일 때는 프로토콜 플래그를 받지 않는다', () => {
+    expect(() => proxyFromUrlPatch({ name: 'p', url: 'https://x.test/', listener: 'web', hosts: ['a.test'], protocol: 'https', tls }))
+      .toThrow(/새 리스너/);
+  });
+});

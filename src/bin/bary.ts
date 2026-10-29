@@ -147,6 +147,7 @@ const usage = (): never => {
                                    --host a.example.com,…   있으면 라우트를 만든다 (Host 헤더·경로 바꾸기를 라우트에 싣는다)
                                    --path-prefix /api/      라우트의 경로 접두사 (없으면 /)
                                    --allow · --allow-file   새 리스너의 출발지 제한
+                                   --protocol https --policy <TLS 정책> --certificate <인증서>   새 리스너를 HTTPS 로 (#116)
                                  URL 경로가 / 가 아니면 --host 가 필요하다 — 경로 바꾸기는 라우트에만 있다
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
   bary backend delete            --name
@@ -303,6 +304,10 @@ async function main(): Promise<void> {
       const hostsRaw = flag(argv, '--host');
       const pathPrefix = flag(argv, '--path-prefix');
       const allowFile = flag(argv, '--allow-file');
+      const proto = flag(argv, '--protocol');
+      const policy = flag(argv, '--policy');
+      const certificate = flag(argv, '--certificate');
+      if (proto !== undefined && proto !== 'http' && proto !== 'https') usage();
       try {
         const sourceAllow = parseSourceAllow([
           ...flagAll(argv, '--allow'),
@@ -315,6 +320,8 @@ async function main(): Promise<void> {
           ...(hostsRaw === undefined ? {} : { hosts: hostsRaw.split(',') }),
           ...(pathPrefix === undefined ? {} : { pathPrefix }),
           ...(sourceAllow === undefined ? {} : { sourceAllow }),
+          ...(proto === undefined ? {} : { protocol: proto as 'http' | 'https' }),
+          ...(policy === undefined && certificate === undefined ? {} : { tls: { policy: policy ?? '', certificate: certificate ?? '' } }),
         });
         console.error(`proxy ${name} committed r${out.revision} — ${out.created.join(', ')}`);
         show(out);

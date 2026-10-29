@@ -1961,6 +1961,8 @@ http {
 펼치기(`proxyFromUrlPatch`)만 있다. 풀(`upstreamTls`·헬스체크 `tcp_connect`) → 백엔드 → 리스너(기본
 동작 + `Host`) 또는 라우트(`Host` + `rewritePrefix`). URL 경로가 `/` 가 아니면 라우트가 필요하므로
 `--host` 를 요구한다. 라우트를 만들면 새 리스너의 기본 동작은 거절(444)이다.
+`--protocol https --policy P --certificate C` 면 새 리스너를 HTTPS 로 연다(#116). `--host` 가 있으면 그 호스트를
+기본 인증서로 묶는 SNI 바인딩도 만든다 — 없으면 검증기가 `sni_binding_missing` 으로 막는다.
 
 ### 7.2 파일 레이아웃 — 인증서를 세대에 결박한다
 
