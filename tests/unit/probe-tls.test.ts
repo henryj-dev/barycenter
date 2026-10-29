@@ -9,7 +9,7 @@
  * 여기서 실제 HTTPS 서버를 띄운다. 그 서버는 SNI 와 Host 가 `api.test` 일 때만 200 을 준다.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -22,16 +22,22 @@ import type { Model, Pool } from '../../src/model/provisional.js';
 
 let server: Server;
 let port = 0;
+let CA = '';
 const seen: { sni?: string; host?: string }[] = [];
 
 beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'bary-probe-tls-'));
   try {
-    execFileSync('openssl', [
-      'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
-      '-days', '1', '-subj', '/CN=api.test', '-addext', 'subjectAltName=DNS:api.test',
-      '-keyout', join(dir, 'k.pem'), '-out', join(dir, 'c.pem'),
-    ], { stdio: 'ignore' });
+    // 테스트 CA 와 그 CA 가 서명한 서버 인증서. 시스템 신뢰 저장소에는 없다.
+    const ossl = (...args: string[]): void => { execFileSync('openssl', args, { stdio: 'ignore' }); };
+    ossl('req', '-x509', '-sha256', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+      '-subj', '/CN=bary-test-ca', '-keyout', join(dir, 'ca.key'), '-out', join(dir, 'ca.pem'));
+    ossl('req', '-newkey', 'rsa:2048', '-nodes',
+      '-subj', '/CN=api.test', '-keyout', join(dir, 'k.pem'), '-out', join(dir, 'leaf.csr'));
+    writeFileSync(join(dir, 'ext.cnf'), 'subjectAltName=DNS:api.test\n');
+    ossl('x509', '-req', '-sha256', '-in', join(dir, 'leaf.csr'), '-CA', join(dir, 'ca.pem'), '-CAkey', join(dir, 'ca.key'),
+      '-CAcreateserial', '-days', '1', '-extfile', join(dir, 'ext.cnf'), '-out', join(dir, 'c.pem'));
+    CA = readFileSync(join(dir, 'ca.pem'), 'utf8');
     server = createServer({ key: readFileSync(join(dir, 'k.pem')), cert: readFileSync(join(dir, 'c.pem')) },
       (q, r) => {
         const sni = (q.socket as { servername?: string | false }).servername || undefined;
@@ -80,21 +86,30 @@ describe('실제 HTTPS 백엔드', () => {
     expect(await probeHttp('127.0.0.1', port, 2000, { path: '/' })).toBeDefined();
   });
 
-  it('**TLS 프로브는 산 것으로 본다** — SNI 와 Host 가 같이 간다', async () => {
-    const plan = probePlanOf(model({ upstreamTls: { enabled: true, sni: 'api.test' } }), 'ext');
+  it('**신뢰하는 체인이면 산 것으로 본다** — SNI 와 Host 가 같이 간다', async () => {
     seen.length = 0;
-    expect(await probeBackend(plan, '127.0.0.1', port, 2000)).toBeUndefined();
+    expect(await probeHttp('127.0.0.1', port, 2000, { path: '/', tls: { servername: 'api.test', ca: CA } }))
+      .toBeUndefined();
     expect(seen).toEqual([{ sni: 'api.test', host: 'api.test' }]);
+  });
+
+  it('**인증서를 검증한다** — 신뢰하지 않는 CA 면 실패하고 고칠 길을 말한다', async () => {
+    const plan = probePlanOf(model({ upstreamTls: { enabled: true, sni: 'api.test' } }), 'ext');
+    const r = await probeBackend(plan, '127.0.0.1', port, 2000);
+    expect(r).toMatch(/인증서를 검증하지 못했다/);
+    expect(r).toMatch(/tcp_connect/);
+  });
+
+  it('SNI 이름이 인증서와 다르면 실패한다 — 이름도 검증한다', async () => {
+    expect(await probeHttp('127.0.0.1', port, 2000, { path: '/', tls: { servername: 'other.test', ca: CA } }))
+      .toMatch(/인증서를 검증하지 못했다/);
   });
 
   it('지정한 hostHeader 가 SNI 이름보다 이긴다', async () => {
     seen.length = 0;
-    const r = await probeHttp('127.0.0.1', port, 2000, { path: '/', hostHeader: 'other.test', tls: { servername: 'api.test' } });
+    const r = await probeHttp('127.0.0.1', port, 2000,
+      { path: '/', hostHeader: 'other.test', tls: { servername: 'api.test', ca: CA } });
     expect(r).toMatch(/421/);
     expect(seen).toEqual([{ sni: 'api.test', host: 'other.test' }]);
-  });
-
-  it('자체 서명 인증서도 프로브는 통과한다 — 검증은 데이터 경로의 몫이다', async () => {
-    expect(await probeHttp('127.0.0.1', port, 2000, { path: '/', tls: { servername: 'api.test' } })).toBeUndefined();
   });
 });

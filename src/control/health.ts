@@ -123,11 +123,14 @@ export type HttpProbeOpts = {
    *
    * `servername` 은 SNI 다. 없으면 SNI 를 안 보낸다(IP 로 찌르므로 노드가 보낼 이름이 없다).
    *
-   * **인증서를 검증하지 않는다.** 프로브가 묻는 것은 「살았나」이고, 검증은 데이터 경로의
-   * `proxy_ssl_verify` 가 진다. 프로브가 CA 번들을 읽으려면 시크릿 저장소를 헬스 루프에
-   * 들여야 한다 — 그 대가에 비해 얻는 것이 적다.
+   * **인증서를 검증한다** (CodeQL `js/disabling-certificate-validation`). 처음엔 검증을 껐다 —
+   * 「살았나」만 물으면 된다고 봤다. 그러나 검증을 끈 TLS 클라이언트는 중간자에게 무엇이든
+   * 「살았다」고 듣는다. 기본은 시스템 신뢰 저장소다. 공개 인증서를 쓰는 외부 API 는 그대로
+   * 통과한다. 사설 CA 나 자체 서명이면 `ca` 로 신뢰 번들을 주거나, 헬스체크를
+   * `tcp_connect` 로 둔다 — 실패 사유가 그 길을 말한다. 그 경우는 고치기 전에도 (평문이라)
+   * 실패했으므로 나빠지는 배포는 없다.
    */
-  tls?: { servername?: string };
+  tls?: { servername?: string; ca?: string };
 };
 
 /**
@@ -156,8 +159,8 @@ export function probeHttp(
       ? httpRequest(common, cb)
       : httpsRequest({
         ...common,
-        rejectUnauthorized: false,
         ...(opts.tls.servername === undefined ? {} : { servername: opts.tls.servername }),
+        ...(opts.tls.ca === undefined ? {} : { ca: opts.tls.ca }),
       }, cb));
     const req = send((res) => {
       /**
@@ -217,7 +220,14 @@ export function probeHttp(
       req.destroy();
       resolve(`${timeoutMs}ms 안에 응답이 없다`);
     });
-    req.on('error', (e) => resolve(e.message));
+    req.on('error', (e) => {
+      // 인증서 실패는 **고칠 길을 함께** 말한다. 이 문구가 운영자가 보는 「왜 빠졌나」다.
+      const code = (e as NodeJS.ErrnoException).code ?? '';
+      const tlsTrust = /CERT|SELF_SIGNED|UNABLE_TO_(GET|VERIFY)|ALTNAME|HOSTNAME|SIGNATURE|TOO_WEAK|KEY_TOO_SMALL/.test(code);
+      resolve(opts.tls !== undefined && tlsTrust
+        ? `인증서를 검증하지 못했다 (${code}). 사설 CA 면 healthCheck.protocol 을 tcp_connect 로 둔다`
+        : e.message);
+    });
     req.end();
   });
 }
