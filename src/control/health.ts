@@ -23,7 +23,8 @@
  * 끝나면** 낡은 결과가 최신 판정을 덮는다. 그래서 프로브마다 시작 순번을 싣고, 그 번호가
  * 마지막 반영값보다 클 때만 적용한다.
  */
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { connect } from 'node:net';
 
 import type { Model } from '../model/provisional.js';
@@ -113,6 +114,20 @@ export type HttpProbeOpts = {
    * 산 백엔드가 죽은 것으로 보인다.
    */
   hostHeader?: string;
+  /**
+   * **TLS 로 찌른다** (2026-10-29). 풀의 `upstreamTls` 가 켜져 있고 데이터 포트를 찌를 때다.
+   *
+   * 전에는 프로브가 언제나 평문이었다. 그래서 HTTPS 백엔드(예: `api.example.com:443`)에
+   * 평문 GET 을 보냈고, 서버는 400 을 주거나 끊었다 — **산 백엔드가 비정상이 되어
+   * 트래픽에서 빠졌다.** 데이터 경로(nginx)는 TLS 로 잘 붙는데 프로브만 틀렸다.
+   *
+   * `servername` 은 SNI 다. 없으면 SNI 를 안 보낸다(IP 로 찌르므로 노드가 보낼 이름이 없다).
+   *
+   * **인증서를 검증하지 않는다.** 프로브가 묻는 것은 「살았나」이고, 검증은 데이터 경로의
+   * `proxy_ssl_verify` 가 진다. 프로브가 CA 번들을 읽으려면 시크릿 저장소를 헬스 루프에
+   * 들여야 한다 — 그 대가에 비해 얻는 것이 적다.
+   */
+  tls?: { servername?: string };
 };
 
 /**
@@ -129,11 +144,22 @@ export function probeHttp(
   host: string, port: number, timeoutMs: number, opts: HttpProbeOpts,
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
-    const req = httpRequest({
+    // Host 는 지정값 → (TLS 면) SNI 이름 → 노드 기본(찌르는 주소) 순서다. 이름 기반
+    // 가상호스팅 HTTPS 서버는 SNI 와 같은 Host 를 기대한다.
+    const hostHeader = opts.hostHeader ?? opts.tls?.servername;
+    const common: RequestOptions = {
       host, port, path: opts.path, method: 'GET', timeout: timeoutMs,
       // **있을 때만 얹는다.** 빈 값을 넣으면 노드가 채우던 기본이 사라진다.
-      ...(opts.hostHeader === undefined ? {} : { headers: { Host: opts.hostHeader } }),
-    }, (res) => {
+      ...(hostHeader === undefined ? {} : { headers: { Host: hostHeader } }),
+    };
+    const send = (cb: (res: IncomingMessage) => void): ClientRequest => (opts.tls === undefined
+      ? httpRequest(common, cb)
+      : httpsRequest({
+        ...common,
+        rejectUnauthorized: false,
+        ...(opts.tls.servername === undefined ? {} : { servername: opts.tls.servername }),
+      }, cb));
+    const req = send((res) => {
       /**
        * **판정이 나면 그 자리에서 끊는다** (검수 D10).
        *
@@ -247,11 +273,21 @@ export function probePlanOf(model: Model, poolKey: string): ProbePlan {
   const spec = pool?.healthCheck;
   // **기본은 옛 규칙이다.** `protocolClass` 가 정하던 그것 — 안 적은 배포가 안 바뀐다.
   const protocol = spec?.protocol ?? (pool?.protocolClass === 'http' ? 'http' : 'tcp_connect');
+  /**
+   * **데이터 포트를 찌를 때만 TLS 를 따른다.** 별도 헬스 포트(`port`)나 사이드카
+   * (`hostOverride`)는 데이터 경로가 아니다 — 거기가 TLS 인지 모델이 말하지 않으므로
+   * 옛 동작(평문)을 그대로 둔다. 안 쓰는 배포의 판정이 안 바뀐다.
+   */
+  const ut = pool?.upstreamTls;
+  const tls = ut?.enabled === true && spec?.port === undefined && spec?.hostOverride === undefined
+    ? (ut.sni === undefined ? {} : { servername: ut.sni })
+    : undefined;
   const http: HttpProbeOpts | undefined = protocol === 'http' ? {
     path: spec?.path ?? HTTP_PROBE_PATH,
     ...(spec?.expectStatus === undefined ? {} : { expectStatus: spec.expectStatus }),
     ...(spec?.expectBody === undefined ? {} : { expectBody: spec.expectBody }),
     ...(spec?.hostHeader === undefined ? {} : { hostHeader: spec.hostHeader }),
+    ...(tls === undefined ? {} : { tls }),
   } : undefined;
   return {
     mode: spec?.mode ?? 'active',
