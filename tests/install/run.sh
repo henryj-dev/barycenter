@@ -4,6 +4,7 @@
 #   ./tests/install/run.sh                 전부 (순차 — 도커 자원 경합을 안 만든다)
 #   ./tests/install/run.sh debian alpine   골라서
 #   ./tests/install/run.sh --keep debian   실패한 판을 남겨 둔다 (docker exec 로 들어간다)
+#   ./tests/install/run.sh --list-planes   기본 판 이름 목록 (CI 가 매트릭스를 만든다)
 #
 # 설치 스크립트는 **문서와 같은 부류의 물건**이다: 읽어서는 도는지 알 수 없고, 손으로
 # 확인하는 한 반드시 썩는다. 배포판이 저장소 경로를 옮기거나 패키지 이름을 바꾸면
@@ -49,6 +50,12 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1
 
+# **기본으로 도는 판의 목록은 여기 한 곳이다.** CI 는 `--list-planes` 로 이 목록을 받아 판마다
+# 러너 하나씩 매트릭스를 만든다 — 워크플로에 이름을 다시 적으면 로컬과 갈라진다
+# (`verify.sh --list-groups` 와 같은 모양이다).
+DEFAULT_PLANES="debian ubuntu rocky rocky10 amazon alpine global"
+if [ "${1:-}" = "--list-planes" ]; then printf '%s\n' $DEFAULT_PLANES; exit 0; fi
+
 KEEP=0
 if [ "${1:-}" = "--keep" ]; then KEEP=1; shift; fi
 
@@ -69,7 +76,7 @@ alpine|alpine:3.21|openrc|-
 "
 
 WANT="$*"
-[ -z "$WANT" ] && WANT="debian ubuntu rocky rocky10 amazon alpine global"
+[ -z "$WANT" ] && WANT="$DEFAULT_PLANES"
 
 command -v docker >/dev/null 2>&1 || { echo "  FAIL  docker 가 없다"; exit 1; }
 docker info >/dev/null 2>&1 || { echo "  FAIL  도커 데몬이 안 돈다"; exit 1; }

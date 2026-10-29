@@ -89,3 +89,34 @@ describe('install 잡 경로 필터', () => {
     expect(matches('tests/unit/package.json')).toBe(false);
   });
 });
+
+describe('install 매트릭스', () => {
+  /**
+   * 판마다 러너 하나다. 판 이름은 `run.sh --list-planes` 가 한 곳에서 말한다 — 워크플로에
+   * 다시 적으면 로컬과 갈라진다(`verify.sh --list-groups` 와 같은 규칙).
+   */
+  const HARNESS = join(root, 'tests', 'install', 'run.sh');
+
+  it('**목록의 판은 모두 하네스가 아는 판이다** — 모르는 이름이면 그 러너가 「모르는 배포판」으로 죽는다', () => {
+    const names = execFileSync('bash', [HARNESS, '--list-planes'], { encoding: 'utf8' }).trim().split('\n');
+    expect(names.length).toBeGreaterThan(0);
+    const src = readFileSync(HARNESS, 'utf8');
+    for (const n of names) expect(src, `${n} 의 줄이 ALL_PLANES 에 있어야 한다`).toMatch(new RegExp(`^${n}\\|`, 'm'));
+  });
+
+  it('워크플로는 판 이름을 직접 적지 않고 `--list-planes` 에서 받는다', () => {
+    const wf = readFileSync(WORKFLOW, 'utf8');
+    expect(wf).toContain('./tests/install/run.sh --list-planes');
+    expect(wf).toMatch(/plane: \$\{\{ fromJSON\(needs\.install-plan\.outputs\.planes\) \}\}/);
+    expect(wf).not.toMatch(/run\.sh (debian|ubuntu|rocky|amazon|alpine|global)\b/);
+  });
+
+  it('**gate 가 install-plan 도 기다린다** — 판정이 죽으면 매트릭스는 건너뛰고(skipped), 건너뛴 것은 통과로 본다', () => {
+    const wf = readFileSync(WORKFLOW, 'utf8');
+    const needs = /^\s*name: gate\n\s*needs: \[([^\]]+)\]/m.exec(wf);
+    expect(needs).not.toBeNull();
+    const list = needs![1]!.split(',').map((x) => x.trim());
+    expect(list).toContain('install-plan');
+    expect(list).toContain('install');
+  });
+});

@@ -266,9 +266,17 @@ jobs:
   #
   # 워크플로 자신도 경로에 넣는다 — 이 잡을 고치는 PR 이 이 잡을 안 돌리면 고친 것이
   # 도는지 알 수 없다.
-  install:
+  #
+  # **판마다 러너 하나** (2026-10-29). 전에는 한 잡이 일곱 판을 직렬로 깔아 20분을 넘겼다.
+  # 하네스의 직렬은 **로컬 도커 자원 경합**을 피하려는 것이라, 러너가 따로인 CI 에서는
+  # 이유가 없다. 판 목록은 `run.sh --list-planes` 가 말한다 — `groups` 와 같은 모양이다.
+  # 「돌까」 판정과 목록은 `install-plan` 이 한 번 내고, 매트릭스는 그것만 받는다.
+  install-plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.changed.outputs.run }}
+      planes: ${{ steps.planes.outputs.list }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -327,15 +335,36 @@ jobs:
             echo "설치가 쓰는 입력 중 바뀐 것이 없다 — 건너뛴다 ($TARGETS)"
           fi
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        if: steps.changed.outputs.run == '1'
+      - name: 판 목록
+        id: planes
+        run: |
+          set -euo pipefail
+          names="$(./tests/install/run.sh --list-planes)"
+          test -n "$names" || { echo "::error::판 목록이 비었다"; exit 1; }
+          echo "$names"
+          echo "list=$(printf '%s\n' "$names" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  install:
+    name: install (${{ matrix.plane }})
+    needs: install-plan
+    if: needs.install-plan.outputs.run == '1'
+    runs-on: ubuntu-latest
+    # 한 판이 빨개도 나머지는 끝까지 본다 — 어느 배포판이 깨졌는지 한 번에 다 보인다.
+    strategy:
+      fail-fast: false
+      matrix:
+        plane: ${{ fromJSON(needs.install-plan.outputs.planes) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-        if: steps.changed.outputs.run == '1'
-      - run: npm run test:install
-        if: steps.changed.outputs.run == '1'
+          persist-credentials: false
+      # **호스트의 node 는 안 쓴다.** 하네스는 저장소를 컨테이너에 복사해 그 안에서 깔고
+      # 그 안의 node 로 잰다 — 그래서 `setup-node`·`npm ci` 를 판 수만큼 치르지 않는다.
+      - name: 하네스
+        env:
+          PLANE: ${{ matrix.plane }}
+        run: ./tests/install/run.sh "$PLANE"
 
   # **문서에 적힌 절차가 정말 도는가.** 문서를 읽어서는 알 수 없고, 손으로 확인하는 한
   # 반드시 썩는다.
@@ -381,7 +410,7 @@ jobs:
   # 모아 받으면 잡을 늘리고 줄이는 것이 `needs:` 한 줄로 끝나고, 보호 규칙은 안 건드린다.
   gate:
     name: gate
-    needs: [quick, groups, verify, install, quickstart, policy]
+    needs: [quick, groups, verify, install-plan, install, quickstart, policy]
     # 선행 잡이 빨개도 이 잡은 돌아야 한다. 안 그러면 "돌지 않은 체크" 가 되어
     # 규칙이 기다리기만 하고, 무엇이 깨졌는지는 아무 데도 안 적힌다.
     if: always()
