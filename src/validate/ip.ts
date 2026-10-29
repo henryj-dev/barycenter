@@ -112,3 +112,12 @@ export function cidrVersion(input: string): 0 | 4 | 6 {
   if (!/^(0|[1-9][0-9]{0,2})$/.test(prefix)) return 0;
   return Number(prefix) <= (v === 4 ? 32 : 128) ? v : 0;
 }
+
+/**
+ * 주소 집합 참조 `@이름` (#114). 이름은 리소스 key 문법과 같다. 참조가 아니면 `undefined`.
+ * 브라우저에서도 돈다 — GUI 의 출발지 제한 입력이 같은 판정을 쓴다.
+ */
+export function addressSetRef(input: string): string | undefined {
+  const m = /^@([A-Za-z0-9][A-Za-z0-9._-]{0,62})$/.exec(input);
+  return m === null ? undefined : m[1];
+}

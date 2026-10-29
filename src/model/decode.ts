@@ -18,10 +18,11 @@
  *   3. **강제 변환하지 않는다.** `"8080"` 은 8080 이 아니라 오류다. 변환은 의미를 바꾼다.
  */
 import { validateHeaderName, validateHeaderValue } from '../validate/strings.js';
-import { cidrVersion } from '../validate/ip.js';
+import { addressSetRef, cidrVersion } from '../validate/ip.js';
 
 import type {
   AcmeIntent,
+  AddressSet,
   EngineSettings,
   InboundProxyProtocol,
   InboundRealIpHeader,
@@ -517,9 +518,10 @@ function decodeSourceAllow(iss: Issues, v: unknown, path: string): string[] | un
   const items = arrayOf(iss, v, path, (item, at) => {
     const s = str(iss, item, at);
     if (s === undefined) return undefined;
-    if (cidrVersion(s) === 0) {
+    // `@이름` 은 주소 집합 참조다 (#114). 있는지는 검증기가 본다 — 해독은 모양만.
+    if (cidrVersion(s) === 0 && addressSetRef(s) === undefined) {
       iss.add('invalid_value', at,
-        `CIDR 이나 IP 주소가 아니다: ${JSON.stringify(s)} — 예: 173.245.48.0/20 · 2400:cb00::/32 · 203.0.113.7`);
+        `CIDR · IP 주소 · @주소집합 이 아니다: ${JSON.stringify(s)} — 예: 173.245.48.0/20 · 2400:cb00::/32 · @cloudflare`);
       return undefined;
     }
     return s;
@@ -1020,8 +1022,44 @@ function decodeTlsOverride(
 const MODEL_KEYS = [
   'engine',
   'listeners', 'httpRoutes', 'passthroughRoutes', 'pools', 'backends',
-  'certificates', 'tlsPolicies', 'sniBindings',
+  'certificates', 'tlsPolicies', 'sniBindings', 'addressSets',
 ] as const;
+
+/**
+ * 주소 집합 (#114). 대역만 받는다 — **다른 집합을 참조하지 않는다.** 참조를 허용하면
+ * 순환과 펼침 순서를 따로 다뤄야 하는데, 집합 하나에 대역을 모으면 될 일이다.
+ */
+function decodeAddressSet(iss: Issues, v: unknown, path: string): AddressSet | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['key', 'cidrs', 'source']);
+  const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
+  const source = optional(v['source'], () => oneOf(iss, v['source'], `${path}.source`, ['cloudflare'] as const));
+  const raw = v['cidrs'];
+  const cidrs = arrayOf(iss, raw, `${path}.cidrs`, (item, at) => {
+    const c = str(iss, item, at);
+    if (c === undefined) return undefined;
+    if (cidrVersion(c) === 0) {
+      iss.add('invalid_value', at, `CIDR 이나 IP 주소가 아니다: ${JSON.stringify(c)} (집합은 다른 집합을 참조하지 않는다)`);
+      return undefined;
+    }
+    return c;
+  });
+  if (Array.isArray(raw) && raw.length === 0) {
+    iss.add('out_of_range', `${path}.cidrs`, '비어 있을 수 없다 — 쓰지 않는 집합은 지운다');
+    return undefined;
+  }
+  const seen = new Set<string>();
+  (Array.isArray(raw) ? raw : []).forEach((c: unknown, i) => {
+    if (typeof c !== 'string') return;
+    if (seen.has(c)) iss.add('duplicate', `${path}.cidrs[${i}]`, `같은 대역이 두 번 있다: ${c}`);
+    seen.add(c);
+  });
+  if (key === undefined) return undefined;
+  return { key, cidrs, ...(source === undefined ? {} : { source }) };
+}
 
 function decodeEngineSettings(iss: Issues, v: unknown, path: string): EngineSettings | undefined {
   if (!isObject(v)) {
@@ -1073,6 +1111,10 @@ export function decodeModel(input: unknown): DecodeResult {
     certificates: arrayOf(iss, input['certificates'] ?? [], 'certificates', (v, at) => decodeCertificate(iss, v, at)),
     tlsPolicies: arrayOf(iss, input['tlsPolicies'] ?? [], 'tlsPolicies', (v, at) => decodeTlsPolicy(iss, v, at)),
     sniBindings: arrayOf(iss, input['sniBindings'] ?? [], 'sniBindings', (v, at) => decodeSniBinding(iss, v, at)),
+    // **없으면 키를 안 만든다** — 옛 리비전 스냅샷과 같은 모양을 지킨다.
+    ...(input['addressSets'] === undefined ? {} : {
+      addressSets: arrayOf(iss, input['addressSets'], 'addressSets', (v, at) => decodeAddressSet(iss, v, at)),
+    }),
   };
 
   return iss.failed ? { ok: false, issues: iss.list } : { ok: true, model };

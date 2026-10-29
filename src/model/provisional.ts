@@ -819,6 +819,27 @@ export type Model = {
   certificates: Certificate[];
   tlsPolicies: TlsPolicy[];
   sniBindings: SniCertificateBinding[];
+  /**
+   * 이름 붙인 대역 목록 (#114). 리스너가 `@이름` 으로 참조한다. **선택이다** — 없는 모델과
+   * 빈 목록은 같다. 필수로 두면 이 필드가 없던 옛 리비전 스냅샷이 해독 불가가 되고 그
+   * 리비전으로 롤백할 수 없다.
+   */
+  addressSets?: AddressSet[];
+};
+
+/**
+ * 주소 집합 (#114). 예: Cloudflare 대역 22개를 `@cloudflare` 하나로.
+ *
+ * 참조하는 자리: 리스너 `sourceAllow` · `realIpFromHeader.trustedCidrs` ·
+ * `acceptProxyProtocol.trustedCidrs`. 렌더 직전에 대역으로 **펼친다** — nginx 설정은 직접
+ * 적은 것과 같다. 집합이 바뀌면 그것을 쓰는 리스너가 영향 목록에 오른다.
+ */
+export type AddressSet = {
+  key: string;
+  /** CIDR 이나 주소 하나. 비어 있을 수 없다. 다른 집합을 참조하지 않는다(순환을 막는다). */
+  cidrs: string[];
+  /** 어디서 받았나. `cloudflare` 면 CLI·GUI 가 공개 목록을 다시 받는 버튼을 준다. */
+  source?: 'cloudflare';
 };
 
 /** 검증 전 모델. `validateModel` 의 입력이다. */

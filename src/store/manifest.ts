@@ -22,7 +22,7 @@ export const MANIFEST_SCHEMA = '1' as const;
  */
 const KINDS: readonly ResourceKind[] = [
   'engine',
-  'pool', 'backend', 'certificate', 'tlsPolicy', 'listener',
+  'pool', 'backend', 'certificate', 'tlsPolicy', 'addressSet', 'listener',
   'httpRoute', 'passthroughRoute', 'sniBinding',
 ];
 
@@ -35,6 +35,7 @@ const BAG: Record<Exclude<ResourceKind, 'engine'>, keyof Model> = {
   backend: 'backends',
   certificate: 'certificates',
   tlsPolicy: 'tlsPolicies',
+  addressSet: 'addressSets',
   listener: 'listeners',
   httpRoute: 'httpRoutes',
   passthroughRoute: 'passthroughRoutes',

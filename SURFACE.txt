@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 119 심볼 · sha256:122971c5537f088a6c281de607d58f4eef50d3b73c553fc511df92e1db4587da
+# 120 심볼 · sha256:d351ec6e3fd3d69156bc3b58239df3c96f6b07f30c241a9c8a29b0772b6f02be
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -23,6 +23,12 @@ export type ActivationEvidence = {
     masterPid?: string;
     workersReported?: number;
     workersExpected?: number;
+};
+── AddressSet
+export type AddressSet = {
+    key: string;
+    cidrs: string[];
+    source?: 'cloudflare';
 };
 ── Algorithm
 export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash' | 'least_conn';
@@ -380,6 +386,7 @@ export type Model = {
     certificates: Certificate[];
     tlsPolicies: TlsPolicy[];
     sniBindings: SniCertificateBinding[];
+    addressSets?: AddressSet[];
 };
 ── ModelIssue
 export type ModelIssue = {
@@ -388,7 +395,7 @@ export type ModelIssue = {
     message: string;
 };
 ── ModelIssueCode
-export type ModelIssueCode = 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'strict_priority_too_many' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_hsts' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range' | 'invalid_value' | 'duplicate';
+export type ModelIssueCode = 'unknown_address_set' | 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'strict_priority_too_many' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_hsts' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range' | 'invalid_value' | 'duplicate';
 ── ModelValidationError
 export declare class ModelValidationError extends Error {
     readonly issues: ModelIssue[];
@@ -720,7 +727,7 @@ export declare function readDriverBootSource(env: NodeJS.ProcessEnv): DriverBoot
 ── readManifest
 export declare function readManifest(prefix: string, generation: string): GenerationManifest;
 ── render
-export declare function render(model: Model, caps?: RenderCapabilities): RenderedConfig;
+export declare function render(input: Model, caps?: RenderCapabilities): RenderedConfig;
 ── validateModel
 export declare function validateModel(model: RawModel, caps?: ValidationCapabilities): ModelIssue[];
 ── verifyGeneration
