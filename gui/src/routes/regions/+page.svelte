@@ -5,8 +5,8 @@
    */
   import { getContext, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import type { Scope, RegionSummary } from '$lib/global/scope.svelte.ts';
-  import type { createDesk } from '$lib/desk.svelte.ts';
+  import type { Scope, RegionSummary } from '#lib/global/scope.svelte.ts';
+  import type { createDesk } from '#lib/desk.svelte.ts';
 
   const scope = getContext<Scope>('scope');
   const desk = getContext<ReturnType<typeof createDesk>>('desk');

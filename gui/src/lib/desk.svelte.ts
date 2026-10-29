@@ -21,7 +21,7 @@ import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs } from '@web/reconnect';
 import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
-import { needsStepUp, stepUp } from '$lib/account/step-up.svelte';
+import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 
 export type StatusSnap = {
   head?: string;
