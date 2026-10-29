@@ -36,6 +36,8 @@
 #                                             — 토큰은 다음 배포 스크립트가, KEK 은
 #                                             인증서를 읽는 순간이 알려 준다 — 여기서
 #                                             안 재면 아무도 안 잰다
+#   7-b. 좁은 umask 셸에서 깔아도 서는가 — **rocky10 판에서만** 잰다 (#98). umask 077 셸에서
+#                                             돌리고 1~6 을 그대로 본다
 #   8. 대화형으로 깔아도 같은 것이 서는가   — **ubuntu 판에서만** 잰다. 답을 파이프로
 #                                             넣고 `--interactive` 로 강제한다. 프롬프트가
 #                                             도는 것과 그 답이 **env 파일까지 가는 것**은
@@ -62,7 +64,7 @@ ALL_PLANES="
 debian|debian:12|systemd|dsn
 ubuntu|ubuntu:24.04|systemd|interactive
 rocky|rockylinux/rockylinux:9|systemd|-
-rocky10|rockylinux/rockylinux:10|systemd|-
+rocky10|rockylinux/rockylinux:10|systemd|umask
 global|debian:12|systemd|global
 amazon|amazonlinux:2023|systemd|-
 alpine|alpine:3.21|openrc|-
@@ -264,9 +266,13 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
     return $?
   fi
 
-  printf '  ..    install.sh --with-postgres (패키지·빌드로 몇 분 걸린다)\n'
-  if ! docker exec "$c" sh /repo/deploy/install.sh --with-postgres \
-       --env "BARY_SECRET_KEK=$KEK" > "/tmp/bary-install-$name.log" 2>&1; then
+  # **좁은 umask 의 셸에서 깐다** (#98) — 보안 강화 호스트(CIS 의 027 등)의 모양이다. 스크립트가
+  # umask 를 안 정하면 `/opt/barycenter` 가 root 전용으로 복사되고 아래 ① 이 「서비스 active」에서 죽는다.
+  local umask_prefix=""
+  [ "$extra" = umask ] && umask_prefix="umask 077 && "
+  printf '  ..    install.sh --with-postgres (패키지·빌드로 몇 분 걸린다)%s\n' "${umask_prefix:+ — umask 077 셸}"
+  if ! docker exec "$c" sh -c "${umask_prefix}exec sh /repo/deploy/install.sh --with-postgres --env BARY_SECRET_KEK=$KEK" \
+       > "/tmp/bary-install-$name.log" 2>&1; then
     printf '    NO   install.sh 가 실패했다 — 마지막 30줄:\n'
     tail -n 30 "/tmp/bary-install-$name.log" | sed 's/^/         /'
     return 1
