@@ -5,11 +5,11 @@
  * 메서드×경로 ALLOW/DENY 는 WAF 다. 여기 없다.
  */
 import { parseHashKey } from '../validate/strings.js';
-import { cidrVersion } from '../validate/ip.js';
+import { addressSetRef, cidrVersion } from '../validate/ip.js';
 
 export type EditKind =
   | 'backend' | 'listener' | 'pool' | 'httpRoute' | 'passthroughRoute'
-  | 'sniBinding' | 'certificate' | 'tlsPolicy';
+  | 'sniBinding' | 'certificate' | 'tlsPolicy' | 'addressSet';
 
 export type DeleteOp = { op: 'delete'; kind: EditKind; key: string };
 
@@ -260,12 +260,38 @@ export function parseSourceAllow(text: string | readonly string[] | undefined): 
   for (const item of raw) {
     const s = item.trim();
     if (s === '') continue;
-    if (cidrVersion(s) === 0) {
-      throw new Error(`CIDR 이나 IP 주소가 아니다: ${JSON.stringify(s)} — 예: 173.245.48.0/20 · 2400:cb00::/32`);
+    // `@이름` 은 주소 집합 참조다 (#114). 있는지는 저장할 때 검증기가 본다.
+    if (cidrVersion(s) === 0 && addressSetRef(s) === undefined) {
+      throw new Error(`CIDR · IP 주소 · @주소집합 이 아니다: ${JSON.stringify(s)} — 예: 173.245.48.0/20 · @cloudflare`);
     }
     if (!out.includes(s)) out.push(s);
   }
   return out.length === 0 ? undefined : out;
+}
+
+/**
+ * 주소 집합 만들기·바꾸기 (#114). 대역만 받는다 — 집합은 다른 집합을 참조하지 않는다.
+ * 끊기는 `parseSourceAllow` 와 같다(줄바꿈·쉼표·공백). 중복은 접는다.
+ */
+export type PutAddressSetOp = {
+  op: 'put';
+  kind: 'addressSet';
+  key: string;
+  body: { cidrs: string[]; source?: 'cloudflare' };
+};
+
+export function putAddressSetPatch(
+  key: string, input: { cidrs: string | readonly string[]; source?: 'cloudflare' },
+): PutAddressSetOp[] {
+  if (key.trim() === '') throw new Error('이름이 비어 있다');
+  const cidrs = parseSourceAllow(input.cidrs) ?? [];
+  if (cidrs.length === 0) throw new Error('대역이 비어 있다');
+  const ref = cidrs.find((c) => addressSetRef(c) !== undefined);
+  if (ref !== undefined) throw new Error(`집합은 다른 집합(${ref})을 참조하지 않는다 — 대역을 직접 넣는다`);
+  return [{
+    op: 'put', kind: 'addressSet', key: key.trim(),
+    body: { cidrs, ...(input.source === undefined ? {} : { source: input.source }) },
+  }];
 }
 
 /** **안 적으면 키를 안 만든다** — 빈 배열을 실으면 해독기가 거절하고, 키만 있어도 렌더가 바뀐다. */

@@ -38,6 +38,7 @@ import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete, parseListenerOptions } from '../cli/listener.js';
 import { parseSourceAllow } from '../web/edit.js';
 import { parseListen, proxyCreate } from '../cli/proxy.js';
+import { addressSetCreate, addressSetDelete } from '../cli/address-set.js';
 import { poolCreate, poolDelete } from '../cli/pool.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
 import {
@@ -137,6 +138,10 @@ const usage = (): never => {
                                    --route-header 'Host: api.example.com'   (여러 번) 이 라우트에만. 같은 이름이면 리스너 것을 대신한다
                                    --rewrite-prefix /v1/                   맞은 --path-prefix 를 이 값으로 바꿔 보낸다 (끝 '/' 가 같아야 한다)
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
+  bary address-set create        --name (--cidr a,b … | --cidr-file f | --cloudflare). commit 까지. apply 는 아니다 (#114)
+                                 리스너는 --allow @이름 · 신뢰 대역 @이름 으로 참조한다
+                                 --cloudflare: 공개 목록(ips-v4·ips-v6)을 받아 만들거나 바꾼다. 하나라도 실패하면 안 바꾼다
+  bary address-set delete        --name. 참조하는 리스너가 있으면 plan 이 막는다
   bary proxy create              --name --url https://example.com/v1/ (--listen 127.0.0.1:8080 | --listener <키>) (#112)
                                  URL 하나를 풀·백엔드·리스너(또는 라우트)로 펼쳐 변경 하나로 commit 한다. apply 는 아니다
                                    --host a.example.com,…   있으면 라우트를 만든다 (Host 헤더·경로 바꾸기를 라우트에 싣는다)
@@ -261,6 +266,32 @@ async function main(): Promise<void> {
     case 'audit': {
       const n = arg ?? '30';
       show(must(await call('GET', `/api/v1/audit?limit=${encodeURIComponent(n)}`), 'audit'));
+      return;
+    }
+    case 'address-set': {
+      const sub = arg ?? usage();
+      const name = flag(argv, '--name') ?? usage();
+      try {
+        if (sub === 'delete') {
+          const out = await addressSetDelete(call, name);
+          console.error(`address-set ${name} deleted r${out.revision}`);
+          show(out);
+          return;
+        }
+        if (sub !== 'create') usage();
+        const cidrFile = flag(argv, '--cidr-file');
+        const cidrs = [
+          ...flagAll(argv, '--cidr'),
+          ...(cidrFile === undefined ? [] : [readFileSync(cidrFile, 'utf8')]),
+        ];
+        const cloudflare = has(argv, '--cloudflare');
+        if (cloudflare === (cidrs.length > 0)) usage();
+        const out = await addressSetCreate(call, { name, cidrs, cloudflare });
+        console.error(`address-set ${name} committed r${out.revision} — 대역 ${out.count}개`);
+        show(out);
+      } catch (e) {
+        die(e);
+      }
       return;
     }
     case 'proxy': {

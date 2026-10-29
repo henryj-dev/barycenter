@@ -25,11 +25,14 @@ import { ACME_PREFIX } from '../conf/render.js';
 import {
   coversHost, parseHashKey, parseHostPattern, validatePathPrefix, type HostPattern,
 } from './strings.js';
+import { referencedSets } from '../model/address-sets.js';
 import type {
   RawListener, RawModel, ProtocolClass, SniCertificateBinding,
 } from '../model/provisional.js';
 
 export type ModelIssueCode =
+  /** 리스너가 없는 주소 집합을 `@이름` 으로 참조한다 (#114). */
+  | 'unknown_address_set'
   | 'invalid_bind_address'
   | 'unknown_pool'
   | 'unknown_listener'
@@ -258,6 +261,21 @@ export function validateModel(
 
   // ── 리스너 ──
   const reservations: SocketReservation[] = [];
+  // **주소 집합 참조** (#114). 모양(`@이름`)은 해독기가 봤다 — 여기서는 있는지를 본다.
+  {
+    const sets = new Set((model.addressSets ?? []).map((x) => x.key));
+    for (const l of model.listeners) {
+      for (const ref of referencedSets(l)) {
+        if (sets.has(ref)) continue;
+        issues.push({
+          code: 'unknown_address_set',
+          subjects: [l.key, ref],
+          message: `리스너 '${l.key}' 가 없는 주소 집합 '@${ref}' 를 참조한다`,
+        });
+      }
+    }
+  }
+
   for (const l of model.listeners) {
     const bind = normalizeBind(l.bind);
     if (!bind.ok) {

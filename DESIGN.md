@@ -1053,6 +1053,14 @@ HTTP 헤더로 넘긴다. 그 자리를 같은 잠금으로 열었다:
 | DB | `source_allow text[]` (025). `cidr[]` 이 아니다 — 정규화(`/32` 덧붙임)가 적은 것과 읽은 것을 갈라 plan 이 매번 바뀐다 |
 | 저작 | GUI 다섯 리스너 폼의 「출발지 제한」, CLI `--allow`(여러 번·쉼표)·`--allow-file`. 끊기·검사는 `parseSourceAllow` 한 자리 |
 
+**주소 집합 (2026-10-29, #114).** 여러 리스너가 같은 목록(예: Cloudflare 22개)을 쓰면 복사가 갈린다.
+`addressSet { key, cidrs, source? }` 를 두고 리스너가 `@이름` 으로 참조한다 — `sourceAllow` ·
+`realIpFromHeader.trustedCidrs` · `acceptProxyProtocol.trustedCidrs` 세 자리. 렌더 직전에 펼친다
+(`expandAddressSets` 한 자리 · 겹치는 대역은 접는다) — 산출물은 직접 적은 것과 같은 바이트다. 없는 집합
+참조는 검증기가 `unknown_address_set` 으로 막는다(삭제도 그래서 막힌다). 집합은 리스너 폐포에 들어가므로
+대역만 바꿔도 그 리스너가 영향 목록에 오른다. DB 027 `address_sets`. CLI `bary address-set create
+--cloudflare` 는 공개 목록을 받아 commit 까지 한다 — 하나라도 실패하면 안 바꾼다.
+
 ⚠️ ACME http-01 은 CA 가 직접 :80 에 온다. 그 리스너에 대역을 걸면 발급이 막힌다. 그리고
 barycenterd 자신의 로그인 실패 제한은 이 기능과 무관하게 여전히 소켓 주소를 센다 — 프록시
 뒤에서는 별건으로 다룬다.

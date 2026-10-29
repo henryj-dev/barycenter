@@ -645,6 +645,10 @@ const ROUTES: Route[] = [
   route('GET', '/api/v1/tls-policies', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).tlsPolicies);
   }),
+  // 주소 집합 (#114). 없으면 빈 배열이다 — 집합이 없는 모델에는 필드가 없다.
+  route('GET', '/api/v1/address-sets', 'read', async (c, api) => {
+    json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).addressSets ?? []);
+  }),
   route('GET', '/api/v1/sni-bindings', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).sniBindings);
   }),
