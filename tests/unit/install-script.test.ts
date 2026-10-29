@@ -567,3 +567,61 @@ describe('지원 배포판 표', () => {
     expect(src).toContain('package/${OR_SRC#openresty.org/}/');
   });
 });
+
+describe('실패해도 토큰을 잃지 않는다 (#99)', () => {
+  /**
+   * ⑩ 이 토큰을 발급한 뒤 ⑪·⑫ 에서 죽으면 평문이 어디에도 안 남았다. 재실행은 파일을
+   * 보존하므로 아무도 모르는 토큰만 남는다. `on_exit` 를 스크립트에서 **그대로** 꺼내
+   * 실제로 종료시켜 본다.
+   */
+  function exitWith(rc: number, issued: boolean): { rc: number; stderr: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'bary-exit-'));
+    try {
+      const body = `set -eu
+        ${shFunction('on_exit')}
+        BUILD_DIR='${dir}/build'; mkdir -p "$BUILD_DIR"
+        TOKEN_PLAIN='plain-token-for-test'; TOKEN_ISSUED=${issued ? 1 : 0}
+        trap on_exit EXIT
+        exit ${rc}`;
+      try {
+        execFileSync('sh', ['-c', body], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        return { rc: 0, stderr: '' };
+      } catch (e) {
+        const err = e as { status?: number; stderr?: string };
+        return { rc: err.status ?? -1, stderr: err.stderr ?? '' };
+      } finally {
+        expect(execFileSync('sh', ['-c', `[ -e '${dir}/build' ] && echo left || echo gone`], { encoding: 'utf8' }).trim(),
+          '빌드 디렉터리는 언제나 지운다').toBe('gone');
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  it('**발급한 뒤 실패하면 평문을 낸다** — 종료 코드는 그대로다', () => {
+    const r = exitWith(3, true);
+    expect(r.rc).toBe(3);
+    expect(r.stderr).toContain('plain-token-for-test');
+    expect(r.stderr).toMatch(/그대로 이어 간다/);
+  });
+
+  it('성공하면 안 낸다 — 평문은 요약이 한 번 낸다', () => {
+    expect(exitWith(0, true)).toEqual({ rc: 0, stderr: '' });
+  });
+
+  it('발급 전(⑩ 앞)에 죽으면 안 낸다 — 파일에 없는 토큰을 보여 주지 않는다', () => {
+    const r = exitWith(1, false);
+    expect(r.rc).toBe(1);
+    expect(r.stderr).not.toContain('plain-token-for-test');
+  });
+
+  it('**발급 표시는 토큰 파일을 쓴 뒤에 선다**', () => {
+    const write = src.indexOf('chmod 0640 "$TOKENS_FILE"');
+    const flag = src.indexOf('&& TOKEN_ISSUED=1');
+    expect(write).toBeGreaterThan(-1);
+    expect(flag).toBeGreaterThan(write);
+  });
+
+  it('EXIT trap 은 한 자리다 — ⑦ 이 덮어쓰지 않는다', () => {
+    const code = src.replace(/^\s*#.*$/gm, '');
+    expect(code.match(/^\s*trap .* EXIT/gm)).toEqual(['trap on_exit EXIT']);
+  });
+});
