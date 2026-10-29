@@ -445,7 +445,8 @@ export type PutHttpsListenerOp = {
     enabled: true;
     sourceAllow?: string[];
     http: {
-      defaultAction: { pool: string };
+      /** URL 프록시가 라우트를 만들 때만 'reject' (#112·#116). */
+      defaultAction: { pool: string } | 'reject';
       limits?: ProxyLimitsInput;
       headers?: HeaderRulesInput;
       rateLimit?: RateLimitInput;
@@ -1094,9 +1095,14 @@ export type ProxyFromUrlInput = {
   pathPrefix?: string;
   /** 새 리스너의 출발지 제한. */
   sourceAllow?: string[];
+  /** 새 리스너의 프로토콜. 없으면 http. https 면 `tls` 가 필요하다 (#116). */
+  protocol?: 'http' | 'https';
+  /** https 리스너의 TLS 정책과 기본 인증서. 둘 다 있어야 저장된다. */
+  tls?: { policy: string; certificate: string };
 };
 
-export type ProxyFromUrlOp = PutPoolOp | PutBackendOp | PutHttpListenerOp | PutHttpRouteOp;
+export type ProxyFromUrlOp =
+  | PutPoolOp | PutBackendOp | PutHttpListenerOp | PutHttpsListenerOp | PutHttpRouteOp | PutSniBindingOp;
 
 export function proxyFromUrlPatch(input: ProxyFromUrlInput): ProxyFromUrlOp[] {
   const name = input.name.trim();
@@ -1141,14 +1147,30 @@ export function proxyFromUrlPatch(input: ProxyFromUrlInput): ProxyFromUrlOp[] {
   ];
   const hostRule = [{ name: 'Host', value: hostHeader }];
   if (input.listen !== undefined) {
-    // 라우트를 만들면 리스너 기본 동작은 거절(444)이다 — 모르는 Host 가 외부로 새지 않게.
-    const [l] = putHttpListenerPatch(name, {
+    const common = {
       bind: input.listen.bind, port: input.listen.port, pool: name,
       ...(hosts.length === 0 ? { headers: { request: hostRule } } : {}),
       ...(input.sourceAllow === undefined ? {} : { sourceAllow: input.sourceAllow }),
-    });
+    };
+    // https 리스너는 TLS 정책과 기본 인증서가 **둘 다** 있어야 저장된다 (#116).
+    const https = (input.protocol ?? 'http') === 'https';
+    if (https && (input.tls === undefined || input.tls.policy.trim() === '' || input.tls.certificate.trim() === '')) {
+      throw new Error('https 리스너는 --policy(TLS 정책)와 --certificate(기본 인증서)가 필요하다');
+    }
+    if (!https && input.tls !== undefined) throw new Error('--policy·--certificate 는 https 리스너에만 쓴다');
+    const [l] = https
+      ? putHttpsListenerPatch(name, { ...common, policy: input.tls!.policy.trim(), certificate: input.tls!.certificate.trim() })
+      : putHttpListenerPatch(name, common);
+    // 라우트를 만들면 리스너 기본 동작은 거절(444)이다 — 모르는 Host 가 외부로 새지 않게.
     if (hosts.length > 0) l!.body.http = { ...l!.body.http, defaultAction: 'reject' };
     ops.push(l!);
+    // **https 라우트의 호스트는 SNI 바인딩이 덮어야 한다** (검증기 `sni_binding_missing`).
+    // 없으면 handshake 에서 제시할 인증서가 정해지지 않는다. 기본 인증서로 묶는다.
+    if (https && hosts.length > 0) {
+      ops.push(...putSniBindingPatch({ key: name, listener: name, hosts, certificate: input.tls!.certificate.trim() }));
+    }
+  } else if (input.protocol !== undefined || input.tls !== undefined) {
+    throw new Error('--protocol·--policy·--certificate 는 새 리스너(--listen)에만 쓴다');
   }
   if (hosts.length > 0) {
     ops.push(...putHttpRoutePatch({
