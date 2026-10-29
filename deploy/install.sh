@@ -286,6 +286,7 @@ umask 022
 # 모든 전역이 **같은 포트 9443** 을 쓴다 — DNS 다중 A 는 포트를 싣지 않는다(docs/runbook-global.md).
 # 이 갈림은 ⓪-a(옛 설정 이어받기)보다 **먼저**여야 한다 — 이어받기가 `$PREFIX/env` 를 읽는다.
 SVC_NAME=barycenterd
+ENGINE_SVC=barycenter-engine
 if [ "$MODE" = global ]; then
   SVC_NAME=barycenter-global
   [ "$PREFIX_SET" = 1 ] || PREFIX=/etc/barycenter-global
@@ -1403,8 +1404,16 @@ fi
 # admin 엔드포인트가 옛 세대에 이미 있어야 첫 apply 가 성립하고, 그 모양은 엔진
 # capability 에 따라 달라진다.
 #
-# 엔진과 데몬을 **한 유닛**에 둔다. 나누면 "엔진만 살아 있고 제어가 없는" 상태가
-# 정상 상태처럼 보이는데, 그건 S8 이 실측한 조용한 고장의 모양이다.
+# **systemd 에서는 엔진을 별도 유닛(`barycenter-engine`)에 둔다** (#122). 전에는 한 유닛이었고,
+# 그래서 데몬을 재시작·업데이트할 때마다 같은 cgroup 의 nginx 도 죽었다 — 「컨트롤 플레인이
+# 내려가도 데이터 플레인은 마지막 세대로 서빙한다」(ADR-SPOF·ADR-CLUSTER)와 정면으로 어긋났다.
+#
+# 한 유닛이던 이유(S8: 「엔진만 살고 제어가 없는」 상태가 정상처럼 보인다)는 이렇게 막는다:
+#   · 데몬 유닛은 재시도 상한이 없다(StartLimitIntervalSec=0) — 제어 없는 상태가 오래 안 간다
+#   · 데몬이 없으면 /healthz 가 안 답한다 — 설치 ⑫ 와 모니터가 그것을 본다
+#   · 데몬이 엔진을 Wants·After 한다. 엔진은 데몬을 모른다 — 데몬을 올리면 엔진도 올라오지만,
+#     데몬을 내려도 엔진은 산다
+# OpenRC 는 그대로 한 서비스다(stop_post 가 엔진을 내린다).
 
 step "⑪ 서비스"
 write_systemd_unit() {
@@ -1412,19 +1421,46 @@ write_systemd_unit() {
   # `/run` 밑이고 거기는 tmpfs 라 **재부팅마다 사라진다** — 설치 때 한 번 만들어 두는
   # 것으로는 모자라고, 유닛은 비-root 로 돌아 스스로 만들 수 없다.
   RUNDIR_PRE=""
-  # 전역 모드에는 엔진이 없다 — 부트스트랩 세대도 엔진 기동도 안 한다.
-  ENGINE_PRE=""
+  # 전역 모드에는 엔진이 없다 — 엔진 유닛을 안 쓴다.
   if [ -n "$ENGINE_RUN_DIR" ]; then
     RUNDIR_PRE="ExecStartPre=+/usr/bin/install -d -m 0755 -o $SVC_USER -g $SVC_USER $ENGINE_RUN_DIR"
   fi
+  ENGINE_DEP=""
   if [ "$WITH_ENGINE" = 1 ]; then
-    ENGINE_PRE="$RUNDIR_PRE
+    ENGINE_DEP="Wants=$ENGINE_SVC.service
+After=$ENGINE_SVC.service"
+    cat > "/etc/systemd/system/$ENGINE_SVC.service" <<EOF
+[Unit]
+Description=barycenter data plane engine (nginx)
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+# nginx 는 스스로 데몬이 된다. 마스터 pid 를 pid 파일로 넘겨받는다.
+Type=forking
+User=$SVC_USER
+Group=$SVC_USER
+EnvironmentFile=$ENV_FILE
+PIDFile=$ENGINE_PID_FILE
+$RUNDIR_PRE
+# 부트스트랩은 PG 없이 돈다 — PG 가 늦게 떠도 엔진은 마지막 세대로 선다.
 ExecStartPre=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js --write-bootstrap
-ExecStartPre=$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf"
+ExecStart=$ENGINE_BIN -p $PREFIX -c $PREFIX/current/nginx.conf
+# 세대 전환은 데몬이 HUP 으로 한다. 이 reload 는 손으로 쓸 때를 위한 것이다.
+ExecReload=/bin/kill -HUP \$MAINPID
+ExecStop=/bin/kill -QUIT \$MAINPID
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
   fi
   cat > "/etc/systemd/system/$SVC_NAME.service" <<EOF
 [Unit]
 Description=barycenter control plane ($MODE)
+$ENGINE_DEP
 # network-online.target 을 **안 쓴다.** 쓰면 그 타깃을 채우는
 # systemd-networkd-wait-online 이 못 끝나는 환경에서 start 작업이 queued 인 채로
 # 매달린다 — AL2023 판에서 실측했다: "systemctl enable --now" 가 0 을 냈는데 서비스는
@@ -1447,9 +1483,8 @@ Type=exec
 User=$SVC_USER
 Group=$SVC_USER
 EnvironmentFile=$ENV_FILE
-$ENGINE_PRE
 ExecStart=$NODE_BIN $APP_DIR/dist/bin/barycenterd.js
-# 토큰 파일과 관리 포트 인증서를 다시 읽는다 — 엔진은 안 건드린다. 재시작은 데이터 플레인을 끊는다.
+# 토큰 파일과 관리 포트 인증서를 다시 읽는다 — 엔진은 안 건드린다. 재시작도 엔진을 안 끊는다(#122).
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -1523,8 +1558,17 @@ EOF
   chmod +x "/etc/init.d/$SVC_NAME"
 }
 
+# 옛 모양(엔진이 데몬 유닛의 ExecStartPre)에서 처음 넘어오는가 — 유닛을 덮기 전에 본다.
+ENGINE_SPLIT_MIGRATE=0
+if [ "$INIT" = systemd ] && [ "$WITH_ENGINE" = 1 ] \
+   && grep -q '^ExecStartPre=.* -c .*nginx.conf' "/etc/systemd/system/$SVC_NAME.service" 2>/dev/null \
+   && systemctl is-active --quiet "$SVC_NAME" 2>/dev/null; then
+  ENGINE_SPLIT_MIGRATE=1
+fi
+
 case "$INIT" in
-  systemd) write_systemd_unit; ok "/etc/systemd/system/$SVC_NAME.service" ;;
+  systemd) write_systemd_unit; ok "/etc/systemd/system/$SVC_NAME.service"
+           [ "$WITH_ENGINE" = 1 ] && ok "/etc/systemd/system/$ENGINE_SVC.service" ;;
   openrc)  write_openrc_unit;  ok "/etc/init.d/$SVC_NAME" ;;
   none)
     warn "초기화 시스템을 못 찾았다 (systemd·OpenRC 둘 다) — 유닛을 쓰지 않는다"
@@ -1540,6 +1584,22 @@ if [ "$NO_SERVICE" = 1 ]; then
   say "    sudo -u $SVC_USER env \$(grep -v '^#' $ENV_FILE | tr -d \"'\" | xargs) \\"
   say "      $NODE_BIN $APP_DIR/dist/bin/barycenterd.js"
 else
+  if [ "$INIT" = systemd ] && [ "$WITH_ENGINE" = 1 ]; then
+    # **엔진은 이미 돌면 그대로 둔다** (#122) — 업데이트가 트래픽을 끊지 않는 것이 이 유닛을
+    # 나눈 이유다. 엔진 바이너리를 바꿨다면 손으로 systemctl restart barycenter-engine.
+    systemctl enable "$ENGINE_SVC" >/dev/null 2>&1 || true
+    if [ "$ENGINE_SPLIT_MIGRATE" = 1 ]; then
+      # 옛 유닛은 nginx 를 자기 cgroup 에 띄웠다. 그 nginx 를 한 번 내려야 엔진 유닛이 포트를 잡는다.
+      warn "엔진을 별도 유닛으로 옮긴다 — 이번 한 번 데이터 플레인이 몇 초 끊긴다"
+      systemctl stop "$SVC_NAME" >/dev/null 2>&1 || true
+    fi
+    if systemctl is-active --quiet "$ENGINE_SVC"; then
+      ok "$ENGINE_SVC 가 돌고 있다 — 건드리지 않는다"
+    else
+      systemctl start "$ENGINE_SVC" || die "$ENGINE_SVC 를 못 띄웠다 — journalctl -u $ENGINE_SVC"
+      ok "$ENGINE_SVC 시작"
+    fi
+  fi
   svc_start "$SVC_NAME"
   ok "$SVC_NAME 시작"
 fi

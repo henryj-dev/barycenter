@@ -6,7 +6,7 @@
 두 번째 설치부터는 [`runbook-upgrade.md`](./runbook-upgrade.md) 다(재실행이 곧 업데이트다).
 장애 대응은 [`runbook-spof.md`](./runbook-spof.md) 다.
 
-전제는 §11.3 의 v1 권장 배포다 — **전용 VM 한 대**, 엔진과 데몬이 한 유닛.
+전제는 §11.3 의 v1 권장 배포다 — **전용 VM 한 대**. systemd 에서는 엔진(`barycenter-engine`)과 데몬(`barycenterd`)이 별도 유닛이다 — 데몬을 재시작해도 트래픽이 안 끊긴다(#122).
 Debian 11+ · Ubuntu 20.04+ · RHEL 계열 9·10 · Amazon Linux 2023 · Alpine 3.19+.
 버전별 지원·거절과 패키지 출처는 `deploy/install.sh` ① 의 `DISTRO_TABLE` 한 곳에 있다.
 EL 10 은 openresty.org 가 EL 10 판을 안 내서 **EL 9 의 OpenResty RPM 을 쓴다** (실측으로 선다).

@@ -17,6 +17,7 @@
 #   3. nginx 마스터가 비-root 로 도는가     — `setcap` 경로가 정말 섰는가
 #   4. **재기동 뒤에도** 1·2 가 참인가      — `--write-bootstrap` 이 활성 세대를 되돌리지
 #                                             않는다는 것은 재기동해 봐야만 안다
+#   4-b. 데몬 재시작·정지가 nginx 를 안 건드리는가 (systemd, #122) — 마스터 PID 가 그대로
 #   5. `bary status` 가 답하는가            — 토큰 해시와 API 가 맞물렸는가
 #   5-b. reload 가 재시작 없이 토큰을 들이는가 — PID 가 그대로여야 한다. `/status` 의 판 표시도
 #   5-c. 사람 계정이 설치에서 바로 서는가 — 첫 관리자 링크 → TOTP 관리자 → 로그인 → MFA → /me
@@ -311,12 +312,35 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
   fi
 
   # ④ 재기동. **부트스트랩이 활성 세대를 되돌리지 않는다**는 것은 재기동해 봐야 안다.
+  #    systemd 에서는 **데몬을 재시작해도 nginx 마스터가 그대로**여야 한다(#122) — 엔진은
+  #    별도 유닛이다. 같은 PID 가 「데이터 플레인이 안 끊겼다」의 증거다.
+  local master_pid master_pid2
+  master_pid=$(docker exec "$c" sh -c "ps -eo pid=,args= | grep '[n]ginx: master' | head -1 | awk '{print \$1}'" | tr -d ' \n')
   if [ "$init" = systemd ]; then
+    expect "엔진 유닛 active (barycenter-engine)" "$c" systemctl is-active --quiet barycenter-engine || rc=1
     docker exec "$c" systemctl restart barycenterd >/dev/null 2>&1 || rc=1
   else
     docker exec "$c" rc-service barycenterd restart >/dev/null 2>&1 || rc=1
   fi
   if wait_ready "$c"; then printf '    ok   재기동 뒤에도 /readyz\n'; else printf '    NO   재기동 뒤 /readyz 가 안 답한다\n'; rc=1; fi
+  if [ "$init" = systemd ]; then
+    master_pid2=$(docker exec "$c" sh -c "ps -eo pid=,args= | grep '[n]ginx: master' | head -1 | awk '{print \$1}'" | tr -d ' \n')
+    if [ -n "$master_pid" ] && [ "$master_pid" = "$master_pid2" ]; then
+      printf '    ok   데몬을 재시작해도 nginx 마스터가 그대로다 (PID %s)\n' "$master_pid"
+    else
+      printf '    NO   데몬 재시작이 nginx 를 다시 띄웠다 (PID %s → %s)\n' "${master_pid:-?}" "${master_pid2:-?}"; rc=1
+    fi
+    # 데몬을 **내려도** 엔진은 산다 — 그리고 다시 올리면 붙는다.
+    docker exec "$c" systemctl stop barycenterd >/dev/null 2>&1
+    master_pid2=$(docker exec "$c" sh -c "ps -eo pid=,args= | grep '[n]ginx: master' | head -1 | awk '{print \$1}'" | tr -d ' \n')
+    if [ "$master_pid" = "$master_pid2" ]; then
+      printf '    ok   데몬을 내려도 nginx 가 산다\n'
+    else
+      printf '    NO   데몬을 내리자 nginx 가 죽었다\n'; rc=1
+    fi
+    docker exec "$c" systemctl start barycenterd >/dev/null 2>&1 || rc=1
+    if wait_ready "$c"; then printf '    ok   다시 올린 데몬이 엔진에 붙는다\n'; else printf '    NO   다시 올린 데몬이 안 붙는다\n'; rc=1; fi
+  fi
 
   # ⑤ CLI 가 API 에 닿는가 — 토큰 해시와 스코프가 맞물렸는가.
   local token
