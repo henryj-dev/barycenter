@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { ListenerOptionFlags } from '@web/edit';
   import ListenerOptions from './ListenerOptions.svelte';
+  import SourceAllow from './SourceAllow.svelte';
 
   let { pools, editing, add }: {
     pools: string[];
     editing: boolean;
-    add: (key: string, bind: string, port: number, pool: string, opts: ListenerOptionFlags) => void;
+    add: (key: string, bind: string, port: number, pool: string, opts: ListenerOptionFlags, allow?: string) => void;
   } = $props();
 
   let key = $state('');
@@ -14,9 +15,10 @@
   let pool = $state('');
   // 제안 6·7·8. 문자열 그대로 올린다 — 단위 해석은 `parseListenerOptions` 한 자리다.
   let opts = $state<ListenerOptionFlags>({});
+  let allow = $state('');
 
   const submit = (): void => {
-    add(key.trim(), bind.trim(), Number(port), pool, opts);
+    add(key.trim(), bind.trim(), Number(port), pool, opts, allow);
   };
 </script>
 
@@ -32,6 +34,7 @@
   </select>
   <button type="submit" disabled={editing || pools.length === 0}>HTTP 포트를 연다</button>
   <ListenerOptions {editing} bind:value={opts} />
+  <SourceAllow {editing} bind:value={allow} />
 </form>
 
 <style>

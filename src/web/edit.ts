@@ -5,6 +5,7 @@
  * 메서드×경로 ALLOW/DENY 는 WAF 다. 여기 없다.
  */
 import { parseHashKey } from '../validate/strings.js';
+import { cidrVersion } from '../validate/ip.js';
 
 export type EditKind =
   | 'backend' | 'listener' | 'pool' | 'httpRoute' | 'passthroughRoute'
@@ -242,6 +243,35 @@ export function parseListenerOptions(f: ListenerOptionFlags): ListenerOptions {
   });
 }
 
+/**
+ * 리스너 출발지 제한 (`sourceAllow`, 2026-10-29). 프로토콜과 상관없이 모든 리스너에 붙는다.
+ *
+ * **폼과 플래그가 같은 파서를 쓴다** — 쉼표·공백·줄바꿈으로 끊고, 빈 칸은 버리고,
+ * 해독기와 같은 판정(`cidrVersion`)으로 미리 거절한다. 저장 못 하는 patch 를 만들지 않는다.
+ * 중복은 **접는다**(해독기는 거절한다): 붙여 넣은 목록에서 같은 줄이 두 번인 것은 폼이
+ * 대신 정리해 줄 만한 실수다.
+ */
+export type SourceAllowInput = { sourceAllow?: string[] };
+
+export function parseSourceAllow(text: string | readonly string[] | undefined): string[] | undefined {
+  if (text === undefined) return undefined;
+  const raw = (typeof text === 'string' ? [text] : text).flatMap((t) => t.split(/[\s,]+/));
+  const out: string[] = [];
+  for (const item of raw) {
+    const s = item.trim();
+    if (s === '') continue;
+    if (cidrVersion(s) === 0) {
+      throw new Error(`CIDR 이나 IP 주소가 아니다: ${JSON.stringify(s)} — 예: 173.245.48.0/20 · 2400:cb00::/32`);
+    }
+    if (!out.includes(s)) out.push(s);
+  }
+  return out.length === 0 ? undefined : out;
+}
+
+/** **안 적으면 키를 안 만든다** — 빈 배열을 실으면 해독기가 거절하고, 키만 있어도 렌더가 바뀐다. */
+const sourceAllowField = (list: string[] | undefined): SourceAllowInput =>
+  (list === undefined || list.length === 0 ? {} : { sourceAllow: list });
+
 export type PutHttpListenerOp = {
   op: 'put';
   kind: 'listener';
@@ -251,6 +281,7 @@ export type PutHttpListenerOp = {
     bind: string;
     port: number;
     enabled: true;
+    sourceAllow?: string[];
     http: {
       defaultAction: { pool: string };
       limits?: ProxyLimitsInput;
@@ -264,7 +295,7 @@ export type PutHttpListenerOp = {
 /** HTTP 만. HTTPS 는 tls 결박이 따로 있다. */
 export function putHttpListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string } & ListenerOptions,
+  body: { bind: string; port: number; pool: string } & ListenerOptions & SourceAllowInput,
 ): PutHttpListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -281,6 +312,7 @@ export function putHttpListenerPatch(
       bind: body.bind,
       port: body.port,
       enabled: true,
+      ...sourceAllowField(body.sourceAllow),
       http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
     },
   }];
@@ -295,6 +327,7 @@ export type PutTcpListenerOp = {
     bind: string;
     port: number;
     enabled: true;
+    sourceAllow?: string[];
     defaultPool: string;
   };
 };
@@ -305,7 +338,7 @@ export type PutTcpListenerOp = {
  */
 export function putTcpListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string },
+  body: { bind: string; port: number; pool: string } & SourceAllowInput,
 ): PutTcpListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -322,6 +355,7 @@ export function putTcpListenerPatch(
       bind: body.bind,
       port: body.port,
       enabled: true,
+      ...sourceAllowField(body.sourceAllow),
       defaultPool: body.pool,
     },
   }];
@@ -340,6 +374,7 @@ export type PutUdpListenerOp = {
     bind: string;
     port: number;
     enabled: true;
+    sourceAllow?: string[];
     defaultPool: string;
     udp: { preset: UdpPreset };
   };
@@ -351,7 +386,7 @@ export type PutUdpListenerOp = {
  */
 export function putUdpListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string; preset: UdpPreset },
+  body: { bind: string; port: number; pool: string; preset: UdpPreset } & SourceAllowInput,
 ): PutUdpListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -369,6 +404,7 @@ export function putUdpListenerPatch(
       bind: body.bind,
       port: body.port,
       enabled: true,
+      ...sourceAllowField(body.sourceAllow),
       defaultPool: body.pool,
       udp: { preset: body.preset },
     },
@@ -406,6 +442,7 @@ export type PutHttpsListenerOp = {
     bind: string;
     port: number;
     enabled: true;
+    sourceAllow?: string[];
     http: {
       defaultAction: { pool: string };
       limits?: ProxyLimitsInput;
@@ -424,7 +461,7 @@ export type PutHttpsListenerOp = {
  */
 export function putHttpsListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string; policy: string; certificate: string }
+  body: { bind: string; port: number; pool: string; policy: string; certificate: string } & SourceAllowInput
     & ListenerOptions,
 ): PutHttpsListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
@@ -444,6 +481,7 @@ export function putHttpsListenerPatch(
       bind: body.bind,
       port: body.port,
       enabled: true,
+      ...sourceAllowField(body.sourceAllow),
       http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
       tls: { policy: body.policy, defaultCertificate: body.certificate },
     },
@@ -520,6 +558,7 @@ export type PutPassthroughListenerOp = {
     bind: string;
     port: number;
     enabled: true;
+    sourceAllow?: string[];
     onUnmatchedSni?: { pool: string };
     onNoSni?: { pool: string };
   };
@@ -540,7 +579,7 @@ export type PutPassthroughListenerOp = {
  */
 export function putPassthroughListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool?: string; noSniPool?: string },
+  body: { bind: string; port: number; pool?: string; noSniPool?: string } & SourceAllowInput,
 ): PutPassthroughListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -553,6 +592,7 @@ export function putPassthroughListenerPatch(
     bind: body.bind,
     port: body.port,
     enabled: true,
+    ...sourceAllowField(body.sourceAllow),
   };
   if (pool !== undefined && pool !== '') patchBody.onUnmatchedSni = { pool };
   const noSniPool = body.noSniPool?.trim();

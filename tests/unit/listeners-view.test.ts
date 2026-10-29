@@ -15,9 +15,17 @@ describe('리스너 목록', () => {
     expect(view.rows).toEqual([
       {
         key: 'front', protocol: 'http', bind: '0.0.0.0', port: 999,
-        enabled: true, socket: 'tcp://0.0.0.0:999', mark: 'join',
+        enabled: true, socket: 'tcp://0.0.0.0:999', mark: 'join', sourceAllow: [],
       },
     ]);
+  });
+
+  it('출발지 제한을 행에 싣는다 — 화면이 「출발지 N개만」을 그린다 (2026-10-29)', () => {
+    const view = viewOfListeners([
+      { key: 'cf', protocol: 'http', bind: '0.0.0.0', port: 443, sourceAllow: ['173.245.48.0/20', '2400:cb00::/32'] },
+      { key: 'open', protocol: 'tcp', bind: '0.0.0.0', port: 9000 },
+    ]);
+    expect(view.rows.map((r) => [r.key, r.sourceAllow.length])).toEqual([['cf', 2], ['open', 0]]);
   });
 
   it('head 에서 빠진 소켓은 아직 엔진에 있다고 leave 로 남긴다', () => {

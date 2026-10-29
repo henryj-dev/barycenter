@@ -32,6 +32,8 @@ export type ListenerCreateInput = {
   options?: ListenerOptions;
   /** 패스스루에만. TLS 인데 SNI 가 없을 때의 폴백 (S9). */
   noSniPool?: string;
+  /** 모든 프로토콜. 연결할 수 있는 출발지 (2026-10-29). */
+  sourceAllow?: string[];
 };
 
 const udpPreset = (v: string | undefined): UdpPreset | undefined =>
@@ -50,6 +52,7 @@ export function listenerCreatePatch(
     return putHttpListenerPatch(input.name, {
       bind: input.bind,
       port: input.port,
+      ...(input.sourceAllow === undefined ? {} : { sourceAllow: input.sourceAllow }),
       pool: input.pool,
       // 제안 6·7·8. `undefined` 면 `listenerOptionFields` 가 아무것도 안 만든다.
       ...(input.options ?? {}),
@@ -60,6 +63,7 @@ export function listenerCreatePatch(
     return putTcpListenerPatch(input.name, {
       bind: input.bind,
       port: input.port,
+      ...(input.sourceAllow === undefined ? {} : { sourceAllow: input.sourceAllow }),
       pool: input.pool,
     });
   }
@@ -69,6 +73,7 @@ export function listenerCreatePatch(
     return putUdpListenerPatch(input.name, {
       bind: input.bind,
       port: input.port,
+      ...(input.sourceAllow === undefined ? {} : { sourceAllow: input.sourceAllow }),
       pool: input.pool,
       preset,
     });
@@ -82,6 +87,7 @@ export function listenerCreatePatch(
     return putHttpsListenerPatch(input.name, {
       bind: input.bind,
       port: input.port,
+      ...(input.sourceAllow === undefined ? {} : { sourceAllow: input.sourceAllow }),
       pool: input.pool,
       policy: input.policy,
       certificate: input.certificate,
@@ -92,6 +98,7 @@ export function listenerCreatePatch(
     return putPassthroughListenerPatch(input.name, {
       bind: input.bind,
       port: input.port,
+      ...(input.sourceAllow === undefined ? {} : { sourceAllow: input.sourceAllow }),
       ...(input.pool === undefined || input.pool === '' ? {} : { pool: input.pool }),
       ...(input.noSniPool === undefined || input.noSniPool === ''
         ? {} : { noSniPool: input.noSniPool }),

@@ -205,6 +205,52 @@ function sniMismatchGuard(): ConfNode {
   return block('if', [lit(`($${SNI_MISMATCH_VAR})`)], [directive('return', [num(421)])]);
 }
 
+/**
+ * 출발지 제한 (리스너 `sourceAllow`, 2026-10-29).
+ *
+ * **http 계열은 `allow` 를 안 쓴다.** 이유가 둘이다 — 둘 다 이 저장소가 이미 물린 함정이다:
+ *
+ *   1. `allow` 는 access 단계라 **realip 이 바꾼 뒤의** `$remote_addr` 를 본다. Cloudflare
+ *      대역만 받으면서 `realIpFromHeader` 로 방문자 IP 를 꺼내면, 검사가 방문자 IP 를 보게
+ *      되어 전부 막힌다. `$realip_remote_addr` 는 바뀌기 **전** 주소다(realip 이 안 걸려도
+ *      연결 주소를 낸다).
+ *   2. access 단계는 rewrite 단계의 `return` 보다 **늦다.** redirect·reject 라우트는
+ *      `allow` 가 돌기 전에 응답한다 — 레이트리밋이 같은 이유로 거기 안 걸린다(실측).
+ *
+ * 그래서 http 블록에 `geo` 로 「막을 것인가」 를 만들고, server 레벨 `if` 로 끊는다.
+ * server 레벨 `if` 는 server rewrite 단계라 어떤 location 보다도 앞이다(ACME 예약 라우트
+ * 포함 — 그건 모델 주석에 경고로 적었다). 값은 **막을 때 1** 이다: `if ($var)` 는 빈 값과
+ * `0` 을 거짓으로 읽는다.
+ *
+ * `444` 는 응답 없이 끊는다. 허용 목록 밖의 상대에게 무엇이 있는지 알려 줄 이유가 없다.
+ */
+const sourceDenyVar = (listenerKey: string): string => `bary_src_deny_${ident(listenerKey)}`;
+
+function sourceAllowGeo(listener: Listener): ConfNode[] {
+  if (listener.sourceAllow === undefined) return [];
+  return [block('geo', [variable('realip_remote_addr'), variable(sourceDenyVar(listener.key))], [
+    entry(lit('default'), lit('1')),
+    ...listener.sourceAllow.map((cidr) => entry(lit(cidr), lit('0'))),
+  ])];
+}
+
+function sourceAllowGuard(listener: Listener): ConfNode[] {
+  if (listener.sourceAllow === undefined) return [];
+  return [block('if', [lit(`($${sourceDenyVar(listener.key)})`)], [directive('return', [num(444)])])];
+}
+
+/**
+ * stream 판. `if` 가 없으므로 `allow` 다. PROXY 수신과의 조합은 검증기가 막는다 —
+ * stream realip 이 주소를 바꾼 뒤에 검사하기 때문이다(위 1번과 같은 함정).
+ */
+function sourceAllowStream(listener: Listener): ConfNode[] {
+  if (listener.sourceAllow === undefined) return [];
+  return [
+    ...listener.sourceAllow.map((cidr) => directive('allow', [lit(cidr)])),
+    directive('deny', [lit('all')]),
+  ];
+}
+
 const byKey = <T extends { key: string }>(xs: T[]): T[] =>
   [...xs].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
@@ -633,6 +679,7 @@ function httpServerBlocks(
       directive('server_name', [nameArg]),
       ...tlsBody,
       ...realipNodes(listener),
+      ...sourceAllowGuard(listener),
       ...proxyLimitNodes(listener.http?.limits),
       ...responseHeaderNodes(listener.http?.headers?.response),
       ...rateLimitNodes(listener.key, listener.http?.rateLimit),
@@ -1251,6 +1298,9 @@ function defaultServerBlock(
     directive('server_name', [lit('_')]),
     ...tlsBody,
     ...realipNodes(listener),
+    // **default_server 에도 낸다.** 모르는 Host 로 오면 여기로 온다 — 여기가 빠지면
+    // 허용 목록 밖의 상대가 Host 만 바꿔서 들어온다.
+    ...sourceAllowGuard(listener),
     // **default_server 에도 낸다.** 한계값은 리스너 단위 계약이다 — 여기 안 내면
     // 호스트 라우트가 없는 리스너(그리고 모르는 Host 로 오는 요청)에는 안 걸리고,
     // 운영자는 "적었는데 어떤 요청에는 안 먹는다" 를 겪는다.
@@ -1371,6 +1421,7 @@ function passthroughNodes(
   const server = block('server', [], [
     directive('listen', listenArgs(listener)),
     ...realipNodes(listener),
+    ...sourceAllowStream(listener),
     directive('ssl_preread', [lit('on')]),
     ...(listener.prereadTimeoutS === undefined
       ? []
@@ -1398,6 +1449,7 @@ function streamServerBlock(
   }
   children.push(directive('listen', args));
   children.push(...realipNodes(listener));
+  children.push(...sourceAllowStream(listener));
   children.push(directive('proxy_pass', [lit(upstreamName(listener.defaultPool))]));
 
   if (preset) {
@@ -1556,6 +1608,8 @@ export function render(model: Model, caps: RenderCapabilities = CONSERVATIVE): R
      */
     const children: ConfNode[] = [
       ...httpListeners.flatMap((l) => rateLimitZoneNodes(l.key, l.http?.rateLimit)),
+      // 출발지 제한의 `geo` 도 http 블록에만 있을 수 있다. server 블록보다 앞이면 된다.
+      ...httpListeners.flatMap((l) => sourceAllowGeo(l)),
       adminInclude,
     ];
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).

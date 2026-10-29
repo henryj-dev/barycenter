@@ -1,8 +1,10 @@
 <script lang="ts">
+  import SourceAllow from './SourceAllow.svelte';
+
   let { pools, editing, add }: {
     pools: string[];
     editing: boolean;
-    add: (key: string, bind: string, port: number, pool?: string, noSniPool?: string) => void;
+    add: (key: string, bind: string, port: number, pool?: string, noSniPool?: string, allow?: string) => void;
   } = $props();
 
   let key = $state('');
@@ -17,6 +19,7 @@
    * 사용자가 "쓰레기 바이트도 여기로 가나" 를 묻게 되므로 아래 설명에 적어 둔다.
    */
   let noSniPool = $state('');
+  let allow = $state('');
 
   const submit = (): void => {
     const dest = pool.trim();
@@ -25,6 +28,7 @@
       key.trim(), bind.trim(), Number(port),
       dest === '' ? undefined : dest,
       noSni === '' ? undefined : noSni,
+      allow,
     );
   };
 </script>
@@ -51,6 +55,7 @@
     <b>TLS 는 맞는데 SNI 가 없을 때</b>다. TLS 로 읽히지 않는 바이트(비-TLS·깨진
     ClientHello)는 <b>어느 쪽으로도 안 간다</b> — 언제나 끊는다.
   </p>
+  <SourceAllow {editing} bind:value={allow} />
 </form>
 
 <style>

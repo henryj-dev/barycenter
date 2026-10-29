@@ -89,3 +89,26 @@ function isIPv6(input: string): boolean {
   // `::` 는 **최소 한 그룹**을 대신한다. 없으면 정확히 여덟이어야 한다.
   return dbl >= 0 ? groups <= 7 : groups === 8;
 }
+
+/**
+ * `주소/접두사` 또는 주소 하나 (리스너 `sourceAllow` — 2026-10-29).
+ *
+ * nginx 의 `allow` 와 `geo` 가 받는 모양만 받는다:
+ *   · 접두사는 IPv4 0–32, IPv6 0–128. **선행 0 을 안 받는다** (`/08`).
+ *   · **존 ID 를 안 받는다** (`fe80::1%eth0`). `ipVersion` 은 받지만 nginx 는 못 읽는다.
+ *   · 접두사 없는 주소는 단일 호스트다 (`/32` · `/128` 과 같다).
+ *
+ * 호스트 비트가 켜진 대역(`10.0.0.1/8`)은 **받는다.** nginx 가 경고만 내고 망 주소로
+ * 읽는다 — 운영자가 붙여 넣는 목록에는 흔한 모양이라 거절하면 쓰기만 어렵다.
+ */
+export function cidrVersion(input: string): 0 | 4 | 6 {
+  const slash = input.indexOf('/');
+  const addr = slash < 0 ? input : input.slice(0, slash);
+  if (addr.includes('%')) return 0;
+  const v = ipVersion(addr);
+  if (v === 0) return 0;
+  if (slash < 0) return v;
+  const prefix = input.slice(slash + 1);
+  if (!/^(0|[1-9][0-9]{0,2})$/.test(prefix)) return 0;
+  return Number(prefix) <= (v === 4 ? 32 : 128) ? v : 0;
+}

@@ -18,6 +18,7 @@
  *   3. **강제 변환하지 않는다.** `"8080"` 은 8080 이 아니라 오류다. 변환은 의미를 바꾼다.
  */
 import { validateHeaderName, validateHeaderValue } from '../validate/strings.js';
+import { cidrVersion } from '../validate/ip.js';
 
 import type {
   AcmeIntent,
@@ -416,7 +417,7 @@ function decodePassthroughAction(iss: Issues, v: unknown, path: string): Passthr
 
 // ── 리스너 — 프로토콜별로 아는 필드가 다르다 ───────────────────────────
 
-const LISTENER_BASE = ['key', 'protocol', 'bind', 'port', 'enabled'] as const;
+const LISTENER_BASE = ['key', 'protocol', 'bind', 'port', 'enabled', 'sourceAllow'] as const;
 
 /**
  * 인바운드 PROXY 수신 (§4.7).
@@ -484,6 +485,40 @@ function decodeInboundRealIpHeader(
   return { header, trustedCidrs: cidrs };
 }
 
+/**
+ * 리스너에 연결할 수 있는 출발지 (2026-10-29). CIDR 또는 주소 하나의 목록.
+ *
+ * **비어 있을 수 없다.** 빈 목록을 「아무도 못 들어온다」로 읽든 「제한 없음」으로 읽든
+ * 한쪽은 운영자의 의도와 반대다 — 둘 다 이미 다른 이름이 있다(`enabled: false` · 필드 생략).
+ * 중복도 거절한다: 붙여 넣은 목록이 두 번 들어간 것은 대개 실수이고, 조용히 접으면
+ * 저장된 것과 적은 것이 달라진다.
+ */
+function decodeSourceAllow(iss: Issues, v: unknown, path: string): string[] | undefined {
+  const items = arrayOf(iss, v, path, (item, at) => {
+    const s = str(iss, item, at);
+    if (s === undefined) return undefined;
+    if (cidrVersion(s) === 0) {
+      iss.add('invalid_value', at,
+        `CIDR 이나 IP 주소가 아니다: ${JSON.stringify(s)} — 예: 173.245.48.0/20 · 2400:cb00::/32 · 203.0.113.7`);
+      return undefined;
+    }
+    return s;
+  });
+  if (Array.isArray(v) && v.length === 0) {
+    iss.add('out_of_range', path,
+      '비어 있을 수 없다 — 제한을 안 걸 거면 필드를 빼고, 아무도 안 받을 거면 enabled: false 로 둔다');
+    return undefined;
+  }
+  // 원래 배열의 위치로 짚는다 — 걸러진 목록의 위치는 사용자가 적은 것과 어긋난다.
+  const seen = new Set<string>();
+  (Array.isArray(v) ? v : []).forEach((s: unknown, i) => {
+    if (typeof s !== 'string') return;
+    if (seen.has(s)) iss.add('duplicate', `${path}[${i}]`, `같은 대역이 두 번 있다: ${s}`);
+    seen.add(s);
+  });
+  return items.length === 0 ? undefined : items;
+}
+
 function decodeListener(iss: Issues, v: unknown, path: string): Listener | undefined {
   if (!isObject(v)) {
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
@@ -497,7 +532,8 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
   const port = required(iss, v, 'port', path, () => int(iss, v['port'], `${path}.port`, PORT_MIN, PORT_MAX));
   const enabled = required(iss, v, 'enabled', path, () => bool(iss, v['enabled'], `${path}.enabled`));
   if (key === undefined || bind === undefined || port === undefined || enabled === undefined) return undefined;
-  const head = { key, bind, port, enabled };
+  const sourceAllow = optional(v['sourceAllow'], () => decodeSourceAllow(iss, v['sourceAllow'], `${path}.sourceAllow`));
+  const head = { key, bind, port, enabled, ...(sourceAllow === undefined ? {} : { sourceAllow }) };
 
   switch (protocol) {
     case 'http': {

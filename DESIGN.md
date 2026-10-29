@@ -1040,6 +1040,23 @@ HTTP 헤더로 넘긴다. 그 자리를 같은 잠금으로 열었다:
 | 검증기 | stream 리스너에 적힌 값, **PROXY 수신과 함께 적힌 리스너**를 막는다 — `real_ip_header` 는 server 마다 하나라 출처가 둘이면 어느 쪽이 이기는지가 렌더 순서에 달린다 |
 | DB | `real_ip_header` · `real_ip_header_cidrs` (024). 둘은 함께만, http 계열에만, `accept_proxy_cidrs` 와 배타 |
 
+**출발지 제한 (2026-10-29).** Cloudflare 프록시 뒤의 오리진처럼 **정해진 앞단만 연결해야 하는**
+리스너가 있다. 방화벽 말고는 정할 자리가 없었다. 위 헤더 파생과 짝을 이룬다 — 앞단 대역만
+받고(`sourceAllow`), 방문자 IP 는 헤더에서 꺼낸다(`realIpFromHeader`).
+
+| | 지금 |
+|---|---|
+| 모델 | **모든** 리스너의 `sourceAllow?: string[]`. CIDR 이나 주소 하나(`cidrVersion` — 존 ID·선행 0 접두사 거절). 비어 있을 수 없고 중복은 거절. **연결한 상대(바로 앞 홉)를 본다** |
+| 렌더 (http 계열) | http 블록의 `geo $realip_remote_addr $bary_src_deny_<리스너>` + **모든** server 블록(default_server 포함)의 `if (…) { return 444; }`. `allow` 를 안 쓰는 이유가 둘이다: access 단계라 ① rewrite 단계의 `return`(redirect·reject 라우트)보다 늦고 ② realip 이 바꾼 **뒤** 주소를 본다. 둘 다 골든이 `allow` 돌연변이로 실측한다 |
+| 렌더 (stream) | `allow …; deny all;`. 패스스루는 `ssl_preread` 앞이다 |
+| 검증기 | tcp·패스스루에서 **PROXY 수신과 함께 적힌 것**을 막는다 — stream 에는 `if` 가 없고, stream realip 이 주소를 바꾼 뒤 `allow` 가 돈다 |
+| DB | `source_allow text[]` (025). `cidr[]` 이 아니다 — 정규화(`/32` 덧붙임)가 적은 것과 읽은 것을 갈라 plan 이 매번 바뀐다 |
+| 저작 | GUI 다섯 리스너 폼의 「출발지 제한」, CLI `--allow`(여러 번·쉼표)·`--allow-file`. 끊기·검사는 `parseSourceAllow` 한 자리 |
+
+⚠️ ACME http-01 은 CA 가 직접 :80 에 온다. 그 리스너에 대역을 걸면 발급이 막힌다. 그리고
+barycenterd 자신의 로그인 실패 제한은 이 기능과 무관하게 여전히 소켓 주소를 센다 — 프록시
+뒤에서는 별건으로 다룬다.
+
 아직 없는 것: `forwarded_header_policy`. **엔진 capability 는 기동에서 묻는다** (`src/engine/probe.ts`).
 못 물으면 `streamRealip: false` 로 보수적으로 답하고, stream PROXY 수신은 그때
 막힌다.

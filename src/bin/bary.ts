@@ -36,6 +36,7 @@ import {
 } from '../cli/backend.js';
 import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete, parseListenerOptions } from '../cli/listener.js';
+import { parseSourceAllow } from '../web/edit.js';
 import { poolCreate, poolDelete } from '../cli/pool.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
 import {
@@ -118,6 +119,9 @@ const usage = (): never => {
                                    --strict-priority      priority 가 매치 클래스를 이기게 한다 (S10)
                                                           겹치는 호스트를 앵커 정규식으로 내린다 — 128개 상한
                                    --rate 10r/s  --burst 20  --nodelay  --max-conn 100
+                                 모든 프로토콜에서 출발지를 제한한다 (연결한 상대를 본다 — realip 전 주소):
+                                   --allow 173.245.48.0/20,2400:cb00::/32   (여러 번 · 쉼표·공백)
+                                   --allow-file cf-ips.txt                  (한 줄에 하나 — curl https://www.cloudflare.com/ips-v4/)
   bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|least_conn|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
                                  백엔드로 TLS 를 쓰려면 (§4.3):
@@ -290,7 +294,14 @@ async function main(): Promise<void> {
         // S10 — 전역 숫자 priority. **강등 수에 상한이 있다** (§7.5-4).
         ...(has(argv, '--strict-priority') ? { strictPriority: true } : {}),
       });
+      // 출발지 제한 — 모든 프로토콜. 파싱은 `parseSourceAllow` 한 자리다(GUI 와 같다).
+      const allowFile = flag(argv, '--allow-file');
       try {
+        // try 안이다 — 잘못된 대역은 스택이 아니라 아래 catch 의 한 줄로 끝나야 한다.
+        const sourceAllow = parseSourceAllow([
+          ...flagAll(argv, '--allow'),
+          ...(allowFile === undefined ? [] : [readFileSync(allowFile, 'utf8')]),
+        ]);
         const out = await listenerCreate(call, {
           name, protocol, bind, port: Number(portRaw),
           ...(pool === undefined ? {} : { pool }),
@@ -299,6 +310,7 @@ async function main(): Promise<void> {
           ...(policy === undefined ? {} : { policy }),
           ...(certificate === undefined ? {} : { certificate }),
           ...(Object.keys(options).length === 0 ? {} : { options }),
+          ...(sourceAllow === undefined ? {} : { sourceAllow }),
         });
         console.error(`listener ${name} committed r${out.revision}`);
         show(out);
