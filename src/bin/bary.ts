@@ -132,6 +132,9 @@ const usage = (): never => {
                                  udp 와 패스스루가 가리키는 풀에는 못 켠다
   bary pool delete               --name
   bary route create              --name --listener --host|--sni --pool|--to|--reject [--status] [--path-prefix] [--websocket]. apply 는 아니다
+                                 proxy 라우트는 둘을 더 받는다 (#109):
+                                   --route-header 'Host: api.example.com'   (여러 번) 이 라우트에만. 같은 이름이면 리스너 것을 대신한다
+                                   --rewrite-prefix /v1/                   맞은 --path-prefix 를 이 값으로 바꿔 보낸다 (끝 '/' 가 같아야 한다)
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
   bary backend delete            --name
@@ -399,6 +402,8 @@ async function main(): Promise<void> {
       if (!reject && (pool === undefined || pool === '') && (to === undefined || to === '')) usage();
       const status = flag(argv, '--status');
       const pathPrefix = flag(argv, '--path-prefix');
+      const routeHeaders = flagAll(argv, '--route-header');
+      const rewritePrefix = flag(argv, '--rewrite-prefix');
       try {
         const out = await routeCreate(call, {
           name, listener,
@@ -410,6 +415,8 @@ async function main(): Promise<void> {
           ...(reject ? { reject: true } : {}),
           ...(websocket ? { websocket: true } : {}),
           ...(pathPrefix === undefined ? {} : { pathPrefix }),
+          ...(routeHeaders.length === 0 ? {} : { requestHeaders: routeHeaders }),
+          ...(rewritePrefix === undefined ? {} : { rewritePrefix }),
         });
         console.error(`route ${name} committed r${out.revision}`);
         show(out);

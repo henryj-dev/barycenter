@@ -36,6 +36,7 @@ import type {
   SniCertificateBinding,
   TlsPolicy,
   SniOutcome,
+  HeaderRule,
   HeaderRules,
   HttpProfile,
   ProxyLimits,
@@ -405,7 +406,8 @@ async function readModel(c: Queryable): Promise<Model> {
 
   const httpRoutes = (await c.query(
     `SELECT r.key, l.key AS listener, r.hosts, r.priority, r.path_prefix,
-            r.action_kind, p.key AS pool, r.websocket, r.redirect_to, r.status
+            r.action_kind, p.key AS pool, r.websocket, r.redirect_to, r.status,
+            r.request_headers, r.rewrite_prefix
        FROM http_routes r
        JOIN listeners l ON l.id = r.listener_id
        LEFT JOIN pools p ON p.id = r.pool_id
@@ -418,7 +420,13 @@ async function readModel(c: Queryable): Promise<Model> {
     ...(maybeText(r, 'path_prefix') !== undefined ? { pathPrefix: text(r, 'path_prefix') } : {}),
     action:
       text(r, 'action_kind') === 'proxy'
-        ? { kind: 'proxy', pool: text(r, 'pool'), websocket: bool(r, 'websocket') }
+        ? {
+          kind: 'proxy', pool: text(r, 'pool'), websocket: bool(r, 'websocket'),
+          // 026. NULL 이면 키를 안 만든다 — 안 정한 것과 빈 목록은 다르다.
+          ...(Array.isArray(r['request_headers']) && (r['request_headers'] as unknown[]).length > 0
+            ? { requestHeaders: r['request_headers'] as HeaderRule[] } : {}),
+          ...(maybeText(r, 'rewrite_prefix') === undefined ? {} : { rewritePrefix: text(r, 'rewrite_prefix') }),
+        }
         : text(r, 'action_kind') === 'redirect'
           ? { kind: 'redirect', to: text(r, 'redirect_to'), status: num(r, 'status') as 301 }
           : { kind: 'reject', status: num(r, 'status') as 403 },
@@ -744,13 +752,15 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       await c.query(
         `INSERT INTO http_routes (id,key,listener_id,listener_protocol,hosts,priority,path_prefix,
                                   action_kind,pool_id,pool_cls,websocket,redirect_to,status,
+                                  request_headers,rewrite_prefix,
                                   created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$15,$16,$13,$13,$14)
          ON CONFLICT (key) DO UPDATE SET
            listener_id=EXCLUDED.listener_id, listener_protocol=EXCLUDED.listener_protocol,
            hosts=EXCLUDED.hosts, priority=EXCLUDED.priority, path_prefix=EXCLUDED.path_prefix,
            action_kind=EXCLUDED.action_kind, pool_id=EXCLUDED.pool_id, pool_cls=EXCLUDED.pool_cls,
            websocket=EXCLUDED.websocket, redirect_to=EXCLUDED.redirect_to, status=EXCLUDED.status,
+           request_headers=EXCLUDED.request_headers, rewrite_prefix=EXCLUDED.rewrite_prefix,
            version=http_routes.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, lid, lproto, b['hosts'] ?? [], b['priority'] ?? 0, b['pathPrefix'] ?? null,
@@ -758,7 +768,11 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           kind === 'proxy' ? action['websocket'] ?? false : null,
           kind === 'redirect' ? action['to'] ?? null : null,
           kind === 'proxy' ? null : action['status'] ?? null,
-          by, revision],
+          by, revision,
+          // $15·$16 — 026. proxy 에만 (DB 도 같은 CHECK). jsonb 는 문자열로 넘긴다.
+          kind === 'proxy' && Array.isArray(action['requestHeaders']) && action['requestHeaders'].length > 0
+            ? JSON.stringify(action['requestHeaders']) : null,
+          kind === 'proxy' ? action['rewritePrefix'] ?? null : null],
       );
       return;
     }

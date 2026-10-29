@@ -19,7 +19,7 @@ import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs } from '@web/reconnect';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, type ListenerOptionFlags } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 
@@ -626,11 +626,16 @@ export function createDesk(scope?: { api(path: string): string }) {
     pool: string;
     pathPrefix?: string;
     websocket?: boolean;
+    rewritePrefix?: string;
+    /** `이름: 값` 줄들. 끊기는 `parseHeaderLines` 한 자리다 (#109). */
+    requestHeaders?: string;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
-      return await commitPatch(putHttpRoutePatch(input));
+      const { requestHeaders, ...rest } = input;
+      const parsed = parseHeaderLines(requestHeaders);
+      return await commitPatch(putHttpRoutePatch({ ...rest, ...(parsed === undefined ? {} : { requestHeaders: parsed }) }));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;

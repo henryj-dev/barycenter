@@ -383,10 +383,30 @@ function decodeHttpAction(iss: Issues, v: unknown, path: string): HttpAction | u
   if (kind === undefined) return undefined;
 
   if (kind === 'proxy') {
-    noExtraKeys(iss, v, path, ['kind', 'pool', 'websocket']);
+    noExtraKeys(iss, v, path, ['kind', 'pool', 'websocket', 'requestHeaders', 'rewritePrefix']);
     const pool = str(iss, v['pool'], `${path}.pool`);
     const websocket = bool(iss, v['websocket'], `${path}.websocket`);
-    return pool === undefined || websocket === undefined ? undefined : { kind, pool, websocket };
+    // 리스너 헤더와 같은 판정이다 — 예약 이름(X-Forwarded-*, Upgrade, Connection)은 막는다.
+    const requestHeaders = optional(v['requestHeaders'], () =>
+      decodeHeaderList(iss, v['requestHeaders'], `${path}.requestHeaders`, RESERVED_REQUEST_HEADERS));
+    const rewritePrefix = optional(v['rewritePrefix'], () => {
+      const s = str(iss, v['rewritePrefix'], `${path}.rewritePrefix`);
+      if (s === undefined) return undefined;
+      // **좁게 받는다.** `proxy_pass` 의 URI 는 nginx 가 변수를 푼다 — `$` 가 들어가면
+      // 사용자가 적은 경로가 아니라 변수 값이 나간다. 경로 접두사(`PATH_PREFIX`)보다 좁다.
+      if (!/^\/[A-Za-z0-9\-._~/%]*$/.test(s)) {
+        iss.add('invalid_value', `${path}.rewritePrefix`,
+          `'/' 로 시작하는 경로여야 한다. 글자·숫자·- . _ ~ / % 만 쓴다: ${JSON.stringify(s)}`);
+        return undefined;
+      }
+      return s;
+    });
+    if (pool === undefined || websocket === undefined) return undefined;
+    return {
+      kind, pool, websocket,
+      ...(requestHeaders === undefined || requestHeaders.length === 0 ? {} : { requestHeaders }),
+      ...(rewritePrefix === undefined ? {} : { rewritePrefix }),
+    };
   }
   if (kind === 'redirect') {
     noExtraKeys(iss, v, path, ['kind', 'to', 'status']);
@@ -807,6 +827,16 @@ function decodeHttpRoute(iss: Issues, v: unknown, path: string): HttpRoute | und
   const action = required(iss, v, 'action', path, () => decodeHttpAction(iss, v['action'], `${path}.action`));
   if (key === undefined || listener === undefined || hosts === undefined || priority === undefined || action === undefined) {
     return undefined;
+  }
+  // **끝의 `/` 가 같아야 한다** (2026-10-29). nginx 는 맞은 접두사를 글자 그대로 바꾼다 —
+  // `/api/` → `/v1` 이면 `/api/users` 가 `/v1users`, `/api` → `/v1/` 이면 `/v1//users` 다.
+  if (action.kind === 'proxy' && action.rewritePrefix !== undefined) {
+    const matched = pathPrefix ?? '/';
+    if (matched.endsWith('/') !== action.rewritePrefix.endsWith('/')) {
+      iss.add('invalid_value', `${path}.action.rewritePrefix`,
+        `끝의 '/' 가 경로 접두사(${JSON.stringify(matched)})와 같아야 한다 — 다르면 경로가 붙거나 겹친다`);
+      return undefined;
+    }
   }
   return { key, listener, hosts, priority, action, ...(pathPrefix === undefined ? {} : { pathPrefix }) };
 }

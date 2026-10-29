@@ -1935,6 +1935,19 @@ http {
 > `source_ip_hash` 렌더: http 는 `ip_hash;`, **stream 은 `hash $remote_addr consistent;`**
 > (stream 에 `ip_hash` 디렉티브는 없다). 두 경로는 동일 분배를 보장하지 않는다.
 
+**프록시 라우트 옵션 (2026-10-29, #109).** `location /api/ { proxy_pass https://api.example.com/; }`
+를 옮기는 자리다.
+
+| | 지금 |
+|---|---|
+| `action.rewritePrefix` | 맞은 `pathPrefix`(없으면 `/`)를 이 값으로 바꾼다. 렌더는 `proxy_pass http://<upstream><rewritePrefix>;`. 끝의 `/` 가 접두사와 같아야 한다(다르면 `/v1users`·`/v1//users`). 문자는 `[A-Za-z0-9-._~/%]` — `$` 는 nginx 가 변수로 푼다 |
+| `action.requestHeaders` | 이 라우트에만 거는 요청 헤더. 기본 셋(Host 등)과 리스너 헤더 **뒤**에 나간다. **같은 이름의 리스너 줄은 뺀다** — nginx 는 같은 이름의 `proxy_set_header` 를 둘 다 보낸다(실측: `X-A one`·`X-A two` → `one\|two`). `Host` 만 마지막 하나가 간다(실측) |
+| DB | 026: `http_routes.request_headers jsonb` · `rewrite_prefix text`. proxy 라우트에만 |
+| 저작 | CLI `--route-header 'Name: value'`(여러 번) · `--rewrite-prefix`. GUI 라우트 폼의 「프록시 옵션」. 끊기는 `parseHeaderLines` 한 자리 |
+
+외부 HTTPS 대상은 풀의 `upstreamTls`(`sni`)와 백엔드 `host:443` 으로 표현한다. 그 풀의 HTTP
+프로브는 TLS 로 찌른다(#107).
+
 ### 7.2 파일 레이아웃 — 인증서를 세대에 결박한다
 
 ```

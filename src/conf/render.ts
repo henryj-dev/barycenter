@@ -845,7 +845,10 @@ function locationBody(
       // 평문으로 나가고 그 지시어들은 아무 일도 안 한다 — 조용히 안 걸리는 설정이다.
       const ut = pools?.get(r.action.pool)?.upstreamTls;
       const scheme = ut?.enabled === true ? 'https' : 'http';
-      body.push(directive('proxy_pass', [lit(`${scheme}://${upstreamName(r.action.pool)}`)]));
+      // `rewritePrefix` 는 proxy_pass 의 URI 부분이다 — nginx 가 맞은 location 접두사를
+      // 이 값으로 바꾼다. 없으면 URI 를 안 붙인다(경로를 그대로 보낸다, 옛 동작).
+      body.push(directive('proxy_pass',
+        [lit(`${scheme}://${upstreamName(r.action.pool)}${r.action.rewritePrefix ?? ''}`)]));
       body.push(...upstreamTlsNodes(ut, certs ?? new Map()));
       body.push(directive('proxy_set_header', [lit('Host'), variable('host')]));
       body.push(
@@ -859,7 +862,15 @@ function locationBody(
       }
       // **기존 셋 뒤에 붙인다** (제안 #7). 프록시하는 라우트에만 뜻이 있다 —
       // redirect·reject 는 업스트림으로 가지 않으므로 얹을 요청이 없다.
-      body.push(...requestHeaderNodes(requestHeaders));
+      //
+      // 라우트 헤더가 있으면 **같은 이름의 리스너 줄을 뺀다** (2026-10-29). nginx 는 같은
+      // 이름을 둘 다 보낸다 — 실측: `X-A one` · `X-A two` 가 `one|two` 로 간다. 라우트 것이
+      // 이겨야 하므로 리스너 것을 남기면 안 된다. `Host` 는 마지막 하나만 가지만(실측),
+      // 규칙을 이름마다 다르게 두지 않는다.
+      const own = r.action.requestHeaders;
+      const overridden = new Set((own ?? []).map((h) => h.name.toLowerCase()));
+      body.push(...requestHeaderNodes(requestHeaders?.filter((h) => !overridden.has(h.name.toLowerCase()))));
+      body.push(...requestHeaderNodes(own));
       break;
     }
     case 'redirect':

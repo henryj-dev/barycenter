@@ -6,6 +6,7 @@
     add: (input: {
       key: string; listener: string; hosts: string[]; pool: string;
       pathPrefix?: string; websocket?: boolean;
+      rewritePrefix?: string; requestHeaders?: string;
     }) => void;
   } = $props();
 
@@ -15,6 +16,10 @@
   let pathPrefix = $state('');
   let pool = $state('');
   let websocket = $state(false);
+  // #109 — 프록시 옵션. 기본은 접혀 있다.
+  let more = $state(false);
+  let rewritePrefix = $state('');
+  let headersText = $state('');
 
   const ready = $derived(listeners.length > 0 && pools.length > 0);
 
@@ -28,6 +33,8 @@
       pool,
       ...(prefix === '' ? {} : { pathPrefix: prefix }),
       ...(websocket ? { websocket: true } : {}),
+      ...(rewritePrefix.trim() === '' ? {} : { rewritePrefix: rewritePrefix.trim() }),
+      ...(headersText.trim() === '' ? {} : { requestHeaders: headersText }),
     });
   };
 </script>
@@ -53,9 +60,32 @@
     websocket
   </label>
   <button type="submit" disabled={editing || !ready}>호스트 라우트를 넣는다</button>
+  <div class="more">
+    <button type="button" class="toggle" onclick={() => { more = !more; }} disabled={editing}>
+      {more ? '▾' : '▸'} 프록시 옵션 — 경로 바꾸기 · 이 라우트의 요청 헤더
+    </button>
+    {#if more}
+      <label>경로 바꾸기
+        <input bind:value={rewritePrefix} placeholder="/v1/" autocomplete="off" disabled={editing} />
+      </label>
+      <label>요청 헤더 (한 줄에 하나, 이름: 값)
+        <textarea bind:value={headersText} rows="3" placeholder="Host: api.example.com" spellcheck="false" disabled={editing}></textarea>
+      </label>
+      <p class="note">
+        경로 바꾸기는 맞은 경로 접두사를 이 값으로 바꿔 보낸다. 예: 접두사 <code>/api/</code> + <code>/v1/</code> →
+        <code>/api/users</code> 를 <code>/v1/users</code> 로 보낸다. 끝의 <code>/</code> 는 접두사와 같아야 한다.
+        요청 헤더는 이 라우트에만 건다. 같은 이름이면 리스너의 헤더를 대신한다.
+      </p>
+    {/if}
+  </div>
 </form>
 
 <style>
+  .more { grid-column: 1 / -1; display: grid; gap: 0.4rem; }
+  .more .toggle { background: transparent; border: none; color: var(--mute); padding: 0.2rem 0; font: inherit; font-size: 0.75rem; cursor: pointer; text-align: left; }
+  .more label { display: grid; gap: 0.15rem; font-size: 0.7rem; color: var(--mute); }
+  .more textarea { background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.3rem 0.45rem; font-family: var(--data, ui-monospace, monospace); font-size: 0.78rem; }
+  .more .note { font-size: 0.7rem; color: var(--mute); margin: 0; line-height: 1.5; }
   .add {
     display: grid;
     grid-template-columns: 6rem 7rem 1fr 6rem 7rem auto auto;

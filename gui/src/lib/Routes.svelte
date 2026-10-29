@@ -23,6 +23,7 @@
     insert: (input: {
       key: string; listener: string; hosts: string[]; pool: string;
       pathPrefix?: string; websocket?: boolean;
+      rewritePrefix?: string; requestHeaders?: string;
     }) => void;
     insertRedirect: (input: {
       key: string; listener: string; hosts: string[]; to: string;

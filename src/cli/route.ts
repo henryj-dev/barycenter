@@ -8,7 +8,7 @@ import {
   deletePatch,
   putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch,
   putPassthroughRejectPatch, putPassthroughRoutePatch,
-  type RedirectStatus, type RejectStatus,
+  type RedirectStatus, type RejectStatus, parseHeaderLines,
 } from '../web/edit.js';
 
 import { commitPatch, type Http } from './flow.js';
@@ -24,6 +24,10 @@ export type RouteCreateInput = {
   reject?: boolean;
   websocket?: boolean;
   pathPrefix?: string;
+  /** proxy 에만. `이름: 값` 들 (#109). */
+  requestHeaders?: string[];
+  /** proxy 에만. 맞은 접두사를 이 값으로 바꾼다 (#109). */
+  rewritePrefix?: string;
 };
 
 const redirectStatus = (v: string | undefined): RedirectStatus | undefined =>
@@ -98,6 +102,11 @@ export function routeCreatePatch(
     pool,
     ...prefix,
     ...(input.websocket === true ? { websocket: true } : {}),
+    ...(input.requestHeaders === undefined ? {} : (() => {
+      const h = parseHeaderLines(input.requestHeaders);
+      return h === undefined ? {} : { requestHeaders: h };
+    })()),
+    ...(input.rewritePrefix === undefined ? {} : { rewritePrefix: input.rewritePrefix }),
   });
 }
 
