@@ -1,8 +1,8 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import Routes from '$lib/Routes.svelte';
-  import { after } from '$lib/after';
-  import type { createDesk } from '$lib/desk.svelte.ts';
+  import Routes from '#lib/Routes.svelte';
+  import { after } from '#lib/after';
+  import type { createDesk } from '#lib/desk.svelte.ts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
 </script>

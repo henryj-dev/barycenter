@@ -1,11 +1,11 @@
 <script lang="ts">
   import { getContext, onMount } from 'svelte';
-  import { accountApi } from '$lib/account/api';
-  import type { Session } from '$lib/account/session.svelte.ts';
-  import ChangePassword from '$lib/account/ChangePassword.svelte';
-  import TotpManage from '$lib/account/TotpManage.svelte';
-  import ChangeEmail from '$lib/account/ChangeEmail.svelte';
-  import SsoIdentities from '$lib/account/SsoIdentities.svelte';
+  import { accountApi } from '#lib/account/api';
+  import type { Session } from '#lib/account/session.svelte.ts';
+  import ChangePassword from '#lib/account/ChangePassword.svelte';
+  import TotpManage from '#lib/account/TotpManage.svelte';
+  import ChangeEmail from '#lib/account/ChangeEmail.svelte';
+  import SsoIdentities from '#lib/account/SsoIdentities.svelte';
 
   const session = getContext<Session>('session');
   let note = $state<string | undefined>();

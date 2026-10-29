@@ -1,7 +1,7 @@
 /**
  * 열린 제품 자리 — 드레인 관측 · RBAC · 백업 · API/DDL 동결 · Kit 경로.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -137,12 +137,13 @@ describe('Kit 경로', () => {
     };
     expect(pkg.devDependencies['@sveltejs/kit']).toBeDefined();
     expect(pkg.devDependencies['@sveltejs/adapter-static']).toBeDefined();
-    const svelteCfg = readFileSync(join(root, 'gui/svelte.config.js'), 'utf8');
-    expect(svelteCfg).toContain('@sveltejs/adapter-static');
-    expect(svelteCfg).toMatch(/fallback:\s*undefined/);
+    // Kit 3 은 svelte.config.js 를 읽지 않는다 — 설정은 vite.config.ts 의 sveltekit({...}) 인자다.
+    expect(existsSync(join(root, 'gui/svelte.config.js'))).toBe(false);
     const viteCfg = readFileSync(join(root, 'gui/vite.config.ts'), 'utf8');
     expect(viteCfg).toContain('@sveltejs/kit/vite');
-    expect(viteCfg).toContain('sveltekit()');
+    expect(viteCfg).toContain('@sveltejs/adapter-static');
+    expect(viteCfg).toMatch(/sveltekit\(\{/);
+    expect(viteCfg).toMatch(/fallback:\s*undefined/);
     expect(viteCfg).not.toMatch(/plugins:\s*\[svelte\(\)\]/);
   });
 
