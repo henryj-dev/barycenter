@@ -29,6 +29,7 @@ import { readFileSync } from 'node:fs';
 import { createSecureContext, type SecureContextOptions } from 'node:tls';
 import { createHash, randomBytes, randomUUID, X509Certificate } from 'node:crypto';
 
+import { listClusterNodes } from '../control/cluster.js';
 import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.js';
@@ -65,6 +66,11 @@ import {
 } from './oidc-code.js';
 
 export type ApiOptions = {
+  /**
+   * 클러스터 모드 (ADR-CLUSTER, #118). 없으면 이 인스턴스는 클러스터가 아니다.
+   * `node` 는 이 노드의 이름, `staleAfterMs` 를 넘긴 신호는 「연락 없음」이다.
+   */
+  cluster?: { node: string; staleAfterMs: number };
   db: Db;
   store: ConfigStore;
   control: ControlPlane;
@@ -763,6 +769,15 @@ const ROUTES: Route[] = [
     json(c.res, 200, await api.control.recover(c.who.name));
   }),
 
+  // 클러스터 노드 (ADR-CLUSTER, #118). 꺼져 있으면 `enabled: false` 와 빈 목록이다.
+  route('GET', '/api/v1/cluster/nodes', 'read', async (c, api) => {
+    const cl = 'cluster' in api ? api.cluster : undefined;
+    if (cl === undefined || !('db' in api)) {
+      json(c.res, 200, { enabled: false, nodes: [] });
+      return;
+    }
+    json(c.res, 200, { enabled: true, self: cl.node, nodes: await listClusterNodes(api.db, cl.staleAfterMs) });
+  }),
   route('GET', '/api/v1/status', 'read', async (c, api) => {
     json(c.res, 200, { ...await api.control.status(), build: api.build ?? null });
   }),

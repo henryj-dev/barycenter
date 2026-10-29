@@ -118,6 +118,12 @@ server {
 }
 `;
 
+/** 팔로워 한 번의 결과 (ADR-CLUSTER). */
+export type FollowResult =
+  | { kind: 'nothing_active' }
+  | { kind: 'in_sync'; id: string; revision: string; epoch: string; generation: string }
+  | { kind: 'applied'; id: string; revision: string; epoch: string; generation: string; phase: string; detail: ApplyResult };
+
 export class ControlPlane {
   /**
    * 직전 apply 에서 읽은 DP 상태. **청소가 보호 대상을 고를 때만 쓴다.**
@@ -383,68 +389,9 @@ export class ControlPlane {
       }
     }
 
-    const certFiles = await this.certificateFiles(plan.model);
-
-    const manifest = materializeGeneration({
-      prefix: this.opts.prefix,
-      generation,
-      planes: rendered.planes,
-      ...(certFiles.modes === undefined ? {} : { modes: certFiles.modes }),
-      files: {
-        'nginx.conf': rendered.conf,
-        // **인증서 바이트를 세대 안에 넣는다** (§7.2, S8·S19). 바깥 mutable 경로를
-        // 가리키거나 symlink 로 걸면 롤백이 거짓말이 된다.
-        ...certFiles.files,
-        ...(membership === undefined
-          ? { 'admin/marker.conf': markerConf(generation, this.opts.adminSocket) }
-          : {
-              'admin/marker.conf': httpAdminConf(generation, plan.activationEpoch,
-                this.opts.adminSocket),
-              ...(caps.streamLua === true
-                ? {
-                    'stream-admin/membership.conf':
-                      streamAdminConf(plan.activationEpoch, streamAdminSocket),
-                  }
-                : {}),
-              'lua/membership.json': JSON.stringify({
-                epoch: plan.activationEpoch,
-                http: membership.http,
-                stream: membership.stream,
-              }, null, 2),
-            }),
-      },
-    });
-
-    const status = await this.driver.status();
-    this.lastStatus = status;
-    // **설정 전환은 언제나 두 평면을 옮긴다** (10차 반례 ②, `assertEnvelope`).
-    //
-    // 처음엔 `rendered.planes` 만 선언했다가 `envelope_mismatch` 로 막혔고, 그게 옳다.
-    // 하나의 `nginx.conf` 가 http 와 stream 을 함께 지배하므로 **한쪽이 비게 되는 것도
-    // 전환**이다. 목표에 있는 평면만 선언하면 `http+stream → http` 가 stream 을 없애면서
-    // stream 좌표를 옛 값으로 남긴다 — 설정은 바뀌었는데 컨트롤 플레인은 모른다.
-    //
-    // manifest 의 `planes` 는 그대로 `rendered.planes` 다. 게시 전 검사는 선언이 manifest 를
-    // **덮는지**만 보므로(부분집합) 어긋나지 않는다. 둘은 다른 것을 말한다 —
-    // manifest 는 *이 세대가 무엇을 구성하는가*, 봉투는 *무엇이 움직이는가*.
-    const planeTargets: Partial<Record<Plane, PlaneTarget>> = {};
-    for (const plane of PLANES) {
-      const cur = status.planes[plane];
-      planeTargets[plane] = {
-        expectedCurrent: {
-          activationEpoch: cur.activationEpoch,
-          membershipRevision: cur.membershipRevision,
-        },
-        target: {
-          activationEpoch: plan.activationEpoch,
-          // **v0.1 에는 멤버십 평면이 없다** (§9.1.1 — v0.3 으로 미뤘다). 0 으로 둔다.
-          // 여기에 설정 리비전을 넣고 싶어지는데, 그건 거짓말이다 —
-          // `membership_revision` 은 *그 epoch 안의* 헬스 리비전이지 설정 리비전이 아니다.
-          membershipRevision: '0',
-        },
-        payloadDigest: rendered.digest,
-      };
-    }
+    const { manifest, planeTargets } = await this.buildGeneration(
+      plan.model, generation, plan.activationEpoch, rendered, membership,
+    );
 
     // **부작용 직전에 다시 묻는다.** 기동 때 리더였다는 기억으로는 부족하다 — 그 사이
     // 세션이 끊겼으면 락은 이미 풀렸고 신임이 fence 를 지났을 수 있다. 그래도 창은
@@ -532,6 +479,153 @@ export class ControlPlane {
       activationEpoch: plan.activationEpoch, generation,
       phase: result.phase, detail: result,
     };
+  }
+
+  /**
+   * **클러스터 팔로워** (ADR-CLUSTER, #118). PG 의 활성 오퍼레이션을 **자기** 데이터 플레인에
+   * 옮긴다. 리더가 아닌 노드가 주기마다 부른다.
+   *
+   * 리더의 apply 와 다른 점:
+   *   · plan·head 를 보지 않는다. 기준은 「PG 가 활성이라고 한 것」 — 가장 큰 epoch 의
+   *     `activated` 오퍼레이션이다. 리더가 활성화를 증명한 것만 따라간다.
+   *   · `operations` 에 쓰지 않는다. 그 표는 리더의 결정 기록이다. 노드 상태는 `cluster_nodes`.
+   *   · 펜싱 토큰은 `leader_token_seq` 의 마지막 값이다. 팔로워는 리더가 아니다 — 토큰은
+   *     「발급된 어느 리더보다 낮지 않다」만 증명하면 된다. DP 에이전트는 기록의 토큰이
+   *     자기가 본 최대보다 높으면 거절하므로(I5) **먼저 fence 한다.**
+   *   · 오퍼레이션 id 는 리더의 것을 그대로 쓴다. 노드마다 저널이 따로라 겹치지 않고,
+   *     같은 id 로 다시 부르면 에이전트가 진행된 만큼 건너뛴다(재진입).
+   */
+  async followActive(by: string): Promise<FollowResult> {
+    const r = (await this.db.query(
+      `SELECT id, revision::text AS revision, activation_epoch::text AS epoch, generation,
+              envelope->>'leaderToken' AS token
+         FROM operations WHERE phase = 'activated'
+        ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
+    )).rows[0];
+    if (r === undefined) return { kind: 'nothing_active' };
+    const active = {
+      id: String(r['id']), revision: String(r['revision']),
+      epoch: String(r['epoch']), generation: String(r['generation']),
+    };
+    const st = await this.driver.status();
+    this.lastStatus = st;
+    if (PLANES.every((p) => st.planes[p].activationEpoch === active.epoch)) {
+      return { kind: 'in_sync', ...active };
+    }
+
+    const model = await this.store.modelAt(active.revision);
+    const caps = this.opts.renderCaps ?? { streamRealip: false };
+    const rendered = render(model, caps);
+    const membership = caps.httpLua === true || caps.streamLua === true
+      ? slotsForEligible(model, await this.eligible(model), caps, this.discoveryOf())
+      : undefined;
+    const { manifest, planeTargets } = await this.buildGeneration(
+      model, active.generation, active.epoch, rendered, membership,
+    );
+    const t = (await this.db.query(
+      `SELECT CASE WHEN is_called THEN last_value ELSE 0 END::text AS t FROM leader_token_seq`,
+    )).rows[0];
+    // **둘 중 큰 것** — 시퀀스의 마지막 값과 활성 오퍼레이션을 낸 리더의 토큰. 시퀀스만 보면
+    // 그 값이 활성 오퍼레이션의 토큰보다 낮은 경우(시퀀스를 되돌린 복구 등)에 에이전트 기록과
+    // 어긋난다. 어느 쪽이든 「발급된 리더보다 낮지 않다」를 지킨다.
+    const seqToken = BigInt(String(t?.['t'] ?? '0'));
+    const opToken = /^\d+$/.test(String(r['token'] ?? '')) ? BigInt(String(r['token'])) : 0n;
+    const leaderToken = (seqToken > opToken ? seqToken : opToken).toString();
+    await this.driver.fence(leaderToken);
+    const op: ApplyOperation = {
+      leaderToken,
+      operationId: active.id,
+      transitionId: `r${active.revision}`,
+      affectedPlanes: [...PLANES],
+      targetGeneration: active.generation,
+      generationDigest: manifest.digest,
+      planes: planeTargets,
+    };
+    const result = await this.driver.applyConfig(op);
+    count(`bary_cluster_follow_total{phase="${result.phase}"}`);
+    if (result.phase === 'activated') {
+      await this.projectHealth().catch(() => undefined);
+      await this.sweep(active.generation, by, model);
+    }
+    return { kind: 'applied', ...active, phase: result.phase, detail: result };
+  }
+
+  /**
+   * 세대 디렉토리를 만들고 봉투의 평면 목표를 채운다. **리더의 apply 와 클러스터 팔로워가
+   * 함께 쓴다** (ADR-CLUSTER) — 같은 리비전·epoch 이면 같은 이름·같은 내용의 세대가 나온다.
+   * 두 자리에서 따로 만들면 언젠가 갈린다.
+   */
+  private async buildGeneration(
+    model: Model, generation: string, epoch: string,
+    rendered: ReturnType<typeof render>,
+    membership: ReturnType<typeof slotsForEligible> | undefined,
+  ): Promise<{ manifest: ReturnType<typeof materializeGeneration>; planeTargets: Partial<Record<Plane, PlaneTarget>> }> {
+    const caps = this.opts.renderCaps ?? { streamRealip: false };
+    const streamAdminSocket = this.opts.streamAdminSocket ?? defaultStreamSocket(this.opts.adminSocket);
+    const certFiles = await this.certificateFiles(model);
+
+    const manifest = materializeGeneration({
+      prefix: this.opts.prefix,
+      generation,
+      planes: rendered.planes,
+      ...(certFiles.modes === undefined ? {} : { modes: certFiles.modes }),
+      files: {
+        'nginx.conf': rendered.conf,
+        // **인증서 바이트를 세대 안에 넣는다** (§7.2, S8·S19). 바깥 mutable 경로를
+        // 가리키거나 symlink 로 걸면 롤백이 거짓말이 된다.
+        ...certFiles.files,
+        ...(membership === undefined
+          ? { 'admin/marker.conf': markerConf(generation, this.opts.adminSocket) }
+          : {
+              'admin/marker.conf': httpAdminConf(generation, epoch,
+                this.opts.adminSocket),
+              ...(caps.streamLua === true
+                ? {
+                    'stream-admin/membership.conf':
+                      streamAdminConf(epoch, streamAdminSocket),
+                  }
+                : {}),
+              'lua/membership.json': JSON.stringify({
+                epoch: epoch,
+                http: membership.http,
+                stream: membership.stream,
+              }, null, 2),
+            }),
+      },
+    });
+
+    const status = await this.driver.status();
+    this.lastStatus = status;
+    // **설정 전환은 언제나 두 평면을 옮긴다** (10차 반례 ②, `assertEnvelope`).
+    //
+    // 처음엔 `rendered.planes` 만 선언했다가 `envelope_mismatch` 로 막혔고, 그게 옳다.
+    // 하나의 `nginx.conf` 가 http 와 stream 을 함께 지배하므로 **한쪽이 비게 되는 것도
+    // 전환**이다. 목표에 있는 평면만 선언하면 `http+stream → http` 가 stream 을 없애면서
+    // stream 좌표를 옛 값으로 남긴다 — 설정은 바뀌었는데 컨트롤 플레인은 모른다.
+    //
+    // manifest 의 `planes` 는 그대로 `rendered.planes` 다. 게시 전 검사는 선언이 manifest 를
+    // **덮는지**만 보므로(부분집합) 어긋나지 않는다. 둘은 다른 것을 말한다 —
+    // manifest 는 *이 세대가 무엇을 구성하는가*, 봉투는 *무엇이 움직이는가*.
+    const planeTargets: Partial<Record<Plane, PlaneTarget>> = {};
+    for (const plane of PLANES) {
+      const cur = status.planes[plane];
+      planeTargets[plane] = {
+        expectedCurrent: {
+          activationEpoch: cur.activationEpoch,
+          membershipRevision: cur.membershipRevision,
+        },
+        target: {
+          activationEpoch: epoch,
+          // **v0.1 에는 멤버십 평면이 없다** (§9.1.1 — v0.3 으로 미뤘다). 0 으로 둔다.
+          // 여기에 설정 리비전을 넣고 싶어지는데, 그건 거짓말이다 —
+          // `membership_revision` 은 *그 epoch 안의* 헬스 리비전이지 설정 리비전이 아니다.
+          membershipRevision: '0',
+        },
+        payloadDigest: rendered.digest,
+      };
+    }
+
+    return { manifest, planeTargets };
   }
 
   /**
