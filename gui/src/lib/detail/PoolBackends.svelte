@@ -4,6 +4,7 @@
   import { page } from '$app/state';
   import { itemsOf, resourcePath } from '@web/resources';
   import Writable from '#lib/global/Writable.svelte';
+  import { reasonLabels } from '@web/pools-view';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -24,7 +25,7 @@
         <span class="d-mono d-note">{String(b['host'])}:{String(b['port'])} · w{String(b['weight'])}</span>
         <span class={healthOf(k) === 'healthy' ? 'd-ok' : healthOf(k) === 'unhealthy' ? 'd-warn' : 'd-note'}>{healthOf(k)}</span>
         {#if desk.traffic.get(k)?.receivingTraffic === false}
-          <span class="d-warn">트래픽 없음 — {desk.traffic.get(k)?.reasons.join(' · ')}</span>
+          <span class="d-warn">트래픽 없음 — {reasonLabels(desk.traffic.get(k)?.reasons ?? []).join(' · ')}</span>
         {/if}
       </li>
     {/each}

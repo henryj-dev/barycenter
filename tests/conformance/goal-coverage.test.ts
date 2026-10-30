@@ -87,7 +87,8 @@ describe('① 저작 표면', () => {
     const mark = trafficMarkOf({ receivingTraffic: false, reasons: ['unhealthy'] });
     expect(mark?.reasons?.[0]).toBeDefined();
     expect(mark?.reasons?.[0], '코드가 사람 말로 안 바뀐다').not.toBe('unhealthy');
-    expect(read('gui/src/lib/Pools.svelte'), '화면이 그것을 안 읽는다').toContain('trafficMark');
+    // 백엔드 목록이 읽는다(#126 — 목록이 공통 데이터 테이블로 옮겨 갔다).
+    expect(read('gui/src/lib/lists/BackendList.svelte'), '화면이 그것을 안 읽는다').toContain('trafficMarkOf');
   });
 
   it('CLI 가 backends/status 를 읽을 수 있다', () => {

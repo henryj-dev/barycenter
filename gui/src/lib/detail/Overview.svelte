@@ -5,6 +5,7 @@
   import { detailOfListener } from '@web/listeners-view';
   import { itemOf, relationsOf, resourcePath, summaryOf, type ResourceKind } from '@web/resources';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import { reasonLabels } from '@web/pools-view';
   import Acme from './Acme.svelte';
   import BackendHealth from './BackendHealth.svelte';
 
@@ -24,7 +25,7 @@
     if (kind === 'backend') {
       const h = desk.health.find((x) => x.backendKey === key)?.state ?? 'unknown';
       const t = desk.traffic.get(key);
-      if (t !== undefined && !t.receivingTraffic) return { text: `트래픽 없음 — ${t.reasons.join(' · ')}`, tone: 'warn' };
+      if (t !== undefined && !t.receivingTraffic) return { text: `트래픽 없음 — ${reasonLabels(t.reasons).join(' · ')}`, tone: 'warn' };
       return { text: `헬스 ${h}`, tone: h === 'healthy' ? 'ok' : h === 'unhealthy' ? 'warn' : '' };
     }
     if (kind === 'certificate') {

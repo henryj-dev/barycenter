@@ -6,7 +6,7 @@
    * 않았으면 로그인 화면으로 보낸다 — 화면마다 「연결하면 …」 을 띄우는 대신 한 자리에서 막는다.
    * **로그인 상태에서는 토큰 칸을 어디에도 안 보인다.** 토큰 연결은 로그인 화면에 있다.
    */
-  import { onMount, setContext } from 'svelte';
+  import { onMount, setContext, type Snippet } from 'svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { isDynamicGuiPath, pageOf } from '@web/page';
@@ -35,6 +35,12 @@
   // 사람 계정 — 쿠키 세션이면 `/me` 가 답한다. 토큰으로 붙었으면 비어 있다.
   const session = createSession();
   setContext('session', session);
+
+  /**
+   * 페이지 머리 오른쪽 버튼(만들기 등) — 화면이 `usePageActions` 로 스니펫을 맡긴다. 화면을 떠나면 비운다.
+   */
+  const pageActions = $state<{ snippet?: Snippet }>({});
+  setContext('pageActions', pageActions);
 
   const place = $derived(pageOf(page.url.pathname));
   const standalone = $derived(STANDALONE.includes(place));
@@ -155,7 +161,7 @@
       {/if}
       <main class="content">
         {#if desk.error}<Banner tone="danger">{desk.error}</Banner>{/if}
-        {#if !detail}<PageHeader title={meta.title} desc={meta.desc} />{/if}
+        {#if !detail}<PageHeader title={meta.title} desc={meta.desc} actions={pageActions.snippet} />{/if}
         {@render children()}
       </main>
     </div>
