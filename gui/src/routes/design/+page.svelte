@@ -17,11 +17,6 @@
     { k: 'ok', n: '정상', i: '●' }, { k: 'warn', n: '경고', i: '▲' }, { k: 'danger', n: '위험', i: '✕' }, { k: 'info', n: '정보', i: '↻' },
     { k: 'neutral', n: '중립', i: '○' }, { k: 'pending', n: '적용 대기', i: '◐' }, { k: 'drain', n: '드레인 중', i: '⇣' },
   ];
-  let theme = $state<'system' | 'dark' | 'light'>('system');
-  $effect(() => {
-    if (theme === 'system') document.documentElement.removeAttribute('data-theme');
-    else document.documentElement.setAttribute('data-theme', theme);
-  });
 
   // ── 버튼 ──
   let saving = $state(false);
@@ -123,13 +118,7 @@ server {
 </script>
 
 <div class="ds">
-  <header class="top">
-    <div>
-      <h1>디자인 시스템</h1>
-      <p>공통 컴포넌트를 상태별로 늘어놓았어요. 화면은 이 컴포넌트를 가져다 써요. 데이터는 예시예요.</p>
-    </div>
-    <RadioGroup label="테마" bind:value={theme} options={[{ value: 'system', label: '시스템' }, { value: 'dark', label: '다크' }, { value: 'light', label: '라이트' }]} />
-  </header>
+  <p class="note">테마는 오른쪽 위 사용자 메뉴에서 바꿔요.</p>
 
   <section>
     <h2>1. 토큰</h2>
@@ -391,9 +380,6 @@ server {
 
 <style>
   .ds { display: flex; flex-direction: column; gap: 40px; padding-bottom: 80px; }
-  .top { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
-  h1 { margin: 0 0 4px; font: 700 24px/32px var(--font); }
-  .top p { margin: 0; color: var(--tx2); font: var(--t-small); }
   section { display: flex; flex-direction: column; gap: 16px; }
   h2 { margin: 0; font: 700 20px/28px var(--font); }
   .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }

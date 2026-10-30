@@ -69,6 +69,8 @@ export function createDesk(scope?: { api(path: string): string }) {
   let rendered = $state<RenderedView>(viewOfRendered({}));
   let audit = $state<AuditView>(viewOfAudit([]));
   let applying = $state(false);
+  /** 커밋했지만 적용하지 않은 plan 수 — 상단 바의 「적용 대기 N」 과 배너. */
+  let pendingCount = $state(0);
   let recovering = $state(false);
   let editing = $state(false);
   let stop: (() => void) | undefined;
@@ -146,6 +148,7 @@ export function createDesk(scope?: { api(path: string): string }) {
 
   const onStatus = async (snap: StatusSnap): Promise<void> => {
     head = snap.head;
+    pendingCount = snap.pendingApply?.length ?? 0;
     status = viewOfStatus(snap);
     if (snap.health !== undefined) health = snap.health;
     await refreshImpact(pickPending(snap.pendingApply ?? []));
@@ -913,6 +916,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     get rendered() { return rendered; },
     get audit() { return audit; },
     get applying() { return applying; },
+    get pendingCount() { return pendingCount; },
     get recovering() { return recovering; },
     get editing() { return editing; },
     connect,

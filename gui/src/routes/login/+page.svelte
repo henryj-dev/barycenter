@@ -7,6 +7,7 @@
   import PasswordStep from '#lib/account/PasswordStep.svelte';
   import MfaStep from '#lib/account/MfaStep.svelte';
   import { accountApi } from '#lib/account/api';
+  import { Button, FieldMessage, TextInput } from '#lib/ui';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const session = getContext<Session>('session');
@@ -90,6 +91,26 @@
     const state = page.url.searchParams.get('state');
     if (code !== null && state !== null) void exchange(code, state);
   });
+
+  /**
+   * 토큰으로 연결 — 사람 계정이 없는 자동화·비상 접근용. 셸의 상단에서 옮겨 왔다(#126): 로그인 상태에서는
+   * 토큰 칸을 어디에도 안 보인다. 값은 메모리에만 둔다 — 새로고침하면 사라진다.
+   */
+  let tokenInput = $state('');
+  let tokenBusy = $state(false);
+  let tokenError = $state<string | undefined>();
+  const connectToken = async (): Promise<void> => {
+    if (tokenInput.trim() === '') { tokenError = '토큰을 넣어요.'; return; }
+    tokenError = undefined;
+    tokenBusy = true;
+    desk.token = tokenInput.trim();
+    void desk.connect();
+    // 스트림이 붙으면 들어간다. 거절되면 desk 가 오류를 남긴다.
+    for (let i = 0; i < 40 && !desk.live && desk.error === undefined; i++) await new Promise((r) => setTimeout(r, 150));
+    tokenBusy = false;
+    if (desk.live) { tokenInput = ''; await goto('/'); }
+    else { tokenError = desk.error ?? '연결하지 못했어요. 토큰을 확인해요.'; desk.disconnect(); desk.token = ''; }
+  };
 </script>
 
 <section>
@@ -99,32 +120,30 @@
   {:else}
     <MfaStep onDone={() => { void signedIn(); }} onRestart={() => { step = 'password'; }} />
   {/if}
-  {#if mailOn && step === 'password'}<p><a href="/reset">비밀번호를 잊었다</a></p>{/if}
+  {#if mailOn && step === 'password'}<p><a href="/reset">비밀번호를 잊었어요</a></p>{/if}
 </section>
 
 <section>
   <h2>SSO</h2>
-  <button type="button" onclick={() => { void startLogin(); }} disabled={starting || exchanging}>
-    IdP로 로그인
-  </button>
-  <p>계정이 없으면 관리자에게 초대를 받는다 — 공개 가입은 없다. 해시 토큰은 위 칸에 넣는다.</p>
-  {#if startError !== undefined}
-    <p class="err" role="alert">{startError}</p>
-  {/if}
+  <div><Button onclick={() => { void startLogin(); }} disabled={starting || exchanging} loading={starting || exchanging}>IdP로 로그인해요</Button></div>
+  <p>계정이 없으면 관리자에게 초대를 받아요. 공개 가입은 없어요.</p>
+  {#if startError !== undefined}<FieldMessage tone="error">{startError}</FieldMessage>{/if}
+</section>
+
+<section>
+  <h2>토큰으로 연결</h2>
+  <form class="tok" onsubmit={(e) => { e.preventDefault(); void connectToken(); }}>
+    <TextInput type="password" autocomplete="off" aria-label="Bearer 토큰" placeholder="Bearer 토큰" bind:value={tokenInput} invalid={tokenError !== undefined} />
+    <Button type="submit" loading={tokenBusy}>연결해요</Button>
+  </form>
+  {#if tokenError !== undefined}<FieldMessage tone="error">{tokenError}</FieldMessage>{/if}
+  <p>자동화나 비상 접근에 써요. 토큰은 이 탭의 메모리에만 있어요. 새로고침하면 다시 넣어요.</p>
 </section>
 
 <style>
-  section { display: grid; gap: 0.75rem; margin: 1.5rem 0; }
-  h2 { font-size: 1rem; margin: 0; }
-  button {
-    justify-self: start;
-    background: var(--plate);
-    border: 1px solid var(--rule);
-    color: var(--ink);
-    padding: 0.5rem 0.85rem;
-    cursor: pointer;
-  }
-  button:disabled { opacity: 0.6; cursor: default; }
-  p { margin: 0; color: var(--mute); font-size: 0.9rem; }
-  .err { color: var(--ember); }
+  section { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--bd); }
+  section:first-of-type { padding-top: 0; border-top: 0; }
+  h2 { font: var(--t-h); margin: 0; }
+  p { margin: 0; color: var(--tx2); font: var(--t-small); }
+  .tok { display: flex; gap: 8px; }
 </style>
