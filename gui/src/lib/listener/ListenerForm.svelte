@@ -4,13 +4,15 @@
    *
    * 고치는 칸: 바인드 · 포트 · 켜짐 · 출발지 제한 · 기본 동작. 나머지 칸(헤더 규칙·레이트리밋·TLS
    * 결박 …)은 head 의 값을 그대로 싣는다 — `editListenerPatch`. 저장은 commit 이고, 적용은
-   * 적용 대기 화면에서 한다.
+   * 적용 대기 화면에서 한다. 출발지 제한 구획은 만들기 폼과 같은 것을 쓴다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import { parseSourceAllow, type ListenerEdit } from '@web/edit';
+  import { Banner, Button, Form, FormRow, FormSection, Select, Switch, TextInput } from '#lib/ui';
   import { after } from '#lib/after';
-  import SourceAllow from '#lib/SourceAllow.svelte';
+  import SourceAllowSection from '#lib/forms/SourceAllowSection.svelte';
+  import { bindHelp, filled, portError } from '#lib/forms/checks';
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
@@ -21,13 +23,16 @@
   const isHttp = $derived(protocol === 'http' || protocol === 'https');
   const hasPool = $derived(isHttp || protocol === 'tcp' || protocol === 'udp');
   const poolClass = $derived(isHttp ? 'http' : protocol);
-  const poolKeys = $derived(desk.pools.rows.filter((p) => p.protocolClass === poolClass).map((p) => p.key));
+  /** 빈 값 = HTTP 계열의 「거절」. */
+  const choices = $derived([
+    ...(isHttp ? [{ value: '', label: '거절', hint: '라우트에 맞지 않으면 끊어요' }] : []),
+    ...desk.pools.rows.filter((p) => p.protocolClass === poolClass).map((p) => ({ value: p.key, label: `풀 ${p.key}` })),
+  ]);
 
   let bind = $state('');
-  let port = $state(0);
+  let port = $state('');
   let enabled = $state(true);
   let allow = $state('');
-  /** 풀 key, 또는 HTTP 계열의 '거절'을 뜻하는 빈 문자열. */
   let action = $state('');
   let problem = $state<string | undefined>();
   let loaded = $state<string | undefined>();
@@ -36,7 +41,7 @@
   $effect(() => {
     if (model === undefined || loaded === key) return;
     bind = String(model['bind'] ?? '');
-    port = Number(model['port'] ?? 0);
+    port = String(model['port'] ?? '');
     enabled = model['enabled'] !== false;
     allow = Array.isArray(model['sourceAllow']) ? (model['sourceAllow'] as string[]).join('\n') : '';
     const http = model['http'] as { defaultAction?: unknown } | undefined;
@@ -45,12 +50,14 @@
     loaded = key;
   });
 
+  const ready = $derived(filled(bind) && filled(port, portError) && (!hasPool || isHttp || action !== ''));
   const save = (): void => {
+    if (!ready || desk.editing) return;
     problem = undefined;
     let edit: ListenerEdit;
     try {
       edit = {
-        bind,
+        bind: bind.trim(),
         port: Number(port),
         enabled,
         sourceAllow: parseSourceAllow(allow),
@@ -62,53 +69,34 @@
     }
     void desk.updateListener(key, edit).then(after);
   };
+  const reset = (): void => { loaded = undefined; };
 </script>
 
 {#if model !== undefined}
   <Writable>
-    <form class="edit" onsubmit={(e) => { e.preventDefault(); save(); }}>
-      <label><span>프로토콜</span><input class="mono" value={protocol} disabled /></label>
-      <label><span>바인드</span><input class="mono" bind:value={bind} disabled={desk.editing} /></label>
-      <label><span>포트</span><input class="mono" type="number" min="1" max="65535" bind:value={port} disabled={desk.editing} /></label>
-      <label class="check"><input type="checkbox" bind:checked={enabled} disabled={desk.editing} /> <span>켜짐 — 끄면 소켓을 안 연다</span></label>
+    <Form note="저장하면 커밋해요. 트래픽은 적용 대기에서 적용해야 바뀌어요." onsubmit={save}>
+      <FormSection title="기본">
+        <FormRow label="프로토콜" help="프로토콜은 바꿀 수 없어요."><TextInput value={protocol} disabled /></FormRow>
+        <FormRow label="바인드 주소" for="le-bind" required help={bindHelp(bind)}><TextInput id="le-bind" bind:value={bind} /></FormRow>
+        <FormRow label="포트" for="le-port" required error={portError(port)}>
+          <TextInput id="le-port" bind:value={port} invalid={portError(port) !== undefined} inputmode="numeric" width="120px" />
+        </FormRow>
+        <FormRow label="활성화" help="끄면 소켓을 열지 않아요."><Switch bind:checked={enabled}>켜짐</Switch></FormRow>
+      </FormSection>
       {#if hasPool}
-        <label>
-          <span>기본 동작</span>
-          <select bind:value={action} disabled={desk.editing}>
-            {#if isHttp}<option value="">거절</option>{/if}
-            {#each poolKeys as p (p)}<option value={p}>풀 {p}</option>{/each}
-          </select>
-        </label>
+        <FormSection title="동작">
+          <FormRow label="기본 동작" required>
+            <Select label="기본 동작" bind:value={action} options={choices} placeholder="풀을 골라요" width="100%" />
+          </FormRow>
+        </FormSection>
       {/if}
-      <SourceAllow editing={desk.editing} bind:value={allow} />
-      {#if problem !== undefined}<p class="err" role="alert">{problem}</p>{/if}
-      <p class="note">저장하면 커밋된다. 트래픽은 아직 안 바뀐다 — 적용 대기 화면에서 적용한다.</p>
-      <p class="actions">
-        <button type="submit" disabled={desk.editing}>저장</button>
-        <a href={`/traffic/listener/${encodeURIComponent(key)}`}>취소</a>
-      </p>
-    </form>
+      <SourceAllowSection bind:value={allow} {port} http={isHttp} />
+      {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}
+      {#snippet actions()}
+        <Button variant="primary" type="submit" loading={desk.editing} disabled={!ready}>{desk.editing ? '저장 중' : '저장'}</Button>
+        <Button onclick={reset} disabled={desk.editing}>되돌리기</Button>
+        <Button variant="text" href={`/traffic/listener/${encodeURIComponent(key)}`}>취소</Button>
+      {/snippet}
+    </Form>
   </Writable>
 {/if}
-
-<style>
-  .actions a { color: var(--mute); }
-  .mono { font-family: var(--data); }
-  .edit { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem 1rem; }
-  label { display: flex; flex-direction: column; gap: 0.25rem; }
-  label span { font-size: 0.8rem; color: var(--mute); }
-  .check { flex-direction: row; align-items: center; gap: 0.5rem; grid-column: 1 / -1; }
-  input, select {
-    background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.45rem 0.6rem;
-  }
-  input:disabled, select:disabled { opacity: 0.6; }
-  .err { color: var(--ember); grid-column: 1 / -1; margin: 0; }
-  .note { grid-column: 1 / -1; font-size: 0.8rem; color: var(--mute); margin: 0; }
-  .actions { grid-column: 1 / -1; display: flex; gap: 1rem; align-items: center; margin: 0; }
-  button {
-    background: var(--plate); border: 1px solid var(--rule); color: var(--ink);
-    padding: 0.5rem 0.95rem; cursor: pointer;
-  }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  @media (max-width: 640px) { .edit { grid-template-columns: 1fr; } }
-</style>

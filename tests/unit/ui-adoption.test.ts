@@ -7,6 +7,7 @@
  *
  *   1단계(이 파일의 첫 판) — 리소스 목록 9개는 `DataTable` 이다.
  *   2단계 — 만들기 폼 14개는 `CreateForm`(공통 `Form`) 위의 `FormSection` · `FormRow` 다. 날 입력을 안 그린다.
+ *   3단계 — 상세 탭 10개와 리스너 수정 폼은 `#lib/ui` 를 쓰고, 옛 `d-*` 클래스와 날 입력을 안 쓴다.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -115,5 +116,28 @@ describe('만들기 폼은 공통 폼 컴포넌트다', () => {
       'Listeners', 'Pools', 'Routes', 'Certs', 'ListenerOptions',
     ];
     for (const name of old) expect(existsSync(join(GUI, `lib/${name}.svelte`)), name).toBe(false);
+  });
+});
+
+const DETAIL = [
+  'detail/Overview', 'detail/Settings', 'detail/Relations', 'detail/Traffic', 'detail/History',
+  'detail/Acme', 'detail/BackendHealth', 'detail/PoolBackends', 'detail/JsonEdit', 'detail/Rebuild',
+  'listener/ListenerForm',
+] as const;
+
+describe('상세 탭은 공통 컴포넌트다', () => {
+  for (const name of DETAIL) {
+    it(`${name} → #lib/ui · d-* 없음 · 날 입력 없음`, () => {
+      const src = read(`lib/${name}.svelte`);
+      expect(src).toMatch(/import \{[^}]*\} from '#lib\/ui'/);
+      // 옛 상세 공통 클래스(`detail/style.css`)는 디자인 토큰 이전의 것이다.
+      expect(markup(src), '옛 d-* 클래스를 쓴다').not.toMatch(/class="[^"]*\bd-[a-z0-9]+/);
+      expect(markup(src), '날 입력을 그린다').not.toMatch(RAW_INPUT);
+    });
+  }
+
+  it('출발지 제한 칸은 한 벌이다 — 수정 폼도 만들기 폼의 구획을 쓴다', () => {
+    expect(read('lib/listener/ListenerForm.svelte')).toContain("from '#lib/forms/SourceAllowSection.svelte'");
+    expect(existsSync(join(GUI, 'lib/SourceAllow.svelte'))).toBe(false);
   });
 });
