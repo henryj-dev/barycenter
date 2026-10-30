@@ -14,8 +14,18 @@ import { describe, expect, it } from 'vitest';
 
 const GUI = join(dirname(fileURLToPath(import.meta.url)), '../../gui/src');
 const read = (p: string): string => readFileSync(join(GUI, p), 'utf8');
-/** 스크립트 · 스타일을 뺀 마크업. */
-const markup = (src: string): string => src.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<style[\s\S]*?<\/style>/g, '');
+/**
+ * 스크립트 · 스타일을 뺀 마크업 — 마지막 스크립트 닫는 태그 뒤부터 스타일 여는 태그 앞까지.
+ * 정규식으로 태그를 지우지 않는다(코드 스캔이 그것을 불완전한 정화로 본다). 우리 파일의 모양은
+ * 언제나 「스크립트들 → 마크업 → 스타일」 이다.
+ */
+const markup = (src: string): string => {
+  const close = '</' + 'script>';
+  const start = src.lastIndexOf(close);
+  const body = start < 0 ? src : src.slice(start + close.length);
+  const style = body.indexOf('<' + 'style');
+  return style < 0 ? body : body.slice(0, style);
+};
 
 const LISTS: readonly [route: string, component: string][] = [
   ['routes/traffic/listener/+page.svelte', 'ListenerList'],
