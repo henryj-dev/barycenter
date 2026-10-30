@@ -6,7 +6,7 @@
   import AddCert from './AddCert.svelte';
   import AddSniBinding from './AddSniBinding.svelte';
 
-  let { view, live, editing, insert, listeners, certificates, bindings, insertSni, withdrawSni, withdraw }: {
+  let { mode = 'list', view, live, editing, insert, listeners, certificates, bindings, insertSni, withdrawSni, withdraw }: {
     view: CertsView;
     live: boolean;
     editing: boolean;
@@ -17,6 +17,8 @@
     insertSni: (input: { key: string; listener: string; hosts: string[]; certificate: string }) => void;
     withdrawSni: (key: string) => void;
     withdraw: (key: string) => void;
+    /** `list` 인증서 표 · `new` 자료 넣기 · `sni` 바인딩 표(`/tls/sni`) · `sni-new` 바인딩 만들기. */
+    mode?: 'list' | 'new' | 'sni' | 'sni-new';
   } = $props();
   // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
   const scope = getContext<Scope | undefined>('scope');
@@ -32,33 +34,38 @@
 
 {#if !live}
   <p class="empty">연결하면 head 인증서가 여기 온다.</p>
-{:else if view.rows.length === 0}
-  <p class="empty">인증서가 없다. 아래에서 자료를 넣는다.</p>
-{:else}
-  <ul class="certs">
-    {#each view.rows as row (row.key)}
-      <li data-mark={row.mark}>
-        <span class="key">{row.key}</span>
-        <span class="dom mono">{row.domains.join(', ') || '—'}</span>
-        <span class="src">{row.acme ? (row.orderState ?? 'acme') : '자료'}</span>
-        <span class="mark">{label(row.mark, row.expiresInDays)}</span>
-        {#if !ro}
-        <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
-        {/if}
-      </li>
-    {/each}
-  </ul>
-{/if}
-{#if live}
+{:else if mode === 'list'}
+  <Writable><p class="new"><a href="/tls/certificate/new">인증서 넣기</a></p></Writable>
+  {#if view.rows.length === 0}
+    <p class="empty">인증서가 없다. 「인증서 넣기」 에서 자료를 넣는다.</p>
+  {:else}
+    <ul class="certs">
+      {#each view.rows as row (row.key)}
+        <li data-mark={row.mark}>
+          <a class="key" href={`/tls/certificate/${encodeURIComponent(row.key)}`}>{row.key}</a>
+          <span class="dom mono">{row.domains.join(', ') || '—'}</span>
+          <span class="src">{row.acme ? (row.orderState ?? 'acme') : '자료'}</span>
+          <span class="mark">{label(row.mark, row.expiresInDays)}</span>
+          {#if !ro}
+          <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+{:else if mode === 'new'}
   <Writable>
   <AddCert {editing} add={insert} />
   </Writable>
-  {#if bindings.length > 0}
-    <h2>SNI</h2>
+{:else if mode === 'sni'}
+  <Writable><p class="new"><a href="/tls/sni/new">SNI 바인딩 만들기</a></p></Writable>
+  {#if bindings.length === 0}
+    <p class="empty">SNI 바인딩이 없다. HTTPS 호스트는 바인딩이 있어야 plan 이 된다.</p>
+  {:else}
     <ul class="binds">
       {#each bindings as row (row.key)}
         <li>
-          <span class="key">{row.key}</span>
+          <a class="key" href={`/tls/sni/${encodeURIComponent(row.key)}`}>{row.key}</a>
           <span class="dom mono">{row.hosts.join(', ')}</span>
           <span class="src">{row.listener} → {row.certificate}</span>
           {#if !ro}
@@ -68,12 +75,16 @@
       {/each}
     </ul>
   {/if}
+{:else}
   <Writable>
   <AddSniBinding {listeners} {certificates} {editing} add={insertSni} />
   </Writable>
 {/if}
 
 <style>
+  .new { margin: 0 0 0.5rem; text-align: right; }
+  .new a { color: var(--ink); font-size: 0.85rem; }
+  a.key { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
   .empty { color: var(--mute); }
   .certs { list-style: none; margin: 1.5rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
   li {

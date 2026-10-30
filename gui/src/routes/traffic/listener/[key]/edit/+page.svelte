@@ -64,16 +64,7 @@
   };
 </script>
 
-<p class="crumb">
-  <a href="/traffic/listener">리스너</a> /
-  <a class="mono" href={`/traffic/listener/${encodeURIComponent(key)}`}>{key}</a> / 수정
-</p>
-
-{#if !desk.live}
-  <p class="empty">연결하면 head 리스너가 여기 온다.</p>
-{:else if model === undefined}
-  <p class="empty">리스너 <span class="mono">{key}</span> 가 head 에 없다. <a href="/traffic/listener">목록</a>으로 간다.</p>
-{:else}
+{#if model !== undefined}
   <Writable>
     <form class="edit" onsubmit={(e) => { e.preventDefault(); save(); }}>
       <label><span>프로토콜</span><input class="mono" value={protocol} disabled /></label>
@@ -101,9 +92,7 @@
 {/if}
 
 <style>
-  .crumb { font-size: 0.8rem; color: var(--mute); margin: 0 0 1rem; }
-  .crumb a, .empty a, .actions a { color: var(--mute); }
-  .empty { color: var(--mute); }
+  .actions a { color: var(--mute); }
   .mono { font-family: var(--data); }
   .edit { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem 1rem; }
   label { display: flex; flex-direction: column; gap: 0.25rem; }

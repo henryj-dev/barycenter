@@ -10,7 +10,7 @@
   import AddPassthroughReject from './AddPassthroughReject.svelte';
   import type { RedirectStatus, RejectStatus } from '@web/edit';
 
-  let { view, live, editing, listeners, pools, ptListeners, tcpPools, withdraw, withdrawPt, insert, insertRedirect, insertReject, insertPt, insertPtReject }: {
+  let { mode = 'list', view, live, editing, listeners, pools, ptListeners, tcpPools, withdraw, withdrawPt, insert, insertRedirect, insertReject, insertPt, insertPtReject }: {
     view: RoutesView;
     live: boolean;
     editing: boolean;
@@ -35,6 +35,8 @@
     }) => void;
     insertPt: (input: { key: string; listener: string; snis: string[]; pool: string }) => void;
     insertPtReject: (input: { key: string; listener: string; snis: string[] }) => void;
+    /** `list` 는 표, `http`·`passthrough` 는 그 라우트의 만들기 폼(`/traffic/route/<종류>/new`). */
+    mode?: 'list' | 'http' | 'passthrough';
   } = $props();
   // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
   const scope = getContext<Scope | undefined>('scope');
@@ -43,7 +45,8 @@
 
 {#if !live}
   <p class="empty">연결하면 head 라우트가 여기 온다.</p>
-{:else}
+{:else if mode === 'list'}
+  <Writable><p class="new"><a href="/traffic/route/http/new">HTTP 라우트 만들기</a> · <a href="/traffic/route/passthrough/new">패스스루 라우트 만들기</a></p></Writable>
   {#if view.errors.length > 0}
     <ul class="notes" data-kind="error">
       {#each view.errors as note (note.kind + note.message)}
@@ -60,7 +63,7 @@
   {/if}
 
   {#if view.order.length === 0 && view.errors.length === 0}
-    <p class="empty">HTTP 라우트가 없다. 아래에서 호스트 라우트를 넣는다.</p>
+    <p class="empty">HTTP 라우트가 없다. 「HTTP 라우트 만들기」 에서 호스트 라우트를 넣는다.</p>
   {:else if view.order.length > 0}
     <ol class="order">
       {#each view.order as row, i (row.key + row.host + row.pathPrefix)}
@@ -68,7 +71,7 @@
           <span class="n mono">{i + 1}</span>
           <span class="host mono">{row.host}{row.pathPrefix}</span>
           <span class="cls mono">{row.matchClass}</span>
-          <span class="key">{row.key}</span>
+          <a class="key" href={`/traffic/route/http/${encodeURIComponent(row.key)}`}>{row.key}</a>
           <span class="pri mono">p{row.priority}</span>
           {#if !ro}
           <button type="button" disabled={editing} onclick={() => withdraw(row.key)}>설정에서 뺀다</button>
@@ -80,12 +83,12 @@
 
   <h2>패스스루</h2>
   {#if view.passthrough.length === 0}
-    <p class="empty">패스스루 라우트가 없다. 아래에서 SNI 를 붙인다.</p>
+    <p class="empty">패스스루 라우트가 없다. 「패스스루 라우트 만들기」 에서 SNI 를 붙인다.</p>
   {:else}
     <ul class="pass">
       {#each view.passthrough as row (row.key)}
         <li>
-          <span class="key">{row.key}</span>
+          <a class="key" href={`/traffic/route/passthrough/${encodeURIComponent(row.key)}`}>{row.key}</a>
           <span class="host mono">{row.snis.join(', ')}</span>
           <span class="cls mono">{row.action}</span>
           {#if !ro}
@@ -95,16 +98,23 @@
       {/each}
     </ul>
   {/if}
+{:else if mode === 'http'}
   <Writable>
   <AddRoute {listeners} {pools} {editing} add={insert} />
   <AddRedirect {listeners} {editing} add={insertRedirect} />
   <AddReject {listeners} {editing} add={insertReject} />
+  </Writable>
+{:else}
+  <Writable>
   <AddPassthroughRoute listeners={ptListeners} pools={tcpPools} {editing} add={insertPt} />
   <AddPassthroughReject listeners={ptListeners} {editing} add={insertPtReject} />
   </Writable>
 {/if}
 
 <style>
+  .new { margin: 0 0 0.5rem; text-align: right; }
+  .new a { color: var(--ink); font-size: 0.85rem; }
+  a.key { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
   .empty { color: var(--mute); }
   .notes {
     list-style: none;

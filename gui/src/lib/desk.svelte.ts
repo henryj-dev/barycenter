@@ -21,6 +21,7 @@ import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs } from '@web/reconnect';
 import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
+import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 
 export type StatusSnap = {
@@ -49,6 +50,15 @@ export function createDesk(scope?: { api(path: string): string }) {
   let listeners = $state<ListenersView>({ rows: [] });
   /** head 모델의 리스너 그대로 — 상세가 보여 주고, 수정이 바탕으로 쓴다(`editListenerPatch`). */
   let listenerModels = $state<Record<string, unknown>[]>([]);
+  /**
+   * **head 모델 묶음** — 컬렉션마다 API 가 준 그대로 (상세 화면, 2026-10-30).
+   * `/config/model` 을 따로 묻지 않는다: 전역 모드의 지역 중계에 그 경로가 없고, 같은 값을
+   * 이미 목록마다 받는다. 받을 때마다 그 컬렉션만 바꾼다.
+   */
+  let model = $state<ModelLike>({});
+  const setModel = (collection: string, rows: unknown): void => {
+    model = { ...model, [collection]: Array.isArray(rows) ? rows as Record<string, unknown>[] : [] };
+  };
   let health = $state<HealthFact[]>([]);
   let pools = $state<PoolsView>({ rows: [] });
   let routes = $state<RoutesView>({ order: [], warnings: [], errors: [], passthrough: [] });
@@ -92,6 +102,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     const body = (await r.json()) as unknown;
     const facts = Array.isArray(body) ? body as ListenerFact[] : [];
     listenerModels = Array.isArray(body) ? body as Record<string, unknown>[] : [];
+    setModel('listeners', body);
     listeners = viewOfListeners(
       facts,
       impact === undefined ? undefined : { added: impact.socketsAdded, removed: impact.socketsRemoved },
@@ -106,6 +117,7 @@ export function createDesk(scope?: { api(path: string): string }) {
    * 이 API 가 안 오는 것과 "이유가 없다(= 받는 중)" 는 다르다 — 못 읽은 것을 초록으로
    * 보이게 하면 안 되므로 실패는 빈 맵이 아니라 **표시를 안 만드는 것**으로 흐른다.
    */
+  let acmeOrders = $state<Record<string, unknown>[]>([]);
   let traffic = $state<Map<string, { receivingTraffic: boolean; reasons: string[] }>>(new Map());
 
   const refreshPools = async (): Promise<void> => {
@@ -125,11 +137,11 @@ export function createDesk(scope?: { api(path: string): string }) {
       pools = { rows: [] };
       return;
     }
-    pools = viewOfPools(
-      asList<PoolFact>(await pr.json()),
-      asList<BackendFact>(await br.json()),
-      health,
-    );
+    const poolRows = await pr.json() as unknown;
+    const backendRows = await br.json() as unknown;
+    setModel('pools', poolRows);
+    setModel('backends', backendRows);
+    pools = viewOfPools(asList<PoolFact>(poolRows), asList<BackendFact>(backendRows), health);
   };
 
   const onStatus = async (snap: StatusSnap): Promise<void> => {
@@ -143,6 +155,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     await refreshCerts();
     await refreshPolicies();
     await refreshBindings();
+    await refreshAddressSets();
     await refreshRendered();
     await refreshAudit();
   };
@@ -167,14 +180,23 @@ export function createDesk(scope?: { api(path: string): string }) {
     rendered = viewOfRendered(await r.json());
   };
 
+  /** 주소 집합. 전역 중계에는 이 경로가 없다 — 못 읽으면 빈 목록이고, 오류로 말하지 않는다. */
+  const refreshAddressSets = async (): Promise<void> => {
+    const r = await fetch(api('/api/v1/address-sets'), { headers: auth() });
+    setModel('addressSets', r.ok ? await r.json() : []);
+  };
+
   const refreshBindings = async (): Promise<void> => {
     const r = await fetch(api('/api/v1/sni-bindings'), { headers: auth() });
     if (!r.ok) {
       error = `sni-bindings ${r.status}`;
       bindings = [];
+      setModel('sniBindings', []);
       return;
     }
-    bindings = asList<{ key?: unknown; listener?: unknown; hosts?: unknown; certificate?: unknown }>(await r.json())
+    const bindingRows = await r.json() as unknown;
+    setModel('sniBindings', bindingRows);
+    bindings = asList<{ key?: unknown; listener?: unknown; hosts?: unknown; certificate?: unknown }>(bindingRows)
       .flatMap((b) => {
         if (typeof b.key !== 'string' || typeof b.listener !== 'string' || typeof b.certificate !== 'string') {
           return [];
@@ -191,7 +213,9 @@ export function createDesk(scope?: { api(path: string): string }) {
       policies = [];
       return;
     }
-    policies = asList<{ key?: unknown }>(await r.json())
+    const policyRows = await r.json() as unknown;
+    setModel('tlsPolicies', policyRows);
+    policies = asList<{ key?: unknown }>(policyRows)
       .map((p) => p.key)
       .filter((k): k is string => typeof k === 'string' && k !== '');
   };
@@ -207,7 +231,10 @@ export function createDesk(scope?: { api(path: string): string }) {
       return;
     }
     const orders = or.ok ? asList<OrderFact>(await or.json()) : [];
-    certs = viewOfCertificates(asList<CertificateFact>(await cr.json()), orders);
+    const certRows = await cr.json() as unknown;
+    setModel('certificates', certRows);
+    acmeOrders = orders as unknown as Record<string, unknown>[];
+    certs = viewOfCertificates(asList<CertificateFact>(certRows), orders);
   };
 
   const refreshRoutes = async (): Promise<void> => {
@@ -218,6 +245,8 @@ export function createDesk(scope?: { api(path: string): string }) {
       return;
     }
     const body = (await r.json()) as { http?: unknown; passthrough?: unknown };
+    setModel('httpRoutes', body.http);
+    setModel('passthroughRoutes', body.passthrough);
     routes = viewOfRoutes(asList<HttpRouteFact>(body.http), asList<PassthroughFact>(body.passthrough));
   };
 
@@ -528,6 +557,56 @@ export function createDesk(scope?: { api(path: string): string }) {
     }
   };
 
+  /**
+   * **아무 리소스나 통째로 바꾼다** — 상세의 JSON 수정·만들기 (2026-10-30). body 는 key 를 뺀
+   * 모델 모양 그대로다. 모양 검사는 저장소(해독기·검증기)가 한다 — 여기서 다시 하지 않는다.
+   */
+  const putResource = async (kind: ResourceKind, key: string, body: Record<string, unknown>): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      if (key.trim() === '') throw new Error('키가 비어 있다');
+      return await commitPatch([{ op: 'put', kind, key: key.trim(), body }]);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
+  /** 상세의 「기록」 탭. 못 읽으면(전역 중계에 없다) undefined — 「바뀐 적 없다」 와 다르다. */
+  const historyOf = async (kind: ResourceKind, key: string): Promise<unknown[] | undefined> => {
+    const q = new URLSearchParams({ kind, key });
+    const r = await fetch(api(`/api/v1/config/history?${q.toString()}`), { headers: auth() });
+    return r.ok ? asList<unknown>(await r.json()) : undefined;
+  };
+
+  /** `/change/history` — 리비전 목록. */
+  const revisions = async (): Promise<unknown[] | undefined> => {
+    const r = await fetch(api('/api/v1/config/revisions?limit=100'), { headers: auth() });
+    return r.ok ? asList<unknown>(await r.json()) : undefined;
+  };
+
+  /** 롤백 — 옛 내용으로 새 리비전을 만든다. 적용은 적용 대기 화면이 한다. */
+  const rollback = async (toRevision: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await call('POST', '/api/v1/rollback', { to_revision: toRevision });
+      if (!r.ok) error = (r.body['message'] as string | undefined) ?? `rollback ${r.status}`;
+      return r.ok;
+    } finally {
+      editing = false;
+    }
+  };
+
+  /** `/ops/cluster` — 노드 상태. */
+  const clusterNodes = async (): Promise<Record<string, unknown> | undefined> => {
+    const r = await fetch(api('/api/v1/cluster/nodes'), { headers: auth() });
+    return r.ok ? await r.json() as Record<string, unknown> : undefined;
+  };
+
   /** 상세의 수정 화면. head 의 그 리스너를 바탕으로 고친 칸만 덮는다. */
   const updateListener = async (key: string, edit: ListenerEdit): Promise<boolean> => {
     editing = true;
@@ -799,6 +878,9 @@ export function createDesk(scope?: { api(path: string): string }) {
     get view() { return view; },
     get listeners() { return listeners; },
     get listenerModels() { return listenerModels; },
+    get model() { return model; },
+    get acmeOrders() { return acmeOrders; },
+    get health() { return health; },
     get pools() { return pools; },
     get routes() { return routes; },
     get certs() { return certs; },
@@ -825,6 +907,11 @@ export function createDesk(scope?: { api(path: string): string }) {
     insertUdpListener,
     insertTlsPolicy,
     updateListener,
+    putResource,
+    historyOf,
+    revisions,
+    rollback,
+    clusterNodes,
     get traffic() { return traffic; },
     insertHttpsListener,
     insertCertificate,

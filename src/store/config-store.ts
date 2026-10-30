@@ -249,6 +249,51 @@ const PLAN_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_CHANGESET_OPS = 1000;
 
 const text = (r: Row, k: string): string => String(r[k]);
+
+/** 리비전 목록의 한 줄 (`revisions`). */
+export type RevisionRow = {
+  revision: string;
+  parent: string | null;
+  rollbackOf: string | null;
+  createdAt: string;
+  createdBy: string;
+  note: string | null;
+  /** 이 리비전을 커밋한 changeset. 롤백·import 로 생긴 리비전은 없을 수 있다. */
+  changeset: string | null;
+};
+
+/** 기록을 물을 수 있는 리소스 — 모델 컬렉션 이름으로 옮긴다. */
+export const HISTORY_COLLECTIONS = {
+  listener: 'listeners',
+  httpRoute: 'httpRoutes',
+  passthroughRoute: 'passthroughRoutes',
+  pool: 'pools',
+  backend: 'backends',
+  certificate: 'certificates',
+  tlsPolicy: 'tlsPolicies',
+  sniBinding: 'sniBindings',
+  addressSet: 'addressSets',
+} as const;
+
+export type HistoryKind = keyof typeof HISTORY_COLLECTIONS;
+
+export function isHistoryKind(v: string): v is HistoryKind {
+  return Object.hasOwn(HISTORY_COLLECTIONS, v);
+}
+
+/** 한 리소스의 변경 한 건 (`resourceHistory`). */
+export type ResourceChange = {
+  revision: string;
+  /** `earliest` = 살펴본 창의 맨 앞이다. 그 앞에서 만들어졌는지는 안 봤다. */
+  change: 'created' | 'changed' | 'deleted' | 'earliest';
+  rollbackOf: string | null;
+  createdAt: string;
+  createdBy: string;
+  note: string | null;
+  changeset: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+};
 const maybeText = (r: Row, k: string): string | undefined =>
   r[k] === null || r[k] === undefined ? undefined : String(r[k]);
 const num = (r: Row, k: string): number => Number(r[k]);
@@ -1033,6 +1078,88 @@ export class ConfigStore {
         `리비전 ${revision} 의 스냅샷을 해독할 수 없다`, decoded.issues);
     }
     return decoded.model;
+  }
+
+  /**
+   * **리비전 목록** — 새 것부터 (GUI `/change/history`, 2026-10-30).
+   *
+   * 롤백 대상을 고르는 자리다. 그 리비전을 만든 changeset 을 함께 싣는다 — 롤백으로 생긴
+   * 리비전은 changeset 이 없고 `rollbackOf` 가 있다.
+   */
+  async revisions(limit = 50): Promise<RevisionRow[]> {
+    const n = Math.min(Math.max(Math.trunc(limit), 1), 500);
+    const rows = (await this.db.query(
+      `SELECT r.revision, r.parent, r.rollback_of, r.created_at, r.created_by, r.note, c.id AS changeset
+         FROM config_revisions r
+         LEFT JOIN changesets c ON c.committed_revision = r.revision
+        ORDER BY r.revision DESC
+        LIMIT $1`, [n],
+    )).rows;
+    return rows.map((r) => ({
+      revision: text(r, 'revision'),
+      parent: r['parent'] === null ? null : text(r, 'parent'),
+      rollbackOf: r['rollback_of'] === null ? null : text(r, 'rollback_of'),
+      createdAt: (r['created_at'] as Date).toISOString(),
+      createdBy: text(r, 'created_by'),
+      note: r['note'] === null ? null : text(r, 'note'),
+      changeset: r['changeset'] === null ? null : text(r, 'changeset'),
+    }));
+  }
+
+  /**
+   * **이 리소스를 바꾼 리비전** — 새 것부터 (GUI 상세의 「기록」 탭, 2026-10-30).
+   *
+   * 리비전마다 모델 스냅샷이 통째로 있다. 그래서 이웃한 두 리비전에서 그 항목(`key`)을 꺼내
+   * 비교하면 된다 — jsonb 비교라 키 순서는 상관없다. 감사 로그(audit)는 changeset 단위라
+   * 「어느 리소스」 를 모른다.
+   *
+   * **최근 `scan` 개 리비전만 본다.** 창의 맨 앞 리비전은 그 앞을 안 봤으므로 `created` 라고
+   * 말할 수 없다 — 부모가 없을 때만 `created` 이고, 아니면 `earliest`(이 앞은 안 봤다)다.
+   */
+  async resourceHistory(
+    kind: HistoryKind, key: string, opts: { limit?: number; scan?: number } = {},
+  ): Promise<ResourceChange[]> {
+    const collection = HISTORY_COLLECTIONS[kind];
+    const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 50), 1), 500);
+    const scan = Math.min(Math.max(Math.trunc(opts.scan ?? 500), 1), 5000);
+    const rows = (await this.db.query(
+      `WITH recent AS (
+         SELECT r.revision, r.parent, r.rollback_of, r.created_at, r.created_by, r.note,
+                (SELECT e FROM jsonb_array_elements(COALESCE(r.model->$1, '[]'::jsonb)) e
+                  WHERE e->>'key' = $2 LIMIT 1) AS item
+           FROM config_revisions r
+          ORDER BY r.revision DESC
+          LIMIT $4
+       ), ordered AS (
+         SELECT *, LAG(item) OVER w AS prev, LAG(revision) OVER w AS prev_rev
+           FROM recent WINDOW w AS (ORDER BY revision)
+       )
+       SELECT o.revision, o.rollback_of, o.created_at, o.created_by, o.note, o.item, o.prev,
+              c.id AS changeset,
+              CASE
+                WHEN o.prev_rev IS NULL THEN CASE WHEN o.parent IS NULL THEN 'created' ELSE 'earliest' END
+                WHEN o.prev IS NULL THEN 'created'
+                WHEN o.item IS NULL THEN 'deleted'
+                ELSE 'changed'
+              END AS change
+         FROM ordered o
+         LEFT JOIN changesets c ON c.committed_revision = o.revision
+        WHERE (o.prev_rev IS NULL AND o.item IS NOT NULL)
+           OR (o.prev_rev IS NOT NULL AND o.item IS DISTINCT FROM o.prev)
+        ORDER BY o.revision DESC
+        LIMIT $3`, [collection, key, limit, scan],
+    )).rows;
+    return rows.map((r) => ({
+      revision: text(r, 'revision'),
+      change: text(r, 'change') as ResourceChange['change'],
+      rollbackOf: r['rollback_of'] === null ? null : text(r, 'rollback_of'),
+      createdAt: (r['created_at'] as Date).toISOString(),
+      createdBy: text(r, 'created_by'),
+      note: r['note'] === null ? null : text(r, 'note'),
+      changeset: r['changeset'] === null ? null : text(r, 'changeset'),
+      before: (r['prev'] ?? null) as Record<string, unknown> | null,
+      after: (r['item'] ?? null) as Record<string, unknown> | null,
+    }));
   }
 
   /** 현재 head 를 spec-only 매니페스트로. */

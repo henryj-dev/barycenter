@@ -4,15 +4,14 @@
   import Writable from './global/Writable.svelte';
   import type { ListenerOptionFlags } from '@web/edit';
   import type { ListenersView } from '@web/listeners-view';
-  import type { TlsVersion, UdpPreset } from '@web/edit';
+  import type { UdpPreset } from '@web/edit';
   import AddListener from './AddListener.svelte';
   import AddTcpListener from './AddTcpListener.svelte';
   import AddPassthroughListener from './AddPassthroughListener.svelte';
   import AddUdpListener from './AddUdpListener.svelte';
-  import AddTlsPolicy from './AddTlsPolicy.svelte';
-  import AddHttpsListener from './AddHttpsListener.svelte';
+    import AddHttpsListener from './AddHttpsListener.svelte';
 
-  let { view, live, editing, pools, tcpPools, udpPools, policies, certificates, withdraw, withdrawPolicy, insert, insertTcp, insertPassthrough, insertUdp, insertPolicy, insertHttps }: {
+  let { mode = 'list', view, live, editing, pools, tcpPools, udpPools, policies, certificates, withdraw, insert, insertTcp, insertPassthrough, insertUdp, insertHttps }: {
     view: ListenersView;
     live: boolean;
     editing: boolean;
@@ -22,18 +21,18 @@
     policies: string[];
     certificates: string[];
     withdraw: (key: string) => void;
-    withdrawPolicy: (key: string) => void;
     insert: (key: string, bind: string, port: number, pool: string, opts: ListenerOptionFlags, allow?: string) => void;
     insertTcp: (key: string, bind: string, port: number, pool: string, allow?: string) => void;
     insertPassthrough: (
       key: string, bind: string, port: number, pool?: string, noSniPool?: string, allow?: string,
     ) => void;
     insertUdp: (key: string, bind: string, port: number, pool: string, preset: UdpPreset, allow?: string) => void;
-    insertPolicy: (key: string, minVersion: TlsVersion) => void;
     insertHttps: (
       key: string, bind: string, port: number, pool: string,
       policy: string, certificate: string, opts: ListenerOptionFlags, allow?: string,
     ) => void;
+    /** `list` 는 표만, `new` 는 만들기 폼만 (`/traffic/listener/new`). */
+    mode?: 'list' | 'new';
   } = $props();
   // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
   const scope = getContext<Scope | undefined>('scope');
@@ -48,9 +47,10 @@
 
 {#if !live}
   <p class="empty">연결하면 head 리스너가 여기 온다.</p>
-{:else}
+{:else if mode === 'list'}
+  <Writable><p class="new"><a href="/traffic/listener/new">리스너 만들기</a></p></Writable>
   {#if view.rows.length === 0}
-    <p class="empty">리스너가 없다. 아래에서 포트를 연다. 패스스루는 인증서를 제시하지 않는다.</p>
+    <p class="empty">리스너가 없다. 「리스너 만들기」 에서 포트를 연다. 패스스루는 인증서를 제시하지 않는다.</p>
   {:else}
     <ul class="ports">
       {#each view.rows as row (row.socket + row.key)}
@@ -75,33 +75,22 @@
       {/each}
     </ul>
   {/if}
+{:else}
   <Writable>
   <AddListener {pools} {editing} add={insert} />
   <AddTcpListener pools={tcpPools} {editing} add={insertTcp} />
   <AddPassthroughListener pools={tcpPools} {editing} add={insertPassthrough} />
   <AddUdpListener pools={udpPools} {editing} add={insertUdp} />
   </Writable>
-  {#if policies.length > 0}
-    <h2>TLS 정책</h2>
-    <ul class="policies">
-      {#each policies as key (key)}
-        <li>
-          <span class="key">{key}</span>
-          {#if !ro}
-          <button type="button" disabled={editing} onclick={() => withdrawPolicy(key)}>설정에서 뺀다</button>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  {/if}
   <Writable>
-  <AddTlsPolicy {editing} add={insertPolicy} />
   <AddHttpsListener {pools} {policies} {certificates} {editing} add={insertHttps} />
   </Writable>
 {/if}
 
 <style>
   .empty { color: var(--mute); }
+  .new { margin: 0 0 0.5rem; text-align: right; }
+  .new a { color: var(--ink); font-size: 0.85rem; }
   .ports { list-style: none; margin: 1.5rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
   li {
     display: grid;

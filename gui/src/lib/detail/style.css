@@ -1,0 +1,15 @@
+/* 상세 탭 공통 — 각 탭 컴포넌트가 :global 없이 같은 모양을 쓰게 class 로 묶는다. */
+.d-empty { color: var(--mute); }
+.d-mono { font-family: var(--data); }
+.d-dl { display: grid; grid-template-columns: minmax(8rem, 14rem) 1fr; gap: 0.45rem 1rem; margin: 0 0 1.25rem; }
+.d-dl dt { color: var(--mute); font-size: 0.85rem; overflow-wrap: anywhere; }
+.d-dl dd { margin: 0; font-size: 0.9rem; overflow-wrap: anywhere; font-family: var(--data); }
+.d-h3 { font-size: 0.85rem; color: var(--mute); font-weight: 600; margin: 1.25rem 0 0.5rem; }
+.d-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.d-list > li { padding: 0.55rem 0; border-bottom: 1px solid var(--rule); display: flex; gap: 0.8rem; flex-wrap: wrap; align-items: baseline; }
+.d-list a, .d-link { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--rule); }
+.d-note { font-size: 0.8rem; color: var(--mute); }
+.d-warn { color: var(--ember); }
+.d-ok { color: var(--moss); }
+.d-pre { background: var(--plate); border: 1px solid var(--rule); padding: 0.75rem; font-size: 0.78rem; overflow-x: auto; }
+@media (max-width: 640px) { .d-dl { grid-template-columns: 1fr; } .d-dl dd { margin-bottom: 0.4rem; } }

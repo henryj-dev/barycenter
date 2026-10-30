@@ -203,7 +203,11 @@ describe('같은 출처에서 GUI', () => {
     writeFileSync(join(root, 'index.html'), '<p>dash</p>');
     writeFileSync(join(root, '_shell.html'), '<title>셸</title><script>boot()</script>');
     const url = await listen(root);
-    for (const path of ['/traffic/listener/edge-443', '/traffic/listener/edge-443/', '/traffic/listener/edge-443/edit']) {
+    for (const path of [
+      '/traffic/listener/edge-443', '/traffic/listener/edge-443/', '/traffic/listener/edge-443/edit',
+      '/traffic/listener/edge-443/traffic', '/traffic/route/http/api/history', '/tls/certificate/cf/acme',
+      '/traffic/pool/web/backends', '/traffic/backend/web-1/health',
+    ]) {
       const r = await fetch(`${url}${path}`, { redirect: 'manual' });
       expect(r.status, path).toBe(200);
       expect(await r.text()).toContain('셸');
@@ -211,7 +215,11 @@ describe('같은 출처에서 GUI', () => {
       expect(r.headers.get('content-security-policy') ?? '').toMatch(/script-src 'self' 'sha256-/);
     }
     // 패턴 밖은 셸이 아니다 — 지금처럼 GUI 가 거절하고 인증 검사로 흘러간다.
-    for (const path of ['/traffic/listener/a/b', '/traffic/nope/x', '/whatever', '/traffic/listener/a/edit/x']) {
+    // `new` 는 key 가 아니다 — 만들기 화면은 미리 만든 파일이다(여기엔 없으니 셸도 안 나간다).
+    for (const path of [
+      '/traffic/listener/a/b', '/traffic/nope/x', '/whatever', '/traffic/listener/a/edit/x',
+      '/traffic/listener/new', '/tls/certificate/c/edit', '/traffic/pool/web/traffic',
+    ]) {
       const r = await fetch(`${url}${path}`, { redirect: 'manual' });
       expect(r.status, path).not.toBe(200);
     }

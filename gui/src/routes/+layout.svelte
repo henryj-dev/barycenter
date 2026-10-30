@@ -9,6 +9,7 @@
   import StepUpDialog from '#lib/account/StepUpDialog.svelte';
   import { createScope } from '#lib/global/scope.svelte.ts';
   import '../app.css';
+  import '#lib/detail/style.css';
 
   let { children } = $props();
 
@@ -47,6 +48,30 @@
   };
 
   const lede: Record<string, { h: string; p: string }> = {
+    history: {
+      h: '리비전',
+      p: '커밋된 리비전이다. 롤백은 옛 내용으로 새 리비전을 만든다. 트래픽은 적용해야 바뀐다.',
+    },
+    backends: {
+      h: '트래픽을 받는 곳',
+      p: '모든 풀의 백엔드다. 헬스가 초록이어도 트래픽을 안 받을 수 있다 — 상세의 헬스 탭이 이유를 말한다.',
+    },
+    addressSets: {
+      h: '주소 집합',
+      p: '대역 목록에 이름을 붙인다. 리스너의 출발지 제한이 @이름 으로 참조한다.',
+    },
+    tlsPolicies: {
+      h: 'TLS 정책',
+      p: 'HTTPS 리스너가 참조한다. 최소 버전·암호군·HSTS 를 정한다.',
+    },
+    sniBindings: {
+      h: 'SNI 바인딩',
+      p: 'HTTPS 호스트와 인증서를 묶는다. 바인딩이 없으면 plan 이 안 된다.',
+    },
+    cluster: {
+      h: '노드',
+      p: '모든 호스트가 같은 세대를 서빙한다. 뒤처진 노드는 리더의 세대를 따라간다.',
+    },
     dashboard: {
       h: '한눈에',
       p: 'head 모델의 요약이다. 적용 대기가 있으면 먼저 그것을 본다.',
@@ -125,11 +150,17 @@
       {/if}
       <a href="/" aria-current={place === 'dashboard' ? 'page' : undefined}>대시보드</a>
       <a href="/change/pending" aria-current={place === 'impact' ? 'page' : undefined}>적용 대기</a>
+      <a href="/change/history" aria-current={place === 'history' ? 'page' : undefined}>리비전</a>
       <a href="/traffic/listener" aria-current={place === 'listeners' ? 'page' : undefined}>리스너</a>
-      <a href="/traffic/pool" aria-current={place === 'pools' ? 'page' : undefined}>풀</a>
       <a href="/traffic/route" aria-current={place === 'routes' ? 'page' : undefined}>라우트</a>
+      <a href="/traffic/pool" aria-current={place === 'pools' ? 'page' : undefined}>풀</a>
+      <a href="/traffic/backend" aria-current={place === 'backends' ? 'page' : undefined}>백엔드</a>
+      <a href="/traffic/address-set" aria-current={place === 'addressSets' ? 'page' : undefined}>주소 집합</a>
       <a href="/tls/certificate" aria-current={place === 'certificates' ? 'page' : undefined}>인증서</a>
+      <a href="/tls/policy" aria-current={place === 'tlsPolicies' ? 'page' : undefined}>TLS 정책</a>
+      <a href="/tls/sni" aria-current={place === 'sniBindings' ? 'page' : undefined}>SNI</a>
       <a href="/ops/status" aria-current={place === 'status' ? 'page' : undefined}>상태</a>
+      <a href="/ops/cluster" aria-current={place === 'cluster' ? 'page' : undefined}>클러스터</a>
       <a href="/ops/rendered" aria-current={place === 'rendered' ? 'page' : undefined}>산출물</a>
       <a href="/ops/audit" aria-current={place === 'audit' ? 'page' : undefined}>기록</a>
       {#if session.me === undefined}

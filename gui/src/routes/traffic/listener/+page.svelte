@@ -34,9 +34,7 @@
   }}
   policies={desk.policies}
   certificates={desk.certs.rows.filter((c) => c.hasMaterial).map((c) => c.key)}
-  insertPolicy={(key, minVersion) => { void desk.insertTlsPolicy(key, minVersion).then(after); }}
   insertHttps={(key, bind, port, pool, policy, certificate, opts, allow) => {
     void desk.insertHttpsListener(key, { bind, port, pool, policy, certificate }, opts, allow).then(after);
   }}
-  withdrawPolicy={(key) => { void desk.withdraw('tlsPolicy', key).then(after); }}
 />

@@ -15,6 +15,7 @@ import {
   drainStatusOf, observationPeerOf, observePeerFromAdmin, parsePeerObservation,
 } from '../../src/control/drain.js';
 import { GUI_DYNAMIC, GUI_SHELL, KIT_ROUTES, pageOf } from '../../src/web/page.js';
+import { RESOURCES, resourcePath, type TabSlug } from '../../src/web/resources.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -150,8 +151,10 @@ describe('Kit 경로', () => {
 
   it('Kit 자리가 라우트고 pageOf 가 같은 이름을 읽는다', () => {
     expect(KIT_ROUTES.some((r) => r.place === 'login' && r.path === '/login')).toBe(true);
-    // + invite · account · users (계획 A) · reset · email (B1) · regions (전역) · dashboard (경로 분리)
-    expect(KIT_ROUTES).toHaveLength(16);
+    // 경로 분리(#124): 대시보드·변경 3 · 목록 8 · 만들기 9 · 운영 4 · 사람 1 · 계정 화면 6. 표가 정본이다 — 여기선
+    // 중복이 없고, 파일이 다 있는지를 본다(아래 반복).
+    expect(new Set(KIT_ROUTES.map((r) => r.path)).size).toBe(KIT_ROUTES.length);
+    expect(KIT_ROUTES).toHaveLength(31);
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);
@@ -161,12 +164,25 @@ describe('Kit 경로', () => {
       expect(readdirSync(dirname(file))).toContain('+page.svelte');
       expect(readFileSync(file, 'utf8')).not.toMatch(/setInterval|setTimeout\(\s*\(\)\s*=>\s*fetch/);
     }
-    // key 자리도 라우트 파일이 있고, 미리 만들지 않는다(셸이 연다).
+    // key 자리도 라우트 파일이 있고, 미리 만들지 않는다(셸이 연다). 탭마다 파일이 리소스 표와 같다.
     for (const d of GUI_DYNAMIC) {
+      const spec = RESOURCES[d.kind];
       const dir = join(routesDir, d.route.slice(1));
-      expect(readdirSync(dir)).toContain('+page.svelte');
-      expect(readFileSync(join(dir, '+page.ts'), 'utf8')).toMatch(/prerender\s*=\s*false/);
-      expect(pageOf(d.route.replace('[key]', 'edge-443'))).toBe(d.place);
+      expect(readFileSync(join(dir, '+layout.ts'), 'utf8')).toMatch(/prerender\s*=\s*false/);
+      expect(readFileSync(join(dir, '+layout.svelte'), 'utf8')).toContain(`kind="${d.kind}"`);
+      const tails = [...spec.tabs.map((t) => t.slug), ...(spec.editable ? ['edit'] : [])];
+      for (const tail of tails) {
+        expect(existsSync(join(dir, tail, '+page.svelte')), `${d.route}/${tail}`).toBe(true);
+        const path = resourcePath(d.kind, 'edge-443', tail as TabSlug | 'edit');
+        expect(d.pattern.test(path), path).toBe(true);
+        expect(pageOf(path)).toBe(d.place);
+      }
+      // 표에 없는 탭 디렉터리가 있으면 서버가 셸을 안 내 준다 — 화면이 404 가 된다.
+      const onDisk = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+      expect(onDisk).toEqual(tails.filter((t) => t !== '').sort());
+      // `new` 는 key 가 아니다 — 만들기 화면이 미리 만들어져 있다.
+      expect(d.pattern.test(`${spec.base}/new`)).toBe(false);
+      if (spec.creatable) expect(existsSync(join(routesDir, spec.base.slice(1), 'new', '+page.svelte'))).toBe(true);
     }
     expect(readFileSync(join(root, 'gui/src/routes/+layout.svelte'), 'utf8'))
       .not.toMatch(/setInterval|setTimeout\(\s*\(\)\s*=>\s*fetch/);
