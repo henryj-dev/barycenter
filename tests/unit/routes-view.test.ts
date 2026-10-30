@@ -61,9 +61,9 @@ describe('컴파일된 순서', () => {
 });
 
 describe('화면 자리', () => {
-  it('/routes 가 라우트 화면이다 — Kit 이 아니다', () => {
-    expect(pageOf('/routes')).toBe('routes');
-    expect(pageOf('/pools')).toBe('pools');
-    expect(pageOf('/')).toBe('impact');
+  it('/traffic/route 가 라우트 화면이다 — Kit 자리다', () => {
+    expect(pageOf('/traffic/route')).toBe('routes');
+    expect(pageOf('/traffic/pool')).toBe('pools');
+    expect(pageOf('/')).toBe('dashboard');
   });
 });

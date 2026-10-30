@@ -6,12 +6,11 @@
   import { trafficMarkOf } from '@web/pools-view';
   import type { PoolsView } from '@web/pools-view';
   import type { ProtocolClass } from '@web/edit';
-  import AddBackend from './AddBackend.svelte';
-  import AddPool from './AddPool.svelte';
+    import AddPool from './AddPool.svelte';
   import AddHashPool from './AddHashPool.svelte';
   import AddSourceIpHashPool from './AddSourceIpHashPool.svelte';
 
-  let { view, live, editing, traffic, withdraw, withdrawPool, drain, insert, openPool, openHashPool, openSourceIpHashPool }: {
+  let { mode = 'list', view, live, editing, traffic, withdraw, withdrawPool, drain, insert, openPool, openHashPool, openSourceIpHashPool }: {
     view: PoolsView;
     live: boolean;
     editing: boolean;
@@ -32,6 +31,8 @@
     openSourceIpHashPool: (input: {
       pool: string; protocolClass: ProtocolClass; backend: string; host: string; port: number;
     }) => void;
+    /** `list` 는 풀·백엔드 표, `new` 는 풀 만들기 폼 (`/traffic/pool/new`). */
+    mode?: 'list' | 'new';
   } = $props();
   // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
   const scope = getContext<Scope | undefined>('scope');
@@ -46,15 +47,16 @@
 
 {#if !live}
   <p class="empty">연결하면 head 풀이 여기 온다.</p>
-{:else}
+{:else if mode === 'list'}
+  <Writable><p class="new"><a href="/traffic/pool/new">풀 만들기</a> · <a href="/traffic/backend/new">백엔드 넣기</a></p></Writable>
   {#if view.rows.length === 0}
-    <p class="empty">풀이 없다. 아래에서 풀과 첫 백엔드를 같이 연다.</p>
+    <p class="empty">풀이 없다. 「풀 만들기」 에서 풀과 첫 백엔드를 같이 연다.</p>
   {:else}
   <div class="pools">
     {#each view.rows as pool (pool.key)}
       <section>
         <header>
-          <h2>{pool.key}</h2>
+          <h2><a href={`/traffic/pool/${encodeURIComponent(pool.key)}`}>{pool.key}</a></h2>
           <p class="meta mono">{pool.protocolClass} · {pool.algorithm}</p>
           <p class="tally">
             <span data-state="healthy">{pool.healthy}</span>
@@ -75,7 +77,7 @@
           <ul>
             {#each pool.backends as be (be.key)}
               <li data-state={be.state}>
-                <span class="name">{be.key}</span>
+                <a class="name" href={`/traffic/backend/${encodeURIComponent(be.key)}`}>{be.key}</a>
                 <span class="addr mono">{be.host}:{be.port}</span>
                 <span class="mark">{label(be.state)}</span>
                 {#if trafficMarkOf(traffic?.get(be.key)) !== undefined}
@@ -108,17 +110,11 @@
             {/each}
           </ul>
         {/if}
-        <Writable>
-        <AddBackend
-          pool={pool.key}
-          {editing}
-          add={(key, host, port) => insert(pool.key, key, host, port)}
-        />
-        </Writable>
       </section>
     {/each}
   </div>
   {/if}
+{:else}
   <Writable>
   <AddPool {editing} add={openPool} />
   <AddHashPool {editing} add={openHashPool} />
@@ -127,6 +123,9 @@
 {/if}
 
 <style>
+  .new { margin: 0 0 0.5rem; text-align: right; }
+  .new a { color: var(--ink); font-size: 0.85rem; }
+  h2 a, a.name { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
   .empty { color: var(--mute); }
   .pools { margin-top: 1.5rem; }
   section { border-top: 1px solid var(--rule); padding: 1rem 0 0.4rem; }

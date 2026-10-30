@@ -10,6 +10,7 @@ import type { ServerResponse } from 'node:http';
 import { extname, join, relative, resolve, sep } from 'node:path';
 
 import { SECURITY_HEADERS } from '../api/headers.js';
+import { GUI_SHELL, isDynamicGuiPath, movedGuiPath } from './page.js';
 
 /**
  * HTML 문서의 CSP `script-src` 를 **그 파일에서 유도한다** (검수 G2).
@@ -114,7 +115,17 @@ const MIME: Record<string, string> = {
 
 export function serveGui(res: ServerResponse, pathname: string, root: string): boolean {
   if (!existsSync(root) || !statSync(root).isDirectory()) return false;
-  const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+  // 옮긴 자리 — 새 주소를 알려 준다. 쿼리는 싣지 않는다(옮긴 화면은 쿼리를 안 읽는다).
+  const moved = movedGuiPath(pathname);
+  if (moved !== undefined) {
+    res.writeHead(308, { location: moved, 'cache-control': 'no-cache', ...SECURITY_HEADERS });
+    res.end();
+    return true;
+  }
+  // key 가 든 자리는 셸 하나로 — **이 패턴만**. 모르는 경로는 아래에서 그대로 거절된다.
+  const rel = isDynamicGuiPath(pathname)
+    ? GUI_SHELL
+    : pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
   let target = resolve(root, rel);
   const base = resolve(root);
   const inside = target === base || relative(base, target).split(sep)[0] !== '..';

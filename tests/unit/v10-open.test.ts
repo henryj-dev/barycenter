@@ -14,7 +14,8 @@ import type { Http, HttpResult } from '../../src/cli/flow.js';
 import {
   drainStatusOf, observationPeerOf, observePeerFromAdmin, parsePeerObservation,
 } from '../../src/control/drain.js';
-import { KIT_ROUTES, pageOf } from '../../src/web/page.js';
+import { GUI_DYNAMIC, GUI_SHELL, KIT_ROUTES, pageOf } from '../../src/web/page.js';
+import { RESOURCES, resourcePath, type DetailExtra, type TabSlug } from '../../src/web/resources.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -131,7 +132,7 @@ describe('OpenAPI · DDL 동결', () => {
 });
 
 describe('Kit 경로', () => {
-  it('GUI 는 adapter-static Kit 이고 SPA 폴백이 아니다', () => {
+  it('GUI 는 adapter-static Kit 이고, 폴백은 key 자리를 위한 셸 하나다', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'gui/package.json'), 'utf8')) as {
       devDependencies: Record<string, string>;
     };
@@ -143,13 +144,18 @@ describe('Kit 경로', () => {
     expect(viteCfg).toContain('@sveltejs/kit/vite');
     expect(viteCfg).toContain('@sveltejs/adapter-static');
     expect(viteCfg).toMatch(/sveltekit\(\{/);
-    expect(viteCfg).toMatch(/fallback:\s*undefined/);
+    // 셸은 서버가 GUI_DYNAMIC 패턴에만 낸다 — 아무 경로나 받지 않는다(plan-view 테스트).
+    expect(viteCfg).toMatch(new RegExp(`fallback:\\s*'${GUI_SHELL}'`));
     expect(viteCfg).not.toMatch(/plugins:\s*\[svelte\(\)\]/);
   });
 
   it('Kit 자리가 라우트고 pageOf 가 같은 이름을 읽는다', () => {
     expect(KIT_ROUTES.some((r) => r.place === 'login' && r.path === '/login')).toBe(true);
-    expect(KIT_ROUTES).toHaveLength(15); // + invite · account · users (계획 A) · reset · email (B1) · regions (전역)
+    // 경로 분리(#124): 대시보드·적용 대기 2 · 목록 9(라우트는 세그먼트 둘) · 만들기 9 · 리스너 만들기 둘째
+    // 단계 5 · 빠른 프록시 1 · 운영 4 · 사람 1 · 계정 화면 6. 표가 정본이다 — 여기선
+    // 중복이 없고, 파일이 다 있는지를 본다(아래 반복).
+    expect(new Set(KIT_ROUTES.map((r) => r.path)).size).toBe(KIT_ROUTES.length);
+    expect(KIT_ROUTES).toHaveLength(37);
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);
@@ -158,6 +164,33 @@ describe('Kit 경로', () => {
         : join(routesDir, r.path.slice(1), '+page.svelte');
       expect(readdirSync(dirname(file))).toContain('+page.svelte');
       expect(readFileSync(file, 'utf8')).not.toMatch(/setInterval|setTimeout\(\s*\(\)\s*=>\s*fetch/);
+    }
+    // key 자리도 라우트 파일이 있고, 미리 만들지 않는다(셸이 연다). 탭마다 파일이 리소스 표와 같다.
+    for (const d of GUI_DYNAMIC) {
+      if (d.kind === undefined) {
+        // 리소스가 아닌 동적 자리(클러스터 노드) — 라우트 파일이 있고 미리 만들지 않는다.
+        const dir = join(routesDir, d.route.slice(1));
+        expect(readFileSync(join(dir, '+page.ts'), 'utf8')).toMatch(/prerender\s*=\s*false/);
+        expect(pageOf(d.route.replace(/\[\w+\]/, 'web-01'))).toBe(d.place);
+        continue;
+      }
+      const spec = RESOURCES[d.kind];
+      const dir = join(routesDir, d.route.slice(1));
+      expect(readFileSync(join(dir, '+layout.ts'), 'utf8')).toMatch(/prerender\s*=\s*false/);
+      expect(readFileSync(join(dir, '+layout.svelte'), 'utf8')).toContain(`kind="${d.kind}"`);
+      const tails: (TabSlug | DetailExtra)[] = [...spec.tabs.map((t) => t.slug), ...spec.extras];
+      for (const tail of tails) {
+        expect(existsSync(join(dir, tail, '+page.svelte')), `${d.route}/${tail}`).toBe(true);
+        const path = resourcePath(d.kind, 'edge-443', tail);
+        expect(d.pattern.test(path), path).toBe(true);
+        expect(pageOf(path)).toBe(d.place);
+      }
+      // 표에 없는 탭 디렉터리가 있으면 서버가 셸을 안 내 준다 — 화면이 404 가 된다.
+      const onDisk = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+      expect(onDisk).toEqual(tails.filter((t) => t !== '').sort());
+      // `new` 는 key 가 아니다 — 만들기 화면이 미리 만들어져 있다.
+      expect(d.pattern.test(`${spec.base}/new`)).toBe(false);
+      if (spec.creatable) expect(existsSync(join(routesDir, spec.base.slice(1), 'new', '+page.svelte'))).toBe(true);
     }
     expect(readFileSync(join(root, 'gui/src/routes/+layout.svelte'), 'utf8'))
       .not.toMatch(/setInterval|setTimeout\(\s*\(\)\s*=>\s*fetch/);

@@ -39,9 +39,9 @@ describe('인증서 목록', () => {
 });
 
 describe('화면 자리', () => {
-  it('/certificates 가 인증서 화면이다 — Kit 이 아니다', () => {
-    expect(pageOf('/certificates')).toBe('certificates');
-    expect(pageOf('/routes')).toBe('routes');
-    expect(pageOf('/')).toBe('impact');
+  it('/tls/certificate 가 인증서 화면이다 — Kit 자리다', () => {
+    expect(pageOf('/tls/certificate')).toBe('certificates');
+    expect(pageOf('/traffic/route')).toBe('routes');
+    expect(pageOf('/')).toBe('dashboard');
   });
 });

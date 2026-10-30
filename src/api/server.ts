@@ -40,7 +40,7 @@ import { healthRows } from '../control/health.js';
 import { count, render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
-import { ConfigStore, StoreError, type PatchOp } from '../store/config-store.js';
+import { ConfigStore, isHistoryKind, StoreError, type PatchOp } from '../store/config-store.js';
 import { AccountError, AccountStoreUnavailable, STEP_UP_MAX_AGE_MS, type AccountService, type Meta as AccountMeta } from '../accounts/service.js';
 import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
@@ -286,6 +286,35 @@ const ROUTES: Route[] = [
   route('GET', '/api/v1/config/model', 'read', async (c, api) => {
     const rev = c.url.searchParams.get('revision') ?? (await api.store.head()).revision;
     json(c.res, 200, { revision: rev, model: await api.store.modelAt(rev) });
+  }),
+
+  /**
+   * 리비전 목록 — 새 것부터 (GUI `/change/history`, 2026-10-30). 롤백 대상을 고르는 자리다.
+   * `limit` 은 1–500 으로 묶는다(검수 B-11 — 음수가 PG 까지 가면 500 이다).
+   */
+  route('GET', '/api/v1/config/revisions', 'read', async (c, api) => {
+    const asked = Number(c.url.searchParams.get('limit') ?? '50') || 50;
+    json(c.res, 200, await api.store.revisions(asked));
+  }),
+
+  /**
+   * **이 리소스를 바꾼 리비전** (GUI 상세의 「기록」 탭, 2026-10-30).
+   * `kind` 는 patch 의 kind 와 같은 이름이다(`listener`·`httpRoute`·`pool` …). 모르는 kind 는 400 이다 —
+   * 빈 목록으로 답하면 오타가 「바뀐 적 없다」 로 보인다.
+   */
+  route('GET', '/api/v1/config/history', 'read', async (c, api) => {
+    const kind = c.url.searchParams.get('kind') ?? '';
+    const key = c.url.searchParams.get('key') ?? '';
+    if (!isHistoryKind(kind)) {
+      json(c.res, 400, { error: 'bad_kind', message: `kind '${kind}' 를 모른다` });
+      return;
+    }
+    if (key === '') {
+      json(c.res, 400, { error: 'bad_key', message: 'key 가 비어 있다' });
+      return;
+    }
+    const asked = Number(c.url.searchParams.get('limit') ?? '50') || 50;
+    json(c.res, 200, await api.store.resourceHistory(kind, key, { limit: asked }));
   }),
 
   route('GET', '/api/v1/config/rendered', 'read', async (c, api) => {
