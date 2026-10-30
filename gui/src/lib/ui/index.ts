@@ -33,6 +33,7 @@ export { default as SplitView } from './SplitView.svelte';
 export { default as StepList, type StepState } from './StepList.svelte';
 export { default as Switch } from './Switch.svelte';
 export { default as Tabs, type TabItem } from './Tabs.svelte';
+export { default as TextArea } from './TextArea.svelte';
 export { default as TextInput } from './TextInput.svelte';
 export { default as Timeline, type TimelineGroup } from './Timeline.svelte';
 export { default as Toaster } from './Toaster.svelte';

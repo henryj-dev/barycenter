@@ -73,7 +73,7 @@ describe('① 저작 표면', () => {
   });
 
   it('GUI 폼이 같은 파서를 쓴다 — 두 벌이면 값이 갈린다', () => {
-    const form = read('gui/src/lib/ListenerOptions.svelte');
+    const form = read('gui/src/lib/forms/ListenerOptions.svelte');
     for (const field of ['value.rate', 'value.maxBody', 'value.nodelay', 'value.strictPriority']) {
       expect(form.includes(field), `폼에 ${field} 가 없다`).toBe(true);
     }
