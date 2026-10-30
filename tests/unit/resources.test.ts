@@ -61,15 +61,21 @@ describe('리소스 표와 주소', () => {
     expect(resourcePath('listener', 'edge-443')).toBe('/traffic/listener/edge-443');
     expect(resourcePath('httpRoute', 'a b', 'history')).toBe('/traffic/route/http/a%20b/history');
     const p = detailPattern(RESOURCES.pool);
-    for (const ok of ['/traffic/pool/web', '/traffic/pool/web/backends', '/traffic/pool/web/edit']) expect(p.test(ok), ok).toBe(true);
-    for (const no of ['/traffic/pool/web/traffic', '/traffic/pool/new', '/traffic/pool/new/edit', '/traffic/pool/web/x/y', '/traffic/pool/']) {
+    for (const ok of ['/traffic/pool/web', '/traffic/pool/web/settings', '/traffic/pool/web/traffic']) expect(p.test(ok), ok).toBe(true);
+    // 시안에 없는 탭·수정 화면은 셸을 안 낸다 — 수정은 설정 탭이다.
+    for (const no of ['/traffic/pool/web/edit', '/traffic/pool/web/backends', '/traffic/pool/new', '/traffic/pool/web/x/y', '/traffic/pool/']) {
       expect(p.test(no), no).toBe(false);
     }
-    // 인증서는 수정 화면이 없다(자료를 다시 넣는다).
-    expect(detailPattern(RESOURCES.certificate).test('/tls/certificate/c/edit')).toBe(false);
-    expect(isDynamicGuiPath('/tls/certificate/c/acme')).toBe(true);
+    // 트래픽 경로는 리스너·라우트·풀만(시안의 두 묶음).
+    expect(isDynamicGuiPath('/traffic/backend/b/traffic')).toBe(false);
+    expect(isDynamicGuiPath('/tls/sni/s/resources')).toBe(true);
     expect(isDynamicGuiPath('/traffic/route/http/api/traffic/')).toBe(true);
+    expect(isDynamicGuiPath('/traffic/route/http/api/rebuild')).toBe(true);
+    expect(isDynamicGuiPath('/traffic/route/passthrough/pt/rebuild')).toBe(false);
     expect(isDynamicGuiPath('/traffic/route/api')).toBe(false);
+    expect(isDynamicGuiPath('/ops/cluster/web-01')).toBe(true);
+    // 리스너 만들기 둘째 단계는 미리 만든 파일이다 — 셸이 아니다.
+    expect(isDynamicGuiPath('/traffic/listener/new/https')).toBe(false);
   });
 });
 
@@ -127,9 +133,16 @@ describe('트래픽 경로', () => {
     ]);
   });
 
+  it('풀은 「어디서 이 풀로 오나」 — 리스너 이름을 붙인 줄', () => {
+    expect(trafficOf(model, { kind: 'pool', key: 'web' }, health).map((l) => [l.listener, l.match]))
+      .toEqual([['edge', 'edge · 기본 동작 (맞는 라우트 없음)']]);
+    expect(trafficOf(model, { kind: 'pool', key: 'pg' }, health).map((l) => l.match))
+      .toEqual(['db · 모든 연결', 'sni · SNI 없음']);
+  });
+
   it('라우트는 자기 한 줄, 다른 리소스는 경로가 없다', () => {
     expect(trafficOf(model, { kind: 'httpRoute', key: 'api' }, health)).toHaveLength(1);
-    expect(trafficOf(model, { kind: 'pool', key: 'web' }, health)).toEqual([]);
+    expect(trafficOf(model, { kind: 'backend', key: 'web-1' }, health)).toEqual([]);
     expect(trafficOf(model, { kind: 'listener', key: 'nope' }, health)).toEqual([]);
   });
 });

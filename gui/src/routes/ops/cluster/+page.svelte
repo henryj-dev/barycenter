@@ -32,7 +32,7 @@
   <ul class="d-list">
     {#each body.nodes as n (n.name)}
       <li>
-        <span class="d-mono">{n.name}{n.name === body.self ? ' (이 노드)' : ''}</span>
+        <a class="d-mono" href={`/ops/cluster/${encodeURIComponent(n.name)}`}>{n.name}</a>{#if n.name === body.self}<span class="d-note">이 노드</span>{/if}
         <span class="d-note">{n.role === 'leader' ? '리더' : '팔로워'}</span>
         <span class={n.state === 'in_sync' && !n.stale ? 'd-ok' : 'd-warn'}>{n.state}</span>
         {#if n.stale}<span class="d-warn">보고가 끊겼다 — {new Date(n.lastSeen).toLocaleString()} 이후</span>{/if}

@@ -10,7 +10,7 @@
   import AddPassthroughReject from './AddPassthroughReject.svelte';
   import type { RedirectStatus, RejectStatus } from '@web/edit';
 
-  let { mode = 'list', view, live, editing, listeners, pools, ptListeners, tcpPools, withdraw, withdrawPt, insert, insertRedirect, insertReject, insertPt, insertPtReject }: {
+  let { mode = 'list-http', view, live, editing, listeners, pools, ptListeners, tcpPools, withdraw, withdrawPt, insert, insertRedirect, insertReject, insertPt, insertPtReject }: {
     view: RoutesView;
     live: boolean;
     editing: boolean;
@@ -35,8 +35,11 @@
     }) => void;
     insertPt: (input: { key: string; listener: string; snis: string[]; pool: string }) => void;
     insertPtReject: (input: { key: string; listener: string; snis: string[] }) => void;
-    /** `list` 는 표, `http`·`passthrough` 는 그 라우트의 만들기 폼(`/traffic/route/<종류>/new`). */
-    mode?: 'list' | 'http' | 'passthrough';
+    /**
+     * `list-http`·`list-passthrough` 는 목록 세그먼트(`/traffic/route/<종류>`),
+     * `http`·`passthrough` 는 그 라우트의 만들기 폼(`/traffic/route/<종류>/new`).
+     */
+    mode?: 'list-http' | 'list-passthrough' | 'http' | 'passthrough';
   } = $props();
   // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
   const scope = getContext<Scope | undefined>('scope');
@@ -45,8 +48,21 @@
 
 {#if !live}
   <p class="empty">연결하면 head 라우트가 여기 온다.</p>
-{:else if mode === 'list'}
-  <Writable><p class="new"><a href="/traffic/route/http/new">HTTP 라우트 만들기</a> · <a href="/traffic/route/passthrough/new">패스스루 라우트 만들기</a></p></Writable>
+{:else if mode === 'list-http' || mode === 'list-passthrough'}
+  <div class="seg-row">
+    <nav class="seg" aria-label="라우트 종류">
+      <a href="/traffic/route/http" aria-current={mode === 'list-http' ? 'page' : undefined}>HTTP</a>
+      <a href="/traffic/route/passthrough" aria-current={mode === 'list-passthrough' ? 'page' : undefined}>패스스루</a>
+    </nav>
+    <Writable>
+      {#if mode === 'list-http'}
+        <a class="new" href="/traffic/route/http/new">HTTP 라우트 만들기</a>
+      {:else}
+        <a class="new" href="/traffic/route/passthrough/new">패스스루 라우트 만들기</a>
+      {/if}
+    </Writable>
+  </div>
+  {#if mode === 'list-http'}
   {#if view.errors.length > 0}
     <ul class="notes" data-kind="error">
       {#each view.errors as note (note.kind + note.message)}
@@ -81,7 +97,7 @@
     </ol>
   {/if}
 
-  <h2>패스스루</h2>
+  {:else}
   {#if view.passthrough.length === 0}
     <p class="empty">패스스루 라우트가 없다. 「패스스루 라우트 만들기」 에서 SNI 를 붙인다.</p>
   {:else}
@@ -98,6 +114,7 @@
       {/each}
     </ul>
   {/if}
+  {/if}
 {:else if mode === 'http'}
   <Writable>
   <AddRoute {listeners} {pools} {editing} add={insert} />
@@ -112,8 +129,11 @@
 {/if}
 
 <style>
-  .new { margin: 0 0 0.5rem; text-align: right; }
-  .new a { color: var(--ink); font-size: 0.85rem; }
+  .seg-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 0.75rem; }
+  .seg { display: flex; border: 1px solid var(--rule); }
+  .seg a { padding: 0.3rem 0.8rem; font-size: 0.8rem; color: var(--mute); text-decoration: none; }
+  .seg a[aria-current='page'] { background: var(--plate); color: var(--ink); }
+  .new { color: var(--ink); font-size: 0.85rem; }
   a.key { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
   .empty { color: var(--mute); }
   .notes {

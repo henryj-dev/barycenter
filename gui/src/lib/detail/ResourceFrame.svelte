@@ -19,12 +19,13 @@
   const item = $derived(itemOf(desk.model, kind, key));
   const base = $derived(resourcePath(kind, key));
   const rest = $derived(page.url.pathname.slice(base.length).replace(/^\//, '').replace(/\/$/, ''));
-  const editingPage = $derived(rest === 'edit');
+  const extraLabel: Record<string, string> = { rebuild: 'URL로 다시 만들기' };
+  const extra = $derived(extraLabel[rest]);
 </script>
 
 <p class="crumb">
-  <a href={spec.base.startsWith('/traffic/route/') ? '/traffic/route' : spec.base}>{spec.label}</a> /
-  <a class="mono" href={base}>{key}</a>{#if editingPage} / 설정 수정{/if}
+  <a href={spec.base}>{spec.label}</a> /
+  <a class="mono" href={base}>{key}</a>{#if extra !== undefined} / {extra}{/if}
 </p>
 
 {#if !desk.live}
@@ -32,15 +33,18 @@
 {:else if item === undefined}
   <p class="empty">
     {spec.label} <span class="mono">{key}</span> 가 head 에 없다. 이름을 확인하거나
-    <a href={spec.base.startsWith('/traffic/route/') ? '/traffic/route' : spec.base}>목록</a>으로 간다.
+    <a href={spec.base}>목록</a>으로 간다.
   </p>
 {:else}
   <header class="head">
     <h2 class="mono">{key}</h2>
     <Writable>
       <p class="actions">
-        {#if spec.editable && !editingPage}
-          <a class="button" href={resourcePath(kind, key, 'edit')}>설정 수정</a>
+        {#if spec.editable && rest !== 'settings'}
+          <a class="button" href={resourcePath(kind, key, 'settings')}>수정</a>
+        {/if}
+        {#if spec.extras.includes('rebuild') && rest !== 'rebuild'}
+          <a class="button" href={resourcePath(kind, key, 'rebuild')}>URL로 다시 만들기</a>
         {/if}
         <button type="button" disabled={desk.editing} onclick={() => { void desk.withdraw(kind, key).then(after); }}>
           설정에서 뺀다
@@ -48,7 +52,7 @@
       </p>
     </Writable>
   </header>
-  {#if !editingPage}
+  {#if extra === undefined}
     <nav class="tabs" aria-label="{spec.label} 상세">
       {#each spec.tabs as t (t.slug)}
         <a href={resourcePath(kind, key, t.slug)} aria-current={rest === t.slug ? 'page' : undefined}>{t.label}</a>

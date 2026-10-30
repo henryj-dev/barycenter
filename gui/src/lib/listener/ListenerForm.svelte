@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * 리스너 수정 — `/traffic/listener/<key>/edit` (2026-10-30, 경로 분리).
+   * 리스너 설정 폼 — 리스너 상세의 설정 탭(`/traffic/listener/<key>/settings`, 2026-10-30).
    *
    * 고치는 칸: 바인드 · 포트 · 켜짐 · 출발지 제한 · 기본 동작. 나머지 칸(헤더 규칙·레이트리밋·TLS
    * 결박 …)은 head 의 값을 그대로 싣는다 — `editListenerPatch`. 저장은 commit 이고, 적용은

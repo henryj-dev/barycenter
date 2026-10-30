@@ -4,12 +4,16 @@
   import { page } from '$app/state';
   import { RESOURCES, relationsOf, resourcePath, type ResourceKind } from '@web/resources';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import PoolBackends from './PoolBackends.svelte';
 
   let { kind }: { kind: ResourceKind } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const key = $derived(page.params['key'] ?? '');
   const rel = $derived(relationsOf(desk.model, { kind, key }));
 </script>
+
+<!-- 시안: 풀의 연결된 리소스 탭에는 소속 백엔드 표가 있다. -->
+{#if kind === 'pool'}<h3 class="d-h3">소속 백엔드</h3><PoolBackends />{/if}
 
 <h3 class="d-h3">이것이 쓰는 리소스</h3>
 {#if rel.uses.length === 0}
@@ -18,7 +22,7 @@
   <ul class="d-list">
     {#each rel.uses as e (e.via + e.to.kind + e.to.key)}
       <li>
-        <span class="d-note">{e.via}</span>
+        {#if e.via !== RESOURCES[e.to.kind].label}<span class="d-note">{e.via}</span>{/if}
         <span>{RESOURCES[e.to.kind].label}</span>
         {#if e.missing}
           <span class="d-mono d-warn">{e.to.key} — head 에 없다</span>
@@ -39,7 +43,7 @@
       <li>
         <span>{RESOURCES[e.from.kind].label}</span>
         <a class="d-mono" href={resourcePath(e.from.kind, e.from.key)}>{e.from.key}</a>
-        <span class="d-note">{e.via}</span>
+        {#if e.via !== RESOURCES[e.to.kind].label}<span class="d-note">{e.via}</span>{/if}
       </li>
     {/each}
   </ul>

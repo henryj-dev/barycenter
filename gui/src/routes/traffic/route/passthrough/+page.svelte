@@ -8,6 +8,7 @@
 </script>
 
 <Routes
+  mode="list-passthrough"
   view={desk.routes}
   live={desk.live}
   editing={desk.editing}

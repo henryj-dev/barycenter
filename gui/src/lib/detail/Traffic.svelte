@@ -51,7 +51,7 @@
       </li>
     {/each}
   </ol>
-  <p class="d-note">라우트는 우선순위 순서다. 엔진이 실제로 보는 순서(매치 클래스)는 <a class="d-link" href="/traffic/route">라우트</a> 화면이 정본이다.</p>
+  <p class="d-note">라우트는 우선순위 순서다. 엔진이 실제로 보는 순서(매치 클래스)는 <a class="d-link" href="/traffic/route/http">라우트</a> 화면이 정본이다.</p>
 {/if}
 
 <style>

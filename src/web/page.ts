@@ -8,7 +8,7 @@
 import { RESOURCES, RESOURCE_KINDS, detailPattern, type ResourceKind } from './resources.js';
 
 export type Place =
-  | 'dashboard' | 'impact' | 'history'
+  | 'dashboard' | 'impact'
   | 'listeners' | 'routes' | 'pools' | 'backends' | 'addressSets'
   | 'certificates' | 'tlsPolicies' | 'sniBindings'
   | 'status' | 'cluster' | 'rendered' | 'audit'
@@ -27,13 +27,17 @@ export const PLACE_OF_KIND: Readonly<Record<ResourceKind, Place>> = {
   sniBinding: 'sniBindings',
 };
 
+/** 리스너 만들기 둘째 단계의 주소 — 모델의 프로토콜 이름 그대로. */
+export const LISTENER_PROTOCOLS = ['http', 'https', 'tcp', 'udp', 'tls_passthrough'] as const;
+
 /** SvelteKit 이 프리렌더하는 자리. 한 index.html 폴백이 아니다. */
 export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'dashboard', path: '/' },
   { place: 'impact', path: '/change/pending' },
-  { place: 'history', path: '/change/history' },
   { place: 'listeners', path: '/traffic/listener' },
-  { place: 'routes', path: '/traffic/route' },
+  // 라우트는 목록 위 세그먼트(HTTP · 패스스루)가 주소다. `/traffic/route` 는 HTTP 로 보낸다(GUI_MOVED).
+  { place: 'routes', path: '/traffic/route/http' },
+  { place: 'routes', path: '/traffic/route/passthrough' },
   { place: 'pools', path: '/traffic/pool' },
   { place: 'backends', path: '/traffic/backend' },
   { place: 'addressSets', path: '/traffic/address-set' },
@@ -43,6 +47,10 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   // 만들기 — 리소스마다 `<base>/new`. 미리 만들어진다(key 가 없다).
   ...RESOURCE_KINDS.filter((k) => RESOURCES[k].creatable)
     .map((k) => ({ place: PLACE_OF_KIND[k], path: `${RESOURCES[k].base}/new` })),
+  // 리스너 만들기는 두 단계다(시안: 1 / 2 프로토콜 고르기 → 2 / 2 설정). 둘째 단계가 프로토콜마다 주소다.
+  ...LISTENER_PROTOCOLS.map((p) => ({ place: 'listeners' as const, path: `/traffic/listener/new/${p}` })),
+  // 빠른 프록시 만들기 — URL 하나로 풀·백엔드·리스너(또는 라우트)를 한 번에.
+  { place: 'listeners', path: '/traffic/listener/new/quick' },
   { place: 'status', path: '/ops/status' },
   { place: 'cluster', path: '/ops/cluster' },
   { place: 'rendered', path: '/ops/rendered' },
@@ -63,13 +71,17 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
  */
 export const GUI_SHELL = '_shell.html';
 
-export const GUI_DYNAMIC: readonly { kind: ResourceKind; place: Place; pattern: RegExp; route: string }[] =
-  RESOURCE_KINDS.map((kind) => ({
+
+export const GUI_DYNAMIC: readonly { kind?: ResourceKind; place: Place; pattern: RegExp; route: string }[] = [
+  ...RESOURCE_KINDS.map((kind) => ({
     kind,
     place: PLACE_OF_KIND[kind],
     pattern: detailPattern(RESOURCES[kind]),
     route: `${RESOURCES[kind].base}/[key]`,
-  }));
+  })),
+  // 클러스터 노드 하나 — 시안의 노드 상세 패널(마지막 오류 · 최근 적용 기록 · 노드 GUI 주소).
+  { place: 'cluster', pattern: /^\/ops\/cluster\/[^/]+$/, route: '/ops/cluster/[node]' },
+];
 
 /** 이 경로가 셸로 서빙되는 동적 자리인가. 끝의 `/` 하나는 봐준다. */
 export function isDynamicGuiPath(pathname: string): boolean {
@@ -90,6 +102,8 @@ export const GUI_MOVED: Readonly<Record<string, string>> = {
   '/rendered': '/ops/rendered',
   '/audit': '/ops/audit',
   '/users': '/admin/user',
+  // 라우트 목록은 세그먼트가 주소다 — 첫 세그먼트로.
+  '/traffic/route': '/traffic/route/http',
 };
 
 /** 옛 주소면 새 주소. 아니면 undefined. 끝의 `/` 하나는 봐준다. */
@@ -103,7 +117,6 @@ const under = (pathname: string, base: string): boolean =>
 
 export function pageOf(pathname: string): Place {
   if (under(pathname, '/change/pending')) return 'impact';
-  if (under(pathname, '/change/history')) return 'history';
   if (under(pathname, '/traffic/route')) return 'routes';
   for (const k of RESOURCE_KINDS) if (under(pathname, RESOURCES[k].base)) return PLACE_OF_KIND[k];
   if (under(pathname, '/ops/status')) return 'status';

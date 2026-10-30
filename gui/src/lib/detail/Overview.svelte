@@ -5,6 +5,8 @@
   import { detailOfListener } from '@web/listeners-view';
   import { itemOf, relationsOf, resourcePath, summaryOf, type ResourceKind } from '@web/resources';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import Acme from './Acme.svelte';
+  import BackendHealth from './BackendHealth.svelte';
 
   let { kind }: { kind: ResourceKind } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -48,4 +50,7 @@
     {#if rel.uses.some((u) => u.missing)}<span class="d-warn"> · 없는 대상을 가리킨다</span>{/if}
     {#if desk.model !== undefined}— <a class="d-link" href={resourcePath(kind, key, 'resources')}>연결된 리소스</a>{/if}
   </p>
+  <!-- 시안: 백엔드의 헬스·트래픽 이유와 인증서의 ACME 주문은 개요에 있다. -->
+  {#if kind === 'backend'}<h3 class="d-h3">헬스</h3><BackendHealth />{/if}
+  {#if kind === 'certificate'}<h3 class="d-h3">ACME</h3><Acme />{/if}
 {/if}

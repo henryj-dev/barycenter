@@ -14,7 +14,10 @@ export type ResourceKind =
   | 'certificate' | 'tlsPolicy' | 'sniBinding';
 
 /** 탭 이름. 빈 문자열은 개요(상세의 첫 화면)다. */
-export type TabSlug = '' | 'settings' | 'traffic' | 'resources' | 'history' | 'backends' | 'health' | 'acme';
+export type TabSlug = '' | 'settings' | 'traffic' | 'resources' | 'history';
+
+/** 탭이 아닌 상세 아래 화면 — 시안의 드로어. 라우트의 「URL로 다시 만들기」. */
+export type DetailExtra = 'rebuild';
 
 export type ResourceSpec = {
   kind: ResourceKind;
@@ -25,8 +28,13 @@ export type ResourceSpec = {
   /** 모델의 컬렉션 이름 (`/api/v1/config/history` 의 kind 는 `kind` 그대로다). */
   collection: string;
   tabs: readonly { slug: TabSlug; label: string }[];
-  /** `<key>/edit` 가 있는가. */
+  /**
+   * 설정 탭에서 고칠 수 있는가(시안: 「수정」 은 설정 탭으로 간다). 아니면 설정 탭은 보기만 한다.
+   * 인증서는 자료를 다시 넣는 것이 수정이다 — 만들기 화면에서 한다.
+   */
   editable: boolean;
+  /** 탭 말고 상세 아래에 있는 화면. */
+  extras: readonly DetailExtra[];
   /** `<base>/new` 가 있는가. */
   creatable: boolean;
 };
@@ -36,50 +44,53 @@ const SETTINGS = { slug: 'settings', label: '설정' } as const;
 const TRAFFIC = { slug: 'traffic', label: '트래픽 경로' } as const;
 const RESOURCES_TAB = { slug: 'resources', label: '연결된 리소스' } as const;
 const HISTORY = { slug: 'history', label: '기록' } as const;
+/** 시안의 두 묶음 — 트래픽이 지나가는 리소스(리스너·라우트·풀)만 트래픽 경로 탭이 있다. */
+const FLOW_TABS = [OVERVIEW, SETTINGS, TRAFFIC, RESOURCES_TAB, HISTORY] as const;
+const PLAIN_TABS = [OVERVIEW, SETTINGS, RESOURCES_TAB, HISTORY] as const;
 
 export const RESOURCES: Readonly<Record<ResourceKind, ResourceSpec>> = {
   listener: {
     kind: 'listener', label: '리스너', base: '/traffic/listener', collection: 'listeners',
-    tabs: [OVERVIEW, SETTINGS, TRAFFIC, RESOURCES_TAB, HISTORY], editable: true, creatable: true,
+    tabs: FLOW_TABS, editable: true, extras: [], creatable: true,
   },
   httpRoute: {
     kind: 'httpRoute', label: 'HTTP 라우트', base: '/traffic/route/http', collection: 'httpRoutes',
-    tabs: [OVERVIEW, SETTINGS, TRAFFIC, RESOURCES_TAB, HISTORY], editable: true, creatable: true,
+    tabs: FLOW_TABS, editable: true, extras: ['rebuild'], creatable: true,
   },
   passthroughRoute: {
     kind: 'passthroughRoute', label: '패스스루 라우트', base: '/traffic/route/passthrough', collection: 'passthroughRoutes',
-    tabs: [OVERVIEW, SETTINGS, TRAFFIC, RESOURCES_TAB, HISTORY], editable: true, creatable: true,
+    tabs: FLOW_TABS, editable: true, extras: [], creatable: true,
   },
   pool: {
     kind: 'pool', label: '풀', base: '/traffic/pool', collection: 'pools',
-    tabs: [OVERVIEW, SETTINGS, { slug: 'backends', label: '백엔드' }, RESOURCES_TAB, HISTORY], editable: true, creatable: true,
+    tabs: FLOW_TABS, editable: true, extras: [], creatable: true,
   },
   backend: {
     kind: 'backend', label: '백엔드', base: '/traffic/backend', collection: 'backends',
-    tabs: [OVERVIEW, SETTINGS, { slug: 'health', label: '헬스' }, HISTORY], editable: true, creatable: true,
+    tabs: PLAIN_TABS, editable: true, extras: [], creatable: true,
   },
   addressSet: {
     kind: 'addressSet', label: '주소 집합', base: '/traffic/address-set', collection: 'addressSets',
-    tabs: [OVERVIEW, SETTINGS, RESOURCES_TAB, HISTORY], editable: true, creatable: true,
+    tabs: PLAIN_TABS, editable: true, extras: [], creatable: true,
   },
   certificate: {
     kind: 'certificate', label: '인증서', base: '/tls/certificate', collection: 'certificates',
-    tabs: [OVERVIEW, SETTINGS, { slug: 'acme', label: 'ACME' }, RESOURCES_TAB, HISTORY], editable: false, creatable: true,
+    tabs: PLAIN_TABS, editable: false, extras: [], creatable: true,
   },
   tlsPolicy: {
     kind: 'tlsPolicy', label: 'TLS 정책', base: '/tls/policy', collection: 'tlsPolicies',
-    tabs: [OVERVIEW, SETTINGS, RESOURCES_TAB, HISTORY], editable: true, creatable: true,
+    tabs: PLAIN_TABS, editable: true, extras: [], creatable: true,
   },
   sniBinding: {
     kind: 'sniBinding', label: 'SNI 바인딩', base: '/tls/sni', collection: 'sniBindings',
-    tabs: [OVERVIEW, SETTINGS, HISTORY], editable: true, creatable: true,
+    tabs: PLAIN_TABS, editable: true, extras: [], creatable: true,
   },
 };
 
 export const RESOURCE_KINDS = Object.keys(RESOURCES) as ResourceKind[];
 
-/** 상세 주소. `tab` 이 없으면 개요. `edit` 은 탭이 아니라 설정 수정 화면이다. */
-export function resourcePath(kind: ResourceKind, key: string, tab: TabSlug | 'edit' = ''): string {
+/** 상세 주소. `tab` 이 없으면 개요. */
+export function resourcePath(kind: ResourceKind, key: string, tab: TabSlug | DetailExtra = ''): string {
   const base = `${RESOURCES[kind].base}/${encodeURIComponent(key)}`;
   return tab === '' ? base : `${base}/${tab}`;
 }
@@ -91,7 +102,7 @@ const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * 그래서 이름이 `new` 인 리소스는 상세 주소를 못 쓴다. 대신 목록에서 그렇다고 말한다.
  */
 export function detailPattern(spec: ResourceSpec): RegExp {
-  const tails = [...spec.tabs.map((t) => t.slug).filter((s) => s !== ''), ...(spec.editable ? ['edit'] : [])];
+  const tails = [...spec.tabs.map((t) => t.slug).filter((s) => s !== ''), ...spec.extras];
   const tail = tails.length === 0 ? '' : `(?:/(?:${tails.join('|')}))?`;
   return new RegExp(`^${escape(spec.base)}/(?!new(?:/|$))[^/]+${tail}$`);
 }
@@ -196,6 +207,8 @@ export type TrafficLine = {
   /** 무엇이 이 줄을 고르는가 — 기본 동작, 라우트 key, SNI 결과 … */
   match: string;
   route?: Ref;
+  /** 풀의 트래픽 경로에서 — 이 줄이 어느 리스너에서 오나. */
+  listener?: string;
   target: Target;
 };
 
@@ -241,6 +254,12 @@ export function trafficOf(model: ModelLike, ref: Ref, health: HealthOf): Traffic
     const r = itemOf(model, ref.kind, ref.key);
     if (r === undefined) return [];
     return [{ match: routeMatch(r), route: ref, target: targetOfAction(model, r['action'], health) }];
+  }
+  if (ref.kind === 'pool') {
+    // 풀은 「어디서 이 풀로 오나」 다 — 모든 리스너의 경로 중 이 풀로 가는 줄. 앞에 리스너 이름을 붙인다.
+    return itemsOf(model, 'listener').flatMap((li) => trafficOf(model, { kind: 'listener', key: String(li['key']) }, health)
+      .filter((line) => line.target.kind === 'pool' && line.target.pool === ref.key)
+      .map((line) => ({ ...line, match: `${String(li['key'])} · ${line.match}`, listener: String(li['key']) })));
   }
   if (ref.kind !== 'listener') return [];
   const l = itemOf(model, 'listener', ref.key);

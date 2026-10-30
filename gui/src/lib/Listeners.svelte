@@ -11,7 +11,7 @@
   import AddUdpListener from './AddUdpListener.svelte';
     import AddHttpsListener from './AddHttpsListener.svelte';
 
-  let { mode = 'list', view, live, editing, pools, tcpPools, udpPools, policies, certificates, withdraw, insert, insertTcp, insertPassthrough, insertUdp, insertHttps }: {
+  let { mode = 'list', protocol, view, live, editing, pools, tcpPools, udpPools, policies, certificates, withdraw, insert, insertTcp, insertPassthrough, insertUdp, insertHttps }: {
     view: ListenersView;
     live: boolean;
     editing: boolean;
@@ -33,6 +33,8 @@
     ) => void;
     /** `list` 는 표만, `new` 는 만들기 폼만 (`/traffic/listener/new`). */
     mode?: 'list' | 'new';
+    /** 만들기 둘째 단계 — 이 프로토콜의 폼만 (`/traffic/listener/new/<protocol>`). */
+    protocol?: 'http' | 'https' | 'tcp' | 'udp' | 'tls_passthrough';
   } = $props();
   // 전역 모드면 설정을 읽기만 한다 — 쓰기 버튼을 안 그린다(설계 §1).
   const scope = getContext<Scope | undefined>('scope');
@@ -48,7 +50,7 @@
 {#if !live}
   <p class="empty">연결하면 head 리스너가 여기 온다.</p>
 {:else if mode === 'list'}
-  <Writable><p class="new"><a href="/traffic/listener/new">리스너 만들기</a></p></Writable>
+  <Writable><p class="new"><a href="/traffic/listener/new/quick">빠른 프록시 만들기</a> · <a href="/traffic/listener/new">리스너 만들기</a></p></Writable>
   {#if view.rows.length === 0}
     <p class="empty">리스너가 없다. 「리스너 만들기」 에서 포트를 연다. 패스스루는 인증서를 제시하지 않는다.</p>
   {:else}
@@ -77,13 +79,11 @@
   {/if}
 {:else}
   <Writable>
-  <AddListener {pools} {editing} add={insert} />
-  <AddTcpListener pools={tcpPools} {editing} add={insertTcp} />
-  <AddPassthroughListener pools={tcpPools} {editing} add={insertPassthrough} />
-  <AddUdpListener pools={udpPools} {editing} add={insertUdp} />
-  </Writable>
-  <Writable>
-  <AddHttpsListener {pools} {policies} {certificates} {editing} add={insertHttps} />
+  {#if protocol === 'http'}<AddListener {pools} {editing} add={insert} />{/if}
+  {#if protocol === 'tcp'}<AddTcpListener pools={tcpPools} {editing} add={insertTcp} />{/if}
+  {#if protocol === 'tls_passthrough'}<AddPassthroughListener pools={tcpPools} {editing} add={insertPassthrough} />{/if}
+  {#if protocol === 'udp'}<AddUdpListener pools={udpPools} {editing} add={insertUdp} />{/if}
+  {#if protocol === 'https'}<AddHttpsListener {pools} {policies} {certificates} {editing} add={insertHttps} />{/if}
   </Writable>
 {/if}
 

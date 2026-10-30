@@ -204,9 +204,10 @@ describe('같은 출처에서 GUI', () => {
     writeFileSync(join(root, '_shell.html'), '<title>셸</title><script>boot()</script>');
     const url = await listen(root);
     for (const path of [
-      '/traffic/listener/edge-443', '/traffic/listener/edge-443/', '/traffic/listener/edge-443/edit',
-      '/traffic/listener/edge-443/traffic', '/traffic/route/http/api/history', '/tls/certificate/cf/acme',
-      '/traffic/pool/web/backends', '/traffic/backend/web-1/health',
+      '/traffic/listener/edge-443', '/traffic/listener/edge-443/', '/traffic/listener/edge-443/settings',
+      '/traffic/listener/edge-443/traffic', '/traffic/route/http/api/history', '/tls/certificate/cf/settings',
+      '/traffic/pool/web/traffic', '/traffic/backend/web-1/resources', '/tls/sni/s/resources',
+      '/traffic/route/http/api/rebuild', '/ops/cluster/web-01',
     ]) {
       const r = await fetch(`${url}${path}`, { redirect: 'manual' });
       expect(r.status, path).toBe(200);
@@ -218,7 +219,8 @@ describe('같은 출처에서 GUI', () => {
     // `new` 는 key 가 아니다 — 만들기 화면은 미리 만든 파일이다(여기엔 없으니 셸도 안 나간다).
     for (const path of [
       '/traffic/listener/a/b', '/traffic/nope/x', '/whatever', '/traffic/listener/a/edit/x',
-      '/traffic/listener/new', '/tls/certificate/c/edit', '/traffic/pool/web/traffic',
+      '/traffic/listener/new', '/traffic/listener/edge-443/edit', '/tls/certificate/c/acme',
+      '/traffic/pool/web/backends', '/traffic/backend/b/traffic', '/ops/cluster/a/b',
     ]) {
       const r = await fetch(`${url}${path}`, { redirect: 'manual' });
       expect(r.status, path).not.toBe(200);
@@ -232,7 +234,7 @@ describe('같은 출처에서 GUI', () => {
     const cases: [string, string][] = [
       ['/listeners', '/traffic/listener'], ['/pools/', '/traffic/pool'], ['/routes', '/traffic/route'],
       ['/certificates', '/tls/certificate'], ['/status', '/ops/status'], ['/rendered', '/ops/rendered'],
-      ['/audit', '/ops/audit'], ['/users', '/admin/user'],
+      ['/audit', '/ops/audit'], ['/users', '/admin/user'], ['/traffic/route', '/traffic/route/http'],
     ];
     for (const [from, to] of cases) {
       const r = await fetch(`${url}${from}`, { redirect: 'manual' });

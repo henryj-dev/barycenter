@@ -15,7 +15,7 @@ import {
   drainStatusOf, observationPeerOf, observePeerFromAdmin, parsePeerObservation,
 } from '../../src/control/drain.js';
 import { GUI_DYNAMIC, GUI_SHELL, KIT_ROUTES, pageOf } from '../../src/web/page.js';
-import { RESOURCES, resourcePath, type TabSlug } from '../../src/web/resources.js';
+import { RESOURCES, resourcePath, type DetailExtra, type TabSlug } from '../../src/web/resources.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -151,10 +151,11 @@ describe('Kit 경로', () => {
 
   it('Kit 자리가 라우트고 pageOf 가 같은 이름을 읽는다', () => {
     expect(KIT_ROUTES.some((r) => r.place === 'login' && r.path === '/login')).toBe(true);
-    // 경로 분리(#124): 대시보드·변경 3 · 목록 8 · 만들기 9 · 운영 4 · 사람 1 · 계정 화면 6. 표가 정본이다 — 여기선
+    // 경로 분리(#124): 대시보드·적용 대기 2 · 목록 9(라우트는 세그먼트 둘) · 만들기 9 · 리스너 만들기 둘째
+    // 단계 5 · 빠른 프록시 1 · 운영 4 · 사람 1 · 계정 화면 6. 표가 정본이다 — 여기선
     // 중복이 없고, 파일이 다 있는지를 본다(아래 반복).
     expect(new Set(KIT_ROUTES.map((r) => r.path)).size).toBe(KIT_ROUTES.length);
-    expect(KIT_ROUTES).toHaveLength(31);
+    expect(KIT_ROUTES).toHaveLength(37);
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);
@@ -166,14 +167,21 @@ describe('Kit 경로', () => {
     }
     // key 자리도 라우트 파일이 있고, 미리 만들지 않는다(셸이 연다). 탭마다 파일이 리소스 표와 같다.
     for (const d of GUI_DYNAMIC) {
+      if (d.kind === undefined) {
+        // 리소스가 아닌 동적 자리(클러스터 노드) — 라우트 파일이 있고 미리 만들지 않는다.
+        const dir = join(routesDir, d.route.slice(1));
+        expect(readFileSync(join(dir, '+page.ts'), 'utf8')).toMatch(/prerender\s*=\s*false/);
+        expect(pageOf(d.route.replace(/\[\w+\]/, 'web-01'))).toBe(d.place);
+        continue;
+      }
       const spec = RESOURCES[d.kind];
       const dir = join(routesDir, d.route.slice(1));
       expect(readFileSync(join(dir, '+layout.ts'), 'utf8')).toMatch(/prerender\s*=\s*false/);
       expect(readFileSync(join(dir, '+layout.svelte'), 'utf8')).toContain(`kind="${d.kind}"`);
-      const tails = [...spec.tabs.map((t) => t.slug), ...(spec.editable ? ['edit'] : [])];
+      const tails: (TabSlug | DetailExtra)[] = [...spec.tabs.map((t) => t.slug), ...spec.extras];
       for (const tail of tails) {
         expect(existsSync(join(dir, tail, '+page.svelte')), `${d.route}/${tail}`).toBe(true);
-        const path = resourcePath(d.kind, 'edge-443', tail as TabSlug | 'edit');
+        const path = resourcePath(d.kind, 'edge-443', tail);
         expect(d.pattern.test(path), path).toBe(true);
         expect(pageOf(path)).toBe(d.place);
       }

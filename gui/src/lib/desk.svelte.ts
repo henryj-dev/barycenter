@@ -19,7 +19,7 @@ import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs } from '@web/reconnect';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
@@ -582,7 +582,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     return r.ok ? asList<unknown>(await r.json()) : undefined;
   };
 
-  /** `/change/history` — 리비전 목록. */
+  /** 적용 대기 화면의 롤백 구획 — 리비전 목록. */
   const revisions = async (): Promise<unknown[] | undefined> => {
     const r = await fetch(api('/api/v1/config/revisions?limit=100'), { headers: auth() });
     return r.ok ? asList<unknown>(await r.json()) : undefined;
@@ -599,6 +599,29 @@ export function createDesk(scope?: { api(path: string): string }) {
     } finally {
       editing = false;
     }
+  };
+
+  /**
+   * 빠른 프록시 · URL로 다시 만들기 — URL 하나를 풀·백엔드·리스너(또는 라우트)로 편다.
+   * 펴는 규칙은 `proxyFromUrlPatch` 한 자리다(CLI `bary proxy create` 와 같다).
+   */
+  const proxyFromUrl = async (input: ProxyFromUrlInput): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(proxyFromUrlPatch(input));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
+  /** `/ops/cluster/<노드>` — 그 노드가 최근에 따라간 기록. */
+  const clusterHistory = async (name: string): Promise<unknown[] | undefined> => {
+    const r = await fetch(api(`/api/v1/cluster/nodes/${encodeURIComponent(name)}/history`), { headers: auth() });
+    return r.ok ? asList<unknown>(await r.json()) : undefined;
   };
 
   /** `/ops/cluster` — 노드 상태. */
@@ -912,6 +935,8 @@ export function createDesk(scope?: { api(path: string): string }) {
     revisions,
     rollback,
     clusterNodes,
+    clusterHistory,
+    proxyFromUrl,
     get traffic() { return traffic; },
     insertHttpsListener,
     insertCertificate,

@@ -48,10 +48,6 @@
   };
 
   const lede: Record<string, { h: string; p: string }> = {
-    history: {
-      h: '리비전',
-      p: '커밋된 리비전이다. 롤백은 옛 내용으로 새 리비전을 만든다. 트래픽은 적용해야 바뀐다.',
-    },
     backends: {
       h: '트래픽을 받는 곳',
       p: '모든 풀의 백엔드다. 헬스가 초록이어도 트래픽을 안 받을 수 있다 — 상세의 헬스 탭이 이유를 말한다.',
@@ -150,9 +146,8 @@
       {/if}
       <a href="/" aria-current={place === 'dashboard' ? 'page' : undefined}>대시보드</a>
       <a href="/change/pending" aria-current={place === 'impact' ? 'page' : undefined}>적용 대기</a>
-      <a href="/change/history" aria-current={place === 'history' ? 'page' : undefined}>리비전</a>
       <a href="/traffic/listener" aria-current={place === 'listeners' ? 'page' : undefined}>리스너</a>
-      <a href="/traffic/route" aria-current={place === 'routes' ? 'page' : undefined}>라우트</a>
+      <a href="/traffic/route/http" aria-current={place === 'routes' ? 'page' : undefined}>라우트</a>
       <a href="/traffic/pool" aria-current={place === 'pools' ? 'page' : undefined}>풀</a>
       <a href="/traffic/backend" aria-current={place === 'backends' ? 'page' : undefined}>백엔드</a>
       <a href="/traffic/address-set" aria-current={place === 'addressSets' ? 'page' : undefined}>주소 집합</a>
