@@ -7,15 +7,20 @@
   import { goto } from '$app/navigation';
   import type { Scope, RegionSummary } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import { Badge, Banner, Button, DataTable, type Column, type Tone } from '#lib/ui';
 
   const scope = getContext<Scope>('scope');
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   let regions = $state<RegionSummary[]>([]);
   let error = $state<string | undefined>();
+  let loading = $state(true);
 
   const load = async (): Promise<void> => {
+    loading = true;
     const r = await fetch('/api/v1/regions', { credentials: 'same-origin' });
-    if (!r.ok) { error = r.status === 401 ? '로그인이 필요하다' : `regions ${r.status}`; return; }
+    loading = false;
+    if (!r.ok) { error = r.status === 401 ? '로그인이 필요해요.' : `regions ${r.status}`; return; }
+    error = undefined;
     regions = ((await r.json()) as { regions: RegionSummary[] }).regions;
   };
   onMount(() => { void load(); });
@@ -26,46 +31,42 @@
     await desk.connect();
     await goto('/');
   };
-  const stateOf = (r: RegionSummary): string => {
-    if (!r.reachable) return '모른다 — 닿지 않는다';
-    if (r.auth === 'rejected') return '인증 거절 — 전역 토큰 설정을 본다';
-    if (r.status === undefined) return '모른다 — 응답이 이상하다';
-    return `head r${r.status.head ?? '?'}`;
+  const stateOf = (r: RegionSummary): { tone: Tone; text: string } => {
+    if (!r.reachable) return { tone: 'neutral', text: '모름 — 닿지 않아요' };
+    if (r.auth === 'rejected') return { tone: 'danger', text: '인증 거절 — 전역 토큰 설정을 봐요' };
+    if (r.status === undefined) return { tone: 'neutral', text: '모름 — 응답이 이상해요' };
+    return { tone: 'ok', text: `head r${r.status.head ?? '?'}` };
   };
+  const columns: Column<RegionSummary>[] = [
+    { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
+    { key: 'state', label: '상태', sort: (r) => stateOf(r).text },
+    { key: 'build', label: '판', mono: true, text: (r) => r.regionBuild ?? '모름' },
+    { key: 'last', label: '마지막 확인', mono: true, muted: true, text: (r) => (r.lastOkAt === undefined || r.lastOkAt === null ? '—' : new Date(r.lastOkAt).toLocaleString()) },
+    { key: 'act', label: '', align: 'right', width: '200px' },
+  ];
 </script>
 
-{#if error !== undefined}<p class="err" role="alert">{error}</p>{/if}
-<table>
-  <thead><tr><th>지역</th><th>상태</th><th>판</th><th>마지막 확인</th><th></th></tr></thead>
-  <tbody>
-    {#each regions as r (r.name)}
-      <tr class:down={!r.reachable || r.auth === 'rejected'}>
-        <td>{r.name}</td>
-        <td>{stateOf(r)}</td>
-        <td>
-          {r.regionBuild ?? '모른다'}
-          {#if r.buildMismatch === true}<span class="warn" title="전역과 판이 다르다 — 화면이 어긋날 수 있다">판 다름</span>{/if}
-        </td>
-        <td class="mono">{(r.lastOkAt ?? '').slice(0, 19).replace('T', ' ') || '—'}</td>
-        <td class="ops">
-          {#if r.reachable && r.auth === undefined}<button type="button" onclick={() => { void pick(r); }}>보기</button>{/if}
-          <a href={r.gui} target="_blank" rel="noopener">지역 GUI</a>
-        </td>
-      </tr>
-    {/each}
-  </tbody>
-</table>
-<button type="button" class="quiet" onclick={() => { void load(); }}>다시 묻기</button>
+{#snippet cell(r: RegionSummary, c: Column<RegionSummary>)}
+  {#if c.key === 'state'}
+    {@const s = stateOf(r)}<Badge tone={s.tone}>{s.text}</Badge>
+  {:else if c.key === 'build'}
+    {c.text?.(r)}{#if r.buildMismatch === true} <Badge tone="warn" title="전역과 판이 달라요. 화면이 어긋날 수 있어요.">판 다름</Badge>{/if}
+  {:else if c.key === 'act'}
+    <span class="ops">
+      {#if r.reachable && r.auth === undefined}<Button size="sm" onclick={() => { void pick(r); }}>보기</Button>{/if}
+      <Button size="sm" variant="text" href={r.gui} target="_blank" rel="noopener">지역 GUI ↗</Button>
+    </span>
+  {:else}{c.text?.(r) ?? ''}{/if}
+{/snippet}
+
+{#snippet toolbar()}<Button size="sm" onclick={() => { void load(); }}>다시 묻기</Button>{/snippet}
+
+<div class="rg">
+  {#if error !== undefined}<Banner tone="danger">{error}</Banner>{/if}
+  <DataTable rows={regions} rowKey={(r) => r.name} {columns} {cell} {toolbar} {loading} label="지역" emptyTitle="지역이 없어요" />
+</div>
 
 <style>
-  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; margin: 1rem 0; }
-  th, td { text-align: left; padding: 0.4rem; border-bottom: 1px solid var(--rule); }
-  th { color: var(--mute); font-weight: 400; font-size: 0.8rem; }
-  .down td { color: var(--mute); }
-  .warn { margin-left: 0.4rem; color: var(--ember); font-size: 0.8rem; }
-  .mono { font-family: var(--data); }
-  .ops { white-space: nowrap; display: flex; gap: 0.6rem; align-items: center; }
-  button { background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.3rem 0.7rem; cursor: pointer; }
-  .quiet { border-color: transparent; color: var(--mute); }
-  .err { color: var(--ember); }
+  .rg { display: flex; flex-direction: column; gap: 12px; }
+  .ops { display: inline-flex; gap: 6px; }
 </style>

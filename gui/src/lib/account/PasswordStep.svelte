@@ -1,7 +1,8 @@
 <script lang="ts">
+  /** 로그인 첫 단계 — 비밀번호가 맞으면 다음 단계를 알린다(관리자·인증 앱 등록자는 `mfa`). */
+  import { Button, FieldMessage, FormRow, FormSection, TextInput } from '#lib/ui';
   import { accountApi } from './api';
 
-  /** 비밀번호가 맞으면 다음 단계를 알린다 — 관리자·인증 앱 등록자는 `mfa`. */
   let { onDone }: { onDone: (next: 'ok' | 'mfa') => void } = $props();
 
   let username = $state('');
@@ -10,6 +11,7 @@
   let error = $state<string | undefined>();
 
   const submit = async (): Promise<void> => {
+    if (username.trim() === '' || password === '') return;
     busy = true;
     error = undefined;
     const r = await accountApi.login(username, password);
@@ -23,19 +25,19 @@
   };
 </script>
 
-<form onsubmit={(e) => { e.preventDefault(); void submit(); }}>
-  <label><span>아이디 또는 이메일</span><input autocomplete="username" bind:value={username} required /></label>
-  <label><span>비밀번호</span><input type="password" autocomplete="current-password" bind:value={password} required /></label>
-  <button type="submit" disabled={busy}>로그인</button>
-  {#if error !== undefined}<p class="err" role="alert">{error}</p>{/if}
+<form class="step" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
+  <FormSection stack>
+    <FormRow label="아이디 또는 이메일" for="lg-user">
+      <TextInput id="lg-user" autocomplete="username" mono={false} bind:value={username} required />
+    </FormRow>
+    <FormRow label="비밀번호" for="lg-pass">
+      <TextInput id="lg-pass" type="password" autocomplete="current-password" mono={false} bind:value={password} required />
+    </FormRow>
+  </FormSection>
+  <div><Button variant="primary" type="submit" loading={busy}>로그인</Button></div>
+  {#if error !== undefined}<FieldMessage tone="error">{error}</FieldMessage>{/if}
 </form>
 
 <style>
-  form { display: grid; gap: 0.6rem; max-width: 22rem; }
-  label { display: flex; flex-direction: column; gap: 0.25rem; }
-  span { font-size: 0.8rem; color: var(--mute); }
-  input { background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.45rem 0.6rem; }
-  button { justify-self: start; background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.5rem 0.85rem; cursor: pointer; }
-  button:disabled { opacity: 0.6; cursor: default; }
-  .err { margin: 0; color: var(--ember); }
+  .step { display: grid; gap: 12px; }
 </style>

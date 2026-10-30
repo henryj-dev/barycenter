@@ -6,6 +6,8 @@
    */
   import { onMount } from 'svelte';
   import { accountApi } from '#lib/account/api';
+  import { PASSWORD_HELP } from '#lib/account/text';
+  import { Banner, Button, FormRow, FormSection, TextInput } from '#lib/ui';
 
   let token = $state('');
   let email = $state('');
@@ -14,15 +16,17 @@
   let note = $state<{ ok: boolean; text: string } | undefined>();
   let busy = $state(false);
   const matches = $derived(password !== '' && password === confirm);
+  const mismatch = $derived(confirm !== '' && !matches);
 
   onMount(() => { token = location.hash.replace(/^#/, ''); });
 
   const request = async (): Promise<void> => {
+    if (email.trim() === '') return;
     busy = true;
     const r = await accountApi.requestReset(email);
     busy = false;
     note = r.ok || r.status === 202
-      ? { ok: true, text: '그 주소가 계정에 묶여 있으면 재설정 링크를 보냈다. 메일함을 본다 (30분 안).' }
+      ? { ok: true, text: '그 주소가 계정에 묶여 있으면 재설정 링크를 보냈어요. 30분 안에 메일함을 봐요.' }
       : { ok: false, text: r.message };
   };
   const reset = async (): Promise<void> => {
@@ -33,33 +37,38 @@
     if (!r.ok) { note = { ok: false, text: r.message }; return; }
     history.replaceState(null, '', '/reset');
     token = '';
-    note = { ok: true, text: '바꿨다 — 열려 있던 세션은 모두 끊겼다. 다시 로그인한다.' };
+    note = { ok: true, text: '바꿨어요. 열려 있던 세션은 모두 끊겼어요. 다시 로그인해요.' };
   };
 </script>
 
-{#if token !== ''}
-  <form onsubmit={(e) => { e.preventDefault(); void reset(); }}>
-    <label><span>새 비밀번호 (8자 이상, 영소문자·영대문자·숫자·특수문자 중 3종류)</span><input type="password" autocomplete="new-password" bind:value={password} required /></label>
-    <label><span>새 비밀번호 확인</span><input type="password" autocomplete="new-password" bind:value={confirm} required /></label>
-    {#if confirm !== '' && !matches}<p class="err">두 비밀번호가 다르다</p>{/if}
-    <button type="submit" disabled={busy || !matches}>바꾸기</button>
-  </form>
-{:else if note === undefined || !note.ok}
-  <form onsubmit={(e) => { e.preventDefault(); void request(); }}>
-    <label><span>계정 이메일</span><input type="email" autocomplete="email" bind:value={email} required /></label>
-    <button type="submit" disabled={busy}>재설정 링크 받기</button>
-  </form>
-{/if}
-{#if note !== undefined}<p class:err={!note.ok} role="status">{note.text}</p>{/if}
-<p><a href="/login">로그인으로</a></p>
+<div class="std">
+  {#if token !== ''}
+    <form class="std" onsubmit={(e) => { e.preventDefault(); void reset(); }}>
+      <FormSection stack>
+        <FormRow label="새 비밀번호" for="rs-pass" help={PASSWORD_HELP}>
+          <TextInput id="rs-pass" type="password" autocomplete="new-password" mono={false} bind:value={password} required />
+        </FormRow>
+        <FormRow label="새 비밀번호 확인" for="rs-conf" error={mismatch ? '두 비밀번호가 달라요.' : undefined}>
+          <TextInput id="rs-conf" type="password" autocomplete="new-password" mono={false} bind:value={confirm} invalid={mismatch} required />
+        </FormRow>
+      </FormSection>
+      <div><Button variant="primary" type="submit" loading={busy} disabled={!matches}>바꾸기</Button></div>
+    </form>
+  {:else if note === undefined || !note.ok}
+    <form class="std" onsubmit={(e) => { e.preventDefault(); void request(); }}>
+      <FormSection stack>
+        <FormRow label="계정 이메일" for="rs-mail">
+          <TextInput id="rs-mail" type="email" autocomplete="email" bind:value={email} required />
+        </FormRow>
+      </FormSection>
+      <div><Button variant="primary" type="submit" loading={busy}>재설정 링크 받기</Button></div>
+    </form>
+  {/if}
+  {#if note !== undefined}<Banner tone={note.ok ? 'ok' : 'danger'}>{note.text}</Banner>{/if}
+  <a href="/login">← 로그인으로</a>
+</div>
 
 <style>
-  form { display: grid; gap: 0.6rem; max-width: 24rem; margin: 1.5rem 0; }
-  label { display: flex; flex-direction: column; gap: 0.25rem; }
-  span { font-size: 0.8rem; color: var(--mute); }
-  input { background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.45rem 0.6rem; }
-  button { justify-self: start; background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.5rem 0.85rem; cursor: pointer; }
-  button:disabled { opacity: 0.6; cursor: default; }
-  p { margin: 0 0 0.5rem; }
-  .err { color: var(--ember); }
+  .std { display: grid; gap: 12px; }
+  a { color: var(--accent); font: var(--t-small); }
 </style>
