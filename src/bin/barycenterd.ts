@@ -978,6 +978,8 @@ export async function main(): Promise<void> {
     placer: new HttpChallengePlacer(adminFetch(adminSocket)),
     ...(dnsDir === '' ? {} : { dnsPlacer: new FileDns01(dnsDir) }),
     renewBeforeDays: t.acmeRenewDays,
+    // 화면이 주문 진행을 따라가게 — 스트림의 `acme` 이벤트.
+    onAdvance: (e) => { events.publish('acme', e); },
   });
   if (acmeOn) {
     acmeRunner.start(
@@ -1014,10 +1016,16 @@ export async function main(): Promise<void> {
       void (async (): Promise<void> => {
         if (!election.state.isLeader) return;
         try {
-          await publishIssued({
+          const published = await publishIssued({
             db, store, control, acme: acmeStore, secrets,
             applyAutomatically: env('BARY_ACME_AUTOAPPLY', '1') !== '0',
           });
+          // **새 리비전을 알린다.** API 를 거치지 않은 커밋이라 전에는 스트림이 몰랐다 — 화면의
+          // head 와 인증서가 다음 다른 변경 때까지 옛것으로 남았다.
+          for (const p of published) {
+            events.publish('revision', { revision: p.revision, acme: p.certificate });
+            events.publish('acme', { certificate: p.certificate, order: p.order, to: 'published' });
+          }
         } catch (e) {
           log.error('acme.publish.tick_failed', { error: (e as Error).message });
         }
