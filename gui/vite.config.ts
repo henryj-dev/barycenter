@@ -27,6 +27,11 @@ export default defineConfig({
   resolve: {
     alias: { '@web': resolve(root, '../src/web') },
   },
+  build: {
+    // **글꼴은 CSS 에 박지 않는다.** Vite 는 4KB 보다 작은 자산을 `data:` 로 박는데, 작은 글꼴 조각이
+    // 그렇게 들어가면 CSP `font-src 'self'` 가 막는다(web-01 콘솔). CSP 를 넓히지 않고 파일로 낸다.
+    assetsInlineLimit: (file) => (/\.(woff2?|ttf|otf)$/.test(file) ? false : undefined),
+  },
   server: {
     proxy: { '/api': 'http://127.0.0.1:8088', '/healthz': 'http://127.0.0.1:8088' },
   },

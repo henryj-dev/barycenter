@@ -284,7 +284,7 @@ export class AcmeRunner {
     if (order.orderUrl === undefined) throw new Error('주문 URL 이 없다');
     const now = await client.fetchOrder(order.orderUrl);
     if (now.status === 'invalid') {
-      throw new Error(`CA 가 주문을 거절했다: ${now.error?.detail ?? '(detail 없음)'}`);
+      throw new Error(`CA 가 주문을 거절했다: ${now.error?.detail ?? await this.#whyInvalid(client, now.authorizations)}`);
     }
     if (now.status === 'ready' || now.status === 'valid') {
       await this.#o.store.advance(order.id, 'ready');
@@ -292,6 +292,32 @@ export class AcmeRunner {
     }
     // 아직 검증 중이다. **실패가 아니다** — 상태를 그대로 두고 다음 틱에 다시 본다.
     return 'validating';
+  }
+
+  /**
+   * 주문이 왜 거절됐나 — **사유는 주문이 아니라 인가의 챌린지에 있다** (RFC 8555 §7.1.4 · §7.1.5).
+   *
+   * Let's Encrypt 는 http-01 이 실패하면 주문에 `error` 를 안 싣고, 그 도메인의 챌린지에
+   * `error.detail`(예: 「Connection refused」 · 「Invalid response from …: 404」)을 싣는다. 전에는 주문만
+   * 봐서 화면에 「(detail 없음)」 만 남았다 — 운영자가 무엇을 고칠지 알 수 없었다.
+   *
+   * 여기서 못 읽어도(네트워크 · CA 오류) 실패 판정은 그대로다. 사유만 비게 둔다.
+   */
+  async #whyInvalid(client: AcmeClient, authorizations: readonly string[]): Promise<string> {
+    const reasons: string[] = [];
+    for (const url of authorizations) {
+      try {
+        const authz = await client.fetchAuthorization(url);
+        for (const ch of authz.challenges) {
+          if (ch.status === 'invalid' && ch.error !== undefined) {
+            reasons.push(`${authz.identifier.value} ${ch.type} — ${ch.error.detail ?? ch.error.type}`);
+          }
+        }
+      } catch {
+        // 사유를 못 읽었을 뿐이다. 아래의 「(detail 없음)」 으로 간다.
+      }
+    }
+    return reasons.length > 0 ? reasons.join(' · ') : '(detail 없음)';
   }
 
   /** CSR 을 보내고 인증서를 받아 SecretStore 에 넣는다. */
