@@ -882,6 +882,28 @@ export function createDesk(scope?: { api(path: string): string }) {
       editing = false;
     }
   };
+  /** 드레인 해제 — 다시 새 연결을 받는다. 설정(commit)이 아니다. */
+  const undrain = async (key: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await fetch(api(`/api/v1/backends/${encodeURIComponent(key)}/drain`), {
+        method: 'DELETE', headers: auth(),
+      });
+      if (!r.ok) {
+        const body = (await r.json()) as { message?: string };
+        error = body.message ?? `undrain ${r.status}`;
+        return false;
+      }
+      await refreshPools();
+      return true;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
 
   const recover = async (): Promise<void> => {
     recovering = true;
@@ -923,6 +945,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     apply,
     recover,
     drain,
+    undrain,
     withdraw,
     insertBackend,
     insertPool,

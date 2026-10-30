@@ -3,6 +3,7 @@
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import Writable from '#lib/global/Writable.svelte';
+  import { reasonLabels } from '@web/pools-view';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -26,7 +27,7 @@
   </dd>
   {#if traffic !== undefined && traffic.reasons.length > 0}
     <dt>이유</dt>
-    <dd>{traffic.reasons.join(' · ')}</dd>
+    <dd>{reasonLabels(traffic.reasons).join(' · ')}</dd>
   {/if}
 </dl>
 <Writable>
