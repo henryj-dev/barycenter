@@ -38,6 +38,9 @@ export type StatusSnap = {
 /**
  * @param scope 전역 모드면 읽기 경로를 고른 지역의 중계 경로로 바꾼다(`lib/global/scope`). 지역 인스턴스면 그대로다.
  */
+/** ACME 계정 한 줄 — `GET /api/v1/acme/accounts`. */
+export type AcmeAccountRow = { id: string; key: string; directoryUrl: string; contact: string[]; registered: boolean };
+
 export function createDesk(scope?: { api(path: string): string }) {
   const api = (path: string): string => scope?.api(path) ?? path;
   // OIDC 로그인은 HttpOnly 세션 쿠키를 쓴다. 수동 Bearer 입력은 새로고침하면 사라지는
@@ -578,6 +581,28 @@ export function createDesk(scope?: { api(path: string): string }) {
     }
   };
 
+  /**
+   * ACME 계정 (DESIGN §8.2.1). 계정 키는 서버가 만들어 시크릿에 둔다 — 화면은 키를 보지 않는다.
+   * CA 등록은 첫 주문 때 러너가 한다(`registered`). 못 읽으면 undefined.
+   */
+  const acmeAccounts = async (): Promise<AcmeAccountRow[] | undefined> => {
+    const r = await fetch(api('/api/v1/acme/accounts'), { headers: auth() });
+    if (!r.ok) return undefined;
+    const body = (await r.json()) as { accounts?: AcmeAccountRow[] };
+    return body.accounts ?? [];
+  };
+  const createAcmeAccount = async (input: { key: string; directoryUrl: string; contact: string[] }): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await call('POST', '/api/v1/acme/accounts', input);
+      if (!r.ok) error = (r.body['message'] as string | undefined) ?? `acme account ${r.status}`;
+      return r.ok;
+    } finally {
+      editing = false;
+    }
+  };
+
   /** 상세의 「기록」 탭. 못 읽으면(전역 중계에 없다) undefined — 「바뀐 적 없다」 와 다르다. */
   const historyOf = async (kind: ResourceKind, key: string): Promise<unknown[] | undefined> => {
     const q = new URLSearchParams({ kind, key });
@@ -958,6 +983,8 @@ export function createDesk(scope?: { api(path: string): string }) {
     insertTlsPolicy,
     updateListener,
     putResource,
+    acmeAccounts,
+    createAcmeAccount,
     historyOf,
     revisions,
     rollback,

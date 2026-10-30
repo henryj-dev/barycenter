@@ -32,6 +32,7 @@
     if (kind === 'certificate') {
       const c = desk.certs.rows.find((r) => r.key === key);
       if (c === undefined) return undefined;
+      if (!c.hasMaterial && c.acme) return { text: `발급 대기${c.orderState ? ` · 주문 ${c.orderState}` : ''} — 발급되면 HTTPS 에 걸 수 있어요`, tone: 'pending' };
       if (!c.hasMaterial) return { text: '자료 없음 — HTTPS 에 못 써요', tone: 'danger' };
       if (c.expiresInDays === undefined) return { text: '자료 있음', tone: 'ok' };
       if (c.expiresInDays < 0) return { text: '만료됨', tone: 'danger' };
