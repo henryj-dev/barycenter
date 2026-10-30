@@ -39,7 +39,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/address-set/new">＋ 주소 집합 만들기</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/traffic/address-set/new">＋ 생성</Button>{/snippet}
 
 <DataTable label="주소 집합 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}
   emptyTitle="주소 집합이 없어요" emptyBody="CLI 의 bary address-set sync cloudflare 로도 만들어요."

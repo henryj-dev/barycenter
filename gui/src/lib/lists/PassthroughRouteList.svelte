@@ -34,7 +34,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/route/passthrough/new">＋ 패스스루 라우트 만들기</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/traffic/route/passthrough/new">＋ 생성</Button>{/snippet}
 
 <RouteSegments current="passthrough" />
 <DataTable label="패스스루 라우트" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}

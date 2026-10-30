@@ -46,7 +46,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/tls/certificate/new">＋ 인증서 넣기</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/tls/certificate/new">＋ 생성</Button>{/snippet}
 
 <DataTable label="인증서 목록" {rows} rowKey={(r) => r.key} {columns} {chips} loading={!desk.live}
   search={{ placeholder: '이름·도메인으로 찾기', match: (r, q) => `${r.key} ${r.domains}`.toLowerCase().includes(q) }}

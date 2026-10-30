@@ -67,7 +67,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/backend/new">＋ 백엔드 넣기</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/traffic/backend/new">＋ 생성</Button>{/snippet}
 
 <DataTable label="백엔드 목록" {rows} rowKey={(r) => r.key} {columns} {chips} selectable={!ro} bind:selected pageSize={50}
   loading={!desk.live} search={{ placeholder: '이름·풀·주소로 찾기', match: (r, q) => `${r.key} ${r.pool} ${r.addr}`.toLowerCase().includes(q) }}
