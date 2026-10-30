@@ -118,13 +118,6 @@
     cursor: pointer;
   }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  h2 { font-size: 0.85rem; color: var(--mute); font-weight: 600; margin: 1.5rem 0 0; }
-  .policies { list-style: none; margin: 0.4rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
-  .policies li {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 0.6rem;
-  }
   li[data-mark='join'] .port,
   li[data-mark='join'] .mark { color: var(--moss); }
   li[data-mark='leave'] .port,
