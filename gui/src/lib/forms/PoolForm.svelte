@@ -8,6 +8,7 @@
   import { getContext } from 'svelte';
   import type { ProtocolClass } from '@web/edit';
   import { FormRow, FormSection, Select, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -44,7 +45,7 @@
       : algorithm === 'source_ip_hash'
         ? desk.insertSourceIpHashPool(base)
         : desk.insertPool({ ...base, algorithm });
-    void run.then(after);
+    void run.then(after(resourcePath('pool', base.pool)));
   };
 </script>
 

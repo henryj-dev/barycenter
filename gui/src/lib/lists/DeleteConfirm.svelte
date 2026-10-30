@@ -21,5 +21,5 @@
   <ConfirmDialog open title="삭제: {RESOURCES[target.kind].label} {target.key} 를 설정에서 빼요"
     sub="저장하면 커밋해요. 트래픽은 적용해야 바뀌어요." {lines} requireName={target.key} confirmLabel="삭제해요" busy={desk.editing}
     oncancel={() => { target = undefined; }}
-    onconfirm={() => { const t = target!; void desk.withdraw(t.kind, t.key).then((ok) => { target = undefined; after(ok); }); }} />
+    onconfirm={() => { const t = target!; void desk.withdraw(t.kind, t.key).then((ok) => { target = undefined; after(undefined, '삭제를 커밋했어요')(ok); }); }} />
 {/if}

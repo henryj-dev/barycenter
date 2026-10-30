@@ -5,6 +5,7 @@
    */
   import { getContext } from 'svelte';
   import { FormRow, FormSection, TextArea, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -21,7 +22,7 @@
   const keyBad = $derived(privkey.trim() === '' || /-----BEGIN [A-Z ]*PRIVATE KEY/.test(privkey) ? undefined : 'PEM 개인 키가 아니에요. -----BEGIN … PRIVATE KEY 로 시작해요.');
   const ready = $derived(filled(key, keyError) && filled(fullchain) && filled(privkey) && chainBad === undefined && keyBad === undefined);
   const submit = (): void => {
-    void desk.insertCertificate(key.trim(), { fullchain: fullchain.trim(), privkey: privkey.trim() }).then(after);
+    void desk.insertCertificate(key.trim(), { fullchain: fullchain.trim(), privkey: privkey.trim() }).then(after(resourcePath('certificate', key.trim())));
   };
 </script>
 

@@ -9,6 +9,7 @@
    */
   import { getContext } from 'svelte';
   import { FormRow, FormSection, Select } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -37,7 +38,7 @@
       port: Number(port),
       ...(pool === '' ? {} : { pool }),
       ...(noSniPool === '' ? {} : { noSniPool }),
-    }, allow).then(after);
+    }, allow).then(after(resourcePath('listener', key.trim())));
   };
 </script>
 

@@ -6,6 +6,7 @@
   import { getContext } from 'svelte';
   import { putAddressSetPatch } from '@web/edit';
   import { FormRow, FormSection, ListInput, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -24,7 +25,7 @@
     problem = undefined;
     try {
       const [op] = putAddressSetPatch(key, { cidrs });
-      if (op !== undefined) void desk.putResource('addressSet', op.key, op.body).then(after);
+      if (op !== undefined) void desk.putResource('addressSet', op.key, op.body).then(after(resourcePath('addressSet', op.key)));
     } catch (e) {
       problem = e instanceof Error ? e.message : String(e);
     }

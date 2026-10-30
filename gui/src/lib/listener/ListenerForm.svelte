@@ -10,6 +10,7 @@
   import { page } from '$app/state';
   import { parseSourceAllow, type ListenerEdit } from '@web/edit';
   import { Banner, Button, Form, FormRow, FormSection, Select, Switch, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import SourceAllowSection from '#lib/forms/SourceAllowSection.svelte';
   import { bindHelp, filled, portError } from '#lib/forms/checks';
@@ -67,7 +68,7 @@
       problem = e instanceof Error ? e.message : String(e);
       return;
     }
-    void desk.updateListener(key, edit).then(after);
+    void desk.updateListener(key, edit).then(after(resourcePath('listener', key)));
   };
   const reset = (): void => { loaded = undefined; };
 </script>

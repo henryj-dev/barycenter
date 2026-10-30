@@ -7,6 +7,7 @@
   import { getContext } from 'svelte';
   import type { RedirectStatus, RejectStatus } from '@web/edit';
   import { Disclosure, FormRow, FormSection, KeyValueEditor, Select, Switch, TextInput, type KvRow } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -56,11 +57,11 @@
         ...(websocket ? { websocket: true } : {}),
         ...(rewritePrefix.trim() === '' ? {} : { rewritePrefix: rewritePrefix.trim() }),
         ...(lines === '' ? {} : { requestHeaders: lines }),
-      }).then(after);
+      }).then(after(resourcePath('httpRoute', base.key)));
     } else if (action === 'redirect') {
-      void desk.insertHttpRedirect({ ...base, to: to.trim(), status: Number(redirectStatus) as RedirectStatus }).then(after);
+      void desk.insertHttpRedirect({ ...base, to: to.trim(), status: Number(redirectStatus) as RedirectStatus }).then(after(resourcePath('httpRoute', base.key)));
     } else {
-      void desk.insertHttpReject({ ...base, status: Number(rejectStatus) as RejectStatus }).then(after);
+      void desk.insertHttpReject({ ...base, status: Number(rejectStatus) as RejectStatus }).then(after(resourcePath('httpRoute', base.key)));
     }
   };
 </script>

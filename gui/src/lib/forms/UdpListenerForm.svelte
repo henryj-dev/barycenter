@@ -3,6 +3,7 @@
   import { getContext } from 'svelte';
   import type { UdpPreset } from '@web/edit';
   import { FormRow, FormSection, Select } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -29,7 +30,7 @@
   const ready = $derived(filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined);
   const submit = (): void => {
     if (pool === undefined) return;
-    void desk.insertUdpListener(key.trim(), { bind: bind.trim(), port: Number(port), pool, preset }, allow).then(after);
+    void desk.insertUdpListener(key.trim(), { bind: bind.trim(), port: Number(port), pool, preset }, allow).then(after(resourcePath('listener', key.trim())));
   };
 </script>
 

@@ -60,7 +60,7 @@
     const m = itemOf(desk.model, 'listener', key);
     if (m === undefined) return;
     const { key: _k, ...body } = m;
-    void desk.putResource('listener', key, { ...body, enabled: m['enabled'] === false }).then(after);
+    void desk.putResource('listener', key, { ...body, enabled: m['enabled'] === false }).then(after());
   };
   const menu = (r: Row): MenuItem[] => r.mark === 'leave' ? [] : [
     { label: '상세를 봐요', href: resourcePath('listener', r.key) },

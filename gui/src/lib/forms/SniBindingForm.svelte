@@ -2,6 +2,7 @@
   /** SNI 바인딩 만들기 — HTTPS 리스너에서 이 호스트들에는 이 인증서를 낸다 (시안: 이름 · 리스너 · 호스트 목록 · 인증서). */
   import { getContext } from 'svelte';
   import { FormRow, FormSection, ListInput, Select, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -20,7 +21,7 @@
   const ready = $derived(filled(key, keyError) && listener !== undefined && certificate !== undefined && words(hosts).length > 0);
   const submit = (): void => {
     if (listener === undefined || certificate === undefined) return;
-    void desk.insertSniBinding({ key: key.trim(), listener, hosts: words(hosts), certificate }).then(after);
+    void desk.insertSniBinding({ key: key.trim(), listener, hosts: words(hosts), certificate }).then(after(resourcePath('sniBinding', key.trim())));
   };
 </script>
 
