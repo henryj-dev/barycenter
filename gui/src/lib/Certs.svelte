@@ -112,7 +112,6 @@
   li[data-mark='expired'] .key,
   li[data-mark='expired'] .mark { color: var(--ember); }
   li[data-mark='missing'] .mark { color: var(--ember); }
-  h2 { font-size: 0.85rem; color: var(--mute); font-weight: 600; margin: 1.5rem 0 0; }
   .binds { list-style: none; margin: 0.4rem 0 0; padding: 0; border-top: 1px solid var(--rule); }
   .binds li {
     display: grid;
