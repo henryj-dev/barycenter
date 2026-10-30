@@ -1,8 +1,12 @@
 <script lang="ts">
-  /** 기록 탭 — 이 리소스를 바꾼 리비전과 바뀐 칸 (`GET /api/v1/config/history`). */
+  /**
+   * 기록 탭 — 이 리소스를 바꾼 리비전과 바뀐 칸 (`GET /api/v1/config/history`).
+   * 리비전 하나가 한 줄이고, 바꾼 리비전은 바뀐 칸을 펼쳐 본다(시안 §8 「기록」 처럼 접고 편다).
+   */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import { diffFields, type Item, type ResourceKind } from '@web/resources';
+  import { Badge, Disclosure, FieldMessage, Skeleton, type Tone } from '#lib/ui';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   type Change = {
@@ -24,31 +28,43 @@
       rows = (r ?? []) as Change[];
     });
   });
-  const label: Record<Change['change'], string> = {
-    created: '만들었다', changed: '바꿨다', deleted: '뺐다', earliest: '살펴본 기록의 맨 앞 — 이 앞은 안 봤다',
+  const LABEL: Record<Change['change'], { text: string; tone: Tone }> = {
+    created: { text: '만들었어요', tone: 'ok' },
+    changed: { text: '바꿨어요', tone: 'info' },
+    deleted: { text: '뺐어요', tone: 'danger' },
+    earliest: { text: '살펴본 기록의 맨 앞', tone: 'neutral' },
   };
 </script>
 
 {#if failed}
-  <p class="d-empty">기록을 못 읽었다. 전역 화면은 지역의 기록을 중계하지 않는다 — 그 지역의 GUI 에서 본다.</p>
+  <FieldMessage>기록을 못 읽었어요. 전역 화면은 지역의 기록을 중계하지 않아요. 그 지역의 GUI 에서 봐요.</FieldMessage>
 {:else if rows === undefined}
-  <p class="d-empty">기록을 읽는 중이다.</p>
+  <Skeleton height="96px" label="기록을 읽는 중" />
 {:else if rows.length === 0}
-  <p class="d-empty">최근 리비전에서 이 리소스를 바꾼 적이 없다.</p>
+  <FieldMessage>최근 리비전에서 이 리소스를 바꾼 적이 없어요.</FieldMessage>
 {:else}
-  <ol class="d-list">
+  <ol class="hist">
     {#each rows as r (r.revision)}
-      <li class="row">
-        <span class="d-mono">r{r.revision}</span>
-        <span>{label[r.change]}{r.rollbackOf !== null ? ` (r${r.rollbackOf} 로 롤백)` : ''}</span>
-        <span class="d-note">{r.createdBy} · {new Date(r.createdAt).toLocaleString()}</span>
-        {#if r.note !== null}<span class="d-note">— {r.note}</span>{/if}
-        {#if r.change === 'changed'}
-          <ul class="diff">
-            {#each diffFields(r.before, r.after) as d (d.path)}
-              <li class="d-mono"><span class="d-note">{d.path}</span> {d.before ?? '(없음)'} → {d.after ?? '(없음)'}</li>
-            {/each}
-          </ul>
+      {@const diff = r.change === 'changed' ? diffFields(r.before, r.after) : []}
+      <li>
+        <div class="head">
+          <code class="rev">r{r.revision}</code>
+          <Badge tone={LABEL[r.change].tone} icon={null}>{LABEL[r.change].text}</Badge>
+          {#if r.rollbackOf !== null}<Badge tone="pending" icon={null}>r{r.rollbackOf} 로 롤백</Badge>{/if}
+          <span class="who">{r.createdBy} · {new Date(r.createdAt).toLocaleString()}</span>
+        </div>
+        {#if r.change === 'earliest'}<FieldMessage>이 앞은 살펴보지 않았어요.</FieldMessage>{/if}
+        {#if r.note !== null}<p class="note">{r.note}</p>{/if}
+        {#if diff.length > 0}
+          <Disclosure title="바뀐 칸" hint={`${diff.length}개`}>
+            <table class="diff">
+              <tbody>
+                {#each diff as d (d.path)}
+                  <tr><th scope="row">{d.path}</th><td class="b">{d.before ?? '(없음)'}</td><td class="arrow">→</td><td class="a">{d.after ?? '(없음)'}</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </Disclosure>
         {/if}
       </li>
     {/each}
@@ -56,6 +72,16 @@
 {/if}
 
 <style>
-  .diff { list-style: none; margin: 0.2rem 0 0; padding: 0 0 0 1rem; width: 100%; font-size: 0.8rem; }
-  .diff li { padding: 0.1rem 0; overflow-wrap: anywhere; }
+  .hist { list-style: none; margin: 0; padding: 0; max-width: 960px; border-top: 1px solid var(--bd); }
+  .hist > li { padding: 12px 0; border-bottom: 1px solid var(--bd); display: flex; flex-direction: column; gap: 6px; }
+  .head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .rev { font-family: var(--mono); font-size: 13px; color: var(--tx); min-width: 56px; }
+  .who { font: var(--t-cap); color: var(--tx3); }
+  .note { margin: 0; font: var(--t-small); color: var(--tx2); }
+  .diff { border-collapse: collapse; width: 100%; font: 400 12px/18px var(--mono); }
+  .diff th { text-align: left; font-weight: 400; color: var(--tx3); padding: 2px 12px 2px 0; white-space: nowrap; vertical-align: top; }
+  .diff td { padding: 2px 6px; overflow-wrap: anywhere; vertical-align: top; }
+  .diff .b { color: var(--danger); }
+  .diff .a { color: var(--ok); }
+  .diff .arrow { color: var(--tx3); width: 1%; }
 </style>

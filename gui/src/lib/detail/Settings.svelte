@@ -2,12 +2,13 @@
   /**
    * 설정 탭 — **여기가 수정하는 자리다** (시안: 「수정」 은 설정 탭으로 간다).
    *
-   * 리스너는 폼, 인증서는 보기만(자료를 다시 넣는 것이 수정이다), 나머지는 JSON 수정이다 —
-   * 리소스별 폼은 디자인을 들일 때 만든다. 쓰기가 막혀 있으면(전역 모드) 모든 칸을 보기로 편다.
+   * 리스너는 폼, 인증서는 보기만(자료를 다시 넣는 것이 수정이다), 나머지는 JSON 수정이다.
+   * 쓰기가 막혀 있으면(전역 모드) 모든 칸을 보기로 편다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import { RESOURCES, flattenFields, itemOf, type ResourceKind } from '@web/resources';
+  import { Banner, Button, Card, CodeViewer, DescriptionList, Disclosure } from '#lib/ui';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import ListenerForm from '#lib/listener/ListenerForm.svelte';
   import JsonEdit from './JsonEdit.svelte';
@@ -18,29 +19,36 @@
   const scope = getContext<Scope | undefined>('scope');
   const key = $derived(page.params['key'] ?? '');
   const item = $derived(itemOf(desk.model, kind, key));
-  const fields = $derived(item === undefined ? [] : flattenFields(item));
+  const fields = $derived(item === undefined ? [] : flattenFields(item).map((f) => ({ label: f.path, value: f.value, mono: true })));
   const writable = $derived(RESOURCES[kind].editable && scope?.readOnly !== true);
 </script>
 
 {#if item !== undefined}
-  {#if writable && kind === 'listener'}
-    <ListenerForm />
-    <details class="all">
-      <summary class="d-note">모든 칸 보기 — 폼에 없는 칸은 저장해도 그대로 남는다</summary>
-      <dl class="d-dl">{#each fields as f (f.path)}<dt>{f.path}</dt><dd>{f.value}</dd>{/each}</dl>
-    </details>
-  {:else if writable}
-    <JsonEdit {kind} />
-  {:else}
-    {#if kind === 'certificate'}
-      <p class="d-note">인증서는 자료를 다시 넣어 바꾼다 — <a class="d-link" href="/tls/certificate/new">인증서 넣기</a>에서 같은 이름으로 넣는다.</p>
+  <div class="set">
+    {#if writable && kind === 'listener'}
+      <ListenerForm />
+      <Disclosure title="모든 칸 보기" hint="폼에 없는 칸은 저장해도 그대로 남아요">
+        <DescriptionList labelWidth="220px" items={fields} />
+      </Disclosure>
+    {:else if writable}
+      <JsonEdit {kind} />
+    {:else}
+      {#if kind === 'certificate' && scope?.readOnly !== true}
+        <Banner tone="info">
+          인증서는 자료를 다시 넣어서 바꿔요. 같은 이름으로 넣어요.
+          {#snippet action()}<Button size="sm" href="/tls/certificate/new">인증서 넣기</Button>{/snippet}
+        </Banner>
+      {/if}
+      <Card title="설정">
+        <DescriptionList labelWidth="220px" items={fields} />
+      </Card>
+      <Disclosure title="전체 정의" hint="head 모델 · JSON">
+        <CodeViewer code={JSON.stringify(item, null, 2)} maxHeight="420px" />
+      </Disclosure>
     {/if}
-    <dl class="d-dl">{#each fields as f (f.path)}<dt>{f.path}</dt><dd>{f.value}</dd>{/each}</dl>
-    <details>
-      <summary class="d-note">전체 정의 (head 모델, JSON)</summary>
-      <pre class="d-pre">{JSON.stringify(item, null, 2)}</pre>
-    </details>
-  {/if}
+  </div>
 {/if}
 
-<style>.all { margin-top: 1.5rem; }</style>
+<style>
+  .set { display: flex; flex-direction: column; gap: 16px; max-width: 960px; }
+</style>
