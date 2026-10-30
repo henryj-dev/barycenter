@@ -184,18 +184,56 @@ describe('같은 출처에서 GUI', () => {
   it('같은 출처에서 GUI 를 낸다 — CORS 를 열지 않는다', async () => {
     root = mkdtempSync(join(tmpdir(), 'bary-gui-'));
     writeFileSync(join(root, 'index.html'), '<title>이 적용이 하는 일</title>');
-    mkdirSync(join(root, 'listeners'));
-    writeFileSync(join(root, 'listeners', 'index.html'), '<title>열려 있는 포트</title>');
+    mkdirSync(join(root, 'traffic'));
+    writeFileSync(join(root, 'traffic', 'listener.html'), '<title>열려 있는 포트</title>');
     const url = await listen(root);
     const page = await fetch(`${url}/`);
     expect(page.status).toBe(200);
     expect(page.headers.get('content-type')).toContain('text/html');
     expect(await page.text()).toContain('이 적용이 하는 일');
-    const kit = await fetch(`${url}/listeners`);
+    const kit = await fetch(`${url}/traffic/listener`);
     expect(kit.status).toBe(200);
     expect(await kit.text()).toContain('열려 있는 포트');
     const missing = await fetch(`${url}/plan`);
     expect(missing.status).not.toBe(200);
+  });
+
+  it('key 가 든 자리만 셸로 낸다 — 아무 경로나 받는 SPA 폴백이 아니다', async () => {
+    root = mkdtempSync(join(tmpdir(), 'bary-gui-'));
+    writeFileSync(join(root, 'index.html'), '<p>dash</p>');
+    writeFileSync(join(root, '_shell.html'), '<title>셸</title><script>boot()</script>');
+    const url = await listen(root);
+    for (const path of ['/traffic/listener/edge-443', '/traffic/listener/edge-443/', '/traffic/listener/edge-443/edit']) {
+      const r = await fetch(`${url}${path}`, { redirect: 'manual' });
+      expect(r.status, path).toBe(200);
+      expect(await r.text()).toContain('셸');
+      // 셸에도 그 파일의 인라인 스크립트 해시로 CSP 가 붙는다(검수 G2).
+      expect(r.headers.get('content-security-policy') ?? '').toMatch(/script-src 'self' 'sha256-/);
+    }
+    // 패턴 밖은 셸이 아니다 — 지금처럼 GUI 가 거절하고 인증 검사로 흘러간다.
+    for (const path of ['/traffic/listener/a/b', '/traffic/nope/x', '/whatever', '/traffic/listener/a/edit/x']) {
+      const r = await fetch(`${url}${path}`, { redirect: 'manual' });
+      expect(r.status, path).not.toBe(200);
+    }
+  });
+
+  it('옮긴 자리는 308 로 새 주소를 알려 준다', async () => {
+    root = mkdtempSync(join(tmpdir(), 'bary-gui-'));
+    writeFileSync(join(root, 'index.html'), '<p>dash</p>');
+    const url = await listen(root);
+    const cases: [string, string][] = [
+      ['/listeners', '/traffic/listener'], ['/pools/', '/traffic/pool'], ['/routes', '/traffic/route'],
+      ['/certificates', '/tls/certificate'], ['/status', '/ops/status'], ['/rendered', '/ops/rendered'],
+      ['/audit', '/ops/audit'], ['/users', '/admin/user'],
+    ];
+    for (const [from, to] of cases) {
+      const r = await fetch(`${url}${from}`, { redirect: 'manual' });
+      expect(r.status, from).toBe(308);
+      expect(r.headers.get('location')).toBe(to);
+    }
+    // API 경로는 GUI 가 손대지 않는다.
+    const api = await fetch(`${url}/api/v1/status`, { redirect: 'manual' });
+    expect(api.status).toBe(401);
   });
 
   it('API 는 토큰 없이 안 열린다 — 페이지와 계약을 섞지 않는다', async () => {

@@ -57,7 +57,11 @@
         <li data-mark={row.mark} data-enabled={row.enabled}>
           <span class="port mono">{row.bind}:{row.port}</span>
           <span class="proto mono">{row.protocol}</span>
-          <span class="key">{row.mark === 'leave' ? row.socket : row.key}</span>
+          {#if row.mark === 'leave'}
+            <span class="key">{row.socket}</span>
+          {:else}
+            <a class="key" href={`/traffic/listener/${encodeURIComponent(row.key)}`}>{row.key}</a>
+          {/if}
           <span class="mark">{label(row.mark)}</span>
           {#if row.sourceAllow.length > 0}
             <span class="allow mono" title={row.sourceAllow.join('\n')}>출발지 {row.sourceAllow.length}개만</span>
@@ -111,6 +115,8 @@
   .port { font-size: 0.95rem; }
   .proto { color: var(--mute); font-size: 0.8rem; }
   .key { color: var(--mute); font-size: 0.85rem; }
+  a.key { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--rule); justify-self: start; }
+  a.key:hover { border-bottom-color: var(--ember); }
   .mark { font-size: 0.75rem; color: var(--mute); }
   /* 출발지 제한 — 목록은 title 로 펼친다. 줄에 다 싣기엔 길다(Cloudflare 만 스물두 개). */
   .allow { font-size: 0.72rem; color: var(--amber, var(--mute)); cursor: help; }

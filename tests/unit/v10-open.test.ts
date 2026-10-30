@@ -14,7 +14,7 @@ import type { Http, HttpResult } from '../../src/cli/flow.js';
 import {
   drainStatusOf, observationPeerOf, observePeerFromAdmin, parsePeerObservation,
 } from '../../src/control/drain.js';
-import { KIT_ROUTES, pageOf } from '../../src/web/page.js';
+import { GUI_DYNAMIC, GUI_SHELL, KIT_ROUTES, pageOf } from '../../src/web/page.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -131,7 +131,7 @@ describe('OpenAPI · DDL 동결', () => {
 });
 
 describe('Kit 경로', () => {
-  it('GUI 는 adapter-static Kit 이고 SPA 폴백이 아니다', () => {
+  it('GUI 는 adapter-static Kit 이고, 폴백은 key 자리를 위한 셸 하나다', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'gui/package.json'), 'utf8')) as {
       devDependencies: Record<string, string>;
     };
@@ -143,13 +143,15 @@ describe('Kit 경로', () => {
     expect(viteCfg).toContain('@sveltejs/kit/vite');
     expect(viteCfg).toContain('@sveltejs/adapter-static');
     expect(viteCfg).toMatch(/sveltekit\(\{/);
-    expect(viteCfg).toMatch(/fallback:\s*undefined/);
+    // 셸은 서버가 GUI_DYNAMIC 패턴에만 낸다 — 아무 경로나 받지 않는다(plan-view 테스트).
+    expect(viteCfg).toMatch(new RegExp(`fallback:\\s*'${GUI_SHELL}'`));
     expect(viteCfg).not.toMatch(/plugins:\s*\[svelte\(\)\]/);
   });
 
   it('Kit 자리가 라우트고 pageOf 가 같은 이름을 읽는다', () => {
     expect(KIT_ROUTES.some((r) => r.place === 'login' && r.path === '/login')).toBe(true);
-    expect(KIT_ROUTES).toHaveLength(15); // + invite · account · users (계획 A) · reset · email (B1) · regions (전역)
+    // + invite · account · users (계획 A) · reset · email (B1) · regions (전역) · dashboard (경로 분리)
+    expect(KIT_ROUTES).toHaveLength(16);
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);
@@ -158,6 +160,13 @@ describe('Kit 경로', () => {
         : join(routesDir, r.path.slice(1), '+page.svelte');
       expect(readdirSync(dirname(file))).toContain('+page.svelte');
       expect(readFileSync(file, 'utf8')).not.toMatch(/setInterval|setTimeout\(\s*\(\)\s*=>\s*fetch/);
+    }
+    // key 자리도 라우트 파일이 있고, 미리 만들지 않는다(셸이 연다).
+    for (const d of GUI_DYNAMIC) {
+      const dir = join(routesDir, d.route.slice(1));
+      expect(readdirSync(dir)).toContain('+page.svelte');
+      expect(readFileSync(join(dir, '+page.ts'), 'utf8')).toMatch(/prerender\s*=\s*false/);
+      expect(pageOf(d.route.replace('[key]', 'edge-443'))).toBe(d.place);
     }
     expect(readFileSync(join(root, 'gui/src/routes/+layout.svelte'), 'utf8'))
       .not.toMatch(/setInterval|setTimeout\(\s*\(\)\s*=>\s*fetch/);

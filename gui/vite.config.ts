@@ -17,7 +17,9 @@ export default defineConfig({
       adapter: adapter({
         pages: 'build',
         assets: 'build',
-        fallback: undefined,
+        // key 가 든 자리(`/traffic/listener/<key>`)를 위한 셸 하나. 서버는 정해 둔 패턴에만 이것을 낸다
+        // (src/web/page.ts GUI_DYNAMIC) — 아무 경로나 받는 SPA 폴백이 아니다.
+        fallback: '_shell.html',
         strict: true,
       }),
     }),

@@ -19,7 +19,7 @@ import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs } from '@web/reconnect';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 
@@ -47,6 +47,8 @@ export function createDesk(scope?: { api(path: string): string }) {
   let head = $state<string | undefined>();
   let view = $state<ImpactView | undefined>();
   let listeners = $state<ListenersView>({ rows: [] });
+  /** head 모델의 리스너 그대로 — 상세가 보여 주고, 수정이 바탕으로 쓴다(`editListenerPatch`). */
+  let listenerModels = $state<Record<string, unknown>[]>([]);
   let health = $state<HealthFact[]>([]);
   let pools = $state<PoolsView>({ rows: [] });
   let routes = $state<RoutesView>({ order: [], warnings: [], errors: [], passthrough: [] });
@@ -84,10 +86,12 @@ export function createDesk(scope?: { api(path: string): string }) {
     if (!r.ok) {
       error = `listeners ${r.status}`;
       listeners = { rows: [] };
+      listenerModels = [];
       return;
     }
     const body = (await r.json()) as unknown;
     const facts = Array.isArray(body) ? body as ListenerFact[] : [];
+    listenerModels = Array.isArray(body) ? body as Record<string, unknown>[] : [];
     listeners = viewOfListeners(
       facts,
       impact === undefined ? undefined : { added: impact.socketsAdded, removed: impact.socketsRemoved },
@@ -524,6 +528,22 @@ export function createDesk(scope?: { api(path: string): string }) {
     }
   };
 
+  /** 상세의 수정 화면. head 의 그 리스너를 바탕으로 고친 칸만 덮는다. */
+  const updateListener = async (key: string, edit: ListenerEdit): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const current = listenerModels.find((l) => l['key'] === key);
+      if (current === undefined) throw new Error(`리스너 '${key}' 가 head 에 없다`);
+      return await commitPatch(editListenerPatch(current, edit));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const insertTlsPolicy = async (key: string, minVersion?: TlsVersion): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -778,6 +798,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     get head() { return head; },
     get view() { return view; },
     get listeners() { return listeners; },
+    get listenerModels() { return listenerModels; },
     get pools() { return pools; },
     get routes() { return routes; },
     get certs() { return certs; },
@@ -803,6 +824,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     insertPassthroughListener,
     insertUdpListener,
     insertTlsPolicy,
+    updateListener,
     get traffic() { return traffic; },
     insertHttpsListener,
     insertCertificate,

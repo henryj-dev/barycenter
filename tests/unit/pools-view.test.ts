@@ -54,10 +54,10 @@ describe('풀 목록', () => {
 });
 
 describe('화면 자리', () => {
-  it('/pools 가 풀 화면이다 — Kit 이 아니다', () => {
-    expect(pageOf('/pools')).toBe('pools');
-    expect(pageOf('/pools/web')).toBe('pools');
-    expect(pageOf('/listeners')).toBe('listeners');
-    expect(pageOf('/')).toBe('impact');
+  it('/traffic/pool 가 풀 화면이다 — Kit 자리다', () => {
+    expect(pageOf('/traffic/pool')).toBe('pools');
+    expect(pageOf('/traffic/pool/web')).toBe('pools');
+    expect(pageOf('/traffic/listener')).toBe('listeners');
+    expect(pageOf('/')).toBe('dashboard');
   });
 });

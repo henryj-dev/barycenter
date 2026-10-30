@@ -29,9 +29,9 @@ describe('산출물', () => {
 });
 
 describe('화면 자리', () => {
-  it('/rendered 가 산출물 화면이다 — Kit 이 아니다', () => {
-    expect(pageOf('/rendered')).toBe('rendered');
-    expect(pageOf('/status')).toBe('status');
-    expect(pageOf('/')).toBe('impact');
+  it('/ops/rendered 가 산출물 화면이다 — Kit 자리다', () => {
+    expect(pageOf('/ops/rendered')).toBe('rendered');
+    expect(pageOf('/ops/status')).toBe('status');
+    expect(pageOf('/')).toBe('dashboard');
   });
 });

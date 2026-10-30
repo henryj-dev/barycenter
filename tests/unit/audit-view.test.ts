@@ -38,9 +38,9 @@ describe('기록', () => {
 });
 
 describe('화면 자리', () => {
-  it('/audit 가 기록 화면이다 — Kit 이 아니다', () => {
-    expect(pageOf('/audit')).toBe('audit');
-    expect(pageOf('/rendered')).toBe('rendered');
-    expect(pageOf('/')).toBe('impact');
+  it('/ops/audit 가 기록 화면이다 — Kit 자리다', () => {
+    expect(pageOf('/ops/audit')).toBe('audit');
+    expect(pageOf('/ops/rendered')).toBe('rendered');
+    expect(pageOf('/')).toBe('dashboard');
   });
 });

@@ -1209,3 +1209,64 @@ export function proxyFromUrlPatch(input: ProxyFromUrlInput): ProxyFromUrlOp[] {
   }
   return ops;
 }
+
+/**
+ * **리스너 고치기** — 상세의 수정 화면 (2026-10-30, 경로 분리).
+ *
+ * `put` 은 리스너 **전체를 갈아 끼운다.** 화면이 아는 칸만으로 body 를 새로 짜면, 화면에 없는
+ * 칸(헤더 규칙·레이트리밋·TLS 결박·PROXY 수신 …)이 조용히 지워진다. 그래서 **head 모델의 그
+ * 리스너를 바탕으로** 고친 칸만 덮는다. 모르는 칸은 손대지 않고 그대로 싣는다.
+ *
+ * 기본 동작의 자리는 프로토콜마다 다르다:
+ *   http·https   `http.defaultAction` — 풀 또는 'reject'
+ *   tcp·udp      `defaultPool` — 풀만
+ *   패스스루     고칠 기본 풀이 없다(SNI 결과가 따로 있다) — 주면 거절한다
+ */
+export type ListenerEdit = {
+  bind: string;
+  port: number;
+  enabled: boolean;
+  /** undefined 또는 빈 배열 = 제한 없음. 키를 지운다. */
+  sourceAllow?: string[];
+  /** undefined = 그대로 둔다. */
+  defaultAction?: { pool: string } | 'reject';
+};
+
+export type PutListenerOp = {
+  op: 'put';
+  kind: 'listener';
+  key: string;
+  body: Record<string, unknown>;
+};
+
+export function editListenerPatch(current: Readonly<Record<string, unknown>>, edit: ListenerEdit): PutListenerOp[] {
+  const key = current['key'];
+  const protocol = current['protocol'];
+  if (typeof key !== 'string' || key === '') throw new Error('키가 비어 있다');
+  if (typeof protocol !== 'string') throw new Error('프로토콜을 모른다');
+  if (edit.bind.trim() === '') throw new Error('바인드가 비어 있다');
+  if (!Number.isInteger(edit.port) || edit.port < 1 || edit.port > 65535) {
+    throw new Error('포트가 1–65535 정수가 아니다');
+  }
+  const { key: _key, ...rest } = current;
+  const body: Record<string, unknown> = { ...rest, bind: edit.bind.trim(), port: edit.port, enabled: edit.enabled };
+  if (edit.sourceAllow === undefined || edit.sourceAllow.length === 0) delete body['sourceAllow'];
+  else body['sourceAllow'] = [...edit.sourceAllow];
+
+  const action = edit.defaultAction;
+  if (action !== undefined) {
+    if (action !== 'reject' && action.pool === '') throw new Error('풀이 비어 있다');
+    if (protocol === 'http' || protocol === 'https') {
+      const http = typeof current['http'] === 'object' && current['http'] !== null
+        ? current['http'] as Record<string, unknown>
+        : {};
+      body['http'] = { ...http, defaultAction: action === 'reject' ? 'reject' : { pool: action.pool } };
+    } else if (protocol === 'tcp' || protocol === 'udp') {
+      if (action === 'reject') throw new Error(`${protocol} 리스너는 거절을 기본 동작으로 못 둔다 — 풀이 필요하다`);
+      body['defaultPool'] = action.pool;
+    } else {
+      throw new Error(`${protocol} 리스너는 기본 풀을 여기서 못 고친다`);
+    }
+  }
+  return [{ op: 'put', kind: 'listener', key, body }];
+}
