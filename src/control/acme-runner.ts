@@ -53,6 +53,12 @@ export type AcmeRunnerOptions = {
   /** 만료 며칠 전에 갱신할 것인가 (§8.2 는 30 일). */
   renewBeforeDays?: number;
   now?: () => Date;
+  /**
+   * 주문 상태가 바뀌면 부른다(실패 포함). 데몬은 이것을 이벤트 스트림의 `acme` 로 내보낸다 —
+   * 화면이 「대기 → 검증 중 → 발급됨 · 실패」 를 묻지 않고 따라간다(폴링하지 않는다).
+   * 던져도 러너는 멈추지 않는다 — 알림은 부가 기능이다.
+   */
+  onAdvance?: (e: TickResult) => void;
 };
 
 /** 한 틱이 한 일. 관측과 테스트가 이걸 본다. */
@@ -78,6 +84,14 @@ export class AcmeRunner {
 
   #now(): Date {
     return this.#o.now?.() ?? new Date();
+  }
+
+  #notify(e: TickResult): void {
+    try {
+      this.#o.onAdvance?.(e);
+    } catch (err) {
+      log.warn('acme.notify.failed', { error: (err as Error).message });
+    }
   }
 
   #placer(type: 'http-01' | 'dns-01'): ChallengePlacer {
@@ -157,6 +171,7 @@ export class AcmeRunner {
       if (to !== order.state) {
         count(`bary_acme_orders_total{event="${to}"}`);
         log.info('acme.order.advanced', { order: order.id, from, to });
+        this.#notify({ order: order.id, from, to });
       }
       // 종단이면 `markIssued` 가 이미 놓았다 (DB CHECK 가 그걸 강제한다).
       if (to !== 'issued' && to !== 'abandoned') await this.#o.store.release(order.id);
@@ -166,6 +181,7 @@ export class AcmeRunner {
       const state = await this.#o.store.fail(order.id, message);
       count(`bary_acme_orders_total{event="${state}"}`);
       log.warn('acme.order.failed', { order: order.id, from, state, error: message });
+      this.#notify({ order: order.id, from, to: state, error: message });
       await this.cleanupOrder(order.id);
       return { order: order.id, from, to: state, error: message };
     }

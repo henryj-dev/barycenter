@@ -299,6 +299,9 @@ export function createDesk(scope?: { api(path: string): string }) {
             await onStatus(frame.data as StatusSnap);
           } else if (frame.event === 'health') {
             onHealth(frame.data);
+          } else if (frame.event === 'acme') {
+            // 주문이 한 걸음 갔다(대기 → 검증 중 → 발급됨 · 실패). 인증서와 주문만 다시 읽는다.
+            await refreshCerts();
           } else if (frame.event === 'revision' || frame.event === 'apply') {
             const st = await fetch(api('/api/v1/status'), { headers: auth() });
             if (st.ok) await onStatus((await st.json()) as StatusSnap);
