@@ -28,7 +28,8 @@
   const pick = async (r: RegionSummary): Promise<void> => {
     desk.disconnect();
     scope.choose(r);
-    await desk.connect();
+    // **기다리지 않는다.** `connect` 는 스트림이 끊길 때까지 끝나지 않는다.
+    void desk.connect();
     await goto('/');
   };
   const stateOf = (r: RegionSummary): { tone: Tone; text: string } => {
