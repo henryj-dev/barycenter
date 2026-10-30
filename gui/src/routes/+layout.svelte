@@ -23,7 +23,6 @@
   import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
   import '@fontsource-variable/jetbrains-mono';
   import '../app.css';
-  import '#lib/detail/style.css';
 
   let { children } = $props();
 

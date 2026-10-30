@@ -8,6 +8,8 @@
  *   1단계(이 파일의 첫 판) — 리소스 목록 9개는 `DataTable` 이다.
  *   2단계 — 만들기 폼 14개는 `CreateForm`(공통 `Form`) 위의 `FormSection` · `FormRow` 다. 날 입력을 안 그린다.
  *   3단계 — 상세 탭 10개와 리스너 수정 폼은 `#lib/ui` 를 쓰고, 옛 `d-*` 클래스와 날 입력을 안 쓴다.
+ *   4단계 — 운영 화면 8개(대시보드 · 적용 대기 · 롤백 · 상태 · 렌더 결과 · 감사 · 클러스터 둘)도 그렇다.
+ *           옛 상세 공통 스타일(`detail/style.css`)을 지웠다.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -139,5 +141,44 @@ describe('상세 탭은 공통 컴포넌트다', () => {
   it('출발지 제한 칸은 한 벌이다 — 수정 폼도 만들기 폼의 구획을 쓴다', () => {
     expect(read('lib/listener/ListenerForm.svelte')).toContain("from '#lib/forms/SourceAllowSection.svelte'");
     expect(existsSync(join(GUI, 'lib/SourceAllow.svelte'))).toBe(false);
+  });
+});
+
+const OPS: readonly [route: string, components: readonly string[]][] = [
+  ['routes/+page.svelte', ['Dashboard']],
+  ['routes/change/pending/+page.svelte', ['PendingImpact', 'RevisionRollback']],
+  ['routes/ops/status/+page.svelte', ['StatusPanel']],
+  ['routes/ops/rendered/+page.svelte', ['RenderedConf']],
+  ['routes/ops/audit/+page.svelte', ['AuditLog']],
+  ['routes/ops/cluster/+page.svelte', ['ClusterNodes']],
+  ['routes/ops/cluster/[node]/+page.svelte', ['ClusterNodeView']],
+];
+
+describe('운영 화면은 공통 컴포넌트다', () => {
+  for (const [route, components] of OPS) {
+    it(`${route} → ${components.join(' · ')}`, () => {
+      const page = read(route);
+      for (const c of components) {
+        expect(page).toContain(`from '#lib/ops/${c}.svelte'`);
+        const src = read(`lib/ops/${c}.svelte`);
+        expect(src).toMatch(/import \{[^}]*\} from '#lib\/ui'/);
+        expect(markup(src), `${c} 가 옛 d-* 클래스를 쓴다`).not.toMatch(/class="[^"]*\bd-[a-z0-9]+/);
+        expect(markup(src), `${c} 가 날 입력을 그린다`).not.toMatch(RAW_INPUT);
+      }
+    });
+  }
+
+  it('적용 대기는 영향 요약 카드다 — 끊기는 것을 먼저 쓴다', () => {
+    const src = read('lib/ops/PendingImpact.svelte');
+    expect(markup(src)).toContain('<ImpactCard');
+    expect(src.indexOf('socketsRemoved'), '닫히는 소켓이 열리는 소켓보다 먼저다').toBeLessThan(src.indexOf('socketsAdded.map'));
+  });
+
+  it('옛 운영 컴포넌트와 상세 공통 스타일이 남아 있지 않다', () => {
+    for (const name of ['Impact', 'Rollback', 'Status', 'Audit', 'Rendered']) {
+      expect(existsSync(join(GUI, `lib/${name}.svelte`)), name).toBe(false);
+    }
+    expect(existsSync(join(GUI, 'lib/detail/style.css'))).toBe(false);
+    expect(read('routes/+layout.svelte')).not.toContain('detail/style.css');
   });
 });
