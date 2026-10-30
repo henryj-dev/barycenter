@@ -1,5 +1,5 @@
 <script lang="ts">
-  import JsonEdit from '#lib/detail/JsonEdit.svelte';
+  import AddressSetForm from '#lib/forms/AddressSetForm.svelte';
 </script>
 
-<JsonEdit kind="addressSet" create template={{ cidrs: ['203.0.113.0/24'] }} />
+<AddressSetForm />
