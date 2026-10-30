@@ -9,12 +9,13 @@
    * **업로드:** PEM 자료를 올리고(`/certificates/material`) 그 참조로 커밋한다. 개인 키는 서버가 암호화해서
    * 둔다. 화면은 붙여 넣은 값을 다시 보이지 않는다.
    *
-   * ACME 계정이 없으면 같은 화면에서 만든다. 계정 만들기는 설정이 아니라 바로 걸리는 일이다(계정 키를 만든다).
+   * ACME 계정은 「계정」 칸에서 만든다 — 계정이 없으면 그 자리에 바로 펼치고, 있으면 「＋ 계정 생성」 을 눌러야 펼친다.
+   * (전에는 계정이 있어도 만들기 구획이 늘 보였다.) 계정 만들기는 설정이 아니라 바로 걸리는 일이다(계정 키를 만든다).
    */
   import { getContext, onMount } from 'svelte';
   import { resourcePath } from '@web/resources';
   import {
-    Badge, Button, Card, FieldMessage, FormRow, FormSection, ListInput, RadioGroup, Select, TextArea, TextInput,
+    Badge, Button, FieldMessage, FormRow, FormSection, ListInput, RadioGroup, Select, TextArea, TextInput,
   } from '#lib/ui';
   import { after } from '#lib/after';
   import type { AcmeAccountRow, createDesk } from '#lib/desk.svelte.ts';
@@ -41,6 +42,9 @@
   let newContact = $state('');
   let creating = $state(false);
   let accountProblem = $state<string | undefined>();
+  /** 「＋ 계정 생성」 을 눌렀다. 계정이 하나도 없으면 누르지 않아도 펼친다(`noAccount`). */
+  let adding = $state(false);
+  const noAccount = $derived(accounts !== undefined && accounts.length === 0);
 
   const loadAccounts = async (): Promise<void> => {
     accounts = await desk.acmeAccounts();
@@ -68,6 +72,9 @@
     creating = false;
     if (!ok) { accountProblem = desk.error ?? '계정을 만들지 못했어요.'; return; }
     account = newKey.trim();
+    adding = false;
+    newKey = '';
+    newContact = '';
     await loadAccounts();
   };
 
@@ -110,9 +117,35 @@
       <FormRow label="도메인" required help="한 줄에 하나씩 넣어요. 이 이름들이 인증서에 들어가요.">
         <ListInput label="도메인" bind:value={domains} check={domainLine} minRows={2} placeholder={'app.example.com\nwww.example.com'} />
       </FormRow>
-      <FormRow label="계정" required help={accounts !== undefined && accounts.length === 0 ? 'ACME 계정이 없어요. 아래에서 먼저 만들어요.' : undefined}>
-        <Select label="ACME 계정" bind:value={account} width="100%" placeholder="계정을 골라요" disabled={accounts === undefined || accounts.length === 0}
-          options={(accounts ?? []).map((a) => ({ value: a.key, hint: `${caLabel(a.directoryUrl)}${a.registered ? '' : ' · 첫 주문 때 등록'}` }))} />
+      <FormRow label="계정" required help={noAccount ? 'ACME 계정이 없어요. 먼저 만들어요. 계정 키는 서버가 만들어 보관하고, CA 등록은 첫 주문 때 해요.' : undefined}>
+        {#if !noAccount}
+          <Select label="ACME 계정" bind:value={account} width="100%" placeholder="계정을 골라요" disabled={accounts === undefined}
+            options={(accounts ?? []).map((a) => ({ value: a.key, hint: `${caLabel(a.directoryUrl)}${a.registered ? '' : ' · 첫 주문 때 등록'}` }))} />
+          {#if !adding}
+            <div class="add"><Button variant="text" size="sm" onclick={() => { adding = true; }}>＋ 계정 생성</Button></div>
+          {/if}
+        {/if}
+        {#if noAccount || adding}
+          <!-- 계정이 없으면 이 자리에 바로 펼친다. 있으면 「＋ 계정 생성」 을 눌렀을 때만. -->
+          <div class="newacct">
+            <FormSection stack>
+              <FormRow label="계정 이름" for="acme-key" error={keyError(newKey)}>
+                <TextInput id="acme-key" bind:value={newKey} invalid={keyError(newKey) !== undefined} autocomplete="off" width="240px" />
+              </FormRow>
+              <FormRow label="CA" help="처음에는 스테이징으로 확인해요. 운영 CA 는 실패가 잦으면 잠시 막아요(속도 제한).">
+                <Select label="CA" bind:value={newCa} options={CAS} width="100%" mono={false} />
+              </FormRow>
+              <FormRow label="연락 이메일" for="acme-mail" help="만료 · 문제 알림을 CA 가 보내요. 비워도 돼요.">
+                <TextInput id="acme-mail" type="email" bind:value={newContact} autocomplete="email" placeholder="ops@example.com" />
+              </FormRow>
+            </FormSection>
+            <div class="acct">
+              <Button loading={creating} disabled={desk.editing} onclick={() => { void createAccount(); }}>계정 만들기</Button>
+              {#if !noAccount}<Button variant="text" onclick={() => { adding = false; accountProblem = undefined; }}>취소</Button>{/if}
+              {#if accountProblem !== undefined}<FieldMessage tone="error">{accountProblem}</FieldMessage>{/if}
+            </div>
+          </div>
+        {/if}
       </FormRow>
       <FormRow label="검증 방식" help={wildcard
         ? '와일드카드는 DNS-01 로만 받아요. DNS 프로바이더 연결이 필요해요.'
@@ -123,24 +156,6 @@
         <Badge tone="ok">켜짐</Badge>
       </FormRow>
     </FormSection>
-
-    <Card title="ACME 계정 만들기" sub="계정 키는 서버가 만들어 보관해요. CA 등록은 첫 주문 때 해요.">
-      <FormSection>
-        <FormRow label="계정 이름" for="acme-key" required error={keyError(newKey)}>
-          <TextInput id="acme-key" bind:value={newKey} invalid={keyError(newKey) !== undefined} autocomplete="off" width="240px" />
-        </FormRow>
-        <FormRow label="CA" required help="처음에는 스테이징으로 확인해요. 운영 CA 는 실패가 잦으면 잠시 막아요(속도 제한).">
-          <Select label="CA" bind:value={newCa} options={CAS} width="100%" mono={false} />
-        </FormRow>
-        <FormRow label="연락 이메일" for="acme-mail" help="만료 · 문제 알림을 CA 가 보내요. 비워도 돼요.">
-          <TextInput id="acme-mail" type="email" bind:value={newContact} autocomplete="email" placeholder="ops@example.com" />
-        </FormRow>
-      </FormSection>
-      <div class="acct">
-        <Button loading={creating} disabled={desk.editing} onclick={() => { void createAccount(); }}>계정 만들기</Button>
-        {#if accountProblem !== undefined}<FieldMessage tone="error">{accountProblem}</FieldMessage>{/if}
-      </div>
-    </Card>
   {:else}
     <FormSection title="자료" hint="PEM">
       <FormRow label="인증서 체인" for="ct-chain" required error={chainBad} help="서버 인증서 다음에 중간 인증서를 붙여요(fullchain).">
@@ -154,5 +169,7 @@
 </CreateForm>
 
 <style>
+  .add { margin-top: 6px; }
+  .newacct { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--bd); border-radius: var(--r-md); background: var(--bg-page); }
   .acct { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
 </style>
