@@ -117,6 +117,17 @@ describe('주문은 인증서당 하나만 살아 있다', () => {
     expect((await store.get(first.id))?.state).toBe('issued');
   });
 
+  /** 의도 변경 판단(`AcmeRunner.#intentChanged`)이 읽는 자리 — 지금 자료를 낸 주문의 계정 · 도메인. */
+  it('마지막으로 발급된 주문의 계정 · 도메인을 돌려준다 — 발급 기록이 없으면 undefined', async () => {
+    expect(await store.lastIssued(certA)).toBeUndefined();
+    const live = await store.openOrder({ accountId, certificateId: certA, domains: ['a.test'] });
+    expect(await store.lastIssued(certA), '발급 안 된 주문은 세지 않는다').toBeUndefined();
+    await store.setCertKeyRef(live.id, KEYREF('k'));
+    await store.markIssued(live.id, REF('issued'), KEYREF('k'));
+    expect(await store.lastIssued(certA)).toEqual({ accountId, domains: ['a.test'] });
+    expect(await store.lastIssued(certB)).toBeUndefined();
+  });
+
   it('인증서가 다르면 주문도 따로다', async () => {
     const a = await store.openOrder({ accountId, certificateId: certA, domains: ['a.test'] });
     const b = await store.openOrder({ accountId, certificateId: certB, domains: ['b.test'] });

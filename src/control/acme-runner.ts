@@ -127,17 +127,36 @@ export class AcmeRunner {
         log.warn('acme.no_account', { certificate: cert.key, account: acme.account });
         continue;
       }
-      if (!this.#due(cert.materialRef, days)) continue;
+      const changed = await this.#intentChanged(cert.id, cert.materialRef, account.id, acme.domains);
+      if (!changed && !this.#due(cert.materialRef, days)) continue;
       const r = await this.#o.store.openOrder({
         accountId: account.id, certificateId: cert.id, domains: acme.domains,
       });
       if (r.created) {
         opened.push(r.id);
         count('bary_acme_orders_total{event="opened"}');
-        log.info('acme.order.opened', { certificate: cert.key, domains: acme.domains });
+        log.info('acme.order.opened', { certificate: cert.key, domains: acme.domains, ...(changed ? { reason: 'intent_changed' } : {}) });
       }
     }
     return opened;
+  }
+
+  /**
+   * **의도가 바뀌었나** — 지금 자료를 낸 주문과 계정이나 도메인이 다르면 만료를 기다리지 않고 다시 받는다.
+   *
+   * 예: 스테이징 계정으로 받아 확인한 뒤 계정만 운영 CA 로 바꾼다(2026-10-31). 인증서 이름 · 리스너 · SNI 는
+   * 그대로이고, 새 자료가 나오면 게시가 갈아 끼운다. 그 사이에는 옛 자료가 계속 쓰인다.
+   *
+   * 자료를 손으로 올렸으면(ACME 발급 기록이 없다) 바뀐 것으로 보지 않는다 — 전처럼 만료로만 판단한다.
+   */
+  async #intentChanged(certificateId: string, materialRef: string | undefined, accountId: string, domains: readonly string[]): Promise<boolean> {
+    if (materialRef === undefined) return false;
+    const last = await this.#o.store.lastIssued(certificateId);
+    if (last === undefined) return false;
+    if (last.accountId !== accountId) return true;
+    const a = last.domains.map((d) => d.toLowerCase()).sort().join(',');
+    const b = domains.map((d) => d.toLowerCase()).sort().join(',');
+    return a !== b;
   }
 
   /**

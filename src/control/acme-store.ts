@@ -176,6 +176,21 @@ export class AcmeStore {
    * 주문을 내면 CA 의 레이트리밋에 그대로 걸리고 챌린지가 서로를 덮는다. DB 의 부분
    * 유일 인덱스가 그걸 **구조적으로** 막고, 여기서는 그 충돌을 조회로 바꾼다.
    */
+  /**
+   * 이 인증서의 **지금 자료를 낸 주문**의 계정 · 도메인 — 가장 최근에 발급된 주문.
+   * ACME 로 발급한 적이 없으면(자료를 손으로 올렸다) undefined.
+   */
+  async lastIssued(certificateId: string): Promise<{ accountId: string; domains: string[] } | undefined> {
+    const row = (await this.db.query(
+      `SELECT account_id, domains FROM acme_orders
+        WHERE certificate_id=$1 AND state='issued'
+        ORDER BY updated_at DESC LIMIT 1`,
+      [certificateId],
+    )).rows[0];
+    if (row === undefined) return undefined;
+    return { accountId: text(row, 'account_id'), domains: (row['domains'] as string[] | null) ?? [] };
+  }
+
   async openOrder(opts: {
     accountId: string; certificateId: string; domains: readonly string[];
   }): Promise<{ id: string; created: boolean }> {
