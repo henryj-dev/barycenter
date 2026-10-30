@@ -22,7 +22,8 @@
 
   const signedIn = async (): Promise<void> => {
     await session.refresh();
-    await desk.connect();
+    // **기다리지 않는다.** `connect` 는 스트림이 끊길 때까지(재연결 고리) 끝나지 않는다 — 기다리면 이동하지 않는다.
+    void desk.connect();
     await goto('/');
   };
   let startError = $state<string | undefined>();
