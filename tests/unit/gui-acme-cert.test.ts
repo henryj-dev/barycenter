@@ -36,7 +36,8 @@ describe('ACME 인증서 화면', () => {
     const desk = read('desk.svelte.ts');
     expect(desk).toContain("'/api/v1/acme/accounts'");
     expect(desk).toMatch(/call\('POST', '\/api\/v1\/acme\/accounts'/);
-    expect(read('forms/CertificateForm.svelte')).toContain('desk.createAcmeAccount(');
+    expect(read('forms/AcmeAccountField.svelte')).toContain('desk.createAcmeAccount(');
+    expect(read('forms/CertificateForm.svelte')).toContain('<AcmeAccountField');
   });
 
   it('상세가 주문 상태와 실패 이유를 보인다', () => {
@@ -46,10 +47,10 @@ describe('ACME 인증서 화면', () => {
   });
 
   it('만들기 칸은 계정이 없거나 「＋ 계정 생성」 을 눌렀을 때만 펼친다', () => {
-    const src = read('forms/CertificateForm.svelte');
+    const src = read('forms/AcmeAccountField.svelte');
     expect(src).toContain('{#if noAccount || adding}');
     expect(src).toContain('＋ 계정 생성');
-    expect(src, '늘 보이는 계정 만들기 카드가 남았다').not.toContain('<Card title="ACME 계정 만들기"');
+    expect(read('forms/CertificateForm.svelte'), '늘 보이는 계정 만들기 카드가 남았다').not.toContain('<Card title="ACME 계정 만들기"');
   });
 
   it('목록의 만들기 버튼은 모두 「＋ 생성」 이다', () => {
@@ -57,5 +58,18 @@ describe('ACME 인증서 화면', () => {
       const src = read(`lists/${l}List.svelte`);
       expect(src, l).toMatch(/variant="primary" href="[^"]+\/new">＋ 생성<\/Button>/);
     }
+  });
+
+  /**
+   * **CA 바꾸기** (2026-10-31) — 스테이징으로 받은 인증서를 새로 만들지 않고 운영 CA 로 다시 받는다.
+   * 계정만 바꾸고 나머지 칸(자료 · 도메인)은 head 값 그대로 다시 싣는다 — PUT 은 통째로 덮는다.
+   */
+  it('상세에서 계정만 바꿔 다시 발급한다', () => {
+    const src = read('detail/Acme.svelte');
+    expect(src).toContain('<AcmeAccountField bind:account={next}');
+    expect(src).toContain("desk.putResource('certificate', key, { ...body, acme: { account: next, domains: acme.domains ?? [] } })");
+    // 화면용 칸(만료 · 사실)을 섞어 보내면 해독기가 거절한다 — 모델의 칸만 싣는다.
+    expect(src).toContain("const MODEL_FIELDS = ['materialRef', 'chainDigest', 'keyDigest'] as const;");
+    expect(src, '스테이징이면 운영으로 바꾸라고 먼저 말한다').toMatch(/staging && hasMaterial/);
   });
 });
