@@ -8,6 +8,9 @@
   import { createSession } from '#lib/account/session.svelte.ts';
   import StepUpDialog from '#lib/account/StepUpDialog.svelte';
   import { createScope } from '#lib/global/scope.svelte.ts';
+  // 글꼴은 빌드가 자기 자산으로 들인다 — 외부 출처를 열지 않는다(serve-gui 의 CSP).
+  import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
+  import '@fontsource-variable/jetbrains-mono';
   import '../app.css';
   import '#lib/detail/style.css';
 

@@ -72,25 +72,19 @@ function htmlCsp(path: string): string {
     .map((m) => `'sha256-${createHash('sha256').update(m[1] ?? '', 'utf8').digest('base64')}'`);
 
   /**
-   * **구글 폰트를 연다** — 산출물이 실제로 그것을 참조하기 때문이다.
+   * **외부 출처를 열지 않는다** (2026-10-30, 디자인 시스템).
    *
-   *   <link rel="preconnect" href="https://fonts.googleapis.com" />
-   *   <link href="https://fonts.googleapis.com/css2?family=…" rel="stylesheet" />
-   *
-   * `'self'` 만 두면 **화면이 깨진다** — 지어낸 정책이 아니라 **깨진 자리를 근거로**
-   * 좁힌다는 것이 이 항목의 규칙이었다. 스타일시트는 `googleapis`, 폰트 파일은
-   * `gstatic` 에서 온다.
-   *
-   * ⚠️ **이건 결정이지 사실이 아니다.** GUI 가 폰트를 자기 자산으로 들이면 이 두 줄은
-   * 사라져야 한다 — 외부 출처가 하나라도 열려 있으면 그만큼 이 화면이 남의 가용성에
-   * 매달린다. 지금 상태를 정확히 적어 두는 것이 다음 사람이 그 결정을 할 재료다.
+   * 전에는 구글 폰트를 열었다 — 산출물이 그 스타일시트를 참조했기 때문이다. 이제 글꼴
+   * (Pretendard · JetBrains Mono)을 빌드가 자기 자산으로 들인다(`_app/immutable/assets/*.woff2`).
+   * 그래서 `'self'` 만으로 된다. 이 화면이 남의 가용성에 매달리지 않는다. 산출물이 다시
+   * 외부 글꼴을 참조하면 `audit-csp` 테스트가 깨진다.
    */
   const csp = [
     "default-src 'self'",
     `script-src 'self'${hashes.length > 0 ? ` ${[...new Set(hashes)].join(' ')}` : ''}`,
-    // 위 주석의 이유로 스타일 속성을 열고, 폰트 스타일시트의 출처를 더한다.
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com",
+    // 위 주석의 이유로 스타일 속성을 연다.
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
     // SSE 도 이 지시어다 (`/api/v1/events`).
     "connect-src 'self'",
     "img-src 'self' data:",

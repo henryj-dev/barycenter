@@ -155,7 +155,7 @@ describe('Kit 경로', () => {
     // 단계 5 · 빠른 프록시 1 · 운영 4 · 사람 1 · 계정 화면 6. 표가 정본이다 — 여기선
     // 중복이 없고, 파일이 다 있는지를 본다(아래 반복).
     expect(new Set(KIT_ROUTES.map((r) => r.path)).size).toBe(KIT_ROUTES.length);
-    expect(KIT_ROUTES).toHaveLength(37);
+    expect(KIT_ROUTES).toHaveLength(38); // + 디자인 시스템 견본(/design)
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);

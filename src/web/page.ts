@@ -12,7 +12,7 @@ export type Place =
   | 'listeners' | 'routes' | 'pools' | 'backends' | 'addressSets'
   | 'certificates' | 'tlsPolicies' | 'sniBindings'
   | 'status' | 'cluster' | 'rendered' | 'audit'
-  | 'login' | 'invite' | 'account' | 'users' | 'reset' | 'email' | 'regions';
+  | 'login' | 'invite' | 'account' | 'users' | 'reset' | 'email' | 'regions' | 'design';
 
 /** 리소스가 사이드바의 어느 자리에 불이 들어오나. 두 라우트는 한 메뉴(라우트)다. */
 export const PLACE_OF_KIND: Readonly<Record<ResourceKind, Place>> = {
@@ -62,6 +62,8 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'reset', path: '/reset' },
   { place: 'email', path: '/email' },
   { place: 'regions', path: '/regions' },
+  // 디자인 시스템 — 공통 컴포넌트 견본(데이터는 예시, API 를 안 부른다).
+  { place: 'design', path: '/design' },
 ];
 
 /**
@@ -130,5 +132,6 @@ export function pageOf(pathname: string): Place {
   if (under(pathname, '/reset')) return 'reset';
   if (under(pathname, '/email')) return 'email';
   if (under(pathname, '/regions')) return 'regions';
+  if (under(pathname, '/design')) return 'design';
   return 'dashboard';
 }

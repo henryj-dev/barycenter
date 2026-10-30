@@ -173,7 +173,6 @@
     cursor: pointer;
   }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  h2 { font-size: 0.85rem; color: var(--mute); font-weight: 600; margin: 1.5rem 0 0; }
   @media (max-width: 640px) {
     .order li { grid-template-columns: 2rem 1fr auto; }
     .cls, .key { grid-column: 2; }
