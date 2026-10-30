@@ -11,6 +11,11 @@
  */
 export type Impact = {
   requiresReload: boolean;
+  /**
+   * 롤백이 만든 plan 이면 이것만 있다(`config-store` 의 rollback). 영향을 미리 재지 않는다 —
+   * 그래서 아래 필드가 **없을 수 있다.** 화면은 그것을 「영향을 모른다」 로 그린다.
+   */
+  rollbackOf?: string;
   topologyEpochChange?: boolean;
   affectedListeners: { key: string; protocol: string; bind: string; port: number;
     change?: string }[];
@@ -42,6 +47,8 @@ export type ImpactView = {
   certificates: string[];
   routeWarnings: string[];
   capabilityWarnings: string[];
+  /** 롤백 plan 이면 되돌아가는 리비전. 이때 위 목록은 비어 있다 — 「없다」 가 아니라 「재지 않았다」 다. */
+  rollbackOf?: string;
 };
 
 const CHANGE_WORD: Record<string, string> = {
@@ -56,7 +63,32 @@ const SESSION_WORD: Record<string, string> = {
   new_only: '새 연결·새 요청부터 바뀐다',
 };
 
+/**
+ * 롤백 plan — 영향을 재지 않았다. **모르는 것을 「영향 없음」 으로 그리지 않는다.**
+ * reload 가 필요한지 모르므로 필요하다고 본다(경고 쪽으로 기운다).
+ */
+function viewOfRollback(pending: PendingApply, rollbackOf: string): ImpactView {
+  return {
+    planId: pending.planId,
+    revision: pending.revision,
+    requiresReload: true,
+    headline: `r${rollbackOf} 의 내용으로 되돌린다 — 영향은 미리 재지 않았다`,
+    socketsAdded: [],
+    socketsRemoved: [],
+    planes: [],
+    listeners: [],
+    sessions: [],
+    certificates: [],
+    routeWarnings: [],
+    capabilityWarnings: [],
+    rollbackOf,
+  };
+}
+
 export function viewOfImpact(pending: PendingApply, impact: Impact): ImpactView {
+  if (impact.socketChanges === undefined && impact.rollbackOf !== undefined) {
+    return viewOfRollback(pending, impact.rollbackOf);
+  }
   const added = [...impact.socketChanges.added];
   const removed = [...impact.socketChanges.removed];
   /**
