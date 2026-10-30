@@ -133,8 +133,20 @@ export function viewOfImpact(pending: PendingApply, impact: Impact): ImpactView 
   };
 }
 
+/**
+ * 적용할 plan 을 고른다 — **가장 새 리비전의 것**(2026-10-31, web-01).
+ *
+ * 저장마다 plan 이 하나씩 쌓이고, 서버는 미적용 plan 을 리비전 오름차순으로 준다. 전에는 첫 번째(가장
+ * 오래된 것)를 골랐는데, 서버는 head 의 plan 만 받는다 — 「적용해요」 가 늘 `PLAN_STALE`
+ * (「이 plan 은 r10 인데 head 는 r19」)로 거절됐다. 가장 새 plan 을 적용하면 그 리비전의 설정 전체가
+ * 반영되므로 앞의 변경도 함께 간다. 리비전은 숫자로 비교한다(문자열이면 "9" 가 "10" 보다 크다).
+ */
 export function pickPending(
   pending: readonly PendingApply[],
 ): PendingApply | undefined {
-  return pending[0];
+  let best: PendingApply | undefined;
+  for (const p of pending) {
+    if (best === undefined || BigInt(p.revision) > BigInt(best.revision)) best = p;
+  }
+  return best;
 }

@@ -126,8 +126,18 @@ describe('영향 요약', () => {
 
   it('대기 열이 없으면 고를 것이 없다', () => {
     expect(pickPending([])).toBeUndefined();
+  });
+
+  /**
+   * **가장 새 리비전의 plan 을 고른다** (2026-10-31, web-01). 서버는 head 의 plan 만 적용을 받는다 —
+   * 오래된 것을 고르면 「적용해요」 가 늘 `PLAN_STALE` 로 거절된다.
+   */
+  it('가장 새 리비전의 plan 을 고른다', () => {
     expect(pickPending([{ planId: 'a', revision: '1' }, { planId: 'b', revision: '2' }]))
-      .toEqual({ planId: 'a', revision: '1' });
+      .toEqual({ planId: 'b', revision: '2' });
+    // 순서가 섞여 와도, 자릿수가 달라도(문자열 비교면 "9" > "10") 숫자로 고른다.
+    expect(pickPending([{ planId: 'x', revision: '10' }, { planId: 'y', revision: '9' }, { planId: 'z', revision: '19' }]))
+      .toEqual({ planId: 'z', revision: '19' });
   });
 });
 
