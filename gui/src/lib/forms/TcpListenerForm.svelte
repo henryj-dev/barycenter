@@ -2,6 +2,7 @@
   /** TCP 리스너 만들기 — 바이트를 그대로 풀로 넘긴다 (시안 구획: 기본 · 동작 · 접근 제한). */
   import { getContext } from 'svelte';
   import { FormRow, FormSection, Select } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -21,7 +22,7 @@
   const ready = $derived(filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined);
   const submit = (): void => {
     if (pool === undefined) return;
-    void desk.insertTcpListener(key.trim(), { bind: bind.trim(), port: Number(port), pool }, allow).then(after);
+    void desk.insertTcpListener(key.trim(), { bind: bind.trim(), port: Number(port), pool }, allow).then(after(resourcePath('listener', key.trim())));
   };
 </script>
 

@@ -6,6 +6,7 @@
   import { getContext } from 'svelte';
   import { parseSourceAllow, proxyFromUrlPatch, type ProxyFromUrlInput } from '@web/edit';
   import { Card, FieldMessage, FormRow, FormSection, RadioGroup, Select, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -64,7 +65,7 @@
     problem = undefined;
     try {
       const sa = target === 'new' ? parseSourceAllow(allow) : undefined;
-      void desk.proxyFromUrl({ ...input, ...(sa === undefined ? {} : { sourceAllow: sa }) }).then(after);
+      void desk.proxyFromUrl({ ...input, ...(sa === undefined ? {} : { sourceAllow: sa }) }).then(after(target === 'new' ? resourcePath('listener', name.trim()) : resourcePath('httpRoute', name.trim())));
     } catch (e) {
       problem = e instanceof Error ? e.message : String(e);
     }

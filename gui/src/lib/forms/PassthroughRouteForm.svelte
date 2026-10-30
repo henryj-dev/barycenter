@@ -5,6 +5,7 @@
    */
   import { getContext } from 'svelte';
   import { FormRow, FormSection, Select, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -27,8 +28,8 @@
   const submit = (): void => {
     if (listener === undefined) return;
     const base = { key: key.trim(), listener, snis: words(snis) };
-    if (action === 'reject') void desk.insertPassthroughReject(base).then(after);
-    else if (pool !== undefined) void desk.insertPassthroughRoute({ ...base, pool }).then(after);
+    if (action === 'reject') void desk.insertPassthroughReject(base).then(after(resourcePath('passthroughRoute', base.key)));
+    else if (pool !== undefined) void desk.insertPassthroughRoute({ ...base, pool }).then(after(resourcePath('passthroughRoute', base.key)));
   };
 </script>
 

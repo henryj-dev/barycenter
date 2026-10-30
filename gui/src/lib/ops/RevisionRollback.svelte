@@ -63,7 +63,7 @@
   sub="롤백은 커밋까지예요. 트래픽은 위에서 적용해야 바뀌어요."
   lines={[{ tone: 'warn', icon: '▲', text: `head r${desk.head ?? '?'} 다음에 새 리비전이 생겨요. 그 사이의 변경은 기록에 남아요.` }]}
   confirmLabel="롤백해요" danger={false} busy={desk.editing}
-  onconfirm={() => { const t = target; if (t === undefined) return; void desk.rollback(t).then((ok) => { asking = false; after(ok); }); }}
+  onconfirm={() => { const t = target; if (t === undefined) return; void desk.rollback(t).then((ok) => { asking = false; after(undefined, `r${t} 의 내용으로 새 리비전을 만들었어요`)(ok); }); }}
 />
 
 <style>

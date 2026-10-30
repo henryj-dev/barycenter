@@ -2,6 +2,7 @@
   /** 백엔드 넣기 — 풀을 먼저 고른다. `pool` 을 주면(풀 상세의 `?pool=`) 그 풀로 시작한다. */
   import { getContext } from 'svelte';
   import { FormRow, FormSection, Select, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -21,7 +22,7 @@
   const submit = (): void => {
     if (pool === undefined) return;
     const p = pool;
-    void desk.insertBackend(key.trim(), { pool: p, host: host.trim(), port: Number(port) }).then(after);
+    void desk.insertBackend(key.trim(), { pool: p, host: host.trim(), port: Number(port) }).then(after(resourcePath('backend', key.trim())));
   };
 </script>
 

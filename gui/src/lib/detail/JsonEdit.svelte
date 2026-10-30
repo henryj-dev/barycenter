@@ -8,7 +8,7 @@
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { RESOURCES, itemOf, type ResourceKind } from '@web/resources';
+  import { RESOURCES, itemOf, type ResourceKind, resourcePath } from '@web/resources';
   import { Button, Form, FormRow, FormSection, TextArea } from '#lib/ui';
   import { after } from '#lib/after';
   import Writable from '#lib/global/Writable.svelte';
@@ -41,7 +41,7 @@
   });
   const save = (): void => {
     if (problem !== undefined || desk.editing) return;
-    void desk.putResource(kind, key, JSON.parse(text) as Record<string, unknown>).then(after);
+    void desk.putResource(kind, key, JSON.parse(text) as Record<string, unknown>).then(after(resourcePath(kind, key)));
   };
   const reset = (): void => { loaded = undefined; };
 </script>

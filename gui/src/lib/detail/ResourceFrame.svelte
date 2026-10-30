@@ -27,9 +27,20 @@
   let asking = $state(false);
   const tabs = $derived(extra !== undefined ? undefined : spec.tabs.map((t) => ({ key: t.slug, label: t.label, href: resourcePath(kind, key, t.slug) })));
   const listHref = $derived(spec.base);
+  /**
+   * 방금 만든 리소스는 모델에 조금 늦게 온다 — 커밋 뒤 스트림의 `revision` 이벤트가 와야 다시 읽는다.
+   * 그 사이에 「head 에 없어요」 를 보이면 저장이 실패한 것처럼 읽힌다. 그래서 주소가 바뀌고 3초는 기다린다.
+   */
+  let settled = $state(false);
+  $effect(() => {
+    void key;
+    settled = false;
+    const t = setTimeout(() => { settled = true; }, 3000);
+    return () => clearTimeout(t);
+  });
 </script>
 
-{#if !desk.live}
+{#if !desk.live || (item === undefined && !settled)}
   <Skeleton height="120px" label="불러오는 중" />
 {:else if item === undefined}
   <p class="empty">
@@ -54,7 +65,7 @@
     sub="저장하면 커밋해요. 트래픽은 적용해야 바뀌어요."
     lines={[{ tone: 'danger', icon: '✕', text: '이것을 쓰는 리소스가 있으면 plan 이 막혀요. 연결된 리소스 탭에서 먼저 봐요.' }]}
     busy={desk.editing}
-    onconfirm={() => { void desk.withdraw(kind, key).then((ok) => { asking = false; after(ok); }); }} />
+    onconfirm={() => { void desk.withdraw(kind, key).then((ok) => { asking = false; after(listHref, '삭제를 커밋했어요')(ok); }); }} />
 {/if}
 
 <style>

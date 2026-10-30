@@ -3,6 +3,7 @@
   import { getContext } from 'svelte';
   import type { TlsVersion } from '@web/edit';
   import { FormRow, FormSection, Select, TextInput } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -15,7 +16,7 @@
   let minVersion = $state<TlsVersion>('1.2');
 
   const ready = $derived(filled(key, keyError));
-  const submit = (): void => { void desk.insertTlsPolicy(key.trim(), minVersion).then(after); };
+  const submit = (): void => { void desk.insertTlsPolicy(key.trim(), minVersion).then(after(resourcePath('tlsPolicy', key.trim()))); };
 </script>
 
 <CreateForm {ready} onsubmit={submit} cancelHref="/tls/policy">

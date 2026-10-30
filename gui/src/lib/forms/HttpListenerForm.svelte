@@ -6,6 +6,7 @@
   import { getContext } from 'svelte';
   import type { ListenerOptionFlags } from '@web/edit';
   import { FormRow, FormSection, Select } from '#lib/ui';
+  import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
@@ -42,9 +43,9 @@
     const n = Number(port);
     if (tls) {
       if (policy === undefined || certificate === undefined) return;
-      void desk.insertHttpsListener(k, { bind: b, port: n, pool, policy, certificate }, opts, allow).then(after);
+      void desk.insertHttpsListener(k, { bind: b, port: n, pool, policy, certificate }, opts, allow).then(after(resourcePath('listener', k)));
     } else {
-      void desk.insertHttpListener(k, { bind: b, port: n, pool }, opts, allow).then(after);
+      void desk.insertHttpListener(k, { bind: b, port: n, pool }, opts, allow).then(after(resourcePath('listener', k)));
     }
   };
 </script>
