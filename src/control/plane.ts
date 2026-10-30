@@ -737,10 +737,7 @@ export class ControlPlane {
       `SELECT state, count(*)::int AS n FROM backend_health GROUP BY state`,
     )).rows;
     const byState = Object.fromEntries(health.map((r) => [String(r['state']), Number(r['n'])]));
-    const pending = (await this.db.query(
-      `SELECT count(*)::int AS n FROM plans p WHERE p.state='committed'
-         AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.plan_id = p.id)`,
-    )).rows[0];
+    const pending = { n: (await pendingApplies(this.db)).length };
     const mem = process.memoryUsage();
     return {
       generations: gen.count,
@@ -924,12 +921,7 @@ export class ControlPlane {
     const head = await this.store.head();
     const st = await this.driver.status();
     // **커밋됐지만 미적용은 숨기지 않는다** (§5.3).
-    const pending = (await this.db.query(
-      `SELECT p.id, p.target_revision FROM plans p
-        WHERE p.state='committed'
-          AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.plan_id = p.id)
-        ORDER BY p.target_revision`,
-    )).rows.map((r) => ({ planId: String(r['id']), revision: String(r['target_revision']) }));
+    const pending = await pendingApplies(this.db);
     return {
       head: head.revision,
       // 엔진이 무엇을 할 수 있는지 드러낸다. 이게 안 보이면 "왜 이 조합이 막히는가" 에
@@ -1192,3 +1184,23 @@ const viewOf = (r: Row): OperationView => ({
   phase: String(r['phase']),
   detail: r['detail'],
 });
+
+/**
+ * 적용 대기 plan — 커밋됐지만 미적용이고, **이미 더 새 리비전이 활성화되지 않은 것** (§5.3).
+ *
+ * 리비전은 앞의 변경을 모두 품는다. 그래서 더 새 리비전이 활성화되면 그 앞의 미적용 plan 은 이미 트래픽에
+ * 들어간 것이고, 적용하려 해도 `PLAN_STALE` 로 거절된다. 전에는 그것들을 계속 「적용 대기」 로 보였다 —
+ * web-01 에서 ACME 가 r22 를 자동 적용한 뒤에도 r20 · r21 이 남아, 화면의 「적용해요」 가 거절됐다(2026-10-31).
+ *
+ * **숨기는 것은 덮인 것뿐이다.** 활성화된 것보다 새 plan 은 그대로 보인다(「커밋됐지만 미적용은 숨기지 않는다」).
+ */
+export async function pendingApplies(db: Db): Promise<{ planId: string; revision: string }[]> {
+  return (await db.query(
+    `SELECT p.id, p.target_revision FROM plans p
+      WHERE p.state='committed'
+        AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.plan_id = p.id)
+        AND p.target_revision > COALESCE(
+          (SELECT max(o2.revision) FROM operations o2 WHERE o2.phase = 'activated'), 0)
+      ORDER BY p.target_revision`,
+  )).rows.map((r) => ({ planId: String(r['id']), revision: String(r['target_revision']) }));
+}
