@@ -36,7 +36,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/tls/sni/new">＋ SNI 바인딩 만들기</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/tls/sni/new">＋ 생성</Button>{/snippet}
 
 <DataTable label="SNI 바인딩 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}
   search={{ placeholder: '이름·호스트로 찾기', match: (r, q) => `${r.key} ${r.hosts} ${r.cert}`.toLowerCase().includes(q) }}

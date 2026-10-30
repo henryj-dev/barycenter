@@ -52,7 +52,10 @@ describe('ACME 인증서 화면', () => {
     expect(src, '늘 보이는 계정 만들기 카드가 남았다').not.toContain('<Card title="ACME 계정 만들기"');
   });
 
-  it('인증서 목록의 만들기 버튼은 「＋ 생성」 이다', () => {
-    expect(read('lists/CertificateList.svelte')).toContain('>＋ 생성</Button>');
+  it('목록의 만들기 버튼은 모두 「＋ 생성」 이다', () => {
+    for (const l of ['Listener', 'HttpRoute', 'PassthroughRoute', 'Pool', 'Backend', 'AddressSet', 'Certificate', 'TlsPolicy', 'SniBinding']) {
+      const src = read(`lists/${l}List.svelte`);
+      expect(src, l).toMatch(/variant="primary" href="[^"]+\/new">＋ 생성<\/Button>/);
+    }
   });
 });

@@ -44,7 +44,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/tls/policy/new">＋ TLS 정책 만들기</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/tls/policy/new">＋ 생성</Button>{/snippet}
 
 <DataTable label="TLS 정책 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}
   emptyTitle="TLS 정책이 없어요" emptyBody="HTTPS 리스너를 열려면 하나가 필요해요."

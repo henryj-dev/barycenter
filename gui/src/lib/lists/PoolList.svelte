@@ -43,7 +43,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/pool/new">＋ 풀 만들기</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/traffic/pool/new">＋ 생성</Button>{/snippet}
 
 <DataTable label="풀 목록" {rows} rowKey={(r) => r.key} {columns} {chips} loading={!desk.live}
   search={{ placeholder: '이름·알고리즘으로 찾기', match: (r, q) => `${r.key} ${r.alg} ${r.cls}`.toLowerCase().includes(q) }}

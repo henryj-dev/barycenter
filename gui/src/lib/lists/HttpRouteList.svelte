@@ -43,7 +43,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/route/http/new">＋ HTTP 라우트 만들기</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/traffic/route/http/new">＋ 생성</Button>{/snippet}
 
 <RouteSegments current="http" />
 {#each desk.routes.errors as e (e.kind + e.message)}<Banner tone="danger">{e.message}</Banner>{/each}

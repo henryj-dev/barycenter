@@ -75,7 +75,7 @@
 
 {#snippet create()}
   <Button href="/traffic/listener/new/quick">빠른 프록시 만들기</Button>
-  <Button variant="primary" href="/traffic/listener/new">＋ 리스너 만들기</Button>
+  <Button variant="primary" href="/traffic/listener/new">＋ 생성</Button>
 {/snippet}
 
 <DataTable label="리스너 목록" {rows} rowKey={(r) => r.id} {columns} {chips} loading={!desk.live}
