@@ -57,7 +57,7 @@
     {:else if c.key === 'domains'}{r.domains || '—'}
     {:else if c.key === 'acme'}{#if r.acme}<Badge tone="info" icon="↻">ACME{r.order ? ` · ${r.order}` : ''}</Badge>{:else}<span class="sub">업로드</span>{/if}
     {:else if c.key === 'days'}
-      {#if r.mark === 'missing'}<Badge tone="neutral">자료 없음</Badge>
+      {#if r.mark === 'missing' && r.acme}<Badge tone="pending">발급 대기</Badge>{:else if r.mark === 'missing'}<Badge tone="neutral">자료 없음</Badge>
       {:else if r.mark === 'expired'}<Badge tone="danger">만료됨</Badge>
       {:else if r.days !== undefined && r.days < SOON}<Badge tone="warn">만료 {r.days}일 전</Badge>
       {:else}<span class="mono">{r.notAfter?.slice(0, 10) ?? '—'}</span>{#if r.days !== undefined}<span class="sub"> · {r.days}일</span>{/if}{/if}
