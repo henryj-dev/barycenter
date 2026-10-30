@@ -20,5 +20,6 @@
 {/if}
 
 <style>
-  .elsewhere { margin: 1rem 0; font-size: 0.9rem; color: var(--mute); }
+  .elsewhere { margin: 16px 0; font: var(--t-small); color: var(--tx2); }
+  .elsewhere a { color: var(--accent); }
 </style>

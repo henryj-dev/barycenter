@@ -1,7 +1,8 @@
 <script lang="ts">
+  /** 로그인 둘째 단계 — 인증 앱 6자리 코드 또는 복구 코드(xxxx-xxxx). 5분 안에 넣어야 한다. */
+  import { Button, FieldMessage, FormRow, FormSection, TextInput } from '#lib/ui';
   import { accountApi } from './api';
 
-  /** 인증 앱 6자리 코드 또는 복구 코드(xxxx-xxxx). 5분 안에 넣어야 한다. */
   let { onDone, onRestart }: { onDone: () => void; onRestart: () => void } = $props();
 
   let code = $state('');
@@ -9,6 +10,7 @@
   let error = $state<string | undefined>();
 
   const submit = async (): Promise<void> => {
+    if (code.trim() === '') return;
     busy = true;
     error = undefined;
     const r = await accountApi.mfa(code.trim());
@@ -22,23 +24,20 @@
   };
 </script>
 
-<form onsubmit={(e) => { e.preventDefault(); void submit(); }}>
-  <label>
-    <span>인증 앱의 6자리 코드 (또는 복구 코드)</span>
-    <input inputmode="numeric" autocomplete="one-time-code" bind:value={code} required />
-  </label>
-  <button type="submit" disabled={busy}>확인</button>
-  <button type="button" class="quiet" onclick={onRestart}>처음부터</button>
-  {#if error !== undefined}<p class="err" role="alert">{error}</p>{/if}
+<form class="step" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
+  <FormSection stack>
+    <FormRow label="인증 코드" for="lg-code" help="인증 앱의 6자리 코드를 넣어요. 앱이 없으면 복구 코드를 넣어요.">
+      <TextInput id="lg-code" inputmode="numeric" autocomplete="one-time-code" bind:value={code} width="200px" required />
+    </FormRow>
+  </FormSection>
+  <div class="row">
+    <Button variant="primary" type="submit" loading={busy}>확인</Button>
+    <Button variant="text" onclick={onRestart}>처음부터</Button>
+  </div>
+  {#if error !== undefined}<FieldMessage tone="error">{error}</FieldMessage>{/if}
 </form>
 
 <style>
-  form { display: grid; gap: 0.6rem; max-width: 22rem; }
-  label { display: flex; flex-direction: column; gap: 0.25rem; }
-  span { font-size: 0.8rem; color: var(--mute); }
-  input { background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.45rem 0.6rem; font-family: var(--data); letter-spacing: 0.1em; }
-  button { justify-self: start; background: var(--plate); border: 1px solid var(--rule); color: var(--ink); padding: 0.5rem 0.85rem; cursor: pointer; }
-  button:disabled { opacity: 0.6; cursor: default; }
-  .quiet { border-color: transparent; color: var(--mute); }
-  .err { margin: 0; color: var(--ember); }
+  .step { display: grid; gap: 12px; }
+  .row { display: flex; gap: 8px; }
 </style>

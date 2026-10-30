@@ -10,8 +10,9 @@
  *   3단계 — 상세 탭 10개와 리스너 수정 폼은 `#lib/ui` 를 쓰고, 옛 `d-*` 클래스와 날 입력을 안 쓴다.
  *   4단계 — 운영 화면 8개(대시보드 · 적용 대기 · 롤백 · 상태 · 렌더 결과 · 감사 · 클러스터 둘)도 그렇다.
  *           옛 상세 공통 스타일(`detail/style.css`)을 지웠다.
+ *   5단계 — 계정 · 로그인 · 초대 · 재설정 · 사람 관리 · 지역 화면도 그렇다. 옛 변수 별칭(`--plate` …)을 지웠다.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -180,5 +181,43 @@ describe('운영 화면은 공통 컴포넌트다', () => {
     }
     expect(existsSync(join(GUI, 'lib/detail/style.css'))).toBe(false);
     expect(read('routes/+layout.svelte')).not.toContain('detail/style.css');
+  });
+});
+
+const ACCOUNT = [
+  'lib/account/PasswordStep.svelte', 'lib/account/MfaStep.svelte', 'lib/account/StepUpDialog.svelte',
+  'lib/account/ChangePassword.svelte', 'lib/account/ChangeEmail.svelte', 'lib/account/RecoveryCodes.svelte',
+  'lib/account/TotpSetup.svelte', 'lib/account/TotpManage.svelte', 'lib/account/SsoIdentities.svelte',
+  'lib/account/SsoJit.svelte', 'routes/account/+page.svelte', 'routes/admin/user/+page.svelte',
+  'routes/email/+page.svelte', 'routes/reset/+page.svelte', 'routes/invite/+page.svelte',
+  'routes/regions/+page.svelte', 'routes/login/+page.svelte',
+] as const;
+
+/** `gui/src` 아래 화면 파일 전부. */
+const allSources = (dir = GUI): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+  (e.isDirectory() ? allSources(join(dir, e.name)) : /\.(svelte|css|ts)$/.test(e.name) ? [join(dir, e.name)] : []));
+
+describe('계정 화면은 공통 컴포넌트다', () => {
+  for (const f of ACCOUNT) {
+    it(`${f} → #lib/ui · 날 입력 없음`, () => {
+      const src = read(f);
+      expect(src).toMatch(/import \{[^}]*\} from '#lib\/ui'/);
+      expect(markup(src), '날 입력을 그린다').not.toMatch(RAW_INPUT);
+    });
+  }
+
+  it('삭제는 브라우저 대화상자가 아니라 확인 대화상자다', () => {
+    const src = read('routes/admin/user/+page.svelte');
+    expect(src).not.toMatch(/\bconfirm\(/);
+    expect(markup(src)).toContain('<ConfirmDialog');
+  });
+
+  it('옛 변수 별칭이 없다 — 화면이 디자인 토큰만 쓴다', () => {
+    const OLD = /var\(--(void|plate|rule|ink|mute|ember|moss|amber|display|ui|data|paper)\)/;
+    const tokens = read('lib/ui/tokens.css');
+    expect(tokens, '별칭 블록이 남았다').not.toMatch(/--plate\s*:/);
+    for (const file of allSources()) {
+      expect(readFileSync(file, 'utf8'), file).not.toMatch(OLD);
+    }
   });
 });

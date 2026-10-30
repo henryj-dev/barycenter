@@ -176,22 +176,3 @@ code, kbd, samp, pre { font-family: var(--mono); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }
 }
-
-/*
- * ── 옛 화면용 별칭 ─────────────────────────────────────────────────────
- * 화면을 하나씩 새 컴포넌트로 옮기는 동안, 옛 변수가 새 토큰을 가리킨다 — 색이 두 벌로 섞이지 않게.
- * 마지막 화면을 옮기면 이 블록을 지운다.
- */
-:root {
-  --void: var(--bg-page);
-  --plate: var(--bg-panel);
-  --rule: var(--bd);
-  --ink: var(--tx);
-  --mute: var(--tx2);
-  --ember: var(--danger);
-  --moss: var(--ok);
-  --amber: var(--warn);
-  --display: var(--font);
-  --ui: var(--font);
-  --data: var(--mono);
-}
