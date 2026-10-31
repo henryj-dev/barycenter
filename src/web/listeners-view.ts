@@ -123,6 +123,9 @@ export function detailOfListener(m: Readonly<Record<string, unknown>>): Listener
   add('출발지 제한', allow.length === 0 ? '없음 (누구나)' : allow.join(', '));
   const http = typeof m['http'] === 'object' && m['http'] !== null ? m['http'] as Record<string, unknown> : undefined;
   if (protocol === 'http' || protocol === 'https') {
+    // ADR-VHOST — 호스트가 없으면 그 포트의 기본 리스너다(맞는 이름이 없는 요청도 받는다).
+    const hosts = Array.isArray(m['hosts']) ? m['hosts'] as string[] : [];
+    add('호스트', hosts.length === 0 ? '없음 — 이 포트의 기본 리스너' : hosts.join(', '));
     add('기본 동작', outcome(http?.['defaultAction']) ?? '거절');
   }
   if (protocol === 'https') {

@@ -34,5 +34,7 @@ export function renderCapsOf(probe: EngineProbe): RenderCapabilities {
     http2: s.http2,
     // §4.6 — TLS1.3 ciphersuite 를 정하는 유일한 길이다.
     sslConfCommand: s.sslConfCommand,
+    // ADR-VHOST — 호스트 리스너만 있는 HTTPS 소켓의 기본 server 가 인증서 없이 끊는다.
+    sslRejectHandshake: s.sslRejectHandshake,
   };
 }

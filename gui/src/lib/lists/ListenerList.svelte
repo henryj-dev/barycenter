@@ -16,6 +16,8 @@
   type Row = {
     id: string; key: string; protocol: string; bind: string; mark: 'stay' | 'join' | 'leave';
     enabled: boolean; allow: number; action: string; routes: number;
+    /** server_name (ADR-VHOST). http · https 만. 비면 그 포트의 기본 리스너다. */
+    hosts: string;
   };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
@@ -39,11 +41,14 @@
       id: r.socket + r.key, key: r.mark === 'leave' ? r.socket : r.key, protocol: r.protocol, bind: `${r.bind}:${r.port}`,
       mark: r.mark, enabled: r.enabled, allow: r.sourceAllow.length, action: actionOf(m),
       routes: r.mark === 'leave' ? 0 : itemsOf(desk.model, routeKind).filter((x) => x['listener'] === r.key).length,
+      hosts: r.protocol !== 'http' && r.protocol !== 'https' ? '—'
+        : Array.isArray(m?.['hosts']) ? (m['hosts'] as string[]).join(', ') : '기본',
     };
   }));
   const columns: Column<Row>[] = [
     { key: 'key', label: '이름', mono: true, sort: (r) => r.key },
     { key: 'protocol', label: '프로토콜 · 바인드:포트', mono: true, sort: (r) => r.bind },
+    { key: 'hosts', label: '호스트', mono: true, text: (r) => r.hosts, sort: (r) => r.hosts },
     { key: 'action', label: '기본 동작', mono: true, muted: true, sort: (r) => r.action },
     { key: 'routes', label: '라우트', align: 'right', mono: true, sort: (r) => r.routes },
     { key: 'allow', label: '출발지 제한', sort: (r) => r.allow },
@@ -79,13 +84,14 @@
 {/snippet}
 
 <DataTable label="리스너 목록" {rows} rowKey={(r) => r.id} {columns} {chips} loading={!desk.live}
-  search={{ placeholder: '이름·주소로 찾기', match: (r, q) => `${r.key} ${r.bind} ${r.protocol} ${r.action}`.toLowerCase().includes(q) }}
+  search={{ placeholder: '이름·주소로 찾기', match: (r, q) => `${r.key} ${r.bind} ${r.protocol} ${r.action} ${r.hosts}`.toLowerCase().includes(q) }}
   emptyTitle="리스너가 없어요" emptyBody="포트를 열면 트래픽을 받아요. 패스스루는 인증서를 제시하지 않아요."
   onopen={(r) => { if (r.mark !== 'leave') void goto(resourcePath('listener', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
     {#if c.key === 'key'}
       {#if r.mark === 'leave'}{r.key}{:else}<a href={resourcePath('listener', r.key)}>{r.key}</a>{/if}
     {:else if c.key === 'protocol'}<span class="proto">{r.protocol.toUpperCase().replace('TLS_PASSTHROUGH', 'TLS 패스스루')}</span> {r.bind}
+    {:else if c.key === 'hosts'}{#if r.hosts === '기본'}<span class="muted">기본</span>{:else}{r.hosts}{/if}
     {:else if c.key === 'routes'}{r.routes}
     {:else if c.key === 'allow'}{#if r.allow > 0}<Badge tone="warn" icon="⊘">{r.allow}개 대역만</Badge>{:else}<span class="muted">누구나</span>{/if}
     {:else if c.key === 'mark'}

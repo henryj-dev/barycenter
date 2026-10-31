@@ -291,6 +291,8 @@ export type RawListener = ListenerBase & {
   prereadTimeoutS?: number;
   tls?: RawTlsBinding;
   http2?: boolean;
+  /** ADR-VHOST — http · https 에만 있다(해독기가 막는다). */
+  hosts?: string[];
 };
 
 /** 검증 전. `https` 가 아닌 리스너에 붙어 있을 수 있으므로 검증기가 막는다. */
@@ -301,6 +303,16 @@ export type HttpListener = ListenerBase & {
   acceptProxyProtocol?: InboundProxyProtocol;
   realIpFromHeader?: InboundRealIpHeader;
   http?: HttpProfile;
+  /**
+   * **이 리스너가 받는 호스트 이름** — nginx `server_name` (ADR-VHOST, 2026-10-31).
+   *
+   * 있으면 「호스트 리스너」 다. 호스트마다 `server { listen …; server_name <호스트>; }` 를 내고, 같은 소켓을
+   * 다른 호스트 리스너와 함께 쓸 수 있다(호스트가 겹치지 않고 프로토콜 · PROXY 수신이 같을 때). 그 server 의
+   * 기본(`location /`)은 `http.defaultAction` 이고, 라우트는 그 안에서 경로로 나눈다.
+   *
+   * 없으면 지금처럼 그 소켓의 `default_server` 다 — 라우트의 호스트가 server 블록을 만든다.
+   */
+  hosts?: string[];
 };
 
 /**
@@ -316,6 +328,8 @@ export type HttpsListener = ListenerBase & {
   acceptProxyProtocol?: InboundProxyProtocol;
   realIpFromHeader?: InboundRealIpHeader;
   http?: HttpProfile;
+  /** `HttpListener.hosts` 와 같다. */
+  hosts?: string[];
   tls: { policy: string; defaultCertificate: string };
   /**
    * HTTP/2 (§4.9). 안 적으면 **켠다** — 요즘 HTTPS 에서 h2 없이 서비스하는 것은 사실상

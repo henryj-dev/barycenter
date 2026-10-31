@@ -294,6 +294,24 @@ export function putAddressSetPatch(
   }];
 }
 
+/**
+ * 리스너의 호스트(server_name, ADR-VHOST). 쉼표 · 공백 · 줄바꿈으로 끊고 소문자로 맞추고 중복을 접는다.
+ * 모양은 검증기가 라우트 호스트와 같은 파서로 본다. 비면 undefined — 호스트 없는 리스너다.
+ */
+export type HostsInput = { hosts?: string[] };
+export function parseListenerHosts(text: string | readonly string[] | undefined): string[] | undefined {
+  if (text === undefined) return undefined;
+  const raw = (typeof text === 'string' ? [text] : text).flatMap((t) => t.split(/[\s,]+/));
+  const out: string[] = [];
+  for (const item of raw) {
+    const h = item.trim().toLowerCase();
+    if (h !== '' && !out.includes(h)) out.push(h);
+  }
+  return out.length === 0 ? undefined : out;
+}
+const hostsField = (list: string[] | undefined): HostsInput =>
+  (list === undefined || list.length === 0 ? {} : { hosts: list });
+
 /** **안 적으면 키를 안 만든다** — 빈 배열을 실으면 해독기가 거절하고, 키만 있어도 렌더가 바뀐다. */
 const sourceAllowField = (list: string[] | undefined): SourceAllowInput =>
   (list === undefined || list.length === 0 ? {} : { sourceAllow: list });
@@ -308,6 +326,7 @@ export type PutHttpListenerOp = {
     port: number;
     enabled: true;
     sourceAllow?: string[];
+    hosts?: string[];
     http: {
       /** 리스너를 새로 여는 폼은 언제나 풀이다. URL 프록시가 라우트를 만들 때만 'reject' (#112). */
       defaultAction: { pool: string } | 'reject';
@@ -322,7 +341,7 @@ export type PutHttpListenerOp = {
 /** HTTP 만. HTTPS 는 tls 결박이 따로 있다. */
 export function putHttpListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string } & ListenerOptions & SourceAllowInput,
+  body: { bind: string; port: number; pool: string } & ListenerOptions & SourceAllowInput & HostsInput,
 ): PutHttpListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -340,6 +359,7 @@ export function putHttpListenerPatch(
       port: body.port,
       enabled: true,
       ...sourceAllowField(body.sourceAllow),
+      ...hostsField(body.hosts),
       http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
     },
   }];
@@ -470,6 +490,7 @@ export type PutHttpsListenerOp = {
     port: number;
     enabled: true;
     sourceAllow?: string[];
+    hosts?: string[];
     http: {
       /** URL 프록시가 라우트를 만들 때만 'reject' (#112·#116). */
       defaultAction: { pool: string } | 'reject';
@@ -490,7 +511,7 @@ export type PutHttpsListenerOp = {
 export function putHttpsListenerPatch(
   key: string,
   body: { bind: string; port: number; pool: string; policy: string; certificate: string } & SourceAllowInput
-    & ListenerOptions,
+    & ListenerOptions & HostsInput,
 ): PutHttpsListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -510,6 +531,7 @@ export function putHttpsListenerPatch(
       port: body.port,
       enabled: true,
       ...sourceAllowField(body.sourceAllow),
+      ...hostsField(body.hosts),
       http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
       tls: { policy: body.policy, defaultCertificate: body.certificate },
     },
@@ -1230,6 +1252,8 @@ export type ListenerEdit = {
   sourceAllow?: string[];
   /** undefined = 그대로 둔다. */
   defaultAction?: { pool: string } | 'reject';
+  /** http · https 만. undefined = 그대로 둔다. 빈 배열 = 호스트를 지운다(그 소켓의 기본 리스너가 된다). */
+  hosts?: string[];
 };
 
 export type PutListenerOp = {
@@ -1252,6 +1276,11 @@ export function editListenerPatch(current: Readonly<Record<string, unknown>>, ed
   const body: Record<string, unknown> = { ...rest, bind: edit.bind.trim(), port: edit.port, enabled: edit.enabled };
   if (edit.sourceAllow === undefined || edit.sourceAllow.length === 0) delete body['sourceAllow'];
   else body['sourceAllow'] = [...edit.sourceAllow];
+  if (edit.hosts !== undefined) {
+    if (protocol !== 'http' && protocol !== 'https') throw new Error(`${protocol} 리스너에는 호스트가 없다 — 포트로만 가른다`);
+    if (edit.hosts.length === 0) delete body['hosts'];
+    else body['hosts'] = [...edit.hosts];
+  }
 
   const action = edit.defaultAction;
   if (action !== undefined) {

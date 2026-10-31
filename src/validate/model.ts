@@ -76,6 +76,13 @@ export type ModelIssueCode =
   | 'invalid_acme_intent'
   /** HSTS preload 요구조건을 안 지켰다 (§4.6). */
   | 'invalid_hsts'
+  /**
+   * 한 소켓에서 같은 호스트 이름이 두 server 에 간다 (ADR-VHOST). nginx 는 경고만 내고 먼저 나온 server 에
+   * 준다(E36) — `nginx -t` 는 통과하는 조용한 오동작이다.
+   */
+  | 'host_conflict'
+  /** 호스트 리스너의 라우트가 그 리스너의 호스트 밖을 가리킨다 (ADR-VHOST). */
+  | 'route_host_outside_listener'
   // ── 아래는 런타임 해독기(`src/model/decode.ts`)가 낸다 ──
   /** 타입이 다르다. 강제 변환하지 않는다. */
   | 'invalid_type'
@@ -128,7 +135,110 @@ const routesTraffic = (protocol: RawListener['protocol']): boolean =>
   protocol === 'http' || protocol === 'https' || protocol === 'tls_passthrough';
 
 /** 렌더 결과에 영향을 주는 엔진 capability 중, 검증이 알아야 하는 것. */
-export type ValidationCapabilities = { streamRealip: boolean; http2?: boolean };
+export type ValidationCapabilities = { streamRealip: boolean; http2?: boolean; sslRejectHandshake?: boolean };
+
+/** 소켓을 가리키는 열쇠 — 프로토콜 · 정규형 주소 · 포트. 같으면 같은 `listen` 이다. */
+function socketKeyOf(l: RawListener): string | undefined {
+  const n = normalizeBind(l.bind);
+  if (!n.ok) return undefined;
+  return `${l.protocol}|${n.value.family}|${n.value.wildcard ? '*' : n.value.addr}|${l.port}`;
+}
+
+/**
+ * 두 리스너가 소켓을 함께 쓸 수 있나 (ADR-VHOST). 못 쓰면 이유를 준다(같은 바인드인데 어긋난 것만 —
+ * 그 밖의 겹침은 원래 충돌 문구로 충분하다).
+ */
+function socketSharing(a: RawListener, b: RawListener): { ok: true } | { ok: false; why?: string } {
+  const httpFamily = (p: RawListener['protocol']): boolean => p === 'http' || p === 'https';
+  if (!httpFamily(a.protocol) || !httpFamily(b.protocol)) return { ok: false };
+  if (a.hosts === undefined && b.hosts === undefined) return { ok: false };
+  const ka = socketKeyOf({ ...a, protocol: 'http' });
+  const kb = socketKeyOf({ ...b, protocol: 'http' });
+  if (ka === undefined || ka !== kb) {
+    return { ok: false, why: '호스트 리스너가 소켓을 함께 쓰려면 바인드가 같아야 한다(와일드카드와 특정 주소를 섞지 않는다)' };
+  }
+  if (a.protocol !== b.protocol) {
+    return { ok: false, why: '한 포트에 평문(http)과 TLS(https)를 섞을 수 없다' };
+  }
+  if ((a.acceptProxyProtocol === undefined) !== (b.acceptProxyProtocol === undefined)) {
+    return { ok: false, why: 'PROXY protocol 수신은 소켓 단위다 — 같은 소켓의 리스너는 모두 켜거나 모두 꺼야 한다' };
+  }
+  return { ok: true };
+}
+
+/**
+ * 호스트 리스너 검사 (ADR-VHOST).
+ *   · 호스트 모양 · 리스너 안 중복
+ *   · 소켓 안에서 호스트가 두 server 로 가지 않는다(호스트 리스너의 호스트 + 호스트 없는 리스너의 라우트 호스트)
+ *   · 호스트 리스너의 라우트는 그 리스너의 호스트 안에서만
+ *   · 호스트 리스너만 있는 HTTPS 소켓은 엔진이 `ssl_reject_handshake` 를 해야 한다
+ */
+function vhostIssues(model: RawModel, caps: ValidationCapabilities): ModelIssue[] {
+  const out: ModelIssue[] = [];
+  const http = model.listeners.filter((l) => l.enabled && (l.protocol === 'http' || l.protocol === 'https'));
+  const lower = (h: string): string => h.toLowerCase();
+
+  for (const l of model.listeners) {
+    if (l.hosts === undefined) continue;
+    const seen = new Set<string>();
+    for (const h of l.hosts) {
+      if (!parseHostPattern(h).ok) {
+        out.push({ code: 'invalid_value', subjects: [l.key], message: `리스너 '${l.key}' 의 호스트가 이름 모양이 아니다: ${JSON.stringify(h)} — 예: app.example.com · *.example.com` });
+      }
+      if (seen.has(lower(h))) {
+        out.push({ code: 'duplicate', subjects: [l.key], message: `리스너 '${l.key}' 에 호스트 '${h}' 가 두 번 있다` });
+      }
+      seen.add(lower(h));
+    }
+  }
+
+  for (const r of model.httpRoutes) {
+    const l = model.listeners.find((x) => x.key === r.listener);
+    if (l?.hosts === undefined) continue;
+    const own = new Set(l.hosts.map(lower));
+    for (const h of r.hosts) {
+      if (own.has(lower(h))) continue;
+      out.push({
+        code: 'route_host_outside_listener', subjects: [r.key, l.key],
+        message: `라우트 '${r.key}' 의 호스트 '${h}' 가 리스너 '${l.key}' 의 호스트(${l.hosts.join(', ')}) 밖이다`,
+      });
+    }
+  }
+
+  const bySocket = new Map<string, RawListener[]>();
+  for (const l of http) {
+    const k = socketKeyOf(l);
+    if (k === undefined) continue;
+    bySocket.set(k, [...(bySocket.get(k) ?? []), l]);
+  }
+  for (const group of bySocket.values()) {
+    if (!group.some((l) => l.hosts !== undefined)) continue;
+    const owner = new Map<string, string>();
+    const claim = (host: string, listener: string): void => {
+      const prev = owner.get(lower(host));
+      if (prev !== undefined && prev !== listener) {
+        out.push({
+          code: 'host_conflict', subjects: [prev, listener],
+          message: `같은 소켓(${group[0]!.bind}:${group[0]!.port})에서 호스트 '${host}' 를 리스너 '${prev}' 와 '${listener}' 가 함께 받는다 — 먼저 나온 server 가 이긴다`,
+        });
+        return;
+      }
+      owner.set(lower(host), listener);
+    };
+    for (const l of [...group].sort((x, y) => (x.key < y.key ? -1 : 1))) {
+      if (l.hosts !== undefined) for (const h of l.hosts) claim(h, l.key);
+      else for (const r of model.httpRoutes) if (r.listener === l.key) for (const h of r.hosts) claim(h, l.key);
+    }
+    const tls = group[0]!.protocol === 'https';
+    if (tls && !group.some((l) => l.hosts === undefined) && caps.sslRejectHandshake !== true) {
+      out.push({
+        code: 'option_not_supported', subjects: group.map((l) => l.key),
+        message: `호스트 리스너만 있는 HTTPS 소켓(${group[0]!.bind}:${group[0]!.port})은 모르는 SNI 를 인증서 없이 끊어야 한다(ssl_reject_handshake, nginx 1.19.4+). 이 엔진은 못 한다 — 그 소켓에 호스트 없는 리스너를 하나 둔다`,
+      });
+    }
+  }
+  return out;
+}
 
 export function validateModel(
   model: RawModel,
@@ -394,9 +504,19 @@ export function validateModel(
     }
   }
 
+  // **호스트 리스너는 소켓을 함께 쓴다** (ADR-VHOST). 그 외의 겹침은 전처럼 충돌이다.
+  const sockListener = new Map(model.listeners.map((l) => [l.key, l]));
   for (const c of findSocketConflicts(reservations)) {
-    issues.push({ code: 'socket_conflict', subjects: [c.a, c.b], message: c.reason });
+    const a = sockListener.get(c.a);
+    const b = sockListener.get(c.b);
+    const share = a === undefined || b === undefined ? { ok: false as const } : socketSharing(a, b);
+    if (share.ok) continue;
+    issues.push({
+      code: 'socket_conflict', subjects: [c.a, c.b],
+      message: share.why === undefined ? c.reason : `${c.reason} — ${share.why}`,
+    });
   }
+  issues.push(...vhostIssues(model, caps));
 
   // ── stream 에서 PROXY 를 받으려면 stream_realip 이 있어야 한다 (§4.7 · §7.6 · E63) ──
   //
@@ -818,6 +938,8 @@ export function validateModel(
     for (const r of model.httpRoutes) {
       const l = listenerByKey.get(r.listener);
       if (l === undefined || l.protocol !== 'https') continue;
+      // 호스트 리스너는 바인딩이 없으면 자기 기본 인증서를 낸다 (ADR-VHOST) — 운영자가 그 호스트를 위해 골랐다.
+      if (l.hosts !== undefined) continue;
       const list = bindingsByListener.get(r.listener) ?? [];
       for (const h of r.hosts) {
         if (list.some((b) => b.hosts.some((p) => coversHost(p, h)))) continue;

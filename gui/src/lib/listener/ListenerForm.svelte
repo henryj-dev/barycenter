@@ -8,12 +8,13 @@
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { parseSourceAllow, type ListenerEdit } from '@web/edit';
+  import { parseListenerHosts, parseSourceAllow, type ListenerEdit } from '@web/edit';
   import { Banner, Button, Form, FormRow, FormSection, Select, Switch, TextInput } from '#lib/ui';
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import SourceAllowSection from '#lib/forms/SourceAllowSection.svelte';
-  import { bindHelp, filled, portError } from '#lib/forms/checks';
+  import ListenerHostsSection from '#lib/forms/ListenerHostsSection.svelte';
+  import { bindHelp, filled, hostLine, portError } from '#lib/forms/checks';
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
@@ -34,6 +35,7 @@
   let port = $state('');
   let enabled = $state(true);
   let allow = $state('');
+  let hosts = $state('');
   let action = $state('');
   let problem = $state<string | undefined>();
   let loaded = $state<string | undefined>();
@@ -45,13 +47,16 @@
     port = String(model['port'] ?? '');
     enabled = model['enabled'] !== false;
     allow = Array.isArray(model['sourceAllow']) ? (model['sourceAllow'] as string[]).join('\n') : '';
+    hosts = Array.isArray(model['hosts']) ? (model['hosts'] as string[]).join('\n') : '';
     const http = model['http'] as { defaultAction?: unknown } | undefined;
     const da = isHttp ? http?.defaultAction : model['defaultPool'] === undefined ? undefined : { pool: model['defaultPool'] };
     action = typeof da === 'object' && da !== null ? String((da as { pool: unknown }).pool) : '';
     loaded = key;
   });
 
-  const ready = $derived(filled(bind) && filled(port, portError) && (!hasPool || isHttp || action !== ''));
+  const hostList = $derived(parseListenerHosts(hosts) ?? []);
+  const hostsOk = $derived(hostList.every((h) => hostLine(h) === undefined));
+  const ready = $derived(filled(bind) && filled(port, portError) && (!hasPool || isHttp || action !== '') && hostsOk);
   const save = (): void => {
     if (!ready || desk.editing) return;
     problem = undefined;
@@ -63,6 +68,8 @@
         enabled,
         sourceAllow: parseSourceAllow(allow),
         ...(hasPool ? { defaultAction: action === '' ? 'reject' as const : { pool: action } } : {}),
+        // http · https 만 호스트를 가진다. 빈 목록이면 호스트를 지운다 — 그 포트의 기본 리스너가 된다.
+        ...(isHttp ? { hosts: hostList } : {}),
       };
     } catch (e) {
       problem = e instanceof Error ? e.message : String(e);
@@ -84,6 +91,7 @@
         </FormRow>
         <FormRow label="활성화" help="끄면 소켓을 열지 않아요."><Switch bind:checked={enabled}>켜짐</Switch></FormRow>
       </FormSection>
+      {#if isHttp}<ListenerHostsSection bind:value={hosts} />{/if}
       {#if hasPool}
         <FormSection title="동작">
           <FormRow label="기본 동작" required>

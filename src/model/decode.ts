@@ -514,6 +514,19 @@ function decodeInboundRealIpHeader(
  * 중복도 거절한다: 붙여 넣은 목록이 두 번 들어간 것은 대개 실수이고, 조용히 접으면
  * 저장된 것과 적은 것이 달라진다.
  */
+/**
+ * 리스너의 호스트 이름 (ADR-VHOST). **비어 있을 수 없다** — 호스트 없는 리스너는 `hosts` 를 안 적는다.
+ * 모양(정확 · `*.` 와일드카드)은 검증기가 라우트 호스트와 같은 파서로 본다 — 해독은 문자열 목록만.
+ */
+function decodeListenerHosts(iss: Issues, v: unknown, path: string): string[] | undefined {
+  const items = arrayOf(iss, v, path, (h, at) => str(iss, h, at));
+  if (Array.isArray(v) && v.length === 0) {
+    iss.add('invalid_value', path, '비어 있을 수 없다 — 호스트 없는 리스너는 hosts 를 안 적는다');
+    return undefined;
+  }
+  return items;
+}
+
 function decodeSourceAllow(iss: Issues, v: unknown, path: string): string[] | undefined {
   const items = arrayOf(iss, v, path, (item, at) => {
     const s = str(iss, item, at);
@@ -559,7 +572,8 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
 
   switch (protocol) {
     case 'http': {
-      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http']);
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http', 'hosts']);
+      const hosts = optional(v['hosts'], () => decodeListenerHosts(iss, v['hosts'], `${path}.hosts`));
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
       const realIp = optional(v['realIpFromHeader'], () => decodeInboundRealIpHeader(iss, v['realIpFromHeader'], `${path}.realIpFromHeader`));
       const http = optional(v['http'], () => decodeHttpProfile(iss, v['http'], `${path}.http`));
@@ -568,10 +582,12 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
         ...(accept === undefined ? {} : { acceptProxyProtocol: accept }),
         ...(realIp === undefined ? {} : { realIpFromHeader: realIp }),
         ...(http === undefined ? {} : { http }),
+        ...(hosts === undefined ? {} : { hosts }),
       };
     }
     case 'https': {
-      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http', 'tls', 'http2']);
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http', 'tls', 'http2', 'hosts']);
+      const hosts = optional(v['hosts'], () => decodeListenerHosts(iss, v['hosts'], `${path}.hosts`));
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
       const realIp = optional(v['realIpFromHeader'], () => decodeInboundRealIpHeader(iss, v['realIpFromHeader'], `${path}.realIpFromHeader`));
       const http = optional(v['http'], () => decodeHttpProfile(iss, v['http'], `${path}.http`));
@@ -586,6 +602,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
         ...(realIp === undefined ? {} : { realIpFromHeader: realIp }),
         ...(http === undefined ? {} : { http }),
         ...(http2 === undefined ? {} : { http2 }),
+        ...(hosts === undefined ? {} : { hosts }),
       };
     }
     case 'tls_passthrough': {
