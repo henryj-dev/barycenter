@@ -1315,8 +1315,14 @@ export class ConfigStore {
     const baseRevision = text(cs, 'base_revision');
     const ops = cs['patch'] as PatchOp[];
 
+    // **영향은 지금 엔진이 돌리는 리비전과 비교한다** (2026-11-01, web-01). base 와 비교하면 커밋만 되고
+    // 적용 안 된(또는 적용이 실패한) 리비전이 사이에 있을 때 거짓을 말한다 — 한 번도 안 열린 소켓을
+    // 「적용하면 닫힘」 이라고 했다. 아직 활성화된 적이 없으면 base 와 비교한다(전과 같다).
+    const active = await this.activeRevision();
+    const activeModel = active === undefined || active === baseRevision ? undefined : await this.modelAt(active);
+
     const { model, rendered, before, priorModel } = await this.db.dryRun(async (c) => {
-      const prior = await readModel(c);
+      const prior = activeModel ?? await readModel(c);
       const beforeConf = safeRender(prior, this.caps);
       for (const op of ops) await applyOp(c, op, baseRevision, by).catch(translate);
       const next = await readModel(c);
@@ -1355,6 +1361,18 @@ export class ConfigStore {
       expiresAt: new Date(Date.now() + PLAN_TTL_MS).toISOString(),
       targetRevision: undefined, activationEpoch: undefined,
     };
+  }
+
+  /**
+   * 엔진이 지금 돌리는 리비전 — 마지막으로 **활성화된** 적용 작업의 리비전. 없으면 undefined.
+   * `control/plane.ts` 의 `followActive` · `activeRenderDigest` 와 같은 기준이다(activation_epoch 가 가장 큰 것).
+   */
+  async activeRevision(): Promise<string | undefined> {
+    const r = (await this.db.query(
+      `SELECT revision::text AS revision FROM operations
+        WHERE phase = 'activated' ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
+    )).rows[0];
+    return r === undefined ? undefined : String(r['revision']);
   }
 
   /** sealed → open. plan 을 무효화한다 (§5.2 reopen). */
@@ -2161,10 +2179,8 @@ function impactOf(
      * 판정을 산출물 비교로 두는 이유: "백엔드만 바뀌었나" 같은 다른 근거로 재면 렌더에
      * 영향을 주는 필드가 하나 늘 때마다 조용히 틀려진다.
      *
-     * ⚠️ **plan 은 base 리비전과 비교하고, apply 는 지금 서빙 중인 세대와 비교한다.**
-     * 보통 같지만 커밋만 되고 적용은 안 된 리비전이 사이에 있으면 갈릴 수 있다 —
-     * 그때는 plan 이 "reload 없음" 이라고 했는데 apply 가 세대를 만든다. 예측이
-     * 보수적으로 틀리는 쪽이라 두지만, 사실이므로 적어 둔다.
+     * plan 도 apply 처럼 **지금 서빙 중인 리비전**과 비교한다(2026-11-01 부터). 전에는 base 와 비교해서,
+     * 커밋만 되고 적용 안 된 리비전이 사이에 있으면 두 판정이 갈렸다. 활성화된 적이 없으면 base 와 비교한다.
      */
     requiresReload,
     topologyEpochChange: requiresReload || !membershipPlane,

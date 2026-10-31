@@ -13,6 +13,8 @@ export type ListenerFact = {
   enabled?: boolean;
   /** 출발지 제한 (2026-10-29). 없으면 누구나. */
   sourceAllow?: string[];
+  /** HTTPS 의 평문 리다이렉트 (2026-10-31). 같은 바인드의 이 포트에 소켓을 하나 더 연다. */
+  httpRedirect?: { port: number };
 };
 
 export type SocketDelta = { added: string[]; removed: string[] };
@@ -29,6 +31,11 @@ export type ListenerRow = {
   mark: ListenerMark;
   /** 빈 배열 = 제한 없음. 화면이 「출발지 N개만」 을 그린다. */
   sourceAllow: string[];
+  /**
+   * HTTPS 리스너가 함께 여는 리다이렉트 소켓 (2026-11-01). 리스너가 아니라서 따로 행을 안 만들고 이 행에 붙인다.
+   * 이 소켓만 새로 열려도 행은 「적용하면 열림」 이다 — 전에는 그 소켓이 목록 어디에도 안 보였다.
+   */
+  redirect?: { port: number; socket: string };
 };
 
 export type ListenersView = {
@@ -45,9 +52,18 @@ export function viewOfListeners(
   pending?: SocketDelta,
 ): ListenersView {
   const added = new Set(pending?.added ?? []);
-  const current = new Set(listeners.map(socketOf));
+  const redirectOf = (l: ListenerFact): { port: number; socket: string } | undefined =>
+    l.protocol === 'https' && l.httpRedirect !== undefined
+      ? { port: l.httpRedirect.port, socket: socketOf({ protocol: 'http', bind: l.bind, port: l.httpRedirect.port }) }
+      : undefined;
+  // 리다이렉트 소켓도 「지금 있는 소켓」 이다 — 그것이 닫힘 목록에 오면 리스너가 아닌 행으로 따로 그린다.
+  const current = new Set(listeners.flatMap((l) => {
+    const r = redirectOf(l);
+    return r === undefined ? [socketOf(l)] : [socketOf(l), r.socket];
+  }));
   const rows: ListenerRow[] = listeners.map((l) => {
     const socket = socketOf(l);
+    const redirect = redirectOf(l);
     return {
       key: l.key,
       protocol: l.protocol,
@@ -55,8 +71,9 @@ export function viewOfListeners(
       port: l.port,
       enabled: l.enabled !== false,
       socket,
-      mark: added.has(socket) ? 'join' : 'stay',
+      mark: added.has(socket) || (redirect !== undefined && added.has(redirect.socket)) ? 'join' : 'stay',
       sourceAllow: l.sourceAllow ?? [],
+      ...(redirect === undefined ? {} : { redirect }),
     };
   });
   for (const socket of pending?.removed ?? []) {
