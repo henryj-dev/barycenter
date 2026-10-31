@@ -24,6 +24,7 @@ import {
 } from '../validate/strings.js';
 import { PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import { withRedirectListeners } from '../model/redirect.js';
+import { bindIsLocal, type HostAddressFacts } from '../engine/host-addresses.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { ModelValidationError } from '../validate/model.js';
 import type {
@@ -1010,7 +1011,32 @@ export class ConfigStore {
      * 이유가 없고, 좁게 받으면 테스트가 개인키 없이 이 경로를 잴 수 있다.
      */
     private readonly certFacts?: Pick<SecretStore, 'facts'>,
+    /**
+     * 이 서버에 할당된 IP (2026-10-31). 없으면 바인드를 안 본다. 부를 때마다 읽는다 — 주소는 운영 중에 바뀐다.
+     */
+    private readonly hostFacts?: () => HostAddressFacts,
   ) {}
+
+  /**
+   * **리스너의 바인드가 이 서버의 주소인가** (2026-10-31).
+   *
+   * 바인드는 수신할 소켓의 주소다. 할당 안 된 주소는 nginx 가 못 연다 — 전에는 apply 의 nginx 실패로만
+   * 알았다. 인증서 SAN 처럼 **모델 밖의 사실**이라 `validateModel` 이 아니라 여기서 본다(위와 같은 이유).
+   * 와일드카드와 `ip_nonlocal_bind` 가 켜진 계열은 막지 않는다(VIP).
+   */
+  private assertBindsLocal(model: Model): void {
+    if (this.hostFacts === undefined) return;
+    const facts = this.hostFacts();
+    const problems = model.listeners
+      .filter((l) => !bindIsLocal(l.bind, facts))
+      .map((l) => `리스너 '${l.key}': ${l.bind} 는 이 서버에 할당된 주소가 아니다`);
+    if (problems.length > 0) {
+      const have = ['0.0.0.0', '::', ...facts.addresses.map((a) => a.address)].join(', ');
+      throw new StoreError(422, 'bind_not_local',
+        `바인드 주소가 이 서버에 없다 — nginx 가 소켓을 못 연다:\n`
+        + problems.map((p) => `  · ${p}`).join('\n') + `\n  쓸 수 있는 주소: ${have}`, problems);
+    }
+  }
 
   /**
    * **바인딩된 인증서가 그 호스트를 정말 덮는가** (검수 B-05 · S17).
@@ -1296,6 +1322,7 @@ export class ConfigStore {
       const next = await readModel(c);
       // **모델 밖의 사실도 여기서 본다** (검수 B-05). 렌더는 SAN 을 모른다.
       this.assertCertificatesCover(next);
+      this.assertBindsLocal(next);
       return {
         model: next, rendered: renderOrThrow(next, this.caps),
         before: beforeConf, priorModel: prior,
@@ -1435,6 +1462,7 @@ export class ConfigStore {
       // head 검사가 막지만, 같은 트랜잭션 안의 순서 때문에 달라지는 것이 남는다.
       const model = await readModel(c);
       this.assertCertificatesCover(model);
+      this.assertBindsLocal(model);
       const rendered = renderOrThrow(model, this.caps);
 
       const epoch = text(
@@ -1558,6 +1586,7 @@ export class ConfigStore {
       // 그 사이 바뀌었을 수 있다 — 옛 리비전이라고 무조건 통과시키지 않는다.
       const restored = await readModel(c);
       this.assertCertificatesCover(restored);
+      this.assertBindsLocal(restored);
       renderOrThrow(restored, this.caps);
 
       const epoch = text(

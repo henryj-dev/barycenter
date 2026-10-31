@@ -4,7 +4,8 @@
    * 맨 위 「프로토콜 HTTP · 프로토콜 변경」 은 1 / 2 단계로 돌아간다.
    */
   import { FormRow, FormSection, TextInput } from '#lib/ui';
-  import { KEY_HELP, bindHelp, keyError, portError } from './checks';
+  import { KEY_HELP, keyError, portError } from './checks';
+  import BindField from './BindField.svelte';
 
   let { protocol, key = $bindable(), bind = $bindable(), port = $bindable() }: {
     /** 보이는 이름 — HTTP · HTTPS · TCP · UDP · TLS 패스스루. */
@@ -21,9 +22,7 @@
   <FormRow label="이름" for="ln-key" required error={keyError(key)} help={KEY_HELP}>
     <TextInput id="ln-key" bind:value={key} invalid={keyError(key) !== undefined} autocomplete="off" placeholder="web" />
   </FormRow>
-  <FormRow label="바인드 주소" for="ln-bind" required help={bindHelp(bind)}>
-    <TextInput id="ln-bind" bind:value={bind} autocomplete="off" />
-  </FormRow>
+  <BindField id="ln-bind" bind:bind fresh />
   <FormRow label="포트" for="ln-port" required error={portError(port)}>
     <TextInput id="ln-port" bind:value={port} invalid={portError(port) !== undefined} inputmode="numeric" width="120px" />
   </FormRow>

@@ -57,6 +57,7 @@ import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import { AuthFailureLimiter } from './auth-rate-limit.js';
 import { RELAY_PATHS, type RegionRelay } from '../global/relay.js';
+import type { HostAddressFacts } from '../engine/host-addresses.js';
 import {
   BrowserSessions, LOGIN_COOKIE, SESSION_COOKIE, cookieValue, expiredCookie, sessionCookie,
 } from './browser-session.js';
@@ -116,6 +117,11 @@ export type ApiOptions = {
    * 없으면 `null` — 모른다는 것이지 판이 없다는 것이 아니다.
    */
   build?: BuildInfo | null;
+  /**
+   * 이 서버에 할당된 IP (2026-10-31). GUI 의 바인드 선택이 읽는다. 없으면 `available: false` 를 낸다 —
+   * 그러면 GUI 는 바인드를 손으로 받는다.
+   */
+  hostAddresses?: () => HostAddressFacts;
 };
 
 export type BuildInfo = { commit?: string; describe?: string; installedAt?: string };
@@ -799,6 +805,18 @@ const ROUTES: Route[] = [
   }),
 
   // 클러스터 노드 (ADR-CLUSTER, #118). 꺼져 있으면 `enabled: false` 와 빈 목록이다.
+  /**
+   * **바인드할 수 있는 주소** (2026-10-31). 바인드는 수신할 소켓의 주소라, 이 서버에 할당된 것과
+   * 와일드카드만 연다. `nonlocalBind` 가 켜진 계열은 VIP 처럼 아직 안 붙은 주소도 연다.
+   */
+  route('GET', '/api/v1/system/addresses', 'read', async (c, api) => {
+    const read = 'hostAddresses' in api ? api.hostAddresses : undefined;
+    if (read === undefined) {
+      json(c.res, 200, { available: false, addresses: [], nonlocalBind: { v4: false, v6: false } });
+      return;
+    }
+    json(c.res, 200, { available: true, ...read() });
+  }),
   route('GET', '/api/v1/cluster/nodes', 'read', async (c, api) => {
     const cl = 'cluster' in api ? api.cluster : undefined;
     if (cl === undefined || !('db' in api)) {

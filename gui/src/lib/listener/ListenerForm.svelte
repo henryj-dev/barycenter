@@ -15,7 +15,8 @@
   import SourceAllowSection from '#lib/forms/SourceAllowSection.svelte';
   import ListenerHostsSection from '#lib/forms/ListenerHostsSection.svelte';
   import HttpRedirectField from '#lib/forms/HttpRedirectField.svelte';
-  import { bindHelp, filled, hostLine, portError } from '#lib/forms/checks';
+  import { filled, hostLine, portError } from '#lib/forms/checks';
+  import BindField from '#lib/forms/BindField.svelte';
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
@@ -94,7 +95,7 @@
     <Form note="저장하면 커밋해요. 트래픽은 적용 대기에서 적용해야 바뀌어요." onsubmit={save}>
       <FormSection title="기본">
         <FormRow label="프로토콜" help="프로토콜은 바꿀 수 없어요."><TextInput value={protocol} disabled /></FormRow>
-        <FormRow label="바인드 주소" for="le-bind" required help={bindHelp(bind)}><TextInput id="le-bind" bind:value={bind} /></FormRow>
+        <BindField id="le-bind" bind:bind />
         <FormRow label="포트" for="le-port" required error={portError(port)}>
           <TextInput id="le-port" bind:value={port} invalid={portError(port) !== undefined} inputmode="numeric" width="120px" />
         </FormRow>

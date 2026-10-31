@@ -5,7 +5,7 @@
  * **v0.4 의 전체 CLI 가 아니다.** 리스너·풀·라우트·백엔드·TLS 쓰기가 있다. 대화형 편집은 없다.
  * export/import 와 나뉜 changeset 단계는 있다. `apply <파일>` 은 단축이다.
  *
- *   bary listener create|delete
+ *   bary listener create|update|delete
  *   bary pool create|delete
  *   bary route create|delete
  *   bary backend create|delete
@@ -35,8 +35,8 @@ import {
   backendDelete, backendDrain, backendDrainStatus, backendPut, backendUndrain,
 } from '../cli/backend.js';
 import { getResource } from '../cli/get.js';
-import { listenerCreate, listenerDelete, parseListenerOptions } from '../cli/listener.js';
-import { parseSourceAllow } from '../web/edit.js';
+import { listenerCreate, listenerDelete, listenerUpdate, parseListenerOptions } from '../cli/listener.js';
+import { parseListenerHosts, parseSourceAllow } from '../web/edit.js';
 import { parseListen, proxyCreate } from '../cli/proxy.js';
 import { addressSetCreate, addressSetDelete } from '../cli/address-set.js';
 import { poolCreate, poolDelete } from '../cli/pool.js';
@@ -124,6 +124,12 @@ const usage = (): never => {
                                  모든 프로토콜에서 출발지를 제한한다 (연결한 상대를 본다 — realip 전 주소):
                                    --allow 173.245.48.0/20,2400:cb00::/32   (여러 번 · 쉼표·공백)
                                    --allow-file cf-ips.txt                  (한 줄에 하나 — curl https://www.cloudflare.com/ips-v4/)
+                                 http·https 는 받을 이름을 정할 수 있다 (nginx server_name, ADR-VHOST):
+                                   --hosts a.example.com,b.example.com      (쉼표·공백 · 소문자로 맞춘다)
+                                   있으면 같은 포트를 다른 호스트 리스너와 나눠 쓴다. 없으면 그 포트의 기본 리스너다
+  bary listener update           --name (--hosts a.example.com,… | --clear-hosts). commit 까지. apply 는 아니다
+                                 head 의 그 리스너를 바탕으로 호스트만 바꾼다 — 다른 칸은 그대로 둔다
+                                 --clear-hosts 는 호스트를 지운다 (그 포트의 기본 리스너가 된다)
   bary listener delete           --name
   bary pool create               --name --protocol-class http|tcp|udp --backend --host --port [--algorithm round_robin|least_conn|hash|source_ip_hash] [--hash-key]. 첫 백엔드와 같이. apply 는 아니다
                                  백엔드로 TLS 를 쓰려면 (§4.3):
@@ -343,6 +349,22 @@ async function main(): Promise<void> {
         }
         return;
       }
+      if (sub === 'update') {
+        const name = flag(argv, '--name') ?? usage();
+        const hostsRaw = flag(argv, '--hosts');
+        const clear = has(argv, '--clear-hosts');
+        // 둘 중 하나만 — 둘 다 주면 무엇을 원하는지 모른다. 둘 다 없으면 고칠 것이 없다.
+        if ((hostsRaw === undefined) === !clear) usage();
+        const hosts = clear ? [] : (parseListenerHosts(hostsRaw) ?? usage());
+        try {
+          const out = await listenerUpdate(call, { name, hosts });
+          console.error(`listener ${name} updated r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       if (sub !== 'create') usage();
       const name = flag(argv, '--name') ?? usage();
       const protocol = flag(argv, '--protocol') ?? usage();
@@ -373,6 +395,8 @@ async function main(): Promise<void> {
       });
       // 출발지 제한 — 모든 프로토콜. 파싱은 `parseSourceAllow` 한 자리다(GUI 와 같다).
       const allowFile = flag(argv, '--allow-file');
+      // ADR-VHOST — http·https 만. 다른 프로토콜에 주면 `listenerCreate` 가 한 줄로 거절한다.
+      const hosts = parseListenerHosts(flag(argv, '--hosts'));
       try {
         // try 안이다 — 잘못된 대역은 스택이 아니라 아래 catch 의 한 줄로 끝나야 한다.
         const sourceAllow = parseSourceAllow([
@@ -388,6 +412,7 @@ async function main(): Promise<void> {
           ...(certificate === undefined ? {} : { certificate }),
           ...(Object.keys(options).length === 0 ? {} : { options }),
           ...(sourceAllow === undefined ? {} : { sourceAllow }),
+          ...(hosts === undefined ? {} : { hosts }),
         });
         console.error(`listener ${name} committed r${out.revision}`);
         show(out);
