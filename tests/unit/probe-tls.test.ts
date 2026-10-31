@@ -61,12 +61,13 @@ const model = (pool: Partial<Pool>): Model => ({
 
 describe('프로브 계획 — 언제 TLS 인가', () => {
   it('upstreamTls 가 켜진 http 풀은 TLS 로, SNI 는 upstreamTls.sni 로', () => {
-    const plan = probePlanOf(model({ upstreamTls: { enabled: true, sni: 'api.test' } }), 'ext');
+    // 검증하는 풀(verify) — 기본이 HTTP 프로브다. 검증 안 하는 풀은 아래 「기본이 tcp_connect」 를 본다.
+    const plan = probePlanOf(model({ upstreamTls: { enabled: true, sni: 'api.test', verify: true, caBundle: 'ca' } }), 'ext');
     expect(plan.http?.tls).toEqual({ servername: 'api.test' });
   });
 
   it('sni 가 없으면 TLS 는 하되 SNI 를 안 보낸다', () => {
-    expect(probePlanOf(model({ upstreamTls: { enabled: true } }), 'ext').http?.tls).toEqual({});
+    expect(probePlanOf(model({ upstreamTls: { enabled: true }, healthCheck: { protocol: 'http' } }), 'ext').http?.tls).toEqual({});
   });
 
   it('upstreamTls 가 없거나 꺼져 있으면 옛 동작(평문) 그대로다', () => {
@@ -94,7 +95,8 @@ describe('실제 HTTPS 백엔드', () => {
   });
 
   it('**인증서를 검증한다** — 신뢰하지 않는 CA 면 실패하고 고칠 길을 말한다', async () => {
-    const plan = probePlanOf(model({ upstreamTls: { enabled: true, sni: 'api.test' } }), 'ext');
+    // HTTP 프로브를 **적었을 때** — 적은 것이 이긴다.
+    const plan = probePlanOf(model({ upstreamTls: { enabled: true, sni: 'api.test' }, healthCheck: { protocol: 'http' } }), 'ext');
     const r = await probeBackend(plan, '127.0.0.1', port, 2000);
     expect(r).toMatch(/인증서를 검증하지 못했다/);
     expect(r).toMatch(/tcp_connect/);
@@ -111,5 +113,34 @@ describe('실제 HTTPS 백엔드', () => {
       { path: '/', hostHeader: 'other.test', tls: { servername: 'api.test', ca: CA } });
     expect(r).toMatch(/421/);
     expect(seen).toEqual([{ sni: 'api.test', host: 'other.test' }]);
+  });
+});
+
+/**
+ * 데이터 경로가 인증서를 검증하지 않는 TLS 풀은 기본 프로브가 `tcp_connect` 다 (2026-11-01, web-01).
+ *
+ * barycenterd(:8443, 자체 서명)를 `verify` 없이 프록시하자 nginx 는 잘 붙는데 프로버의 HTTP 프로브가 인증서를 검증해
+ * `unhealthy` 로 뺐다 — 풀이 비어 모든 요청이 500 이었다. 프로버의 검증을 끄지는 않는다(CodeQL). 기본만 바꾼다.
+ */
+describe('검증 안 하는 TLS 풀 — 기본이 tcp_connect', () => {
+  it('**verify 가 없으면 기본 프로브가 tcp_connect 다**', () => {
+    expect(probePlanOf(model({ upstreamTls: { enabled: true, sni: 'api.test' } }), 'ext').protocol).toBe('tcp_connect');
+  });
+
+  it('verify 를 켜면 전처럼 HTTP 프로브다', () => {
+    expect(probePlanOf(model({ upstreamTls: { enabled: true, verify: true, caBundle: 'ca' } }), 'ext').protocol).toBe('http');
+  });
+
+  it('헬스체크를 http 로 적으면 그대로 HTTP 다 — 적은 것이 이긴다', () => {
+    expect(probePlanOf(model({ upstreamTls: { enabled: true }, healthCheck: { protocol: 'http' } }), 'ext').protocol).toBe('http');
+  });
+
+  it('TLS 를 안 쓰는 http 풀은 전처럼 HTTP 다', () => {
+    expect(probePlanOf(model({}), 'ext').protocol).toBe('http');
+  });
+
+  it('**신뢰하지 않는 인증서의 백엔드도 산 것으로 본다** — nginx 가 붙는 그대로', async () => {
+    const plan = probePlanOf(model({ upstreamTls: { enabled: true, sni: 'api.test' } }), 'ext');
+    expect(await probeBackend(plan, '127.0.0.1', port, 2000)).toBeUndefined();
   });
 });
