@@ -1375,6 +1375,71 @@ export class ConfigStore {
     return r === undefined ? undefined : String(r['revision']);
   }
 
+  /**
+   * **head 의 적용이 실패했는가** (2026-11-01, web-01). 실패한 plan 은 적용 대기에서 빠지고(작업이 붙었다), 같은 plan 을
+   * 다시 적용하면 멱등이라 그 실패를 그대로 돌려준다. 그래서 head 를 다시 적용할 길이 없었다 — 무엇이든 하나 더
+   * 저장해 새 리비전을 만들어야 했다.
+   *
+   * 다시 시도할 수 있는 것만 준다: head 의 마지막 작업이 `failed` 이고, 일부 평면만 넘어가지 않았고(그건 `/recover`
+   * 의 몫이다), head 가 활성화되지 않았고, head 에 아직 안 쓴 plan 이 없을 때.
+   */
+  async failedHead(): Promise<{ revision: string; planId: string; failure: string } | undefined> {
+    const head = (await this.head()).revision;
+    if ((await this.activeRevision()) === head) return undefined;
+    const fresh = (await this.db.query(
+      `SELECT 1 FROM plans p WHERE p.target_revision = $1 AND p.state = 'committed'
+          AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.plan_id = p.id) LIMIT 1`, [head],
+    )).rows[0];
+    if (fresh !== undefined) return undefined;
+    const r = (await this.db.query(
+      `SELECT plan_id, phase, detail FROM operations WHERE revision = $1
+        ORDER BY created_at DESC, activation_epoch DESC LIMIT 1`, [head],
+    )).rows[0];
+    if (r === undefined || r['phase'] !== 'failed') return undefined;
+    const d = (r['detail'] ?? {}) as { partialTransition?: unknown; failure?: unknown; error?: unknown; cancelled?: unknown };
+    if (d.partialTransition === true) return undefined;
+    const failure = typeof d.failure === 'string' ? d.failure
+      : typeof d.error === 'string' ? d.error
+        : d.cancelled === true ? '취소했다' : '실패했다';
+    return { revision: head, planId: String(r['plan_id']), failure };
+  }
+
+  /**
+   * 실패한 head 를 **같은 리비전으로** 다시 적용할 plan 을 만든다. 새 리비전은 안 만든다 — 설정은 그대로이고,
+   * 엔진 쪽 사정(설정 거부 · 시간 초과)이 바뀌었을 수 있어 다시 시도하는 것이다. 새 epoch 를 받는다(세대 이름이 갈린다).
+   * 영향은 지금 엔진이 돌리는 리비전과 비교한다. 다시 시도할 것이 없으면 409.
+   */
+  async replanHead(by: string): Promise<{ planId: string; revision: string }> {
+    const failed = await this.failedHead();
+    if (failed === undefined) {
+      throw new StoreError(409, 'nothing_to_retry', '다시 적용할 실패가 없다 — head 가 이미 활성이거나, 적용 대기 plan 이 있거나, 마지막 적용이 실패가 아니다');
+    }
+    const model = await this.modelAt(failed.revision);
+    const rendered = renderOrThrow(model, this.caps);
+    const active = await this.activeRevision();
+    const priorModel = active === undefined ? model : await this.modelAt(active);
+    const before = safeRender(priorModel, this.caps);
+    const impact = impactOf({ model: priorModel, conf: before?.conf ?? '' }, { model, rendered }, this.caps, this.certFacts);
+    const planId = randomUUID();
+    await this.db.tx(async (c) => {
+      // head 를 잠근다 — 그 사이 커밋이 들어오면 이 plan 은 낡는다. 그러면 만들지 않는다.
+      const head = text((await c.query('SELECT revision FROM config_head FOR UPDATE')).rows[0] ?? {}, 'revision');
+      if (head !== failed.revision) {
+        throw new StoreError(409, 'PLAN_STALE', `head 가 r${head} 로 바뀌었다 — 그 리비전을 적용한다`);
+      }
+      const epoch = text((await c.query(`SELECT nextval('activation_epoch_seq') AS v`)).rows[0] ?? {}, 'v');
+      await c.query(
+        `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
+                            renderer_version,expires_at,state,target_revision,activation_epoch)
+         VALUES ($1,NULL,$2,$3,$4,$5,$6,now() + ($7 || ' milliseconds')::interval,'committed',$2,$8)`,
+        [planId, failed.revision, JSON.stringify(model), JSON.stringify(impact), rendered.digest,
+          RENDERER_VERSION, String(PLAN_TTL_MS), epoch],
+      );
+    });
+    await this.audit(by, 'apply.retry_plan', failed.revision, undefined, { planId, after: failed.planId }, failed.revision);
+    return { planId, revision: failed.revision };
+  }
+
   /** sealed → open. plan 을 무효화한다 (§5.2 reopen). */
   async reopen(changesetId: string, by: string): Promise<void> {
     await this.db.tx(async (c) => {

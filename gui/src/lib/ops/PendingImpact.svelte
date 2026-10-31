@@ -47,6 +47,19 @@
       {/if}
     {/snippet}
   </ImpactCard>
+{:else if desk.failedApply !== undefined}
+  <ImpactCard tone="danger" title={`r${desk.failedApply.revision} 적용이 실패했어요`}
+    breaking={[{ tone: 'danger', icon: '✕', text: desk.failedApply.failure }]} quiet={[]}>
+    {#snippet sub()}엔진은 전에 적용한 설정 그대로예요. 설정을 고쳐 저장하거나, 원인을 없앤 뒤 같은 리비전을 다시 적용해요.{/snippet}
+    {#snippet footer()}
+      {#if !ro}
+        <Button variant="primary" loading={desk.applying} onclick={() => { void desk.retryApply(); }}>{desk.applying ? '적용하는 중' : `r${desk.failedApply.revision} 다시 적용해요`}</Button>
+        <FieldMessage>같은 설정으로 다시 시도해요. 새 리비전은 안 만들어요.</FieldMessage>
+      {:else}
+        <FieldMessage>전역 화면은 읽기만 해요. 적용은 그 지역의 GUI 에서 해요.</FieldMessage>
+      {/if}
+    {/snippet}
+  </ImpactCard>
 {:else if desk.live}
   <FieldMessage>커밋했지만 적용하지 않은 plan 이 없어요. 리소스를 저장하거나 <code>bary import</code> 를 하면 여기 와요.</FieldMessage>
 {/if}

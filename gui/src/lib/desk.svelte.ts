@@ -3,7 +3,7 @@
  * 운영 화면이 같은 스트림을 본다 — 연결을 둘로 열지 않는다.
  * 헬스는 스냅샷과 health 델타다. `/health/backends` 를 치지 않는다.
  */
-import { pickPending, viewOfImpact, type Impact, type ImpactView, type PendingApply } from '@web/impact-view';
+import { pickPending, viewOfImpact, type FailedApply, type Impact, type ImpactView, type PendingApply } from '@web/impact-view';
 import {
   viewOfListeners, type ListenerFact, type ListenersView,
 } from '@web/listeners-view';
@@ -27,6 +27,8 @@ import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 export type StatusSnap = {
   head?: string;
   pendingApply?: PendingApply[];
+  /** head 의 적용이 실패했고 다시 시도할 수 있다 (2026-11-01). */
+  failedApply?: FailedApply;
   health?: HealthFact[];
   engine?: unknown;
   driver?: unknown;
@@ -78,6 +80,7 @@ export function createDesk(scope?: { api(path: string): string }) {
   let rendered = $state<RenderedView>(viewOfRendered({}));
   let audit = $state<AuditView>(viewOfAudit([]));
   let applying = $state(false);
+  let failedApply = $state<FailedApply | undefined>();
   /** 커밋했지만 적용하지 않은 plan 수 — 상단 바의 「적용 대기 N」 과 배너. */
   let pendingCount = $state(0);
   let recovering = $state(false);
@@ -158,9 +161,11 @@ export function createDesk(scope?: { api(path: string): string }) {
   const onStatus = async (snap: StatusSnap): Promise<void> => {
     head = snap.head;
     pendingCount = snap.pendingApply?.length ?? 0;
+    failedApply = snap.failedApply;
     status = viewOfStatus(snap);
     if (snap.health !== undefined) health = snap.health;
-    await refreshImpact(pickPending(snap.pendingApply ?? []));
+    // head 의 plan 만 적용할 수 있다 — 옛 plan 을 고르면 「적용해요」 가 언제나 PLAN_STALE 이다.
+    await refreshImpact(pickPending(snap.pendingApply ?? [], snap.head));
     await refreshListeners(view);
     await refreshPools();
     await refreshRoutes();
@@ -901,9 +906,23 @@ export function createDesk(scope?: { api(path: string): string }) {
         headers: { ...auth(), 'content-type': 'application/json' },
         body: JSON.stringify({ plan_id: view.planId }),
       });
-      const body = (await r.json()) as { phase?: string; message?: string };
+      const body = (await r.json()) as { phase?: string; message?: string; detail?: { failure?: string } };
       if (!r.ok) error = body.message ?? `apply ${r.status}`;
-      else if (body.phase !== 'activated') error = `활성화되지 않았다: ${body.phase ?? '?'}`;
+      else if (body.phase !== 'activated') error = `활성화되지 않았다: ${body.detail?.failure ?? body.phase ?? '?'}`;
+    } finally {
+      applying = false;
+    }
+  };
+
+  /** 실패한 head 를 같은 리비전으로 다시 적용한다 (`POST /apply/retry`). */
+  const retryApply = async (): Promise<void> => {
+    applying = true;
+    error = undefined;
+    try {
+      const r = await fetch(api('/api/v1/apply/retry'), { method: 'POST', headers: auth() });
+      const body = (await r.json()) as { phase?: string; message?: string; detail?: { failure?: string } };
+      if (!r.ok) error = body.message ?? `apply/retry ${r.status}`;
+      else if (body.phase !== 'activated') error = `활성화되지 않았다: ${body.detail?.failure ?? body.phase ?? '?'}`;
     } finally {
       applying = false;
     }
@@ -986,11 +1005,13 @@ export function createDesk(scope?: { api(path: string): string }) {
     get rendered() { return rendered; },
     get audit() { return audit; },
     get applying() { return applying; },
+    get failedApply() { return failedApply; },
     get pendingCount() { return pendingCount; },
     get recovering() { return recovering; },
     get editing() { return editing; },
     connect,
     apply,
+    retryApply,
     recover,
     drain,
     undrain,
