@@ -234,7 +234,7 @@ function sniMismatchGuard(): ConfNode {
  *
  * `444` 는 응답 없이 끊는다. 허용 목록 밖의 상대에게 무엇이 있는지 알려 줄 이유가 없다.
  */
-const sourceDenyVar = (listenerKey: string): string => `bary_src_deny_${ident(listenerKey)}`;
+const sourceDenyVar = (listenerKey: string): string => varName('bary_src_deny_', listenerKey);
 
 function sourceAllowGeo(listener: Listener): ConfNode[] {
   if (listener.sourceAllow === undefined) return [];
@@ -277,6 +277,30 @@ function ident(key: string): string {
   const digest = createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 8);
   return `${safe}_${digest}`;
 }
+/**
+ * nginx **변수** 이름의 상한 (2026-11-01, web-01).
+ *
+ * 변수 이름은 `variables_hash` 에 들어가고, 기본 `variables_hash_bucket_size 64` 에서 한 칸은
+ * 포인터(8) + 8 바이트로 맞춘 (이름 + 2) 이고 버킷 끝 표시(8)가 함께 들어가야 한다 — 이름은 **46 자까지**다.
+ * 넘으면 `could not build variables_hash` 로 `nginx -t` 가 실패한다. 리스너 키는 63 자까지 받으므로
+ * 키를 그대로 이어 붙이면 넘는다. 실제로 `barycenter-internal` 의 HTTP 리다이렉트 리스너(`…:http`)에
+ * 출발지 제한이 붙자 `bary_src_deny_barycenter_internal_http_79420b8a`(47 자)가 나와 적용이 거부됐다.
+ */
+export const NGINX_VAR_MAX = 46;
+
+/**
+ * 키로 nginx 변수 이름을 만든다. 상한 안이면 전과 같은 이름이다(지금 설정이 안 바뀐다). 넘으면 앞을 잘라
+ * **원래 키의** 다이제스트를 붙인다 — 자른 앞부분이 같은 두 키도 다른 이름이 된다.
+ */
+export function varName(prefix: string, key: string, suffix = ''): string {
+  const full = `${prefix}${ident(key)}${suffix}`;
+  if (full.length <= NGINX_VAR_MAX) return full;
+  const digest = createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 8);
+  const room = NGINX_VAR_MAX - prefix.length - 1 - digest.length - suffix.length;
+  const head = key.replace(/[^A-Za-z0-9_]/g, '_').slice(0, Math.max(0, room));
+  return `${prefix}${head}_${digest}${suffix}`;
+}
+
 /**
  * 풀 키 → upstream 이름. **이름을 정하는 유일한 자리다** (검수 D18).
  *
@@ -1455,7 +1479,7 @@ function passthroughNodes(
   routes: PassthroughRoute[],
   poolsWithBackends: Set<string>,
 ): ConfNode[] {
-  const sniVar = `bary_sni_${ident(listener.key)}`;
+  const sniVar = varName('bary_sni_', listener.key);
 
   // SNI 하나하나를 독립 매치로 펼친 뒤 컴파일 순서를 따른다.
   const inputs: RouteInput[] = [];
@@ -1500,7 +1524,7 @@ function passthroughNodes(
    */
   const noSniNodes: ConfNode[] = [];
   if (listener.onNoSni !== undefined && listener.onNoSni !== 'reject') {
-    const tierVar = `${sniVar}_notls`;
+    const tierVar = varName('bary_sni_', listener.key, '_notls');
     noSniNodes.push(block('map', [variable('ssl_preread_protocol'), variable(tierVar)], [
       // protocol 이 비었다 = preread 가 TLS 를 못 읽었다(비-TLS·malformed).
       // **여기는 계속 reject 고정이다.** S9 가 이 통과 no-SNI 가 갈린다는 것을
