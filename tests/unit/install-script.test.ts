@@ -646,3 +646,52 @@ describe('실패해도 토큰을 잃지 않는다 (#99)', () => {
     expect(code.match(/^\s*trap .* EXIT/gm)).toEqual(['trap on_exit EXIT']);
   });
 });
+
+/**
+ * ⑫ 의 `bary status` 가 API 의 TLS 인증서를 믿는다 (2026-10-31, web-01 초기화에서 잡았다).
+ *
+ * curl 은 `-k` 로 넘겼지만 `bary` 는 node 의 fetch 라 자체 서명 인증서에서 `fetch failed` 로 죽었다. 토큰을 새로
+ * 발급한 설치(`--rotate-token` · 첫 설치)마다 ⑫ 가 실패했고, 그 뒤의 첫 관리자 링크도 안 나왔다. 토큰을 보존한
+ * 업데이트는 이 검사를 건너뛰어서 오래 안 드러났다.
+ *
+ * 텍스트만 보지 않고 **그 줄을 그대로 셸에서 돌려** 가짜 CLI 가 받은 환경을 본다 — `${X:+VAR=…}` 를 명령 앞에
+ * 두면 대입이 아니라 명령 이름이 되는 함정이 텍스트 검사로는 안 보인다.
+ */
+describe('⑫ 검증 — CLI 가 API 인증서를 믿는다', () => {
+  const statusLine = (): string => {
+    const line = src.split('\n').find((l) => l.includes('dist/bin/bary.js" status >/dev/null'));
+    expect(line).toBeDefined();
+    return line!.replace(/>\/dev\/null.*$/, '').trim();
+  };
+
+  const run = (cliCa: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'bary-install-ca-'));
+    try {
+      execFileSync('mkdir', ['-p', join(dir, 'dist', 'bin')]);
+      writeFileSync(join(dir, 'dist', 'bin', 'bary.js'),
+        'echo "url=$BARY_URL ca=${NODE_EXTRA_CA_CERTS-unset} args=$*"\n', 'utf8');
+      return execFileSync('sh', ['-c', `${statusLine()}`], {
+        encoding: 'utf8',
+        env: { PATH: process.env['PATH'] ?? '', URL: 'https://10.0.0.1:8443', TOKEN_PLAIN: 't',
+          CLI_CA: cliCa, NODE_BIN: 'sh', APP_DIR: dir },
+      }).trim();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  };
+
+  it('**TLS 면 그 인증서를 NODE_EXTRA_CA_CERTS 로 넘긴다** — 경로에 공백이 있어도', () => {
+    expect(run('/etc/bary tls/api.crt')).toBe('url=https://10.0.0.1:8443 ca=/etc/bary tls/api.crt args=status');
+  });
+
+  it('TLS 가 아니면 아무것도 안 넘긴다', () => {
+    expect(run('')).toBe('url=https://10.0.0.1:8443 ca=unset args=status');
+  });
+
+  it('CLI_CA 는 TLS 인증서에서 온다 — 검증을 끄는 길(NODE_TLS_REJECT_UNAUTHORIZED)은 안 쓴다', () => {
+    expect(src).toMatch(/if \[ -n "\$TLS_CERT" \]; then CLI_CA=\$TLS_CERT; fi/);
+    expect(src).not.toContain('NODE_TLS_REJECT_UNAUTHORIZED');
+  });
+
+  it('요약의 CLI 안내도 그 인증서를 알려 준다', () => {
+    expect(src).toContain("printf '\\n  export NODE_EXTRA_CA_CERTS=%s' \"$TLS_CERT\"");
+  });
+});

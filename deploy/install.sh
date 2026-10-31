@@ -1614,6 +1614,11 @@ if [ "$NO_SERVICE" = 1 ]; then
   ok "건너뛴다 — 서비스를 안 띄웠다"
 else
   if [ -n "$TLS_CERT" ]; then URL="https://$LISTEN"; CURL_OPTS=-k; else URL="http://$LISTEN"; CURL_OPTS=; fi
+  # **CLI 도 그 인증서를 믿어야 한다** (2026-10-31). curl 은 `-k` 로 넘기는데 `bary` 는 node 의 fetch 라 자체 서명
+  # 인증서에서 `fetch failed` 로 죽었다 — 토큰을 새로 발급한 설치(`--rotate-token`·첫 설치)마다 ⑫ 가 실패했고,
+  # 그 뒤의 첫 관리자 링크도 안 나왔다. 검증은 끄지 않는다 — 우리가 쓴 인증서를 신뢰 목록에 더할 뿐이다.
+  CLI_CA=
+  if [ -n "$TLS_CERT" ]; then CLI_CA=$TLS_CERT; fi
   i=0
   until curl -fsS $CURL_OPTS --max-time 2 "$URL/healthz" >/dev/null 2>&1; do
     i=$((i + 1))
@@ -1663,7 +1668,8 @@ else
     [ "$code" = 401 ] || die "인증 없는 요청에 401 이 아니라 $code 가 왔다 — 토큰 평면이 안 섰다"
     ok "인증 평면 (401) — 기존 토큰을 그대로 뒀으므로 bary status 는 안 쟀다"
   else
-    BARY_URL="$URL" BARY_TOKEN="$TOKEN_PLAIN" "$NODE_BIN" "$APP_DIR/dist/bin/bary.js" status >/dev/null \
+    # `env` 로 넘긴다 — `${CLI_CA:+VAR=…}` 를 명령 앞에 두면 전개된 낱말은 대입이 아니라 명령 이름이 된다.
+    env BARY_URL="$URL" BARY_TOKEN="$TOKEN_PLAIN" ${CLI_CA:+"NODE_EXTRA_CA_CERTS=$CLI_CA"} "$NODE_BIN" "$APP_DIR/dist/bin/bary.js" status >/dev/null \
       || die "bary status 가 실패했다 — API 나 토큰이 안 맞는다"
     ok "bary status"
   fi
@@ -1716,7 +1722,7 @@ fi)
 
 CLI:
 
-  export BARY_URL=${URL:-http://$LISTEN}$(if [ "$TOKEN_KEPT" = 0 ]; then printf '\n  export BARY_TOKEN=%s' "$TOKEN_PLAIN"; fi)
+  export BARY_URL=${URL:-http://$LISTEN}$(if [ "$TOKEN_KEPT" = 0 ]; then printf '\n  export BARY_TOKEN=%s' "$TOKEN_PLAIN"; fi)$(if [ -n "$TLS_CERT" ]; then printf '\n  export NODE_EXTRA_CA_CERTS=%s' "$TLS_CERT"; fi)
   $NODE_BIN $APP_DIR/dist/bin/bary.js status
 
 ⚠️ $LISTEN 을 넓은 인터페이스로 옮기려면 TLS 를 먼저 켠다 — 이 API 로 개인키와
