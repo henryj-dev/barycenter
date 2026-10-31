@@ -184,7 +184,7 @@ export class AcmeStore {
     const row = (await this.db.query(
       `SELECT account_id, domains FROM acme_orders
         WHERE certificate_id=$1 AND state='issued'
-        ORDER BY updated_at DESC LIMIT 1`,
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
       [certificateId],
     )).rows[0];
     if (row === undefined) return undefined;

@@ -63,14 +63,29 @@ export type PublisherOptions = {
 export async function pendingPublications(db: Db): Promise<{
   orderId: string; certificateKey: string; issuedRef: string;
 }[]> {
+  /**
+   * **인증서마다 가장 새로 발급된 주문 하나만 본다** (2026-10-31, web-01).
+   *
+   * 한 인증서에 「발급됨」 주문이 둘 이상 남는다 — 갱신하면 옛 주문이 남고, CA 를 바꾸면(스테이징 → 운영)
+   * 앞의 것이 남는다. 전에는 그것들을 모두 「설정과 다르면 게시」 로 보았다. 새 것을 게시하면 옛 것이 다르고,
+   * 옛 것을 게시하면 새 것이 다르다 — **15초마다 둘을 번갈아 커밋하고 자동 적용했다**(매번 세대 전환).
+   * 고르는 것을 먼저 하고 비교를 나중에 한다. 거꾸로 하면 옛 주문이 뽑힌다.
+   *
+   * 「가장 새」 는 주문을 연 시각이다 — 인증서당 살아 있는 주문은 하나뿐이라 나중에 연 것이 나중의 의도다.
+   * `updated_at` 은 쓰지 않는다: 지난 주문도 손대면(정리 · 그만둠) 움직인다.
+   */
   return (await db.query(
-    `SELECT o.id AS order_id, c.key AS certificate_key, o.issued_ref
-       FROM acme_orders o
-       JOIN certificates c ON c.id = o.certificate_id
-      WHERE o.state = 'issued'
-        AND o.issued_ref IS NOT NULL
-        AND c.material_ref IS DISTINCT FROM o.issued_ref
-      ORDER BY o.updated_at`,
+    `SELECT latest.order_id, latest.certificate_key, latest.issued_ref
+       FROM (SELECT DISTINCT ON (o.certificate_id)
+                    o.id AS order_id, c.key AS certificate_key, o.issued_ref, c.material_ref,
+                    o.updated_at
+               FROM acme_orders o
+               JOIN certificates c ON c.id = o.certificate_id
+              WHERE o.state = 'issued'
+                AND o.issued_ref IS NOT NULL
+              ORDER BY o.certificate_id, o.created_at DESC, o.id DESC) latest
+      WHERE latest.material_ref IS DISTINCT FROM latest.issued_ref
+      ORDER BY latest.updated_at`,
   )).rows.map((r) => ({
     orderId: String(r['order_id']),
     certificateKey: String(r['certificate_key']),
