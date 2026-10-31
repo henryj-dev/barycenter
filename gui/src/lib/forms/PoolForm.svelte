@@ -11,7 +11,9 @@
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import { UPSTREAM_TLS_OFF, upstreamTlsInputOf, upstreamTlsIssue } from '@web/upstream-tls';
   import CreateForm from './CreateForm.svelte';
+  import UpstreamTlsField from './UpstreamTlsField.svelte';
   import { KEY_HELP, filled, keyError, portError } from './checks';
 
   type Algo = 'round_robin' | 'least_conn' | 'source_ip_hash' | 'hash';
@@ -33,13 +35,19 @@
   let backend = $state('');
   let host = $state('');
   let port = $state('80');
+  let tls = $state({ ...UPSTREAM_TLS_OFF });
 
   const ready = $derived(
     filled(pool, keyError) && filled(backend, keyError) && filled(host) && filled(port, portError)
-    && (algorithm !== 'hash' || filled(hashKey)),
+    && (algorithm !== 'hash' || filled(hashKey))
+    && upstreamTlsIssue(protocolClass, tls) === undefined,
   );
   const submit = (): void => {
-    const base = { pool: pool.trim(), protocolClass, backend: backend.trim(), host: host.trim(), port: Number(port) };
+    const upstreamTls = upstreamTlsInputOf(tls);
+    const base = {
+      pool: pool.trim(), protocolClass, backend: backend.trim(), host: host.trim(), port: Number(port),
+      ...(upstreamTls === undefined ? {} : { upstreamTls }),
+    };
     const run = algorithm === 'hash'
       ? desk.insertHashPool({ ...base, hashKey: hashKey.trim() })
       : algorithm === 'source_ip_hash'
@@ -78,4 +86,6 @@
       <TextInput id="pl-port" bind:value={port} invalid={portError(port) !== undefined} inputmode="numeric" width="120px" />
     </FormRow>
   </FormSection>
+
+  <UpstreamTlsField bind:value={tls} {protocolClass} />
 </CreateForm>
