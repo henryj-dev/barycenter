@@ -68,8 +68,9 @@ describe('겹침 판정이 안 바뀐다', () => {
     expect(socketsOverlap(R('a', 'http', 80, '0.0.0.0'), R('b', 'http', 80, '::'))).toBe(false);
   });
 
-  it('같은 family 의 와일드카드는 전부 덮는다', () => {
-    expect(socketsOverlap(R('a', 'http', 80, '0.0.0.0'), R('b', 'http', 80, '10.0.0.1'))).toBe(true);
+  it('같은 family 의 와일드카드는 다른 컨텍스트의 특정 주소를 덮는다', () => {
+    expect(socketsOverlap(R('a', 'http', 80, '0.0.0.0'), R('b', 'tcp', 80, '10.0.0.1'))).toBe(true);
+    expect(socketsOverlap(R('a', 'http', 80, '0.0.0.0'), R('b', 'http', 80, '10.0.0.1'))).toBe(false);
   });
 });
 

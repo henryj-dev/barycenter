@@ -59,10 +59,10 @@ describe('검증 — 소켓 공유', () => {
     expect(issues.find((i) => i.code === 'socket_conflict')?.message).toContain('평문');
   });
 
-  it('와일드카드와 특정 주소를 섞지 않는다', () => {
+  it('와일드카드와 특정 주소는 소켓을 나눠 쓴다 — 충돌이 아니고, 특정 주소로 온 요청은 그쪽이 받는다', () => {
     const b = { ...https('b', ['b.test'], 'cb', 'pb'), bind: '10.0.0.9' };
     const issues = validateModel(base({ listeners: [https('a', ['a.test'], 'ca', 'pa'), b] }), caps);
-    expect(issues.find((i) => i.code === 'socket_conflict')?.message).toContain('바인드가 같아야');
+    expect(issues.filter((i) => i.code === 'socket_conflict')).toEqual([]);
   });
 
   it('PROXY 수신이 어긋나면 충돌이다 — 소켓 단위 옵션이다', () => {

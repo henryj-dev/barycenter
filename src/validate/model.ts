@@ -156,7 +156,7 @@ function socketSharing(a: RawListener, b: RawListener): { ok: true } | { ok: fal
   const ka = socketKeyOf({ ...a, protocol: 'http' });
   const kb = socketKeyOf({ ...b, protocol: 'http' });
   if (ka === undefined || ka !== kb) {
-    return { ok: false, why: '호스트 리스너가 소켓을 함께 쓰려면 바인드가 같아야 한다(와일드카드와 특정 주소를 섞지 않는다)' };
+    return { ok: false, why: '호스트 리스너가 소켓을 함께 쓰려면 바인드가 같아야 한다' };
   }
   if (a.protocol !== b.protocol) {
     return { ok: false, why: '한 포트에 평문(http)과 TLS(https)를 섞을 수 없다' };
