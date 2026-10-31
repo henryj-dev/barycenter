@@ -51,3 +51,33 @@ describe('리스너 목록', () => {
 });
 
 
+
+/**
+ * HTTPS 리다이렉트 소켓이 목록에 보인다 (2026-11-01). 리스너가 아니라서 전에는 어디에도 안 보였다 — 그 소켓만 새로
+ * 열리는 변경도 「서빙 중」 으로 그렸다.
+ */
+describe('리다이렉트 소켓', () => {
+  const https = {
+    key: 'bi', protocol: 'https', bind: '10.253.65.250', port: 443, enabled: true, httpRedirect: { port: 80 },
+  };
+
+  it('HTTPS 행에 리다이렉트 소켓을 붙인다', () => {
+    const [row] = viewOfListeners([https]).rows;
+    expect(row?.redirect).toEqual({ port: 80, socket: 'tcp://10.253.65.250:80' });
+  });
+
+  it('리다이렉트 소켓만 새로 열려도 「적용하면 열림」 이다', () => {
+    const [row] = viewOfListeners([https], { added: ['tcp://10.253.65.250:80'], removed: [] }).rows;
+    expect(row?.mark).toBe('join');
+  });
+
+  it('닫힘 목록에 리다이렉트 소켓이 와도 따로 「닫힘」 행을 만들지 않는다 — 지금 있는 소켓이다', () => {
+    const rows = viewOfListeners([https], { added: [], removed: ['tcp://10.253.65.250:80'] }).rows;
+    expect(rows.map((r) => r.mark)).toEqual(['stay']);
+  });
+
+  it('http 리스너에는 붙이지 않는다', () => {
+    const [row] = viewOfListeners([{ key: 'h', protocol: 'http', bind: '0.0.0.0', port: 80, httpRedirect: { port: 81 } }]).rows;
+    expect(row?.redirect).toBeUndefined();
+  });
+});
