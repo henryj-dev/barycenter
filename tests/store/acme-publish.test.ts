@@ -113,6 +113,35 @@ describe('무엇이 게시를 기다리는가', () => {
   });
 });
 
+/**
+ * **한 인증서에 발급됨 주문이 둘이면 가장 새 것 하나만 게시한다** (2026-10-31, web-01).
+ *
+ * CA 를 스테이징에서 운영으로 바꾼 뒤 둘 다 「발급됨」 으로 남았다. 반영기가 둘을 모두 「설정과 다르면 게시」 로
+ * 보아 15초마다 번갈아 커밋 · 자동 적용했다(매번 세대 전환). 갱신으로 옛 주문이 남아도 같은 일이 난다.
+ */
+describe('발급됨 주문이 둘일 때', () => {
+  it('가장 새 주문만 게시하고, 다시 돌려도 아무것도 안 바뀐다(핑퐁이 없다)', async () => {
+    const old = await issuedOrder('web', 'a.test');
+    // 옛 주문을 확실히 앞에 둔다 — 같은 순간에 열린 것으로 보이지 않게.
+    await db.query("UPDATE acme_orders SET created_at = now() - interval '1 hour' WHERE id=$1", [old.orderId]);
+    const fresh = await issuedOrder('web', 'a.test');
+    expect(fresh.ref).not.toBe(old.ref);
+
+    const pending = await pendingPublications(db);
+    expect(pending.map((p) => p.orderId), '옛 주문은 게시 후보가 아니다').toEqual([fresh.orderId]);
+
+    await publishIssued({ db, store, control: noApply as never, acme, secrets, applyAutomatically: false });
+    const head1 = (await store.head()).revision;
+    expect((await store.modelAt(head1)).certificates.find((c) => c.key === 'web')?.materialRef).toBe(fresh.ref);
+
+    // **두 번째 틱** — 전에는 여기서 옛 자료를 다시 게시했다.
+    expect(await pendingPublications(db)).toHaveLength(0);
+    const out = await publishIssued({ db, store, control: noApply as never, acme, secrets, applyAutomatically: false });
+    expect(out).toHaveLength(0);
+    expect((await store.head()).revision, '새 리비전이 생기면 핑퐁이다').toBe(head1);
+  });
+});
+
 describe('게시', () => {
   it('**인증서 자료가 설정에 들어간다** — 여기까지 와야 nginx 가 안다', async () => {
     const { ref } = await issuedOrder('web', 'a.test');
