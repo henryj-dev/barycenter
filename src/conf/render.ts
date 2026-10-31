@@ -424,8 +424,8 @@ function upstreamBlock(pool: Pool, backends: Backend[], sourceIpVar: string): Co
  *   1. **자기 epoch 의 슬롯만 본다** (§6.5-1). `_G.BARY_EPOCH` 는 세대의 admin 조각에
  *      구워진다 — 렌더러가 굽지 않는 이유는 `render_digest` 가 모델만의 함수여야 하기
  *      때문이다. 이게 있어야 HUP 뒤에도 옛 워커가 E-old 를 계속 쓴다 (§6.5-5).
- *   2. **슬롯이 없으면 503 으로 끊는다.** 조용히 옛 peer 로 흐르면 §6.5-3 이 막으려던
- *      바로 그 상태가 된다 — staging 되지 않은 세대가 트래픽을 받는다.
+ *   2. **슬롯이 없으면 끊는다**(`ngx.exit(ngx.ERROR)` — 클라이언트에는 500). 조용히 옛 peer 로 흐르면 §6.5-3 이
+ *      막으려던 바로 그 상태가 된다 — staging 되지 않은 세대가 트래픽을 받는다. 끊을 때 오류 로그에 이유를 남긴다.
  *   3. `server 0.0.0.1:1` 은 **자리표시**다. nginx 는 upstream 에 최소 하나의 server 를
  *      요구하고, `balancer_by_lua` 가 매 연결마다 그것을 대체한다.
  */
@@ -443,7 +443,11 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
             local balancer = require "ngx.balancer"
             local d = ngx.shared.${dict}
             local peers = d:get("${slotKey}" .. (_G.BARY_EPOCH or "0"))
-            if not peers or peers == "" then return ngx.exit(ngx.ERROR) end
+            if not peers or peers == "" then
+                -- 이유를 남긴다 — 안 남기면 500 만 보이고 오류 로그는 비어, 헬스가 풀을 비웠다는 것을 못 찾는다.
+                ngx.log(ngx.ERR, "bary: ${name} 에 적격 peer 가 없다 (epoch ", _G.BARY_EPOCH or "0", ") — 백엔드 헬스 · 드레인을 본다")
+                return ngx.exit(ngx.ERROR)
+            end
             local all = {}
             for hp in peers:gmatch("[^,]+") do all[#all + 1] = hp end
 

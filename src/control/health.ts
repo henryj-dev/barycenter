@@ -281,14 +281,24 @@ export type ProbePlan = {
 export function probePlanOf(model: Model, poolKey: string): ProbePlan {
   const pool = model.pools.find((p) => p.key === poolKey);
   const spec = pool?.healthCheck;
-  // **기본은 옛 규칙이다.** `protocolClass` 가 정하던 그것 — 안 적은 배포가 안 바뀐다.
-  const protocol = spec?.protocol ?? (pool?.protocolClass === 'http' ? 'http' : 'tcp_connect');
+  /**
+   * **기본은 옛 규칙이다.** `protocolClass` 가 정하던 그것 — 안 적은 배포가 안 바뀐다.
+   *
+   * 예외 하나 (2026-11-01, web-01): 데이터 경로가 **인증서를 검증하지 않는** TLS 풀(`upstreamTls` 켬 · `verify` 아님)
+   * 은 기본을 `tcp_connect` 로 둔다. 프로버의 HTTP 프로브는 언제나 검증하므로(아래 `HttpProbeOpts.tls`), 자체
+   * 서명 백엔드가 nginx 로는 잘 붙는데 프로버만 `unhealthy` 로 빼서 풀이 비었다 — 모든 요청이 500 이었다.
+   * 검증을 끄지 않는다(CodeQL `js/disabling-certificate-validation`). 데이터 경로가 묻지 않는 것을 프로버가 더 엄하게
+   * 묻지 않을 뿐이다. 헬스체크를 `http` 로 적으면 그대로 HTTP 로 찌른다 — 적은 것이 이긴다.
+   */
+  const ut = pool?.upstreamTls;
+  const unverifiedTls = ut?.enabled === true && ut.verify !== true;
+  const protocol = spec?.protocol
+    ?? (pool?.protocolClass === 'http' && !unverifiedTls ? 'http' : 'tcp_connect');
   /**
    * **데이터 포트를 찌를 때만 TLS 를 따른다.** 별도 헬스 포트(`port`)나 사이드카
    * (`hostOverride`)는 데이터 경로가 아니다 — 거기가 TLS 인지 모델이 말하지 않으므로
    * 옛 동작(평문)을 그대로 둔다. 안 쓰는 배포의 판정이 안 바뀐다.
    */
-  const ut = pool?.upstreamTls;
   const tls = ut?.enabled === true && spec?.port === undefined && spec?.hostOverride === undefined
     ? (ut.sni === undefined ? {} : { servername: ut.sni })
     : undefined;
