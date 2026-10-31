@@ -19,7 +19,7 @@ import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs } from '@web/reconnect';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
@@ -458,6 +458,8 @@ export function createDesk(scope?: { api(path: string): string }) {
     port: number;
     /** S6. 없으면 `round_robin` — 빌더가 기본을 준다. */
     algorithm?: KeylessAlgorithm;
+    /** 백엔드로 가는 TLS (§4.3). 없으면 평문. */
+    upstreamTls?: UpstreamTlsInput;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -478,6 +480,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     backend: string;
     host: string;
     port: number;
+    upstreamTls?: UpstreamTlsInput;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -497,6 +500,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     backend: string;
     host: string;
     port: number;
+    upstreamTls?: UpstreamTlsInput;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
