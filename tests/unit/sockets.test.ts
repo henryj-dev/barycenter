@@ -5,7 +5,7 @@
  *   E12  — TCP 와 UDP 는 같은 포트 번호를 공존시킬 수 있다 (실측 확인)
  *   §4.5 — http/https/tls_passthrough 는 전부 transport=tcp 라서 서로 충돌한다
  *
- * 단순 유일 제약으로는 안 된다. 와일드카드 대 특정 주소는 "동등"이 아니라 "겹침"이다.
+ * 단순 유일 제약으로는 안 된다. 와일드카드 대 특정 주소는 컨텍스트에 따라 공존하거나 겹친다.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -74,8 +74,20 @@ describe('socketsOverlap — M6', () => {
     expect(socketsOverlap(res('tcp', '0.0.0.0', 9999), res('udp', '0.0.0.0', 9999))).toBe(false);
   });
 
-  it('M6.3 와일드카드는 특정 주소와 겹친다', () => {
-    expect(socketsOverlap(res('http', '0.0.0.0', 8080), res('http', '10.0.0.5', 8080))).toBe(true);
+  // 2026-10-31 실측: 같은 컨텍스트면 nginx 가 와일드카드 소켓 하나로 받고 도착 주소로 server 를 고른다.
+  it('M6.3 같은 컨텍스트의 와일드카드와 특정 주소는 공존한다 — 특정 주소가 우선', () => {
+    expect(socketsOverlap(res('http', '0.0.0.0', 8080), res('http', '10.0.0.5', 8080))).toBe(false);
+    expect(socketsOverlap(res('https', '0.0.0.0', 443), res('http', '10.0.0.5', 443))).toBe(false);
+    expect(socketsOverlap(res('tcp', '0.0.0.0', 9000), res('tls_passthrough', '10.0.0.5', 9000))).toBe(false);
+  });
+
+  it('M6.3b 컨텍스트가 다르면 와일드카드가 특정 주소와 겹친다 — 각자 bind() 해서 기동이 실패한다', () => {
+    expect(socketsOverlap(res('http', '0.0.0.0', 443), res('tls_passthrough', '10.0.0.5', 443))).toBe(true);
+    expect(socketsOverlap(res('tcp', '10.0.0.5', 443), res('https', '0.0.0.0', 443))).toBe(true);
+  });
+
+  it('M6.3c UDP 는 와일드카드가 특정 주소와 겹친다 — 프리셋이 reuseport 로 따로 bind() 한다', () => {
+    expect(socketsOverlap(res('udp', '0.0.0.0', 53), res('udp', '10.0.0.5', 53))).toBe(true);
   });
 
   it('서로 다른 특정 주소는 겹치지 않는다', () => {
@@ -92,8 +104,13 @@ describe('socketsOverlap — M6', () => {
     expect(socketsOverlap(res('http', '::', 8080), res('http', '0.0.0.0', 8080))).toBe(false);
   });
 
-  it('v6 와일드카드는 같은 family 의 특정 주소를 덮는다', () => {
-    expect(socketsOverlap(res('http', '::', 8080), res('http', '2001:db8::1', 8080))).toBe(true);
+  it('v6 와일드카드도 같은 컨텍스트의 특정 주소와 공존하고, 다른 컨텍스트와는 겹친다', () => {
+    expect(socketsOverlap(res('http', '::', 8080), res('http', '2001:db8::1', 8080))).toBe(false);
+    expect(socketsOverlap(res('http', '::', 8080), res('tcp', '2001:db8::1', 8080))).toBe(true);
+  });
+
+  it('와일드카드 둘은 언제나 겹친다', () => {
+    expect(socketsOverlap(res('http', '0.0.0.0', 80, 'a'), res('http', '0.0.0.0', 80, 'b'))).toBe(true);
   });
 
   it('v4 와일드카드는 v6 특정 주소를 덮지 않는다', () => {

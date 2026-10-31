@@ -6,7 +6,8 @@
  *   §4.5 — http / https / tls_passthrough 는 전부 transport=tcp 다. 그래서 http 컨텍스트 443 과
  *          stream 컨텍스트 443 이 충돌하는데, 프로토콜 enum 만 비교하면 이 충돌을 놓친다.
  *
- * 단순 유일 제약으로는 부족하다 — 와일드카드 대 특정 주소는 "동등"이 아니라 "겹침"이다.
+ * 단순 유일 제약으로는 부족하다 — 와일드카드 대 특정 주소는 "동등"도 "무관"도 아니다. 같은 nginx 컨텍스트면
+ * 공존하고(특정 주소가 우선), 컨텍스트가 다르면 겹친다.
  * PostgreSQL 의 일반 CHECK 는 다른 행을 참조할 수 없으므로(§4.0), 이 판정은 커밋 트랜잭션
  * 안에서 advisory lock 과 함께 도는 검증기의 몫이다.
  */
@@ -189,7 +190,8 @@ export function isLoopbackBind(input: string): boolean {
  * `[::]:p` 와 `0.0.0.0:p` 는 공존한다 — E30 으로 실측했다. v2 는 기본값을 `off` 로
  * 보고 이 둘을 충돌로 판정했고, 테스트가 그 오류를 고정하고 있었다.
  *
- * 렌더러는 이 가정을 숨기지 않기 위해 `[::]:port ipv6only=on` 을 명시적으로 낸다.
+ * 렌더러는 `ipv6only` 를 내지 않고 이 기본값에 기댄다 — 한 소켓에 server 가 여럿이면 그 옵션이 중복으로
+ * 기동을 막는다. 기본값은 E30 이 엔진마다 잰다.
  */
 export function socketsOverlap(a: SocketReservation, b: SocketReservation): boolean {
   if (a.key === b.key) return false;
@@ -207,8 +209,20 @@ export function socketsOverlap(a: SocketReservation, b: SocketReservation): bool
   const y = nb.value;
 
   if (x.family !== y.family) return false;      // ipv6only=on — family 를 넘지 않는다
-  if (x.wildcard || y.wildcard) return true;    // 같은 family 안의 와일드카드는 전부 덮는다
-  return x.addr === y.addr;
+  if (x.wildcard && y.wildcard) return true;
+  if (!x.wildcard && !y.wildcard) return x.addr === y.addr;
+  // **와일드카드 하나 + 특정 주소 하나** (2026-10-31). 같은 nginx 컨텍스트면 nginx 가 와일드카드 소켓 하나만
+  // 열고, 도착 주소로 server 를 고른다 — 특정 주소가 우선한다. 컨텍스트가 다르면(http ↔ stream) 각자 bind()
+  // 해서 기동이 `Address in use` 로 실패한다. UDP 프리셋은 `reuseport` 로 주소마다 따로 bind() 하므로 막는다.
+  return !sharesWildcardSocket(a.protocol, b.protocol);
+}
+
+/** nginx 가 와일드카드 소켓 하나로 특정 주소까지 받아 주는 조합인가 — 같은 컨텍스트의 TCP 만. */
+function sharesWildcardSocket(a: ListenerProtocol, b: ListenerProtocol): boolean {
+  const context = (p: ListenerProtocol): 'http' | 'stream' | undefined =>
+    p === 'http' || p === 'https' ? 'http' : p === 'tcp' || p === 'tls_passthrough' ? 'stream' : undefined;
+  const ca = context(a);
+  return ca !== undefined && ca === context(b);
 }
 
 /** 결과는 입력 순서와 무관하게 결정적이다 — plan diff 가 흔들리면 안 된다. */

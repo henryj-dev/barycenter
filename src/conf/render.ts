@@ -321,18 +321,23 @@ const UDP_PRESETS: Record<UdpPreset, { responses?: number; timeoutS: number; reu
  * 잘못된 bind 는 여기 도달하지 않는다 — `validateModel` 이 먼저 막는다. 도달했다면
  * 검증을 건너뛴 것이므로 조용히 와일드카드로 바꾸지 않고 던진다 (4차 검수 Critical).
  *
- * IPv6 는 `ipv6only=on` 을 **명시**한다. 그게 nginx 기본값이지만(E30), 겹침 판정이 그
- * 가정 위에 서 있으므로 산출물이 가정을 드러내야 한다.
+ * IPv6 와일드카드는 `[::]:p` 로 낸다. 전에는 `[::]` 도 `listen p` 로 냈고, 그것은 IPv4 와일드카드다 — IPv6
+ * 로는 안 열렸다.
+ *
+ * `ipv6only` 는 **안 낸다** (2026-10-31). 기본값이 `on` 이고 E30 이 그것을 엔진마다 잰다. 내면 두 가지가 깨진다(실측):
+ *   · 그 옵션은 주소:포트마다 한 번만 쓸 수 있다. 한 소켓에 server 가 여럿이면(호스트 리스너 · 기본 server)
+ *     `duplicate listen options` 로 기동이 실패한다.
+ *   · 특정 주소에 붙이면 nginx 가 그 주소를 따로 bind() 해서 같은 포트의 `[::]` 와 `Address in use` 로 부딪힌다.
  */
 function listenArgs(l: Listener): ConfValue[] {
   const bind = normalizeBind(l.bind);
   if (!bind.ok) {
     throw new Error(`검증되지 않은 bind 가 렌더에 도달했다: ${l.key} → ${JSON.stringify(l.bind)}`);
   }
-  const base: ConfValue[] = bind.value.wildcard
+  const base: ConfValue[] = bind.value.wildcard && bind.value.family === 'v4'
     ? [num(l.port)]
     : bind.value.family === 'v6'
-      ? [lit(`[${bind.value.addr}]:${l.port}`), lit('ipv6only=on')]
+      ? [lit(`[${bind.value.addr}]:${l.port}`)]
       : [lit(`${bind.value.addr}:${l.port}`)];
   // udp 는 PROXY 수신을 지원하지 않는다 (§4.7). **타입에 그 필드가 없다** — 먼저 좁힌다.
   if (l.protocol !== 'udp' && l.acceptProxyProtocol !== undefined) base.push(lit('proxy_protocol'));

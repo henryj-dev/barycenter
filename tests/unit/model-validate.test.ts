@@ -37,8 +37,15 @@ describe('바인드 주소 — 조용한 확대를 막는다', () => {
     expect(render(tcp('127.0.0.1')).conf).toContain('listen 127.0.0.1:8080;');
   });
 
-  it('IPv6 는 대괄호와 ipv6only=on 을 명시한다 — 기본값에 기대지 않는다 (E30)', () => {
-    expect(render(tcp('::1')).conf).toContain('listen [::1]:8080 ipv6only=on;');
+  it('IPv6 특정 주소는 대괄호로 내고 ipv6only 는 안 붙인다 — 붙이면 같은 포트의 [::] 와 부딪힌다', () => {
+    expect(render(tcp('::1')).conf).toContain('listen [::1]:8080;');
+  });
+
+  it('IPv6 와일드카드는 [::] 로 낸다 — IPv4 와일드카드로 새지 않는다 (ipv6only 는 기본값 on, E30)', () => {
+    const conf = render(tcp('::')).conf;
+    expect(conf).toContain('listen [::]:8080;');
+    expect(conf).not.toContain('ipv6only');
+    expect(conf).not.toContain('listen 8080;');
   });
 });
 
@@ -69,10 +76,21 @@ describe('소켓 겹침과 라우트 오류가 렌더까지 가지 않는다', (
       ...tcp('0.0.0.0'),
       listeners: [
         { key: 'a', protocol: 'tcp', bind: '0.0.0.0', port: 8080, enabled: true, defaultPool: 'p' },
-        { key: 'b', protocol: 'tcp', bind: '10.0.0.5', port: 8080, enabled: true, defaultPool: 'p' },
+        { key: 'b', protocol: 'tcp', bind: '0.0.0.0', port: 8080, enabled: true, defaultPool: 'p' },
       ],
     };
     expect(validateModel(m).map((i) => i.code)).toContain('socket_conflict');
+  });
+
+  it('같은 컨텍스트의 와일드카드와 특정 주소는 충돌이 아니다 — 특정 주소가 우선한다', () => {
+    const m: Model = {
+      ...tcp('0.0.0.0'),
+      listeners: [
+        { key: 'a', protocol: 'tcp', bind: '0.0.0.0', port: 8080, enabled: true, defaultPool: 'p' },
+        { key: 'b', protocol: 'tcp', bind: '10.0.0.5', port: 8080, enabled: true, defaultPool: 'p' },
+      ],
+    };
+    expect(validateModel(m).map((i) => i.code)).not.toContain('socket_conflict');
   });
 
   it('비활성 리스너는 소켓을 예약하지 않는다', () => {
