@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 120 심볼 · sha256:d351ec6e3fd3d69156bc3b58239df3c96f6b07f30c241a9c8a29b0772b6f02be
+# 120 심볼 · sha256:c056d6a624d8bc5e4028982c4e9bec380e991685e3b06474dab0c1ba27ed3fb3
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -297,6 +297,7 @@ export type HttpListener = ListenerBase & {
     acceptProxyProtocol?: InboundProxyProtocol;
     realIpFromHeader?: InboundRealIpHeader;
     http?: HttpProfile;
+    hosts?: string[];
 };
 ── HttpProfile
 export type HttpProfile = {
@@ -323,6 +324,7 @@ export type HttpsListener = ListenerBase & {
     acceptProxyProtocol?: InboundProxyProtocol;
     realIpFromHeader?: InboundRealIpHeader;
     http?: HttpProfile;
+    hosts?: string[];
     tls: {
         policy: string;
         defaultCertificate: string;
@@ -395,7 +397,7 @@ export type ModelIssue = {
     message: string;
 };
 ── ModelIssueCode
-export type ModelIssueCode = 'unknown_address_set' | 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'strict_priority_too_many' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_hsts' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range' | 'invalid_value' | 'duplicate';
+export type ModelIssueCode = 'unknown_address_set' | 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'strict_priority_too_many' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_hsts' | 'host_conflict' | 'route_host_outside_listener' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range' | 'invalid_value' | 'duplicate';
 ── ModelValidationError
 export declare class ModelValidationError extends Error {
     readonly issues: ModelIssue[];
@@ -547,6 +549,7 @@ export type RawListener = ListenerBase & {
     prereadTimeoutS?: number;
     tls?: RawTlsBinding;
     http2?: boolean;
+    hosts?: string[];
 };
 ── RawModel
 export type RawModel = Omit<Model, 'listeners'> & {
@@ -597,6 +600,7 @@ export type RenderCapabilities = {
     streamLua?: boolean;
     sslConfCommand?: boolean;
     http2?: boolean;
+    sslRejectHandshake?: boolean;
 };
 ── RenderedConfig
 export type RenderedConfig = {
@@ -681,6 +685,7 @@ export type UpstreamTls = {
 export type ValidationCapabilities = {
     streamRealip: boolean;
     http2?: boolean;
+    sslRejectHandshake?: boolean;
 };
 ── assertDriverPins
 export declare function assertDriverPins(pins: readonly DriverPin[]): void;

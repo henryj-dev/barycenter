@@ -104,6 +104,14 @@ export type RenderCapabilities = {
    * 잡아온 모양이다.
    */
   http2?: boolean;
+  /**
+   * `ssl_reject_handshake on;` (nginx 1.19.4+, ADR-VHOST).
+   *
+   * 호스트 리스너만 있는 HTTPS 소켓은 렌더러가 기본 server 를 만든다. 거기서 **아무 인증서도 내주지 않고**
+   * 핸드셰이크를 끊는 길이다 — 그렇지 않으면 첫 server 의 인증서가 모르는 SNI 에 나간다(S17).
+   * 없으면 그 소켓에 호스트 없는 리스너가 있어야 한다 — 검증기가 막는다.
+   */
+  sslRejectHandshake?: boolean;
 };
 
 /** capability 를 모르면 없는 쪽으로 가정한다. 모르는 것을 할 수 있다고 하지 않는다. */
@@ -607,11 +615,11 @@ function httpServerBlocks(
    */
   const strict = listener.http?.strictPriority === true;
   const plan = strict
-    ? planStrictPriority([...byHost.keys()].sort().flatMap((h) => {
+    ? planStrictPriority((listener.hosts !== undefined ? [...new Set(listener.hosts)] : [...byHost.keys()]).sort().flatMap((h) => {
       const parsed = parseHostPattern(h);
       if (!parsed.ok) return [];
       // 호스트별 **대표 priority** — 같은 호스트 안의 순서는 longest-prefix 가 정한다.
-      const priority = Math.max(...byHost.get(h)!.map((r) => r.priority));
+      const priority = Math.max(0, ...(byHost.get(h) ?? []).map((r) => r.priority));
       return [{ key: h, pattern: parsed.value, priority }];
     }))
     : { lowered: new Set<string>(), order: [] };
@@ -619,8 +627,11 @@ function httpServerBlocks(
 
   const out: ConfNode[] = [];
   const lateOut: { at: number; node: ConfNode }[] = [];
-  for (const host of [...byHost.keys()].sort()) {
-    const hostRoutes = byHost.get(host)!;
+  // **호스트 리스너는 자기 호스트마다 server 를 낸다** (ADR-VHOST) — 라우트가 없어도 낸다. 그 server 의
+  // 기본(`location /`)은 리스너의 기본 동작이다. 호스트 없는 리스너는 라우트의 호스트만 낸다(지금 동작).
+  const hostList = listener.hosts !== undefined ? [...new Set(listener.hosts)].sort() : [...byHost.keys()].sort();
+  for (const host of hostList) {
+    const hostRoutes = byHost.get(host) ?? [];
     const parsed = parseHostPattern(host);
     if (!parsed.ok) continue; // validateModel 이 이미 막았다
     const lowered = plan.lowered.has(hostPatternKey(parsed.value));
@@ -642,6 +653,12 @@ function httpServerBlocks(
         r, poolsWithBackends, listener.http?.headers?.request, pools, certs,
       );
       if (body.length > 0) locations.push(block('location', [lit(r.pathPrefix ?? '/')], body));
+    }
+    if (listener.hosts !== undefined) {
+      // 라우트가 `/` 를 안 덮으면 리스너의 기본 동작이 덮는다. 덮으면 안 낸다 — 같은 location 이 둘이면
+      // nginx 가 거절한다(duplicate location).
+      const coversRoot = ordered.some((r) => (r.pathPrefix ?? '/') === '/');
+      if (!coversRoot) locations.push(...defaultActionLocations(listener, poolsWithBackends, pools, certs));
     }
     if (locations.length === 0) continue;
 
@@ -1184,6 +1201,15 @@ function certFor(
       max: best.override?.maxVersion ?? policy.maxVersion,
     };
   }
+  // **호스트 리스너는 자기 기본 인증서를 낸다** (ADR-VHOST). 운영자가 그 리스너의 호스트를 위해 고른
+  // 인증서다 — 호스트 없는 리스너의 default 처럼 「아무 이름에나 나가는」 것이 아니다.
+  if (listener.hosts !== undefined) {
+    const cert = certs.get(listener.tls.defaultCertificate);
+    if (cert === undefined) {
+      throw new Error(`알 수 없는 인증서가 렌더에 도달했다: '${listener.tls.defaultCertificate}'`);
+    }
+    return { cert, min: policy.minVersion, max: policy.maxVersion };
+  }
   // 검증기가 이미 막았다 (`sni_binding_missing`). 여기 오면 렌더러가 인증서를 지어내는
   // 대신 **터진다** — 조용히 default 인증서를 물리면 SAN 미커버 제시가 된다.
   throw new Error(
@@ -1242,14 +1268,16 @@ const withHttp2 = (tls: TlsContext, body: ConfNode[]): ConfNode[] => [
   ...(tls.rejectMismatch ? [sniMismatchGuard()] : []),
 ];
 
-function defaultServerBlock(
+/**
+ * 리스너 기본 동작의 `location /` — 기본 풀로 보내거나 444 로 끊는다. `default_server` 와 호스트 리스너의
+ * server 블록(ADR-VHOST)이 같이 쓴다. 한 벌이어야 두 자리가 갈리지 않는다.
+ */
+function defaultActionLocations(
   listener: HttpListener | HttpsListener,
   poolsWithBackends: Set<string>,
-  tls: TlsContext | undefined,
-  acme: boolean,
   pools: Map<string, Pool>,
   certs: Map<string, Certificate>,
-): ConfNode {
+): ConfNode[] {
   const action = listener.http?.defaultAction ?? 'reject';
   const defaultPoolTls = action === 'reject' ? undefined : pools.get(action.pool)?.upstreamTls;
   const defaultCerts = certs;
@@ -1287,6 +1315,48 @@ function defaultServerBlock(
       // `location /` 은 모든 경로를 덮으므로 "안 맞으면 끊는다" 는 뜻이 그대로 유지되고,
       // 더 긴 접두사(`^~ /.well-known/acme-challenge/`)는 이제 이길 수 있다.
       : [block('location', [lit('/')], [directive('return', [num(444)])])];
+  return body;
+}
+
+/** 같은 `listen` 이면 같은 열쇠 — 프로토콜 · 정규형 주소 · 포트 (검증기의 `socketKeyOf` 와 같은 규칙). */
+function vhostSocketKey(l: HttpListener | HttpsListener): string {
+  const n = normalizeBind(l.bind);
+  const addr = !n.ok ? l.bind : n.value.wildcard ? `${n.value.family}:*` : n.value.addr;
+  return `${l.protocol}|${addr}|${l.port}`;
+}
+
+/**
+ * 호스트 리스너만 있는 소켓의 `default_server` (ADR-VHOST). 어느 호스트에도 맞지 않는 요청을 끊는다.
+ *   · HTTP  — `return 444`. ACME 확인 경로는 남긴다(첫 발급은 아직 라우트가 없는 이름으로 온다).
+ *   · HTTPS — `ssl_reject_handshake on`. **어느 서비스의 인증서도 내주지 않는다**(S17). 엔진이 못 하면
+ *             검증기가 이미 막았다.
+ */
+function syntheticDefaultServer(l: HttpListener | HttpsListener, acme: boolean): ConfNode {
+  const listen = directive('listen', [...listenArgs(l), lit('default_server')]);
+  if (l.protocol === 'https') {
+    return block('server', [], [
+      listen,
+      directive('server_name', [lit('_')]),
+      directive('ssl_reject_handshake', [lit('on')]),
+    ]);
+  }
+  return block('server', [], [
+    listen,
+    directive('server_name', [lit('_')]),
+    ...(acme ? [acmeChallengeLocation()] : []),
+    block('location', [lit('/')], [directive('return', [num(444)])]),
+  ]);
+}
+
+function defaultServerBlock(
+  listener: HttpListener | HttpsListener,
+  poolsWithBackends: Set<string>,
+  tls: TlsContext | undefined,
+  acme: boolean,
+  pools: Map<string, Pool>,
+  certs: Map<string, Certificate>,
+): ConfNode {
+  const body = defaultActionLocations(listener, poolsWithBackends, pools, certs);
 
   // **S17 — TLS 리스너의 default_server 는 선택이 아니다.** 없으면 모르는 SNI 가 첫
   // 블록의 인증서를 받는다(E32 의 TLS 판). 여기 쓰는 인증서는 리스너의
@@ -1504,6 +1574,7 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
   const issues = validateModel(model, {
     streamRealip: caps.streamRealip,
     ...(caps.http2 === undefined ? {} : { http2: caps.http2 }),
+    ...(caps.sslRejectHandshake === undefined ? {} : { sslRejectHandshake: caps.sslRejectHandshake }),
   });
   if (issues.length > 0) throw new ModelValidationError(issues);
   model = expandAddressSets(model);
@@ -1672,6 +1743,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       l.protocol === 'https'
       && (policies.get(l.tls.policy)?.sniHostMismatch ?? 'allow') === 'reject_421');
     if (anyMismatchGuard) children.push(sniMismatchMap());
+    const hostlessSockets = new Set(httpListeners.filter((l) => l.hosts === undefined).map(vhostSocketKey));
+    const madeDefault = new Set<string>();
     for (const l of httpListeners) {
       const tls: TlsContext | undefined = l.protocol === 'https'
         ? {
@@ -1696,7 +1769,16 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       // ACME 예약 라우트는 **Lua 가 있어야** 낸다. 없으면 토큰을 conf 에 실어야 하고,
       // 그건 갱신마다 세대 전환이다 (§8.2 · ADR-ACME).
       const acme = caps.httpLua === true;
-      children.push(defaultServerBlock(l, poolsWithBackends, tls, acme, pools, certs));
+      if (l.hosts === undefined) {
+        children.push(defaultServerBlock(l, poolsWithBackends, tls, acme, pools, certs));
+      } else {
+        // **이 소켓에 호스트 없는 리스너가 없으면 기본 server 를 만든다** (ADR-VHOST) — 소켓마다 한 번.
+        const sk = vhostSocketKey(l);
+        if (!hostlessSockets.has(sk) && !madeDefault.has(sk)) {
+          madeDefault.add(sk);
+          children.push(syntheticDefaultServer(l, acme));
+        }
+      }
       children.push(
         ...httpServerBlocks(
           l, routesByListener.get(l.key) ?? [], poolsWithBackends, tls, acme, pools, certs,

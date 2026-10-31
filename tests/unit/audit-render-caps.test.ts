@@ -54,6 +54,7 @@ describe('렌더 capability 매핑 (검수 B-02)', () => {
       httpLua: s?.runtimeMembership.http,
       streamLua: s?.runtimeMembership.stream,
       http2: s?.http2,
+      sslRejectHandshake: s?.sslRejectHandshake,
       sslConfCommand: s?.sslConfCommand,
     });
     // 이 이미지는 http2 와 ssl_conf_command 를 낼 수 있다 — 그런데 런타임은

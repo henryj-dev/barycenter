@@ -11,9 +11,11 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
   import ListenerBasics from './ListenerBasics.svelte';
+  import ListenerHostsSection from './ListenerHostsSection.svelte';
   import ListenerOptions from './ListenerOptions.svelte';
   import SourceAllowSection from './SourceAllowSection.svelte';
-  import { filled, keyError, portError } from './checks';
+  import { filled, hostLine, keyError, portError } from './checks';
+  import { parseListenerHosts } from '@web/edit';
 
   let { tls = false }: { tls?: boolean } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -31,9 +33,12 @@
   let certificate = $state<string | undefined>();
   let opts = $state<ListenerOptionFlags>({});
   let allow = $state('');
+  let hosts = $state('');
+  const hostList = $derived(parseListenerHosts(hosts));
+  const hostsOk = $derived((hostList ?? []).every((h) => hostLine(h) === undefined));
 
   const ready = $derived(
-    filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined
+    filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined && hostsOk
     && (!tls || (policy !== undefined && certificate !== undefined)),
   );
   const submit = (): void => {
@@ -43,15 +48,16 @@
     const n = Number(port);
     if (tls) {
       if (policy === undefined || certificate === undefined) return;
-      void desk.insertHttpsListener(k, { bind: b, port: n, pool, policy, certificate }, opts, allow).then(after(resourcePath('listener', k)));
+      void desk.insertHttpsListener(k, { bind: b, port: n, pool, policy, certificate, ...(hostList === undefined ? {} : { hosts: hostList }) }, opts, allow).then(after(resourcePath('listener', k)));
     } else {
-      void desk.insertHttpListener(k, { bind: b, port: n, pool }, opts, allow).then(after(resourcePath('listener', k)));
+      void desk.insertHttpListener(k, { bind: b, port: n, pool, ...(hostList === undefined ? {} : { hosts: hostList }) }, opts, allow).then(after(resourcePath('listener', k)));
     }
   };
 </script>
 
 <CreateForm {ready} onsubmit={submit} cancelHref="/traffic/listener">
   <ListenerBasics protocol={tls ? 'HTTPS' : 'HTTP'} bind:key bind:bind bind:port />
+  <ListenerHostsSection bind:value={hosts} />
 
   <FormSection title="동작">
     <FormRow label="기본 풀" required help={pools.length === 0 ? 'HTTP 풀이 없어요. 풀을 먼저 만들어요.' : '라우트에 맞지 않는 요청을 이 풀로 보내요.'}>
