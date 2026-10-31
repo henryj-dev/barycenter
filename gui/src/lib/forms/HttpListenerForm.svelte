@@ -14,6 +14,7 @@
   import ListenerHostsSection from './ListenerHostsSection.svelte';
   import ListenerOptions from './ListenerOptions.svelte';
   import SourceAllowSection from './SourceAllowSection.svelte';
+  import HttpRedirectField from './HttpRedirectField.svelte';
   import { filled, hostLine, keyError, portError } from './checks';
   import { parseListenerHosts } from '@web/edit';
 
@@ -34,11 +35,15 @@
   let opts = $state<ListenerOptionFlags>({});
   let allow = $state('');
   let hosts = $state('');
+  // HTTPS 만. 새로 만들 때는 켜 둔다 — 평문으로 온 사람을 HTTPS 로 보내는 것이 흔한 기본이다.
+  let redirectOn = $state(true);
+  let redirectPort = $state('80');
+  const redirectOk = $derived(!tls || !redirectOn || (filled(redirectPort, portError) && redirectPort.trim() !== port.trim()));
   const hostList = $derived(parseListenerHosts(hosts));
   const hostsOk = $derived((hostList ?? []).every((h) => hostLine(h) === undefined));
 
   const ready = $derived(
-    filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined && hostsOk
+    filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined && hostsOk && redirectOk
     && (!tls || (policy !== undefined && certificate !== undefined)),
   );
   const submit = (): void => {
@@ -48,7 +53,7 @@
     const n = Number(port);
     if (tls) {
       if (policy === undefined || certificate === undefined) return;
-      void desk.insertHttpsListener(k, { bind: b, port: n, pool, policy, certificate, ...(hostList === undefined ? {} : { hosts: hostList }) }, opts, allow).then(after(resourcePath('listener', k)));
+      void desk.insertHttpsListener(k, { bind: b, port: n, pool, policy, certificate, ...(hostList === undefined ? {} : { hosts: hostList }), ...(redirectOn ? { httpRedirect: { port: Number(redirectPort) } } : {}) }, opts, allow).then(after(resourcePath('listener', k)));
     } else {
       void desk.insertHttpListener(k, { bind: b, port: n, pool, ...(hostList === undefined ? {} : { hosts: hostList }) }, opts, allow).then(after(resourcePath('listener', k)));
     }
@@ -72,6 +77,8 @@
       </FormRow>
     {/if}
   </FormSection>
+
+  {#if tls}<HttpRedirectField bind:on={redirectOn} bind:port={redirectPort} httpsPort={port} />{/if}
 
   <SourceAllowSection bind:value={allow} {port} http />
   <ListenerOptions bind:value={opts} />

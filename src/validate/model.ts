@@ -11,6 +11,7 @@
  * 여기서는 오류를 **모아서** 반환한다 (`plan` 이 한 번에 보여줘야 하므로). 렌더러는 하나라도
  * 있으면 던진다 — fail closed.
  */
+import { redirectListenerOf } from '../model/redirect.js';
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
 import { compileHostRoutes, planStrictPriority, type RouteInput } from '../route/compile.js';
 
@@ -173,9 +174,10 @@ function socketSharing(a: RawListener, b: RawListener): { ok: true } | { ok: fal
  *   · 호스트 리스너의 라우트는 그 리스너의 호스트 안에서만
  *   · 호스트 리스너만 있는 HTTPS 소켓은 엔진이 `ssl_reject_handshake` 를 해야 한다
  */
-function vhostIssues(model: RawModel, caps: ValidationCapabilities): ModelIssue[] {
+function vhostIssues(model: RawModel, caps: ValidationCapabilities, redirects: readonly RawListener[] = []): ModelIssue[] {
   const out: ModelIssue[] = [];
-  const http = model.listeners.filter((l) => l.enabled && (l.protocol === 'http' || l.protocol === 'https'));
+  // 리다이렉트 소켓은 소켓 묶음에만 든다 — 호스트 모양은 그 HTTPS 리스너에서 이미 봤다.
+  const http = [...model.listeners, ...redirects].filter((l) => l.enabled && (l.protocol === 'http' || l.protocol === 'https'));
   const lower = (h: string): string => h.toLowerCase();
 
   for (const l of model.listeners) {
@@ -504,8 +506,18 @@ export function validateModel(
     }
   }
 
+  // **HTTPS 리스너의 평문 리다이렉트 소켓도 소켓이다** (2026-10-31). 리스너처럼 예약하고, 아래 공유 · 호스트
+  // 검사도 같이 받는다 — 같은 포트의 다른 HTTP 리스너와 호스트 리스너 규칙대로 나눠 쓴다.
+  const redirects: RawListener[] = [];
+  for (const l of model.listeners) {
+    const r = redirectListenerOf(l);
+    if (r === undefined || !l.enabled || !normalizeBind(l.bind).ok) continue;
+    redirects.push(r);
+    reservations.push({ key: r.key, protocol: 'http', bind: r.bind, port: r.port });
+  }
+
   // **호스트 리스너는 소켓을 함께 쓴다** (ADR-VHOST). 그 외의 겹침은 전처럼 충돌이다.
-  const sockListener = new Map(model.listeners.map((l) => [l.key, l]));
+  const sockListener = new Map([...model.listeners, ...redirects].map((l) => [l.key, l]));
   for (const c of findSocketConflicts(reservations)) {
     const a = sockListener.get(c.a);
     const b = sockListener.get(c.b);
@@ -516,7 +528,7 @@ export function validateModel(
       message: share.why === undefined ? c.reason : `${c.reason} — ${share.why}`,
     });
   }
-  issues.push(...vhostIssues(model, caps));
+  issues.push(...vhostIssues(model, caps, redirects));
 
   // ── stream 에서 PROXY 를 받으려면 stream_realip 이 있어야 한다 (§4.7 · §7.6 · E63) ──
   //

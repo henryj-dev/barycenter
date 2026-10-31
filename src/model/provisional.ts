@@ -292,7 +292,8 @@ export type RawListener = ListenerBase & {
   tls?: RawTlsBinding;
   http2?: boolean;
   /** ADR-VHOST — http · https 에만 있다(해독기가 막는다). */
-  hosts?: string[];
+  hosts?: string[];  /** https 에만 있다(해독기가 막는다). */
+  httpRedirect?: { port: number };
 };
 
 /** 검증 전. `https` 가 아닌 리스너에 붙어 있을 수 있으므로 검증기가 막는다. */
@@ -342,6 +343,15 @@ export type HttpsListener = ListenerBase & {
    * 조용히 넘어가지만, 그건 `/api/v1/status` 의 capability 로 보인다.
    */
   http2?: boolean;
+  /**
+   * **평문으로 오면 HTTPS 로 보낸다** (2026-10-31). 있으면 같은 바인드의 이 포트(보통 80)에 평문 server 를
+   * 세우고 `301 https://$host$request_uri` 로 돌려보낸다. 호스트 · 출발지 제한은 이 리스너의 것을 따른다.
+   * ACME 확인 경로는 리다이렉트보다 앞서 그대로 답한다 — http-01 은 평문 80 으로 온다.
+   *
+   * 그 평문 소켓은 **리스너처럼 검증된다**(`src/model/redirect.ts`): 같은 포트의 다른 HTTP 리스너와는
+   * 호스트 리스너 규칙대로 나눠 쓰고, 겹치면 `socket_conflict` · `host_conflict` 다.
+   */
+  httpRedirect?: { port: number };
 };
 
 export type PassthroughListener = ListenerBase & {

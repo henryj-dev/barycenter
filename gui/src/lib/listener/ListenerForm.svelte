@@ -14,6 +14,7 @@
   import { after } from '#lib/after';
   import SourceAllowSection from '#lib/forms/SourceAllowSection.svelte';
   import ListenerHostsSection from '#lib/forms/ListenerHostsSection.svelte';
+  import HttpRedirectField from '#lib/forms/HttpRedirectField.svelte';
   import { bindHelp, filled, hostLine, portError } from '#lib/forms/checks';
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
@@ -37,6 +38,8 @@
   let allow = $state('');
   let hosts = $state('');
   let action = $state('');
+  let redirectOn = $state(false);
+  let redirectPort = $state('80');
   let problem = $state<string | undefined>();
   let loaded = $state<string | undefined>();
 
@@ -48,6 +51,9 @@
     enabled = model['enabled'] !== false;
     allow = Array.isArray(model['sourceAllow']) ? (model['sourceAllow'] as string[]).join('\n') : '';
     hosts = Array.isArray(model['hosts']) ? (model['hosts'] as string[]).join('\n') : '';
+    const rd = model['httpRedirect'] as { port?: unknown } | undefined;
+    redirectOn = rd !== undefined;
+    redirectPort = rd?.port === undefined ? '80' : String(rd.port);
     const http = model['http'] as { defaultAction?: unknown } | undefined;
     const da = isHttp ? http?.defaultAction : model['defaultPool'] === undefined ? undefined : { pool: model['defaultPool'] };
     action = typeof da === 'object' && da !== null ? String((da as { pool: unknown }).pool) : '';
@@ -56,7 +62,8 @@
 
   const hostList = $derived(parseListenerHosts(hosts) ?? []);
   const hostsOk = $derived(hostList.every((h) => hostLine(h) === undefined));
-  const ready = $derived(filled(bind) && filled(port, portError) && (!hasPool || isHttp || action !== '') && hostsOk);
+  const redirectOk = $derived(protocol !== 'https' || !redirectOn || (filled(redirectPort, portError) && redirectPort.trim() !== port.trim()));
+  const ready = $derived(filled(bind) && filled(port, portError) && (!hasPool || isHttp || action !== '') && hostsOk && redirectOk);
   const save = (): void => {
     if (!ready || desk.editing) return;
     problem = undefined;
@@ -70,6 +77,8 @@
         ...(hasPool ? { defaultAction: action === '' ? 'reject' as const : { pool: action } } : {}),
         // http · https 만 호스트를 가진다. 빈 목록이면 호스트를 지운다 — 그 포트의 기본 리스너가 된다.
         ...(isHttp ? { hosts: hostList } : {}),
+        // https 만. 끄면 리다이렉트를 지운다.
+        ...(protocol === 'https' ? { httpRedirect: redirectOn ? { port: Number(redirectPort) } : null } : {}),
       };
     } catch (e) {
       problem = e instanceof Error ? e.message : String(e);
@@ -92,6 +101,7 @@
         <FormRow label="활성화" help="끄면 소켓을 열지 않아요."><Switch bind:checked={enabled}>켜짐</Switch></FormRow>
       </FormSection>
       {#if isHttp}<ListenerHostsSection bind:value={hosts} />{/if}
+      {#if protocol === 'https'}<HttpRedirectField bind:on={redirectOn} bind:port={redirectPort} httpsPort={port} />{/if}
       {#if hasPool}
         <FormSection title="동작">
           <FormRow label="기본 동작" required>

@@ -27,6 +27,7 @@
  */
 import type { Model } from '../model/provisional.js';
 import { transportsOf, type Transport } from '../validate/sockets.js';
+import { withRedirectListeners } from '../model/redirect.js';
 
 export type SocketRow = {
   listener: string;
@@ -40,7 +41,8 @@ export type SocketRow = {
 /** 결정적 순서 — 배포 산출물의 diff 가 흔들리면 안 된다. */
 export function socketRows(model: Model): SocketRow[] {
   const rows: SocketRow[] = [];
-  for (const l of model.listeners) {
+  // 리다이렉트 소켓(HTTPS 의 평문 포트)도 열어야 할 소켓이다 — 배포 · 방화벽이 이 목록을 본다.
+  for (const l of withRedirectListeners(model.listeners)) {
     for (const transport of transportsOf(l.protocol)) {
       rows.push({
         listener: l.key,

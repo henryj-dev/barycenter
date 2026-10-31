@@ -739,7 +739,7 @@ export function createDesk(scope?: { api(path: string): string }) {
 
   const insertHttpsListener = async (
     key: string,
-    body: { bind: string; port: number; pool: string; policy: string; certificate: string; hosts?: string[] },
+    body: { bind: string; port: number; pool: string; policy: string; certificate: string; hosts?: string[]; httpRedirect?: { port: number } },
     opts?: ListenerOptionFlags,
     allow?: string,
   ): Promise<boolean> => {
