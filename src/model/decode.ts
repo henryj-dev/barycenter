@@ -518,6 +518,18 @@ function decodeInboundRealIpHeader(
  * 리스너의 호스트 이름 (ADR-VHOST). **비어 있을 수 없다** — 호스트 없는 리스너는 `hosts` 를 안 적는다.
  * 모양(정확 · `*.` 와일드카드)은 검증기가 라우트 호스트와 같은 파서로 본다 — 해독은 문자열 목록만.
  */
+/** HTTPS 리스너의 평문 리다이렉트 — 포트 하나. */
+function decodeHttpRedirect(iss: Issues, v: unknown, path: string): { port: number } | undefined {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    iss.add('invalid_type', path, '객체여야 한다 — 예: { "port": 80 }');
+    return undefined;
+  }
+  const o = v as Record<string, unknown>;
+  noExtraKeys(iss, o, path, ['port']);
+  const port = required(iss, o, 'port', path, () => int(iss, o['port'], `${path}.port`, 1, 65535));
+  return port === undefined ? undefined : { port };
+}
+
 function decodeListenerHosts(iss: Issues, v: unknown, path: string): string[] | undefined {
   const items = arrayOf(iss, v, path, (h, at) => str(iss, h, at));
   if (Array.isArray(v) && v.length === 0) {
@@ -586,7 +598,8 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
       };
     }
     case 'https': {
-      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http', 'tls', 'http2', 'hosts']);
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http', 'tls', 'http2', 'hosts', 'httpRedirect']);
+      const redirect = optional(v['httpRedirect'], () => decodeHttpRedirect(iss, v['httpRedirect'], `${path}.httpRedirect`));
       const hosts = optional(v['hosts'], () => decodeListenerHosts(iss, v['hosts'], `${path}.hosts`));
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
       const realIp = optional(v['realIpFromHeader'], () => decodeInboundRealIpHeader(iss, v['realIpFromHeader'], `${path}.realIpFromHeader`));
@@ -603,6 +616,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
         ...(http === undefined ? {} : { http }),
         ...(http2 === undefined ? {} : { http2 }),
         ...(hosts === undefined ? {} : { hosts }),
+        ...(redirect === undefined ? {} : { httpRedirect: redirect }),
       };
     }
     case 'tls_passthrough': {

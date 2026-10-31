@@ -133,6 +133,8 @@ export function detailOfListener(m: Readonly<Record<string, unknown>>): Listener
     add('TLS 정책', typeof tls['policy'] === 'string' ? tls['policy'] : undefined);
     add('기본 인증서', typeof tls['defaultCertificate'] === 'string' ? tls['defaultCertificate'] : undefined);
     add('HTTP/2', m['http2'] === true ? '켜짐' : '꺼짐');
+    const rd = typeof m['httpRedirect'] === 'object' && m['httpRedirect'] !== null ? m['httpRedirect'] as { port?: unknown } : undefined;
+    add('HTTP 리다이렉트', rd === undefined ? '꺼짐' : `켜짐 — :${String(rd.port)} 의 평문 요청을 HTTPS 로 301`);
   }
   if (protocol === 'tcp' || protocol === 'udp') {
     add('기본 풀', typeof m['defaultPool'] === 'string' ? m['defaultPool'] : undefined);

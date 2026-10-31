@@ -491,6 +491,8 @@ export type PutHttpsListenerOp = {
     enabled: true;
     sourceAllow?: string[];
     hosts?: string[];
+    /** 평문으로 오면 HTTPS 로 보낸다 (2026-10-31). */
+    httpRedirect?: { port: number };
     http: {
       /** URL 프록시가 라우트를 만들 때만 'reject' (#112·#116). */
       defaultAction: { pool: string } | 'reject';
@@ -504,6 +506,17 @@ export type PutHttpsListenerOp = {
 };
 
 /**
+ * HTTPS 리스너의 평문 리다이렉트 (2026-10-31). 있으면 같은 바인드의 이 포트에 평문 server 를 세우고
+ * `301 https://…` 로 보낸다. 소켓 충돌은 검증기가 본다 — 여기서는 모양만 본다.
+ */
+export type HttpRedirectInput = { httpRedirect?: { port: number } };
+export function checkRedirectPort(port: number | undefined, httpsPort: number): void {
+  if (port === undefined) return;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('리다이렉트 포트가 1–65535 정수가 아니다');
+  if (port === httpsPort) throw new Error('리다이렉트 포트가 HTTPS 포트와 같다 — 한 포트에 평문과 TLS 를 함께 못 연다');
+}
+
+/**
  * HTTPS. tls.policy 와 tls.defaultCertificate 가 필수다.
  * 자료 없는 인증서는 검증기가 막는다 — 여기서 자료를 지어내지 않는다.
  * http2 는 안 적는다 (기본이 켠다).
@@ -511,8 +524,9 @@ export type PutHttpsListenerOp = {
 export function putHttpsListenerPatch(
   key: string,
   body: { bind: string; port: number; pool: string; policy: string; certificate: string } & SourceAllowInput
-    & ListenerOptions & HostsInput,
+    & ListenerOptions & HostsInput & HttpRedirectInput,
 ): PutHttpsListenerOp[] {
+  checkRedirectPort(body.httpRedirect?.port, body.port);
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
   if (body.pool === '') throw new Error('풀이 비어 있다');
@@ -532,6 +546,7 @@ export function putHttpsListenerPatch(
       enabled: true,
       ...sourceAllowField(body.sourceAllow),
       ...hostsField(body.hosts),
+      ...(body.httpRedirect === undefined ? {} : { httpRedirect: { port: body.httpRedirect.port } }),
       http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
       tls: { policy: body.policy, defaultCertificate: body.certificate },
     },
@@ -1254,6 +1269,8 @@ export type ListenerEdit = {
   defaultAction?: { pool: string } | 'reject';
   /** http · https 만. undefined = 그대로 둔다. 빈 배열 = 호스트를 지운다(그 소켓의 기본 리스너가 된다). */
   hosts?: string[];
+  /** https 만. undefined = 그대로 둔다. null = 리다이렉트를 끈다. */
+  httpRedirect?: { port: number } | null;
 };
 
 export type PutListenerOp = {
@@ -1280,6 +1297,15 @@ export function editListenerPatch(current: Readonly<Record<string, unknown>>, ed
     if (protocol !== 'http' && protocol !== 'https') throw new Error(`${protocol} 리스너에는 호스트가 없다 — 포트로만 가른다`);
     if (edit.hosts.length === 0) delete body['hosts'];
     else body['hosts'] = [...edit.hosts];
+  }
+
+  if (edit.httpRedirect !== undefined) {
+    if (protocol !== 'https') throw new Error(`${protocol} 리스너에는 HTTP 리다이렉트가 없다 — HTTPS 리스너만 평문을 HTTPS 로 보낸다`);
+    if (edit.httpRedirect === null) delete body['httpRedirect'];
+    else {
+      checkRedirectPort(edit.httpRedirect.port, edit.port);
+      body['httpRedirect'] = { port: edit.httpRedirect.port };
+    }
   }
 
   const action = edit.defaultAction;

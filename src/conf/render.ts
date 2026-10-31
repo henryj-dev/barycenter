@@ -28,6 +28,7 @@ import { coversHost, parseHostPattern } from '../validate/strings.js';
 import { parseRef } from '../dp/secrets.js';
 import { ModelValidationError, validateModel } from '../validate/model.js';
 import { expandAddressSets } from '../model/address-sets.js';
+import { redirectListenerOf } from '../model/redirect.js';
 import { decodeModel } from '../model/decode.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
@@ -1272,12 +1273,22 @@ const withHttp2 = (tls: TlsContext, body: ConfNode[]): ConfNode[] => [
  * 리스너 기본 동작의 `location /` — 기본 풀로 보내거나 444 로 끊는다. `default_server` 와 호스트 리스너의
  * server 블록(ADR-VHOST)이 같이 쓴다. 한 벌이어야 두 자리가 갈리지 않는다.
  */
+/** 리다이렉트 소켓 → 보낼 HTTPS 포트. 렌더 한 번 안에서만 산다 — 모델에는 리다이렉트 소켓이 없다. */
+const REDIRECT_TO = new WeakMap<HttpListener | HttpsListener, number>();
+
 function defaultActionLocations(
   listener: HttpListener | HttpsListener,
   poolsWithBackends: Set<string>,
   pools: Map<string, Pool>,
   certs: Map<string, Certificate>,
 ): ConfNode[] {
+  // **평문 → HTTPS** (2026-10-31). `$host` 는 요청의 이름 그대로다(포트를 뺀다). 443 이 아니면 포트를 붙인다.
+  // `location /` 안에 둔다 — 아래 444 와 같은 이유로, ACME 확인 경로(`^~` 더 긴 접두사)가 먼저 답한다.
+  const httpsPort = REDIRECT_TO.get(listener);
+  if (httpsPort !== undefined) {
+    const target = httpsPort === 443 ? 'https://$host$request_uri' : `https://$host:${httpsPort}$request_uri`;
+    return [block('location', [lit('/')], [directive('return', [num(301), lit(target)])])];
+  }
   const action = listener.http?.defaultAction ?? 'reject';
   const defaultPoolTls = action === 'reject' ? undefined : pools.get(action.pool)?.upstreamTls;
   const defaultCerts = certs;
@@ -1612,9 +1623,18 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
    */
   // **https 도 http 블록에서 산다.** TLS 종단은 stream 이 아니라 http 의 일이다 —
   // `tls_passthrough` 만 stream 이고, 그쪽은 인증서를 제시하지 않는다 (§4.6).
-  const httpListeners = listeners.filter(
+  const httpListeners: (HttpListener | HttpsListener)[] = listeners.filter(
     (l): l is HttpListener | HttpsListener => l.protocol === 'http' || l.protocol === 'https',
   );
+  // **평문 리다이렉트 소켓** (2026-10-31). HTTPS 리스너가 `httpRedirect` 를 달면 그 포트에 평문 server 를
+  // 세운다. 다른 HTTP 리스너와 똑같이 렌더하고, 기본 동작만 리다이렉트로 바꿔 낸다(`defaultActionLocations`).
+  for (const l of [...httpListeners]) {
+    const r = l.protocol === 'https' ? redirectListenerOf(l) : undefined;
+    if (r === undefined) continue;
+    REDIRECT_TO.set(r, l.port);
+    httpListeners.push(r);
+  }
+  httpListeners.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   const streamListeners = listeners.filter(
     (l): l is PassthroughListener | TcpListener | UdpListener =>
       l.protocol !== 'http' && l.protocol !== 'https',
