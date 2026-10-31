@@ -792,6 +792,15 @@ const ROUTES: Route[] = [
     json(c.res, 200, out);
   }),
 
+  // **실패한 head 를 다시 적용한다** (2026-11-01). 같은 리비전의 새 plan 을 만들어 바로 적용한다 — 실패한 plan 은
+  // 멱등이라 다시 부르면 그 실패를 그대로 돌려준다. 다시 시도할 것이 없으면 409 다.
+  route('POST', '/api/v1/apply/retry', 'apply', async (c, api) => {
+    const { planId } = await api.store.replanHead(c.who.name);
+    const out = await api.control.apply(planId, c.who.name);
+    eventsOf(api).publish('apply', { planId, phase: out.phase });
+    json(c.res, 200, out);
+  }),
+
   route('GET', '/api/v1/operations/:id', 'read', async (c, api) => {
     json(c.res, 200, await api.control.operation(c.params['id'] ?? ''));
   }),

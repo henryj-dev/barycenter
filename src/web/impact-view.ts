@@ -143,10 +143,19 @@ export function viewOfImpact(pending: PendingApply, impact: Impact): ImpactView 
  */
 export function pickPending(
   pending: readonly PendingApply[],
+  /**
+   * 주면 **head 의 plan 만** 고른다 (2026-11-01). head 의 적용이 실패하면 그 plan 은 목록에서 빠지고, 남은 가장 새
+   * plan 은 head 보다 옛것이라 적용하면 언제나 `PLAN_STALE` 이었다. 그때는 아무것도 안 고르고 화면이 「다시 시도」 를 보인다.
+   */
+  head?: string,
 ): PendingApply | undefined {
   let best: PendingApply | undefined;
   for (const p of pending) {
     if (best === undefined || BigInt(p.revision) > BigInt(best.revision)) best = p;
   }
+  if (head !== undefined && best !== undefined && best.revision !== head) return undefined;
   return best;
 }
+
+/** `GET /status` 의 `failedApply` — head 의 적용이 실패했고 다시 시도할 수 있다. */
+export type FailedApply = { revision: string; planId: string; failure: string };
