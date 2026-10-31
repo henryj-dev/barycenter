@@ -917,8 +917,11 @@ export class ControlPlane {
     lastEvidence: unknown;
     unfinished: unknown;
     pendingApply: { planId: string; revision: string }[];
+    /** head 의 적용이 실패했고 다시 시도할 수 있으면 그 리비전과 이유 (`POST /apply/retry`). */
+    failedApply?: { revision: string; planId: string; failure: string };
   }> {
     const head = await this.store.head();
+    const failedApply = await this.store.failedHead();
     const st = await this.driver.status();
     // **커밋됐지만 미적용은 숨기지 않는다** (§5.3).
     const pending = await pendingApplies(this.db);
@@ -936,6 +939,7 @@ export class ControlPlane {
       lastEvidence: st.lastEvidence,
       unfinished: st.unfinished,
       pendingApply: pending,
+      ...(failedApply === undefined ? {} : { failedApply }),
     };
   }
 
