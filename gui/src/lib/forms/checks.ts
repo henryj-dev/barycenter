@@ -49,6 +49,9 @@ export const sourceAllowLine = (line: string): string | undefined => {
 export const bindHelp = (bind: string): string =>
   (bind.trim() === '0.0.0.0' ? '▲ 모든 인터페이스에 열려요. 필요한 주소만 넣어요.' : '이 주소로 들어오는 연결만 받아요.');
 
+// 바인드 선택지는 `src/web/bind.ts` 에 산다 — 서버 테스트도 같은 것을 잰다.
+export { CUSTOM_BIND, bindError, bindOptions, type BindFacts } from '@web/bind';
+
 /** 호스트 이름 한 줄(정확 · 맨 앞 `*.` 와일드카드). `ListInput` 의 `check` 로 쓴다. 최종 판정은 서버다. */
 const HOST = /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 export const hostLine = (line: string): string | undefined =>

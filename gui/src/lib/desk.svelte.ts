@@ -38,6 +38,12 @@ export type StatusSnap = {
 /**
  * @param scope 전역 모드면 읽기 경로를 고른 지역의 중계 경로로 바꾼다(`lib/global/scope`). 지역 인스턴스면 그대로다.
  */
+/** 바인드할 수 있는 주소 — `GET /api/v1/system/addresses`. */
+export type HostAddressFacts = {
+  addresses: { address: string; family: 'v4' | 'v6'; interface: string; internal: boolean }[];
+  nonlocalBind: { v4: boolean; v6: boolean };
+};
+
 /** ACME 계정 한 줄 — `GET /api/v1/acme/accounts`. */
 export type AcmeAccountRow = { id: string; key: string; directoryUrl: string; contact: string[]; registered: boolean };
 
@@ -594,6 +600,16 @@ export function createDesk(scope?: { api(path: string): string }) {
     const body = (await r.json()) as { accounts?: AcmeAccountRow[] };
     return body.accounts ?? [];
   };
+  /**
+   * 이 서버에 할당된 IP — 바인드 선택이 읽는다(2026-10-31). 못 읽거나 서버가 모르면 undefined —
+   * 그러면 바인드를 손으로 받는다.
+   */
+  const hostAddresses = async (): Promise<HostAddressFacts | undefined> => {
+    const r = await fetch(api('/api/v1/system/addresses'), { headers: auth() });
+    if (!r.ok) return undefined;
+    const body = (await r.json()) as HostAddressFacts & { available?: boolean };
+    return body.available === true ? { addresses: body.addresses, nonlocalBind: body.nonlocalBind } : undefined;
+  };
   const createAcmeAccount = async (input: { key: string; directoryUrl: string; contact: string[] }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -987,6 +1003,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     updateListener,
     putResource,
     acmeAccounts,
+    hostAddresses,
     createAcmeAccount,
     historyOf,
     revisions,

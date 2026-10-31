@@ -65,6 +65,7 @@ import { log } from '../obs/log.js';
 import { count } from '../obs/metrics.js';
 import { dataplaneCapabilitiesOf } from '../engine/native-dns.js';
 import { probeEngine } from '../engine/probe.js';
+import { hostAddresses } from '../engine/host-addresses.js';
 import { renderCapsOf } from '../engine/render-caps.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
@@ -749,7 +750,8 @@ export async function main(): Promise<void> {
 
   // **사실 창구를 넘긴다** (검수 B-05). 안 넘기면 바인딩된 인증서가 그 호스트를
   // 덮는지 아무도 안 본다 — `certCoversHost` 가 구현돼 있는데 호출자가 없었다.
-  const store = new ConfigStore(db, renderCaps, secrets);
+  // 바인드는 이 서버에 할당된 주소여야 한다 — 데몬과 nginx 는 같은 호스트(같은 네트워크 이름공간)에 있다.
+  const store = new ConfigStore(db, renderCaps, secrets, hostAddresses);
 
   /**
    * DP 쪽 부작용. **`bary-dp-agent` 와 같은 팩토리를 쓴다** — 둘이 각자 만들면
@@ -1125,7 +1127,7 @@ export async function main(): Promise<void> {
     tidyAccounts(accounts);
   }
   const apiOpts = {
-    db, store, control, auth, election, secrets, events,
+    db, store, control, auth, election, secrets, events, hostAddresses,
     // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.
     ...(clusterOn ? { cluster: { node: nodeName, staleAfterMs: clusterSyncMs * 5 } } : {}),
     ...(accounts === undefined ? {} : { accounts }),
