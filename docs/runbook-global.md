@@ -45,11 +45,26 @@ env (지역 `/etc/barycenter/env` 에 더한다):
 | `BARY_GLOBAL_HOST` | 전역 화면의 호스트 이름(`barycenter.tinyuniver.se`, 포트 없이) |
 | `BARY_GLOBAL_REGIONS` | 위 파일. 자기 지역도 넣고 HTTPS 로 읽는다(auditor 토큰) |
 | `BARY_OIDC_*` | 그대로. 전역 화면은 redirect URI 의 호스트만 `BARY_GLOBAL_HOST` 로 바꾼다 — IdP 에 두 주소를 다 등록한다 |
+| `BARY_SESSION_DOMAIN` | 로그인 세션을 함께 쓸 도메인(`barycenter.tinyuniver.se`). 아래 「로그인 세션 공유」 |
 
 `BARY_GLOBAL_HOST` 와 `BARY_GLOBAL_REGIONS` 는 짝이다. 하나만 있으면 기동을 거부한다. 새로 깔 때는
 `deploy/install.sh … --env BARY_GLOBAL_HOST=… --env BARY_GLOBAL_REGIONS=…` 로 준다. 이미 깔렸으면 env 에 줄을 더하고
 `systemctl restart barycenterd` — 설치를 다시 돌려도 그 줄은 남는다. 지역 목록·토큰 파일은 서비스 유저(`bary`)가
 읽을 수 있어야 한다(`root:bary 0640`). 설치 하네스의 `global` 판이 이 길을 실물로 잰다.
+
+## 로그인 세션 공유
+
+전역과 지역은 **같은 계정 PG**(`BARY_ACCOUNTS_DSN`)를 본다. 그리고 `BARY_SESSION_DOMAIN=barycenter.tinyuniver.se` 를 주면
+그 도메인 아래로 들어온 로그인이 `__Secure-bary_sid; Domain=barycenter.tinyuniver.se` 쿠키를 받는다. 전역에서 지역 화면으로,
+지역에서 전역으로 옮겨도 다시 로그인하지 않는다. 어느 쪽에서 로그아웃해도 그 세션은 모든 화면에서 끝난다.
+
+- 도메인 밖(IP · `:8443` 직접)으로 들어오면 지금처럼 그 호스트만 쓰는 `__Host-bary_sid` 다. 브라우저는 IP 에 Domain 쿠키를
+  받지 않는다.
+- 켜기 전의 `__Host-` 쿠키도 계속 읽는다. 켜는 순간 로그인이 끊기지 않는다. 다음 로그인부터 도메인 쿠키로 바뀐다.
+- API TLS 를 켠 서버에서만 쓴다(`__Secure-`). TLS 가 없으면 기동을 거부한다. 점이 하나뿐인 도메인(`tinyuniver.se`)도 거부한다.
+- **그 도메인 아래에는 barycenter 화면만 둔다.** 그 아래 호스트는 모두 이 쿠키를 받고, 같은 이름의 쿠키를 심을 수도 있다.
+  다른 서비스(데이터 플레인의 공개 사이트 등)를 `*.barycenter.tinyuniver.se` 에 열지 않는다. 와일드카드 DNS 도 두지 않는다.
+- 쓰기의 CSRF 검사(`Origin` 이 그 요청의 `Host` 와 같아야 한다)는 그대로다. 화면마다 자기 호스트로 쓴다.
 
 ## 주소 · 인증서 · DNS
 

@@ -503,6 +503,9 @@ async function listenApi(
   if (exposureError !== undefined) throw new Error(exposureError);
   apiOpts.plaintextExposed = plaintextExposed;
   apiOpts.sessionSecure = tlsOn;
+  if ((apiOpts as { sessionDomain?: string }).sessionDomain !== undefined && !tlsOn) {
+    throw new Error('BARY_SESSION_DOMAIN 은 API TLS(BARY_TLS_CERT_FILE · BARY_TLS_KEY_FILE)를 켰을 때만 쓴다 — 도메인 쿠키는 __Secure- 다');
+  }
   const trustedRaw = env('BARY_TRUSTED_PROXIES', '');
   const trustedProxies = parseTrustedProxies(trustedRaw);
   if (trustedProxies !== undefined) apiOpts.trustedProxies = trustedProxies;
@@ -589,6 +592,23 @@ export function hostDispatchFromEnv(source: NodeJS.ProcessEnv = process.env, own
       globalSurface: { host, relay: new RegionRelay(loadRegistry(regions), ownCommit === undefined ? {} : { ownCommit }) },
     }),
   };
+}
+
+/**
+ * **계정 세션 쿠키를 함께 쓸 도메인** (`BARY_SESSION_DOMAIN`, 2026-11-01). 전역(`barycenter.tinyuniver.se`)과 지역
+ * (`util-icn-vtr.barycenter.tinyuniver.se`) 사이를 오가도 로그인이 유지된다. 앞의 점은 떼고 받는다. 점이 하나뿐인 이름
+ * (`tinyuniver.se` 같은 등록 도메인 바로 위)은 받지 않는다 — 그 아래 모든 사이트가 세션을 받는다.
+ */
+export function sessionDomainFromEnv(source: NodeJS.ProcessEnv = process.env): { sessionDomain?: string } {
+  const d = (source['BARY_SESSION_DOMAIN'] ?? '').trim().toLowerCase().replace(/^\./, '').replace(/\.$/, '');
+  if (d === '') return {};
+  if (d.includes(':') || d.includes('/') || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d)) {
+    throw new Error(`BARY_SESSION_DOMAIN 은 도메인 이름만 적는다 (포트 · 경로 없이): ${d}`);
+  }
+  if (d.split('.').length < 3) {
+    throw new Error(`BARY_SESSION_DOMAIN '${d}' 이 너무 넓다 — 그 아래 모든 사이트가 로그인 세션을 받는다. barycenter 화면만 있는 도메인을 준다`);
+  }
+  return { sessionDomain: d };
 }
 
 export async function main(): Promise<void> {
@@ -1127,6 +1147,7 @@ export async function main(): Promise<void> {
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
     ...dispatch,
+    ...sessionDomainFromEnv(),
     // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.
     ...(clusterOn ? { cluster: { node: nodeName, staleAfterMs: clusterSyncMs * 5 } } : {}),
     ...(accounts === undefined ? {} : { accounts }),
