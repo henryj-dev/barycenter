@@ -2011,6 +2011,26 @@ async function handle(
   }
   const who = bearer ?? session ?? principalFromClientCert(peerCertOf(req), api.auth);
   if (who === undefined) {
+    /**
+     * **자격을 아예 안 보낸 요청은 실패로 세지 않는다** (2026-11-01, web-01). 로그인 화면은 로그아웃 상태에서
+     * `/api/v1/me` 를 부른다. 그것까지 세면 새로고침 몇 번에 그 출처가 429 로 잠겼다. 맞혀 볼 값이 없는 요청은
+     * 무차별 대입이 아니다. 틀린 토큰 · 낡은 세션 쿠키 · 매핑 없는 인증서는 전처럼 센다.
+     */
+    const sid = cookieValue(req.headers.cookie, accountCookie(api));
+    const oidc = cookieValue(req.headers.cookie, SESSION_COOKIE);
+    const presented = (req.headers.authorization ?? '') !== '' || (sid ?? '') !== '' || (oidc ?? '') !== ''
+      || peerCertOf(req) !== undefined;
+    if (!presented) {
+      json(res, 401, { code: 'unauthenticated', message: 'Bearer 토큰이나 클라이언트 인증서가 필요하다' },
+        { 'www-authenticate': 'Bearer' });
+      return;
+    }
+    // 낡은 세션 쿠키는 지운다. 남겨 두면 로그인 화면이 새로고침마다 그것을 다시 보내 실패로 세어진다.
+    const stale = [
+      ...((sid ?? '') !== '' ? [expiredCookie(accountCookie(api), api.sessionSecure === true)] : []),
+      ...((oidc ?? '') !== '' ? [expiredCookie(SESSION_COOKIE, api.sessionSecure === true)] : []),
+    ];
+    if (stale.length > 0) res.setHeader('set-cookie', stale);
     const key = req.socket.remoteAddress ?? 'unknown';
     count('bary_auth_failures_total');
     const retryAfter = authFailures.record(key);
