@@ -3,9 +3,9 @@
 > 설계: `docs/design-global-mode.md`(#74). 전역은 지역들을 **읽기 전용**으로 모아 보이는 `barycenterd` 다 —
 > 설정 PG·데이터 플레인·리더가 없고, 사람 계정은 지역과 같은 공용 계정 PG 를 쓴다.
 
-> ⚠️ **2026-11-01 부터 전역은 지역 `barycenterd` 안에서 Host 로 고른다** (`docs/adr-host-dispatch.md`). 지역 env 에
-> `BARY_GLOBAL_HOST` · `BARY_GLOBAL_REGIONS` · `BARY_REGION` 을 준다. 아래의 별도 전역 서비스(`--mode global`, 9443)는
-> 3 단계에서 걷는다. 지역 목록 파일의 모양과 auditor 토큰 준비는 그대로다.
+> **전역은 별도 서비스가 아니다** (2026-11-01, `docs/adr-host-dispatch.md`). 지역 `barycenterd` 가 들어온 Host 로
+> 고른다 — `BARY_GLOBAL_HOST` 로 오면 전역, 나머지(지역 이름 · IP)는 지역이다. 옛 `--mode global` · `barycenter-global` ·
+> 9443 은 걷었다. 옛 env 에 `BARY_MODE=global` 이 남아 있으면 기동을 거부한다.
 
 ## 지역 쪽 준비 (지역마다)
 
@@ -37,58 +37,37 @@
   데이터 플레인(공개 사이트)이다. Cloudflare 앞단을 쓰는 데이터 플레인은 Origin Pull 클라이언트 인증서를 요구하므로
   브라우저에서는 `ERR_BAD_SSL_CLIENT_AUTH_CERT` 로 거절된다 — 고장이 아니라 다른 문으로 간 것이다.
 
-env:
+env (지역 `/etc/barycenter/env` 에 더한다):
 
 | | |
 |---|---|
-| `BARY_MODE=global` | 전역으로 뜬다 |
-| `BARY_GLOBAL_REGIONS` | 위 파일 |
-| `BARY_ACCOUNTS_DSN`·`BARY_ACCOUNTS_KEK` | 지역과 **같은** 공용 계정 PG·키 |
-| `BARY_LISTEN`·`BARY_TLS_*` | 메시 주소, TLS |
-| `BARY_OIDC_*` | 지역과 같은 OIDC 클라이언트, redirect URI 는 `https://barycenter.tinyuniver.se:9443/login` |
+| `BARY_REGION` | 이 지역의 이름(`util-icn-vtr`). 전역이 목록의 이름과 맞춰 본다 |
+| `BARY_GLOBAL_HOST` | 전역 화면의 호스트 이름(`barycenter.tinyuniver.se`, 포트 없이) |
+| `BARY_GLOBAL_REGIONS` | 위 파일. 자기 지역도 넣고 HTTPS 로 읽는다(auditor 토큰) |
+| `BARY_OIDC_*` | 그대로. 전역 화면은 redirect URI 의 호스트만 `BARY_GLOBAL_HOST` 로 바꾼다 — IdP 에 두 주소를 다 등록한다 |
 
-`BARY_DSN`·`BARY_DP_REMOTE_URL`·`BARY_SECRET_BACKEND`·`BARY_DRIVER` 가 있으면 **기동 거부**(전역은 안 쓴다).
-
-설치:
-
-```sh
-sudo deploy/install.sh --mode global --regions /etc/barycenter-global/regions.json \
-  --accounts-dsn 'postgres://…/bary_accounts' --env BARY_ACCOUNTS_KEK='<지역과 같은 값>' \
-  --listen <메시 주소>:9443 --tls-cert … --tls-key …
-```
-
-**지역 호스트에 함께 깐다**(2026-10-19 사용자 결정). 전역은 지역과 **다른 서비스·자리·포트**를 쓴다:
-
-| | 지역 | 전역 |
-|---|---|---|
-| 서비스 | `barycenterd` | `barycenter-global` |
-| 설정·앱 | `/etc/barycenter` · `/opt/barycenter` | `/etc/barycenter-global` · `/opt/barycenter-global` |
-| 메시 포트 | 8443 | **9443** (모든 전역이 같은 포트 — DNS 다중 A 는 포트를 싣지 않는다) |
-| 루프백 기본 | 127.0.0.1:8088 | 127.0.0.1:9088 |
-| 인증서 | `*.barycenter.tinyuniver.se` | `*.tinyuniver.se`(barycenter.tinyuniver.se 포함) |
-
-- 지역의 재시작·재설치는 전역 프로세스를 건드리지 않고, 전역을 내려도 지역 엔진은 산다(설치 하네스 `global` 판이 잰다).
-- 전역은 자기 리스너로 TLS 를 끝낸다 — **데이터 플레인 엔진(OpenResty)을 거치지 않는다.** 관리 화면이 자기가 관리하는
-  엔진에 기대면, 엔진 설정이 틀어졌을 때 고칠 화면까지 사라진다. 같은 8443 을 SNI 로 나누지 않는 이유다.
-- 같은 호스트의 지역도 **메시 이름**(`https://<지역>.barycenter.tinyuniver.se:8443`)으로 부른다 — 루프백은 인증서 이름이
-  안 맞는다. 다른 지역과 같은 길이다.
-- 두 인증서 모두 `systemctl reload barycenterd` / `systemctl reload barycenter-global` 로 재시작 없이 다시 읽는다(아래 「인증서 갱신」).
-- ⚠️ **지역이 하나인 동안은 그 호스트가 죽으면 전역도 함께 죽는다**(지금 dev-icn-vtr·web-01). 지역이 둘 이상이 되면
-  각 지역 호스트의 전역이 서로를 받친다. 프로세스 장애는 서로 영향이 없고, 호스트 장애만 함께 간다.
-- 노출: 지역 호스트에는 이미 계정 DSN·KEK 가 있으므로, 함께 둬서 새로 늘어나는 것은 **다른 지역의 읽기 전용 auditor
-  토큰**뿐이다(사용자 판단).
-
-엔진·설정 DB 를 깔지 않고, 전역 유닛은 엔진을 띄우지 않는다. 계정을 켜면 KEK 는 **지역과 같은 값을 직접** 줘야 한다
-(새로 만들면 지역에서 등록한 인증 앱을 못 연다 — 설치가 거부한다). 지역 목록·토큰 파일은 서비스 유저(`bary`)가
+`BARY_GLOBAL_HOST` 와 `BARY_GLOBAL_REGIONS` 는 짝이다. 하나만 있으면 기동을 거부한다. 새로 깔 때는
+`deploy/install.sh … --env BARY_GLOBAL_HOST=… --env BARY_GLOBAL_REGIONS=…` 로 준다. 이미 깔렸으면 env 에 줄을 더하고
+`systemctl restart barycenterd` — 설치를 다시 돌려도 그 줄은 남는다. 지역 목록·토큰 파일은 서비스 유저(`bary`)가
 읽을 수 있어야 한다(`root:bary 0640`). 설치 하네스의 `global` 판이 이 길을 실물로 잰다.
 
-## 여러 전역 + DNS
+## 주소 · 인증서 · DNS
 
-- 지역 호스트마다 전역 하나(위 표 — 별도 프로세스·포트, 데이터 플레인 엔진을 거치지 않는다). 메시 내부 DNS 에
-  `barycenter.tinyuniver.se` A 레코드 여러 개, parallax 헬스체크가 `https://<노드>:9443/readyz`(SNI barycenter.tinyuniver.se)로
-  죽은 주소를 뺀다. 화면 주소는 `https://barycenter.tinyuniver.se:9443`.
+- **전역 주소는 데이터 플레인 443 으로 들어온다.** 지역 주소(`util-icn-vtr.barycenter.tinyuniver.se`)와 같은 길이다.
+  barycenter 설정에 `barycenter.tinyuniver.se` 의 인증서와 HTTPS 라우트를 더하고, 그 라우트를 관리 API(8443)
+  풀로 보낸다. nginx 가 SNI 로 이름마다 인증서를 고르고, `Host` 를 그대로 넘긴다 — 데몬은 그 Host 로 전역을 고른다.
+  `*.barycenter.tinyuniver.se` 는 `barycenter.tinyuniver.se` 를 덮지 않으므로 인증서가 따로 필요하다.
+- 앞단 nginx 의 주소는 `BARY_TRUSTED_PROXIES` 에 있어야 한다. 그래야 시도 제한 · 감사가 사람의 주소를 쓴다.
+- **엔진이 고장 나면 443 의 두 이름이 함께 안 열린다.** 그때는 관리 포트로 바로 간다:
+  `https://<지역>.barycenter.tinyuniver.se:8443` (그 인증서는 와일드카드다). 엔진을 거치지 않는 문이 남는다.
+- DNS: `barycenter.tinyuniver.se` 에 지역 서버마다 A 레코드를 하나씩 둔다(라운드로빈). 헬스체크는 없다 — 죽은 서버로
+  가면 브라우저가 다시 시도해야 한다. 세션은 공용 계정 PG 의 서버 세션이라 어느 서버로 가도 같다. 계정 PG 가 죽으면
+  사람 로그인은 503.
 - `/readyz` 는 지역 상태와 무관하게 200 이다 — 지역 하나가 죽었다고 전역이 빠지지 않는다.
-- 세션은 공용 계정 PG 의 서버 세션이라 어느 전역으로 가도 같다. 계정 PG 가 죽으면 사람 로그인은 503.
+- ⚠️ **같은 프로세스다.** 지역 `barycenterd` 가 재시작하면 그 서버의 전역 화면도 함께 내려간다. 다른 서버의 전역이
+  받친다. 지역이 하나인 동안(web-01)은 그 서버가 죽으면 전역도 죽는다.
+- 노출: 지역 서버에는 이미 계정 DSN·KEK 가 있으므로, 전역을 켜서 새로 늘어나는 것은 **다른 지역의 읽기 전용 auditor
+  토큰**뿐이다.
 
 ## 화면
 
@@ -111,7 +90,7 @@ sudo deploy/install.sh --mode global --regions /etc/barycenter-global/regions.js
 
 ## 인증서 갱신
 
-관리 포트(지역 8443·전역 9443)의 인증서(`BARY_TLS_CERT_FILE`·`BARY_TLS_KEY_FILE`)가 갱신돼 파일이 바뀌면 **`systemctl reload barycenterd`**(전역은 `barycenter-global`)
+관리 포트(8443)의 인증서(`BARY_TLS_CERT_FILE`·`BARY_TLS_KEY_FILE`)가 갱신돼 파일이 바뀌면 **`systemctl reload barycenterd`**
 (OpenRC 는 `rc-service barycenterd reload`) — SIGHUP 으로 인증서와 토큰을 다시 읽는다. 재시작이 아니라 지역의 데이터
 플레인이 끊기지 않는다. 새 연결부터 새 인증서이고, 로그에 `tls.reloaded`(새 만료 시각 `validTo`)가 남는다.
 파일이 깨졌거나 키와 짝이 안 맞으면 `tls.reload_failed` 를 남기고 **옛 인증서를 계속 쓴다** — 갱신 경로(cert-manager·반출)는

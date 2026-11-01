@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { TokenAuth, hashToken } from '../../src/api/auth.js';
 import { createApi, requestHost } from '../../src/api/server.js';
-import { hostDispatchFromEnv } from '../../src/bin/barycenterd.js';
+import { hostDispatchFromEnv, main } from '../../src/bin/barycenterd.js';
 import { RegionRelay } from '../../src/global/relay.js';
 import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
@@ -88,6 +88,18 @@ describe('hostDispatchFromEnv', () => {
     expect(d.globalSurface?.host).toBe('barycenter.tinyuniver.se');
     expect(d.globalSurface?.relay.regions.map((r) => r.name)).toEqual(['alpha']);
     d.globalSurface?.relay.close();
+  });
+});
+
+describe('별도 전역 서비스는 없다 (3 단계)', () => {
+  it('**옛 BARY_MODE=global 이면 무엇을 바꿀지 말하고 멈춘다** — 지역으로 오해해 엉뚱한 곳에서 죽지 않는다', async () => {
+    const before = process.env['BARY_MODE'];
+    process.env['BARY_MODE'] = 'global';
+    try {
+      await expect(main()).rejects.toThrow(/BARY_MODE=global 는 없어졌다 — .*BARY_GLOBAL_HOST/);
+    } finally {
+      if (before === undefined) delete process.env['BARY_MODE']; else process.env['BARY_MODE'] = before;
+    }
   });
 });
 

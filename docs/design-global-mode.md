@@ -7,6 +7,9 @@
 >
 > 요청: stardust(orc 경유). 지역 대시보드(`dev-icn-vtr.barycenter.tinyuniver.se`)와 전역
 > 대시보드(`barycenter.tinyuniver.se`)를 함께 보고 싶다.
+>
+> **2026-11-01 갱신:** 별도 전역 프로세스(`BARY_MODE=global`, `--mode global`, `barycenter-global`)는 걷었다. 전역 화면은
+> 지역 `barycenterd` 가 Host 로 고른다(`docs/adr-host-dispatch.md`). 아래의 프로세스 · 설치 서술은 그 전의 기록이다.
 
 ## 0. 한 줄
 

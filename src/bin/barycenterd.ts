@@ -566,56 +566,6 @@ async function listenApi(
 }
 
 /**
- * 전역 모드에서 **쓰지 않는** 설정. 있으면 기동을 거부한다 — 켰다고 믿는데 아무것도 안 하는 상태를 만들지
- * 않는다(설계 §2.6). 전역은 설정 DB·데이터 플레인·시크릿 저장소가 없다.
- */
-const REGION_ONLY_ENV = ['BARY_DSN', 'BARY_DP_REMOTE_URL', 'BARY_SECRET_BACKEND', 'BARY_DRIVER'] as const;
-
-/**
- * **전역 모드** (docs/design-global-mode.md). 지역 목록을 들고 지역들을 읽기 전용으로 중계한다.
- * 설정 PG·데이터 플레인·리더 선출·ACME·프로버가 없다. 사람 계정은 공용 계정 PG 로 지역과 같다.
- */
-async function mainGlobal(): Promise<void> {
-  for (const k of REGION_ONLY_ENV) {
-    if ((process.env[k] ?? '') !== '') throw new Error(`전역 모드는 ${k} 를 쓰지 않는다 — 지우거나 BARY_MODE 를 지역으로 둔다`);
-  }
-  const { host, port } = parseListen(env('BARY_LISTEN', '127.0.0.1:8088'));
-  const prefix = env('BARY_PREFIX', '/etc/barycenter');
-  const regions = loadRegistry(env('BARY_GLOBAL_REGIONS'));
-  const build = readBuildInfo(prefix);
-  const relay = new RegionRelay(regions, build?.commit === undefined ? {} : { ownCommit: build.commit });
-  const { auth, oidcRp, stopJwks } = await authFromEnv(readTimings().oidcJwksMs);
-  const serveRoot = guiRootFromEnv();
-  const accounts = await accountsFromEnv();
-  if (accounts !== undefined) tidyAccounts(accounts);
-  const apiOpts: GlobalApiOptions = {
-    global: relay, auth, build,
-    plaintextExposed: false, sessionSecure: false,
-    ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
-    ...(oidcRp === undefined ? {} : { oidcRp }),
-    ...(accounts === undefined ? {} : { accounts }),
-  };
-  const server = await listenApi(host, port, apiOpts, {
-    mode: 'global', regions: regions.map((r) => r.name), tokens: auth.size, gui: serveRoot ?? false,
-    accounts: accounts !== undefined,
-  });
-  const stop = (): void => {
-    relay.close();
-    setTimeout(() => {
-      log.warn('shutdown.deadline', { ms: SHUTDOWN_DEADLINE_MS });
-      process.exit(0);
-    }, SHUTDOWN_DEADLINE_MS).unref();
-    server.close(() => {
-      stopJwks();
-      process.exit(0);
-    });
-    server.closeAllConnections?.();
-  };
-  process.on('SIGTERM', stop);
-  process.on('SIGINT', stop);
-}
-
-/**
  * **같은 프로세스의 전역 화면** (docs/adr-host-dispatch.md). `BARY_GLOBAL_HOST` 로 들어온 요청은 전역으로 답한다.
  * 둘 중 하나만 있으면 기동을 거부한다 — 켰다고 믿는데 아무것도 안 하는 상태를 만들지 않는다.
  */
@@ -646,9 +596,14 @@ export async function main(): Promise<void> {
     await accountCli(process.argv.slice(3));
     process.exit(0);
   }
+  /**
+   * **별도 전역 서비스는 없어졌다** (docs/adr-host-dispatch.md 3 단계). 옛 env 로 뜨면 지역으로 오해하고 설정 DB 를
+   * 찾다 엉뚱한 곳에서 죽는다. 그래서 무엇을 바꾸면 되는지 말하고 멈춘다.
+   */
   const mode = env('BARY_MODE', 'region');
-  if (mode === 'global') return mainGlobal();
-  if (mode !== 'region') throw new Error(`BARY_MODE 는 region 또는 global 이다 (받은 것: ${mode})`);
+  if (mode !== 'region') {
+    throw new Error(`BARY_MODE=${mode} 는 없어졌다 — 전역 화면은 지역 barycenterd 에 BARY_GLOBAL_HOST · BARY_GLOBAL_REGIONS 를 준다 (docs/runbook-global.md)`);
+  }
   const prefix = env('BARY_PREFIX', '/etc/barycenter');
   // **`split(':')` 이 아니다** (검수 G7). 그러면 IPv6 를 표현할 수 없고, 포트가 비거나
   // 숫자가 아니면 `listen(0)`·`listen(NaN)` 이 되어 **무작위 포트가 조용히 열린다.**
