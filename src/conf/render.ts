@@ -1335,6 +1335,14 @@ function defaultActionLocations(
             ...upstreamTlsNodes(defaultPoolTls, defaultCerts),
             directive('proxy_set_header', [lit('Host'), variable('host')]),
             /**
+             * **보낸 사람 주소도 여기서 넘긴다** (2026-11-01, web-01). 라우트 location 에만 냈다. 그래서 기본 동작으로
+             * 풀에 보내는 리스너 — 라우트 없이 서비스 하나를 내는 가장 흔한 모양 — 의 백엔드는 모든 요청을 nginx
+             * 주소 하나로 봤다. barycenter 자신의 GUI 가 그 모양이라, 한 사람의 인증 실패가 모든 사람을 잠갔다.
+             * 이름은 예약어라(`RESERVED_REQUEST_HEADERS`) 아래 사용자 헤더가 덮지 못한다.
+             */
+            directive('proxy_set_header', [lit('X-Forwarded-For'), variable('proxy_add_x_forwarded_for')]),
+            directive('proxy_set_header', [lit('X-Forwarded-Proto'), variable('scheme')]),
+            /**
              * **요청 헤더는 여기도 나가야 한다** (제안 #7, 2026-08-24).
              *
              * 라우트 location 에만 내고 있었다. 그래서 라우트 없이 기본 액션만 쓰는
