@@ -52,6 +52,7 @@ import {
   changesetPatch,
   changesetPlan,
   planSummary,
+  type PlanImpact,
   changesetReopen,
   changesetShow,
   commitByPlan,
@@ -182,6 +183,7 @@ const usage = (): never => {
   bary backup [파일.json]        GET /backup. 시크릿 바이트 없음
   bary restore <파일.json>       POST /restore. admin 스코프. apply 는 아니다
   bary rollback <리비전>          그 시점 내용으로 **새 리비전**을 만들고 적용한다
+  bary rerender                  활성 리비전을 지금 판의 렌더러로 다시 적용한다 (새 리비전 없음)
   bary cancel <오퍼레이션>        진행 중인 전환을 포기한다 (활성화된 것은 못 되돌린다)
   bary recover                   미완 전환을 이어받는다. changeset 을 안 연다
   bary audit [개수]
@@ -247,6 +249,22 @@ async function main(): Promise<void> {
       // **head 는 앞으로 간다.** 되돌리는 것이 아니라 그 시점 내용으로 새 리비전을 만든다.
       console.error(`r${rolled.rollbackOf} 의 내용으로 r${rolled.revision} 을 만들었다`);
       const op = must(await call('POST', '/api/v1/apply', { plan_id: rolled.planId }), 'apply') as {
+        phase: string; detail?: { failure?: string };
+      };
+      show(op);
+      if (op.phase !== 'activated') {
+        console.error(`활성화되지 않았다: ${op.phase}${
+          op.detail?.failure === undefined ? '' : ` — ${op.detail.failure}`}`);
+        process.exit(1);
+      }
+      return;
+    }
+    case 'rerender': {
+      // 새 판을 배포한 뒤 렌더러가 바뀐 결과를 nginx 에 낸다. 설정은 그대로다.
+      const made = must(await call('POST', '/api/v1/apply/rerender'), 'rerender') as { planId: string; revision: string };
+      const plan = must(await call('GET', `/api/v1/plans/${encodeURIComponent(made.planId)}`), 'plan') as { impact: PlanImpact };
+      for (const line of planSummary(plan.impact)) console.error(`plan ${made.planId} — ${line}`);
+      const op = must(await call('POST', '/api/v1/apply', { plan_id: made.planId }), 'apply') as {
         phase: string; detail?: { failure?: string };
       };
       show(op);

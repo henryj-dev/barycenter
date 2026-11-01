@@ -14,7 +14,10 @@ describe('적용 대기 판단', () => {
     let sql = '';
     const db = { query: async (q: string) => { sql = q; return { rows: [{ id: 'p', target_revision: '23' }] }; } } as unknown as Db;
     expect(await pendingApplies(db)).toEqual([{ planId: 'p', revision: '23' }]);
-    expect(sql).toMatch(/p\.target_revision > COALESCE\(\s*\(SELECT max\(o2\.revision\) FROM operations o2 WHERE o2\.phase = 'activated'\), 0\)/);
+    expect(sql).toMatch(/COALESCE\(max\(revision\), 0\) AS rev FROM operations WHERE phase = 'activated'/);
+    expect(sql).toMatch(/p\.target_revision > a\.rev/);
+    // 같은 리비전은 활성화된 epoch 보다 새 epoch 일 때만 대기다 (다시 렌더).
+    expect(sql).toMatch(/p\.target_revision = a\.rev AND p\.activation_epoch > \(/);
     expect(sql, '커밋됐지만 미적용인 것만').toMatch(/p\.state='committed'/);
   });
 });

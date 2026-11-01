@@ -928,6 +928,24 @@ export function createDesk(scope?: { api(path: string): string }) {
     }
   };
 
+  /**
+   * 활성 리비전을 지금 판의 렌더러로 다시 굽는다 (`POST /apply/rerender`). 바로 적용하지 않는다 — 적용 대기에 올라가
+   * 영향 카드가 뜬다. 적용은 그 카드의 「적용해요」 다.
+   */
+  const rerender = async (): Promise<void> => {
+    applying = true;
+    error = undefined;
+    try {
+      const r = await fetch(api('/api/v1/apply/rerender'), { method: 'POST', headers: auth() });
+      const body = (await r.json()) as { message?: string };
+      if (!r.ok) { error = body.message ?? `apply/rerender ${r.status}`; return; }
+      const st = await fetch(api('/api/v1/status'), { headers: auth() });
+      if (st.ok) await onStatus((await st.json()) as StatusSnap);
+    } finally {
+      applying = false;
+    }
+  };
+
   const drain = async (key: string): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -1012,6 +1030,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     connect,
     apply,
     retryApply,
+    rerender,
     recover,
     drain,
     undrain,

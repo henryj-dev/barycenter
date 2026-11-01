@@ -1211,11 +1211,17 @@ const viewOf = (r: Row): OperationView => ({
  */
 export async function pendingApplies(db: Db): Promise<{ planId: string; revision: string }[]> {
   return (await db.query(
-    `SELECT p.id, p.target_revision FROM plans p
+    // 활성 리비전과 **같은** 리비전의 plan 도 대기다 — 그 리비전이 활성화된 epoch 보다 새 epoch 이면(다시 렌더, 2026-11-01).
+    `WITH a AS (
+       SELECT COALESCE(max(revision), 0) AS rev FROM operations WHERE phase = 'activated'
+     )
+     SELECT p.id, p.target_revision FROM plans p, a
       WHERE p.state='committed'
         AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.plan_id = p.id)
-        AND p.target_revision > COALESCE(
-          (SELECT max(o2.revision) FROM operations o2 WHERE o2.phase = 'activated'), 0)
-      ORDER BY p.target_revision`,
+        AND (p.target_revision > a.rev
+          OR (p.target_revision = a.rev AND p.activation_epoch > (
+               SELECT max(o3.activation_epoch) FROM operations o3
+                WHERE o3.phase = 'activated' AND o3.revision = a.rev)))
+      ORDER BY p.target_revision, p.activation_epoch`,
   )).rows.map((r) => ({ planId: String(r['id']), revision: String(r['target_revision']) }));
 }

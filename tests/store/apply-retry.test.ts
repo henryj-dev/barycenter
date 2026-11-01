@@ -119,3 +119,41 @@ describe('실패한 head 다시 적용', () => {
     expect(await store.failedHead()).toMatchObject({ revision: r2.revision, planId: retry.planId, failure: '두 번째' });
   });
 });
+
+/**
+ * 활성 head 를 다시 렌더한다 (2026-11-01, web-01). #163 이 기본 동작 location 에 X-Forwarded-For 를 더했는데, 배포해도
+ * nginx 에 나가지 않았다. head 는 이미 활성이고, 같은 plan 은 멱등이고, 지금 리비전으로의 롤백은 막혀 있었다.
+ */
+describe('활성 head 다시 렌더', () => {
+  it('**활성 head 의 새 plan 이 적용 대기에 들어간다** — 같은 리비전, 새 epoch, 새 리비전 없음', async () => {
+    const r1 = await commit([...pool, listener(18080)]);
+    await record(r1, 'activated', { phase: 'activated' });
+    expect(await pendingApplies(db)).toEqual([]);
+
+    const again = await store.replanActiveHead('t');
+    expect(again.revision).toBe(r1.revision);
+    const p = await store.getPlan(again.planId);
+    expect(p.state).toBe('committed');
+    expect(p.targetRevision).toBe(r1.revision);
+    expect(BigInt(p.activationEpoch ?? '0')).toBeGreaterThan(BigInt(r1.epoch));
+    expect(p.impact.socketChanges).toEqual({ added: [], removed: [] });
+    expect(await pendingApplies(db)).toEqual([{ planId: again.planId, revision: r1.revision }]);
+    expect(await store.head()).toMatchObject({ revision: r1.revision });
+  });
+
+  it('적용 대기 plan 이 이미 있으면 409 pending_exists 다', async () => {
+    const r1 = await commit([...pool, listener(18080)]);
+    await record(r1, 'activated', { phase: 'activated' });
+    await store.replanActiveHead('t');
+    await expect(store.replanActiveHead('t')).rejects.toMatchObject({ status: 409, code: 'pending_exists' });
+  });
+
+  it('head 가 활성이 아니면 409 head_not_active 다 — 적용 대기나 실패를 먼저 처리한다', async () => {
+    const r1 = await commit([...pool, listener(18080)]);
+    await record(r1, 'activated', { phase: 'activated' });
+    const r2 = await commit([listener(18081)]);
+    await expect(store.replanActiveHead('t')).rejects.toMatchObject({ status: 409, code: 'head_not_active' });
+    await record(r2, 'failed', NGINX_T);
+    await expect(store.replanActiveHead('t')).rejects.toMatchObject({ status: 409, code: 'head_not_active' });
+  });
+});
