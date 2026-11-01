@@ -38,8 +38,13 @@
 ## 단계
 
 1. (이 ADR) Host 로 고르기 · `BARY_REGION` · 이름 맞춰 보기. 자기 지역도 목록에 넣고 HTTPS 로 읽는다(auditor 토큰).
-2. SSO(`BARY_OIDC_*`) 로그인 상태를 PG 로 옮긴다. 지금은 서버 메모리라, DNS 라운드로빈에서 로그인 중에 다른 서버로 가면
-   실패한다. redirect URI 를 들어온 호스트로 고른다. 그때까지 전역 호스트의 SSO 로그인은 쓰지 않는다 — 비밀번호 로그인은 된다.
+2. (끝, 2026-11-01) SSO(`BARY_OIDC_*`).
+   - 로그인 중 상태: 계정(`BARY_ACCOUNTS_DSN`)이 켜져 있으면 이미 계정 PG(`login_flows`)에 있다. 시작과 콜백이 다른 서버로
+     가도 된다. 계정이 꺼져 있으면 서버 메모리에 있다. 그 상태로 전역 호스트와 SSO 를 함께 켜면 기동 때
+     `oidc.login_state_in_memory` 경고를 낸다. 노드가 여럿이면 계정을 켠다.
+   - redirect URI: 전역 화면은 `BARY_OIDC_REDIRECT_URI` 의 호스트만 `BARY_GLOBAL_HOST` 로 바꾸고 포트를 뗀다. 경로는 같다.
+     예: `https://util-icn-vtr.barycenter.tinyuniver.se:8443/login` → `https://barycenter.tinyuniver.se/login`.
+     IdP 에는 두 주소를 모두 등록한다.
 3. 설치 스크립트와 문서에서 별도 전역 서비스(`--mode global`, 9443)를 걷는다. 8443 직결로 두 이름을 쓰려면 인증서 하나가
    두 이름을 모두 덮어야 한다(`*.barycenter.tinyuniver.se` 는 `barycenter.tinyuniver.se` 를 덮지 않는다). 데이터 플레인 443 을
    거치면 nginx 가 이름마다 인증서를 고른다.

@@ -1300,6 +1300,18 @@ export function requestHost(req: IncomingMessage): string {
   return name.endsWith('.') ? name.slice(0, -1) : name;
 }
 
+/**
+ * 같은 경로를 다른 호스트로 (2026-11-01, docs/adr-host-dispatch.md 2 단계). SSO 로그인 쿠키는 호스트에 묶인다. 전역 호스트로
+ * 시작한 로그인을 IdP 가 지역 주소로 돌려보내면 그 쿠키가 안 따라가 로그인이 끝나지 않는다. 그래서 전역 화면은
+ * `BARY_OIDC_REDIRECT_URI` 의 호스트만 전역 호스트로 바꿔 쓴다. IdP 에는 두 주소를 다 등록한다.
+ */
+export function onHost(uri: string, host: string): string {
+  const u = new URL(uri);
+  u.hostname = host;
+  u.port = '';
+  return u.toString();
+}
+
 /** 지역 옵션에서 같은 프로세스의 전역 화면 옵션을 만든다. 인증 · 계정 · 세션 객체를 **그대로** 함께 쓴다. */
 function globalViewOf(api: ApiOptions): GlobalApiOptions | undefined {
   const g = api.globalSurface;
@@ -1308,7 +1320,7 @@ function globalViewOf(api: ApiOptions): GlobalApiOptions | undefined {
     global: g.relay, auth: api.auth,
     ...(api.maxBodyBytes === undefined ? {} : { maxBodyBytes: api.maxBodyBytes }),
     ...(api.guiRoot === undefined ? {} : { guiRoot: api.guiRoot }),
-    ...(api.oidcRp === undefined ? {} : { oidcRp: api.oidcRp }),
+    ...(api.oidcRp === undefined ? {} : { oidcRp: { ...api.oidcRp, redirectUri: onHost(api.oidcRp.redirectUri, g.host) } }),
     ...(api.oidcFetch === undefined ? {} : { oidcFetch: api.oidcFetch }),
     ...(api.plaintextExposed === undefined ? {} : { plaintextExposed: api.plaintextExposed }),
     ...(api.sessions === undefined ? {} : { sessions: api.sessions }),
