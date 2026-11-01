@@ -980,6 +980,328 @@
           }
         }
       }
+    },
+    "/api/v1/regions/{name}/config/head": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/config/head",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/config/revisions": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/config/revisions",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/config/history": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/config/history",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/changesets/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/changesets/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "PATCH:/api/v1/regions/:name/changesets/:id",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "DELETE:/api/v1/regions/:name/changesets/:id",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/plans/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/plans/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/operations/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/operations/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/address-sets": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/address-sets",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/cluster/nodes": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/cluster/nodes",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/cluster/nodes/{node}/history": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/cluster/nodes/:node/history",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/system/addresses": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/system/addresses",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/acme/accounts": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/acme/accounts",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/acme/accounts",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/acme/orders/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/acme/orders/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/sockets": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/sockets",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/health/backends": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/health/backends",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/changesets": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/changesets",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/changesets/{id}/plan": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/changesets/:id/plan",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/changesets/{id}/reopen": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/changesets/:id/reopen",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/changesets/{id}/commit": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/changesets/:id/commit",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/certificates/material": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/certificates/material",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/backends/{id}/drain": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/backends/:id/drain",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "DELETE:/api/v1/regions/:name/backends/:id/drain",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/apply": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/apply",
+        "x-scope": "apply",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/apply/retry": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/apply/retry",
+        "x-scope": "apply",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/apply/rerender": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/apply/rerender",
+        "x-scope": "apply",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/rollback": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/rollback",
+        "x-scope": "apply",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/recover": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/recover",
+        "x-scope": "apply",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/operations/{id}/cancel": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/operations/:id/cancel",
+        "x-scope": "apply",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
     }
   }
 }

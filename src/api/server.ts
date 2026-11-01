@@ -57,7 +57,7 @@ import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import { AuthFailureLimiter } from './auth-rate-limit.js';
 import { clientAddress, type TrustedProxies } from './client-address.js';
-import { RELAY_PATHS, type RegionRelay } from '../global/relay.js';
+import { RELAY_PATHS, RELAY_WRITES, type Credential, type RegionRelay } from '../global/relay.js';
 import type { HostAddressFacts } from '../engine/host-addresses.js';
 import {
   BrowserSessions, LOGIN_COOKIE, SESSION_COOKIE, cookieValue, expiredCookie, sessionCookie,
@@ -1213,17 +1213,46 @@ async function auditGlobalView(api: GlobalApiOptions, c: Ctx, region: string | n
   }
 }
 
-const relayTo = (path: string) => {
-  if (!RELAY_PATHS.includes(path)) throw new Error(`중계 허용 목록에 없는 경로다: ${path}`);
+/**
+ * **보는 사람의 자격** — 지역으로 그대로 넘길 것 (2026-11-01). 계정 세션이면 그 세션 id, Bearer 로 들어왔으면 그 토큰이다.
+ * 클라이언트 인증서·OIDC 메모리 세션은 넘길 수 없다(undefined) — 읽기는 auditor 로, 쓰기는 거부한다.
+ */
+function credentialOf(c: Ctx, api: CookieApi): Credential | undefined {
+  const auth = (c.req.headers.authorization ?? '').trim();
+  if (c.who.account !== undefined) {
+    const id = /^Session\s+(\S+)$/.exec(auth)?.[1] ?? accountSidOf(api, c.req);
+    return id === undefined || id === '' ? undefined : { kind: 'session', id };
+  }
+  const bearer = /^Bearer\s+(\S+)$/.exec(auth)?.[1];
+  return bearer === undefined ? undefined : { kind: 'bearer', token: bearer };
+}
+
+/** `changesets/:id/plan` 의 자리를 요청의 값으로 채운다. `:name`(지역)은 경로 앞에서 이미 썼다. */
+function fillPath(template: string, params: Record<string, string>): string {
+  return template.replace(/:([a-zA-Z]+)/g, (_, k: string) => encodeURIComponent(params[k] ?? ''));
+}
+
+const relayTo = (path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET') => {
+  const known = method === 'GET' ? RELAY_PATHS.includes(path) : RELAY_WRITES.some((w) => w.method === method && w.path === path);
+  if (!known) throw new Error(`중계 허용 목록에 없는 경로다: ${method} ${path}`);
   return async (c: Ctx, api: GlobalApiOptions): Promise<void> => {
   const name = c.params['name'] ?? '';
   if (!api.global.has(name)) {
     json(c.res, 404, { code: 'no_region', message: `지역 '${name}' 은 목록에 없다` });
     return;
   }
-  if (!await auditGlobalView(api, c, name, path, path === 'events')) return;
+  if (!await auditGlobalView(api, c, name, method === 'GET' ? path : `${method} ${path}`, path === 'events')) return;
   if (path !== 'events') {
-    await api.global.relay(name, path, c.url.search, c.res);
+    const credential = credentialOf(c, api);
+    const ifMatch = c.req.headers['if-match'];
+    const ip = ipOf(c.req);
+    await api.global.forward(name, {
+      method, path: fillPath(path, c.params), search: c.url.search,
+      ...(method === 'GET' || c.body === undefined ? {} : { body: c.body }),
+      ...(credential === undefined ? {} : { credential }),
+      ...(typeof ifMatch === 'string' ? { ifMatch } : {}),
+      ...(ip === undefined ? {} : { clientIp: ip }),
+    }, c.res);
     return;
   }
   api.global.relayEvents(name, c.req, c.res);
@@ -1245,7 +1274,7 @@ const relayTo = (path: string) => {
 };
 
 /**
- * 전역 라우트. **GET 만 있다** — 설정 쓰기는 지역 GUI 로 넘긴다(설계 §1).
+ * 전역 라우트. 읽기는 지역의 같은 경로로, 쓰기는 보는 사람의 자격 그대로 그 지역으로 넘긴다(설계 §1.1).
  *
  * 경로를 하나씩 적는다. 패턴 하나(`:name/*`)로 접으면 허용 목록이 이 표에서 안 보이고, B 동결 게이트
  * (`SURFACE-API.json`)도 무엇이 열렸는지 못 센다.
@@ -1268,6 +1297,40 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/audit', 'read', relayTo('audit')),
   route('GET', '/api/v1/regions/:name/config/rendered', 'read', relayTo('config/rendered')),
   route('GET', '/api/v1/regions/:name/events', 'read', relayTo('events')),
+  // 쓰기 흐름과 운영 화면이 읽는 것 (2026-11-01).
+  route('GET', '/api/v1/regions/:name/config/head', 'read', relayTo('config/head')),
+  route('GET', '/api/v1/regions/:name/config/revisions', 'read', relayTo('config/revisions')),
+  route('GET', '/api/v1/regions/:name/config/history', 'read', relayTo('config/history')),
+  route('GET', '/api/v1/regions/:name/changesets/:id', 'read', relayTo('changesets/:id')),
+  route('GET', '/api/v1/regions/:name/plans/:id', 'read', relayTo('plans/:id')),
+  route('GET', '/api/v1/regions/:name/operations/:id', 'read', relayTo('operations/:id')),
+  route('GET', '/api/v1/regions/:name/address-sets', 'read', relayTo('address-sets')),
+  route('GET', '/api/v1/regions/:name/cluster/nodes', 'read', relayTo('cluster/nodes')),
+  route('GET', '/api/v1/regions/:name/cluster/nodes/:node/history', 'read', relayTo('cluster/nodes/:node/history')),
+  route('GET', '/api/v1/regions/:name/system/addresses', 'read', relayTo('system/addresses')),
+  route('GET', '/api/v1/regions/:name/acme/accounts', 'read', relayTo('acme/accounts')),
+  route('GET', '/api/v1/regions/:name/acme/orders/:id', 'read', relayTo('acme/orders/:id')),
+  route('GET', '/api/v1/regions/:name/sockets', 'read', relayTo('sockets')),
+  route('GET', '/api/v1/regions/:name/health/backends', 'read', relayTo('health/backends')),
+  /**
+   * **쓰기 중계** (2026-11-01 사용자 결정, 설계 §1.1). 보는 사람의 자격 그대로 지역에 넘긴다. 범위는 지역 라우트와 같다.
+   */
+  route('POST', '/api/v1/regions/:name/changesets', 'write', relayTo('changesets', 'POST')),
+  route('PATCH', '/api/v1/regions/:name/changesets/:id', 'write', relayTo('changesets/:id', 'PATCH')),
+  route('DELETE', '/api/v1/regions/:name/changesets/:id', 'write', relayTo('changesets/:id', 'DELETE')),
+  route('POST', '/api/v1/regions/:name/changesets/:id/plan', 'write', relayTo('changesets/:id/plan', 'POST')),
+  route('POST', '/api/v1/regions/:name/changesets/:id/reopen', 'write', relayTo('changesets/:id/reopen', 'POST')),
+  route('POST', '/api/v1/regions/:name/changesets/:id/commit', 'write', relayTo('changesets/:id/commit', 'POST')),
+  route('POST', '/api/v1/regions/:name/certificates/material', 'write', relayTo('certificates/material', 'POST')),
+  route('POST', '/api/v1/regions/:name/acme/accounts', 'write', relayTo('acme/accounts', 'POST')),
+  route('POST', '/api/v1/regions/:name/backends/:id/drain', 'write', relayTo('backends/:id/drain', 'POST')),
+  route('DELETE', '/api/v1/regions/:name/backends/:id/drain', 'write', relayTo('backends/:id/drain', 'DELETE')),
+  route('POST', '/api/v1/regions/:name/apply', 'apply', relayTo('apply', 'POST')),
+  route('POST', '/api/v1/regions/:name/apply/retry', 'apply', relayTo('apply/retry', 'POST')),
+  route('POST', '/api/v1/regions/:name/apply/rerender', 'apply', relayTo('apply/rerender', 'POST')),
+  route('POST', '/api/v1/regions/:name/rollback', 'apply', relayTo('rollback', 'POST')),
+  route('POST', '/api/v1/regions/:name/recover', 'apply', relayTo('recover', 'POST')),
+  route('POST', '/api/v1/regions/:name/operations/:id/cancel', 'apply', relayTo('operations/:id/cancel', 'POST')),
 ];
 
 
@@ -2109,20 +2172,25 @@ async function handle(
    * 반영되는 자리다. 못 물으면 거부한다(503). OIDC 메모리 세션(현행)은 그 뒤에 본다.
    */
   let session: Principal | undefined;
+  /**
+   * **헤더로 온 계정 세션** (`Authorization: Session <id>`, 2026-11-01). 전역 화면이 보는 사람의 세션을 그대로 넘길 때 쓴다.
+   * 브라우저가 저절로 싣는 자격이 아니므로 CSRF(출처) 검사 대상이 아니다 — Bearer 와 같다.
+   */
+  const headerSid = /^Session\s+(\S+)$/.exec((req.headers.authorization ?? '').trim())?.[1];
   if (bearer === undefined && api.accounts !== undefined) {
     // 쿠키 유무로 가르지 않는다 — `authenticate` 가 빈 값을 스스로 거른다(DB 에 묻지 않고 undefined).
     try {
-      session = await api.accounts.authenticate(accountSidOf(api, req));
+      session = await api.accounts.authenticate(headerSid ?? accountSidOf(api, req));
     } catch (e) {
       if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
       throw e;
     }
   }
-  session ??= bearer === undefined
+  session ??= bearer === undefined && headerSid === undefined
     ? api.sessions!.get(cookieValue(req.headers.cookie, SESSION_COOKIE))
     : undefined;
   // 쿠키가 신원이 된 요청만 출처를 본다 (위 `sameOriginWrite`).
-  if (session !== undefined && !sameOriginWrite(req)) {
+  if (session !== undefined && headerSid === undefined && !sameOriginWrite(req)) {
     crossSite(res);
     return;
   }

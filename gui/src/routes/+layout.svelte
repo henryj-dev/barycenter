@@ -145,7 +145,7 @@
       <TopBar {crumbs} {node} head={desk.head} {conn} pending={desk.pendingCount}
         user={session.me?.username} role={session.me?.role} bind:theme bind:menuOpen onlogout={() => { void logout(); }} ondisconnect={disconnect} />
       {#if scope.mode === 'global' && scope.region !== undefined}
-        <div class="strip"><Banner tone="info" icon="◎">전역 화면은 읽기만 해요. 설정은 <b>{scope.region.name}</b> 의 GUI에서 바꿔요.</Banner></div>
+        <div class="strip"><Banner tone="info" icon="◎">전역 화면에서 <b>{scope.region.name}</b> 을 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.</Banner></div>
       {/if}
       {#if showPending}
         <div class="strip">
