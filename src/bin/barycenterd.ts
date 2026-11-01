@@ -13,6 +13,7 @@
  * 그 링크가 비어 보인다(Docker bind mount 가 링크 교체를 전파 못 한다). 에이전트를
  * 원격에 두는 구성은 애초에 설계에 없다.
  */
+import { parseTrustedProxies } from '../api/client-address.js';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
 import type { Server } from 'node:http';
@@ -502,6 +503,9 @@ async function listenApi(
   if (exposureError !== undefined) throw new Error(exposureError);
   apiOpts.plaintextExposed = plaintextExposed;
   apiOpts.sessionSecure = tlsOn;
+  const trustedRaw = env('BARY_TRUSTED_PROXIES', '');
+  const trustedProxies = parseTrustedProxies(trustedRaw);
+  if (trustedProxies !== undefined) apiOpts.trustedProxies = trustedProxies;
   const server = tlsOn
     ? createHttpsServer(
         apiTlsOptions({
@@ -536,6 +540,8 @@ async function listenApi(
     host, port: Number(port), ...logFields,
     // 켰다고 생각했는데 안 켜진 상태를 밖에서 확인할 수 있어야 한다.
     tls: tlsOn ? (tlsClientCa === '' ? 'server' : 'server+client-ca') : false,
+    // 비면 프록시 뒤의 모든 사람이 한 주소로 보인다 — 시도 제한이 함께 걸린다.
+    trustedProxies: trustedProxies === undefined ? false : trustedRaw.trim(),
   });
   /**
    * **루프백 밖에 묶었으면 말한다** (검수 S-05a).
