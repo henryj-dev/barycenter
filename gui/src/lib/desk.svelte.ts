@@ -371,7 +371,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
   };
 
   const call = async (method: string, path: string, body?: unknown, retried = false): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> => {
-    const r = await fetch(path, {
+    // 전역에서 지역을 골랐으면 그 지역 경로로 간다(`scope.api`).
+    const r = await fetch(api(path), {
       method,
       headers: {
         ...auth(),

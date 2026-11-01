@@ -1,11 +1,14 @@
 /**
- * 전역 모드의 읽기 중계 (docs/design-global-mode.md §2.3·§2.4).
+ * 전역 모드의 중계 (docs/design-global-mode.md §2.3·§2.4 · §1.1).
  *
  * **해석하지 않고 넘긴다.** 전역이 지역 응답의 모양을 알면 두 벌이 되고, 지역 버전이
  * 다르면 그 사이에서 깨진다. 요약(`/regions`)도 지역의 `status` 를 **그대로** 싣는다.
  *
- * **GET 만 만든다.** 메서드를 받아 넘기는 일반 프록시를 두면 언젠가 POST 가 지난다.
- * 그래도 지역 토큰이 auditor 라서 지역이 403 으로 막지만, 막는 곳이 하나 더 있는 편이 낫다.
+ * **보는 사람의 자격으로 넘긴다** (2026-11-01 사용자 결정). 전역과 지역은 계정 PG 를 함께 쓰므로, 전역에 로그인한
+ * 사람의 세션이 지역에서도 같은 사람이다. 쓰기는 그 자격으로만 넘긴다 — 권한·감사·step-up 은 지역이 판정한다.
+ * 지역 auditor 토큰은 요약과 공유 SSE 상류(여럿이 나눠 보는 것)에만 쓴다.
+ *
+ * **메서드와 경로를 하나씩 적는다**(`RELAY_ROUTES`). 받은 메서드를 그대로 넘기는 일반 프록시는 두지 않는다.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Agent, request } from 'node:https';
@@ -22,7 +25,48 @@ export const RELAY_PATHS: readonly string[] = [
   'status', 'listeners', 'pools', 'backends', 'backends/status', 'routes',
   'certificates', 'tls-policies', 'sni-bindings', 'acme/orders', 'audit',
   'config/rendered', 'events',
+  // 쓰기 흐름과 운영 화면이 읽는 것 (2026-11-01).
+  'config/head', 'config/revisions', 'config/history', 'changesets/:id', 'plans/:id', 'operations/:id',
+  'address-sets', 'cluster/nodes', 'cluster/nodes/:node/history', 'system/addresses', 'acme/accounts',
+  'acme/orders/:id', 'sockets', 'health/backends',
 ];
+
+/** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */
+export const RELAY_WRITES: readonly { method: 'POST' | 'PATCH' | 'DELETE'; path: string; scope: 'write' | 'apply' }[] = [
+  { method: 'POST', path: 'changesets', scope: 'write' },
+  { method: 'PATCH', path: 'changesets/:id', scope: 'write' },
+  { method: 'DELETE', path: 'changesets/:id', scope: 'write' },
+  { method: 'POST', path: 'changesets/:id/plan', scope: 'write' },
+  { method: 'POST', path: 'changesets/:id/reopen', scope: 'write' },
+  { method: 'POST', path: 'changesets/:id/commit', scope: 'write' },
+  { method: 'POST', path: 'certificates/material', scope: 'write' },
+  { method: 'POST', path: 'acme/accounts', scope: 'write' },
+  { method: 'POST', path: 'backends/:id/drain', scope: 'write' },
+  { method: 'DELETE', path: 'backends/:id/drain', scope: 'write' },
+  { method: 'POST', path: 'apply', scope: 'apply' },
+  { method: 'POST', path: 'apply/retry', scope: 'apply' },
+  { method: 'POST', path: 'apply/rerender', scope: 'apply' },
+  { method: 'POST', path: 'rollback', scope: 'apply' },
+  { method: 'POST', path: 'recover', scope: 'apply' },
+  { method: 'POST', path: 'operations/:id/cancel', scope: 'apply' },
+];
+
+/** 지역에 보낼 보는 사람의 자격. `Session` 은 계정 세션 id 다(`Authorization: Session <id>`). */
+export type Credential = { kind: 'bearer'; token: string } | { kind: 'session'; id: string };
+
+/** 지역으로 넘길 요청 하나. `path` 는 `/api/v1/` 뒤, 이미 값이 채워진 것이다. */
+export type Forward = {
+  method: string;
+  path: string;
+  search: string;
+  /** JSON 본문. 없으면 본문 없이 보낸다. */
+  body?: unknown;
+  credential?: Credential;
+  /** 지역이 낙관적 잠금에 쓴다(changeset PATCH). */
+  ifMatch?: string;
+  /** 사람의 주소. 지역의 `BARY_TRUSTED_PROXIES` 에 전역이 있으면 지역이 시도 제한·감사에 쓴다. */
+  clientIp?: string;
+};
 
 const SUMMARY_TIMEOUT_MS = 3_000;
 const RELAY_TIMEOUT_MS = 10_000;
@@ -123,9 +167,24 @@ export class RegionRelay {
    * 것과 우리가 못 물은 것을 섞지 않는다.
    */
   async relay(name: string, path: string, search: string, res: ServerResponse): Promise<void> {
+    await this.forward(name, { method: 'GET', path, search }, res);
+  }
+
+  /**
+   * 요청 하나를 지역으로 넘긴다. 자격을 주면 그것으로, 없으면 지역 auditor 토큰으로 묻는다 — **GET 만**.
+   * 쓰기에 자격이 없으면 보내지 않는다(403) — auditor 로 쓰기를 시도하지 않는다.
+   */
+  async forward(name: string, f: Forward, res: ServerResponse): Promise<void> {
+    if (f.method !== 'GET' && f.credential === undefined) {
+      sendJson(res, 403, {
+        code: 'no_forwardable_credential',
+        message: '전역에서 지역을 고치려면 계정으로 로그인하거나 그 지역에도 있는 토큰으로 들어온다',
+      });
+      return;
+    }
     let got: Fetched;
     try {
-      got = await this.#get(name, path, search, RELAY_TIMEOUT_MS);
+      got = await this.#send(name, f, RELAY_TIMEOUT_MS);
     } catch (e) {
       sendJson(res, 502, { code: 'region_unreachable', region: name, message: messageOf(e) });
       return;
@@ -180,14 +239,27 @@ export class RegionRelay {
   }
 
   #get(name: string, path: string, search: string, timeoutMs: number): Promise<Fetched> {
+    return this.#send(name, { method: 'GET', path, search }, timeoutMs);
+  }
+
+  #send(name: string, f: Forward, timeoutMs: number): Promise<Fetched> {
     const entry = this.#byName.get(name);
     if (entry === undefined) return Promise.reject(new Error(`지역 '${name}' 은 목록에 없다`));
+    const body = f.body === undefined ? undefined : Buffer.from(JSON.stringify(f.body), 'utf8');
+    const authorization = f.credential === undefined ? `Bearer ${entry.region.token}`
+      : f.credential.kind === 'bearer' ? `Bearer ${f.credential.token}` : `Session ${f.credential.id}`;
+    const headers: Record<string, string> = {
+      authorization, accept: 'application/json',
+      ...(body === undefined ? {} : { 'content-type': 'application/json', 'content-length': String(body.length) }),
+      ...(f.ifMatch === undefined ? {} : { 'if-match': f.ifMatch }),
+      ...(f.clientIp === undefined ? {} : { 'x-forwarded-for': f.clientIp }),
+    };
     return new Promise<Fetched>((resolve, reject) => {
-      const req = request(`${entry.region.api}/api/v1/${path}${search}`, {
-        method: 'GET',
+      const req = request(`${entry.region.api}/api/v1/${f.path}${f.search}`, {
+        method: f.method,
         agent: entry.agent,
         timeout: timeoutMs,
-        headers: { authorization: `Bearer ${entry.region.token}`, accept: 'application/json' },
+        headers,
       }, (r) => {
         const chunks: Buffer[] = [];
         let size = 0;
@@ -209,7 +281,7 @@ export class RegionRelay {
       });
       req.on('timeout', () => req.destroy(new Error(`${timeoutMs}ms 안에 응답이 없다`)));
       req.on('error', reject);
-      req.end();
+      req.end(body);
     });
   }
 }
