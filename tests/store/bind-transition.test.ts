@@ -5,6 +5,9 @@
  * 드라이버는 부르면 터진다 — 거절이 데이터 플레인에 닿기 **전**인지 잰다.
  */
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ControlPlane } from '../../src/control/plane.js';
@@ -18,6 +21,8 @@ let db: Db;
 let store: ConfigStore;
 let control: ControlPlane;
 let election: LeaderElection;
+// 드라이버가 터지므로 쓰이지 않지만, 공유 /tmp 의 고정 이름을 쓰지 않는다.
+const dir = mkdtempSync(join(tmpdir(), 'bary-bind-transition-'));
 const driver: DataplaneDriver = new Proxy({} as DataplaneDriver, {
   get: (_t, prop) => () => { throw new Error(`데이터 플레인에 닿았다 (호출됨: ${String(prop)})`); },
 });
@@ -31,13 +36,14 @@ beforeAll(async () => {
   election = new LeaderElection(PG.dsn, 'bind-transition-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   control = new ControlPlane(db, store, driver, election,
-    { prefix: '/tmp/bary-bind-transition', adminSocket: '/tmp/bary-bind-transition.sock' });
+    { prefix: join(dir, 'prefix'), adminSocket: join(dir, 'admin.sock') });
 }, 180_000);
 
 afterAll(async () => {
   await election?.release().catch(() => undefined);
   await db?.close();
   stopPg(PG);
+  rmSync(dir, { recursive: true, force: true });
 });
 
 beforeEach(async () => { await reset(db); });
