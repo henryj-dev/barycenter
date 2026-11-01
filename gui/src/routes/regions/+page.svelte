@@ -17,7 +17,7 @@
 
   const load = async (): Promise<void> => {
     loading = true;
-    const r = await fetch('/api/v1/regions', { credentials: 'same-origin' });
+    const r = await fetch('/api/v1/regions', { credentials: 'same-origin', headers: desk.token === '' ? {} : { authorization: `Bearer ${desk.token}` } });
     loading = false;
     if (!r.ok) { error = r.status === 401 ? '로그인이 필요해요.' : `regions ${r.status}`; return; }
     error = undefined;

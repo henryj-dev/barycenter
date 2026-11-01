@@ -62,3 +62,22 @@ export function backoffMs(attempt: number, opts: BackoffOptions = {}): number {
   // 음수·NaN 이 `setTimeout` 으로 가면 즉시 재시도가 된다 — 상한 아래로 접는다.
   return Math.max(0, Math.min(max, Math.round(ms)));
 }
+
+/** 상단 바의 실시간 연결 표시. `idle` 은 붙을 스트림이 아직 없다는 뜻이다(끊김이 아니다). */
+export type ConnState = 'live' | 'reconnecting' | 'down' | 'idle';
+
+/**
+ * **붙을 스트림이 있는가.** 전역 화면에는 `/api/v1/events` 가 없다 — 지역을 고르면
+ * `/api/v1/regions/<지역>/events` 로 붙는다. 고르기 전에 붙으면 404 를 끝없이 다시 부르고,
+ * 화면은 「실시간 연결이 끊겼어요」를 띄운다(2026-11-01 web-01).
+ */
+export function hasStream(scope: { mode: string; region?: unknown }): boolean {
+  return !(scope.mode === 'global' && scope.region === undefined);
+}
+
+/** 연결 표시를 고른다. 들어온 사람이 있어도 붙을 스트림이 없으면 `idle` 이다. */
+export function connStateOf(o: { live: boolean; signedIn: boolean; hasStream: boolean }): ConnState {
+  if (o.live) return 'live';
+  if (!o.signedIn) return 'down';
+  return o.hasStream ? 'reconnecting' : 'idle';
+}
