@@ -67,8 +67,15 @@
   </ImpactCard>
 {:else if desk.live}
   <FieldMessage>커밋했지만 적용하지 않은 plan 이 없어요. 리소스를 저장하거나 <code>bary import</code> 를 하면 여기 와요.</FieldMessage>
+  {#if !ro && desk.head !== undefined}
+    <div class="again">
+      <Button loading={desk.applying} onclick={() => { void desk.rerender(); }}>{desk.applying ? '만드는 중' : `r${desk.head} 다시 렌더해요`}</Button>
+      <FieldMessage>설정은 그대로예요. barycenter 를 새 판으로 올린 뒤, 바뀐 nginx 설정을 내려고 써요. 영향을 먼저 보여 줘요.</FieldMessage>
+    </div>
+  {/if}
 {/if}
 
 <style>
+  .again { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-top: 12px; }
   code { font-family: var(--mono); font-size: 12px; }
 </style>

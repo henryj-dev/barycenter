@@ -1420,7 +1420,39 @@ export class ConfigStore {
     if (failed === undefined) {
       throw new StoreError(409, 'nothing_to_retry', '다시 적용할 실패가 없다 — head 가 이미 활성이거나, 적용 대기 plan 이 있거나, 마지막 적용이 실패가 아니다');
     }
-    const model = await this.modelAt(failed.revision);
+    const planId = await this.#planHeadAgain(failed.revision);
+    await this.audit(by, 'apply.retry_plan', failed.revision, undefined, { planId, after: failed.planId }, failed.revision);
+    return { planId, revision: failed.revision };
+  }
+
+  /**
+   * **활성 head 를 다시 렌더할 plan 을 만든다** (2026-11-01, web-01). 설정은 그대로이고, barycenter 의 렌더러가 바뀌었을
+   * 때(새 판 배포) 그 결과를 nginx 에 내려고 쓴다. 같은 plan 을 다시 적용하면 멱등이라 옛 결과를 돌려주고, 지금 리비전으로의
+   * 롤백은 막혀 있다(뒤로만 간다). 그래서 모델을 하나 바꿔 저장해야만 새 렌더가 나갔다.
+   *
+   * 새 리비전은 안 만든다. 새 epoch 를 받는다. 바로 적용하지 않는다 — 적용 대기에 올라가 영향을 먼저 보인다.
+   * head 가 활성이 아니거나, head 에 아직 안 쓴 plan 이 있으면 409.
+   */
+  async replanActiveHead(by: string): Promise<{ planId: string; revision: string }> {
+    const head = (await this.head()).revision;
+    if ((await this.activeRevision()) !== head) {
+      throw new StoreError(409, 'head_not_active', `r${head} 는 아직 활성이 아니다 — 적용 대기나 실패한 적용을 먼저 처리한다`);
+    }
+    const fresh = (await this.db.query(
+      `SELECT 1 FROM plans p WHERE p.target_revision = $1 AND p.state = 'committed'
+          AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.plan_id = p.id) LIMIT 1`, [head],
+    )).rows[0];
+    if (fresh !== undefined) {
+      throw new StoreError(409, 'pending_exists', `r${head} 에 아직 적용하지 않은 plan 이 있다 — 그것을 적용한다`);
+    }
+    const planId = await this.#planHeadAgain(head);
+    await this.audit(by, 'apply.rerender_plan', head, undefined, { planId }, head);
+    return { planId, revision: head };
+  }
+
+  /** head 리비전 그대로의 새 plan. 영향은 지금 엔진이 돌리는 리비전과 비교한다. 그 사이 head 가 움직였으면 409. */
+  async #planHeadAgain(revision: string): Promise<string> {
+    const model = await this.modelAt(revision);
     const rendered = renderOrThrow(model, this.caps);
     const active = await this.activeRevision();
     const priorModel = active === undefined ? model : await this.modelAt(active);
@@ -1430,7 +1462,7 @@ export class ConfigStore {
     await this.db.tx(async (c) => {
       // head 를 잠근다 — 그 사이 커밋이 들어오면 이 plan 은 낡는다. 그러면 만들지 않는다.
       const head = text((await c.query('SELECT revision FROM config_head FOR UPDATE')).rows[0] ?? {}, 'revision');
-      if (head !== failed.revision) {
+      if (head !== revision) {
         throw new StoreError(409, 'PLAN_STALE', `head 가 r${head} 로 바뀌었다 — 그 리비전을 적용한다`);
       }
       const epoch = text((await c.query(`SELECT nextval('activation_epoch_seq') AS v`)).rows[0] ?? {}, 'v');
@@ -1438,12 +1470,11 @@ export class ConfigStore {
         `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
                             renderer_version,expires_at,state,target_revision,activation_epoch)
          VALUES ($1,NULL,$2,$3,$4,$5,$6,now() + ($7 || ' milliseconds')::interval,'committed',$2,$8)`,
-        [planId, failed.revision, JSON.stringify(model), JSON.stringify(impact), rendered.digest,
+        [planId, revision, JSON.stringify(model), JSON.stringify(impact), rendered.digest,
           RENDERER_VERSION, String(PLAN_TTL_MS), epoch],
       );
     });
-    await this.audit(by, 'apply.retry_plan', failed.revision, undefined, { planId, after: failed.planId }, failed.revision);
-    return { planId, revision: failed.revision };
+    return planId;
   }
 
   /** sealed → open. plan 을 무효화한다 (§5.2 reopen). */

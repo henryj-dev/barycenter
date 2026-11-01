@@ -448,6 +448,17 @@
         }
       }
     },
+    "/api/v1/apply/rerender": {
+      "post": {
+        "operationId": "POST:/api/v1/apply/rerender",
+        "x-scope": "apply",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/operations/{id}": {
       "get": {
         "operationId": "GET:/api/v1/operations/:id",

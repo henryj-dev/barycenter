@@ -813,6 +813,14 @@ const ROUTES: Route[] = [
     json(c.res, 200, out);
   }),
 
+  // **활성 head 를 다시 렌더한다** (2026-11-01). 새 판의 렌더러로 같은 리비전의 plan 을 만든다. 바로 적용하지 않는다 —
+  // 적용 대기에 올려 영향을 먼저 보인다. 적용은 `/apply` 가 그대로 한다.
+  route('POST', '/api/v1/apply/rerender', 'apply', async (c, api) => {
+    const out = await api.store.replanActiveHead(c.who.name);
+    eventsOf(api).publish('revision', { revision: out.revision, rerender: true });
+    json(c.res, 200, out);
+  }),
+
   route('GET', '/api/v1/operations/:id', 'read', async (c, api) => {
     json(c.res, 200, await api.control.operation(c.params['id'] ?? ''));
   }),
