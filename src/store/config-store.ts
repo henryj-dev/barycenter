@@ -24,6 +24,7 @@ import {
 } from '../validate/strings.js';
 import { PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import { withRedirectListeners } from '../model/redirect.js';
+import { bindTransitionConflicts, type BindTransitionConflict } from '../validate/bind-transition.js';
 import { bindIsLocal, type HostAddressFacts } from '../engine/host-addresses.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { ModelValidationError } from '../validate/model.js';
@@ -231,6 +232,11 @@ export type Impact = {
    * plan 이 그 자리다 — 어차피 여기가 "이 변경이 이 엔진에서 어떻게 되는가" 를 답하는 곳이다.
    */
   capabilityWarnings: { kind: string; message: string }[];
+  /**
+   * **reload 로 못 여는 소켓** (2026-11-01, web-01). 지금 열린 소켓과 주소가 겹쳐 bind 가 막힌다.
+   * 비어 있지 않으면 apply 가 409 `bind_transition` 으로 거절한다 — reload 를 보내 봤자 실패한다.
+   */
+  bindTransitions: BindTransitionConflict[];
   socketChanges: { added: string[]; removed: string[] };
   planes: ('http' | 'stream')[];
   confDiff: { before: number; after: number };
@@ -2254,6 +2260,7 @@ function impactOf(
     certificateChanges: certificateChanges(before.model, model, facts),
     routeOrderChanges: routeOrderChanges(before.model, model),
     capabilityWarnings: capabilityWarningsOf(model, caps),
+    bindTransitions: bindTransitionConflicts(before.model.listeners, model.listeners),
     socketChanges: {
       added: [...sockets].filter((s) => !beforeSockets.has(s)).sort(),
       removed: socketsRemoved,

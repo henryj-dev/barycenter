@@ -28,6 +28,7 @@ import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
 import { certificateFiles, type SecretStore } from '../dp/secrets.js';
 import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
+import { bindTransitionConflicts } from '../validate/bind-transition.js';
 import type { Model } from '../model/provisional.js';
 import {
   count, fileBytes, measureGenerations, type Gauges, type LabeledGauge,
@@ -346,6 +347,16 @@ export class ControlPlane {
     if (plan.targetRevision !== head.revision) {
       throw new StoreError(409, 'PLAN_STALE',
         `superseded: 이 plan 은 r${plan.targetRevision} 인데 head 는 r${head.revision} 이다`);
+    }
+
+    // **reload 로 못 여는 소켓이면 보내기 전에 거절한다** (2026-11-01, web-01). 보내면 nginx 가 bind 에 실패하고,
+    // reload 를 두 번 보낸 뒤에야 「활성화되지 않았다」 로 끝난다. 비교 대상은 plan 때가 아니라 **지금** 서빙 중인 리비전이다.
+    const active = await this.store.activeRevision();
+    if (active !== undefined && active !== plan.targetRevision) {
+      const blocked = bindTransitionConflicts((await this.store.modelAt(active)).listeners, plan.model.listeners);
+      if (blocked.length > 0) {
+        throw new StoreError(409, 'bind_transition', blocked.map((b) => b.message).join(' '), { bindTransitions: blocked });
+      }
     }
 
     const rendered = render(plan.model, this.opts.renderCaps ?? { streamRealip: false });

@@ -70,6 +70,7 @@ export type PlanImpact = {
     [k: string]: unknown;
   };
   capabilityWarnings?: { message: string; [k: string]: unknown }[];
+  bindTransitions?: { message: string; [k: string]: unknown }[];
 };
 
 /**
@@ -97,6 +98,7 @@ export function planSummary(impact: PlanImpact): string[] {
   }
   for (const w of impact.routeOrderChanges?.warnings ?? []) lines.push(`라우트 — ${w.message}`);
   for (const w of impact.capabilityWarnings ?? []) lines.push(`엔진 — ${w.message}`);
+  for (const b of impact.bindTransitions ?? []) lines.push(`적용 불가 — ${b.message}`);
   return lines;
 }
 
