@@ -354,7 +354,13 @@ fi
 # 앞에서 *"지금 뭐지?"* 를, 뒤에서 *"정말 바뀌었나?"* 를 못 물었다. 체크아웃의
 # `git rev-parse` 는 **체크아웃**을 말하지 설치된 것을 말하지 않는다.
 VERSION_FILE="$PREFIX/version"
-NEW_COMMIT=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo '(git 아님)')
+# 체크아웃이 아니면(`git archive` 로 받은 트리) 받은 쪽이 남긴 `.commit` 을 읽는다. 커밋 모양(16진 7~40자)일 때만 믿는다.
+commit_of() {
+  _cm=$(git -C "$1" rev-parse --short HEAD 2>/dev/null) && { echo "$_cm"; return; }
+  _cm=$(head -n 1 "$1/.commit" 2>/dev/null | tr -d '[:space:]')
+  if printf '%s' "$_cm" | grep -Eq '^[0-9a-f]{7,40}$'; then echo "$_cm" | cut -c1-7; else echo '(git 아님)'; fi
+}
+NEW_COMMIT=$(commit_of "$REPO")
 NEW_DESCRIBE=$(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo '')
 PREV_COMMIT=$(sed -n "s/^commit=//p" "$VERSION_FILE" 2>/dev/null | tail -1)
 
