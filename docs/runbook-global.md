@@ -52,6 +52,16 @@ env (지역 `/etc/barycenter/env` 에 더한다):
 `systemctl restart barycenterd` — 설치를 다시 돌려도 그 줄은 남는다. 지역 목록·토큰 파일은 서비스 유저(`bary`)가
 읽을 수 있어야 한다(`root:bary 0640`). 설치 하네스의 `global` 판이 이 길을 실물로 잰다.
 
+## 전역에서 고치기
+
+전역 화면에서 지역을 고르면 그 지역을 고칠 수 있다(docs/design-global-mode.md §1.1). 고친 것은 보는 사람의 세션 그대로
+그 지역으로 간다. 그러려면:
+
+- 전역과 그 지역이 **같은 계정 PG**(`BARY_ACCOUNTS_DSN`)를 본다. 다르면 지역이 그 세션을 모르므로 401 이다.
+- 지역의 `BARY_TRUSTED_PROXIES` 에 전역의 주소를 넣는다. 그래야 지역의 시도 제한 · 감사가 사람의 주소를 쓴다.
+  (같은 프로세스면 이미 들어 있다.)
+- 지역 auditor 토큰은 그대로 둔다. 지역 목록 요약과 공유 실시간 스트림이 쓴다.
+
 ## 로그인 세션 공유
 
 전역과 지역은 **같은 계정 PG**(`BARY_ACCOUNTS_DSN`)를 본다. 그리고 `BARY_SESSION_DOMAIN=barycenter.tinyuniver.se` 를 주면

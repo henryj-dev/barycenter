@@ -1,7 +1,6 @@
 <script lang="ts">
   /**
-   * 설정 쓰기 자리. **전역 모드면 그리지 않는다** — 전역은 읽기 전용이고(설계 §1), 쓰기는 그 지역의 GUI 에서
-   * 한다. 그 자리에 지역 GUI 로 가는 링크를 둔다.
+   * 설정 쓰기 자리. 전역에서 지역을 고르기 전에만 그리지 않는다. 고른 뒤에는 쓰기가 그 지역으로 간다(설계 §1.1).
    */
   import { getContext, type Snippet } from 'svelte';
   import type { Scope } from './scope.svelte.ts';

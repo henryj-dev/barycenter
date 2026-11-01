@@ -2,7 +2,7 @@
  * **전역 모드** (docs/design-global-mode.md) — 가짜 지역(HTTPS) 둘과 실제 전역 서버로 잰다.
  *
  * 재는 것: 지역 목록 해독이 엄하다 · 요약은 지역 status 를 해석 없이 싣고 판 차이를 단다 · 못 닿은 지역은
- * 「모른다」(지난 값을 지금처럼 안 보인다) · 401/403 은 장애와 따로 · 허용 목록 밖은 404 · 쓰기 메서드 없음 ·
+ * 「모른다」(지난 값을 지금처럼 안 보인다) · 401/403 은 장애와 따로 · 허용 목록 밖은 404 · 쓰기는 보는 사람의 자격으로 중계 ·
  * **SSE 는 지역마다 상류 하나**(늦게 온 사람도 스냅샷부터) · readyz 는 지역 상태를 안 본다.
  */
 import { execFileSync } from 'node:child_process';
@@ -20,20 +20,31 @@ import { parseRegistry, type Region } from '../../src/global/registry.js';
 import { RegionRelay } from '../../src/global/relay.js';
 
 const VIEWER = 'viewer-token';
+const WRITER = 'writer-token';
 let pem: { cert: string; key: string };
 let dir = '';
 
-type Fake = { server: HttpsServer; url: string; eventsOpened: number; push: (frame: string) => void; reject: boolean; commit: string };
+type Seen = { method: string; url: string; auth: string; body: string; ifMatch?: string; xff?: string };
+type Fake = { server: HttpsServer; url: string; eventsOpened: number; push: (frame: string) => void; reject: boolean; commit: string; seen: Seen[] };
 const fakes: Fake[] = [];
 
 async function fakeRegion(commit: string): Promise<Fake> {
   const streams: import('node:http').ServerResponse[] = [];
-  const f: Fake = { server: undefined as unknown as HttpsServer, url: '', eventsOpened: 0, push: (fr) => streams.forEach((s) => s.write(fr)), reject: false, commit };
-  f.server = createHttps({ cert: pem.cert, key: pem.key }, (req, res) => {
-    if (req.headers.authorization !== 'Bearer region-token' || f.reject) {
+  const f: Fake = { server: undefined as unknown as HttpsServer, url: '', eventsOpened: 0, push: (fr) => streams.forEach((s) => s.write(fr)), reject: false, commit, seen: [] };
+  f.server = createHttps({ cert: pem.cert, key: pem.key }, async (req, res) => {
+    let body = '';
+    for await (const c of req) body += String(c);
+    f.seen.push({
+      method: req.method ?? '', url: req.url ?? '', auth: req.headers.authorization ?? '', body,
+      ...(typeof req.headers['if-match'] === 'string' ? { ifMatch: req.headers['if-match'] } : {}),
+      ...(typeof req.headers['x-forwarded-for'] === 'string' ? { xff: req.headers['x-forwarded-for'] } : {}),
+    });
+    // 지역은 전역의 auditor 토큰과, 전역이 넘긴 보는 사람의 자격을 둘 다 안다(계정·토큰을 함께 쓴다).
+    const known = ['Bearer region-token', `Bearer ${VIEWER}`, `Bearer ${WRITER}`, 'Session sid-1'];
+    if (!known.includes(req.headers.authorization ?? '') || f.reject) {
       res.writeHead(403, { 'content-type': 'application/json' }); res.end('{"code":"forbidden"}'); return;
     }
-    if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+    if (req.method !== 'GET') { res.writeHead(201, { 'content-type': 'application/json' }); res.end(JSON.stringify({ wrote: req.url })); return; }
     if (req.url === '/api/v1/status') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ head: '7', build: { commit: f.commit } })); return; }
     if (req.url?.startsWith('/api/v1/audit')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ q: req.url })); return; }
     if (req.url === '/api/v1/events') {
@@ -67,7 +78,10 @@ beforeAll(async () => {
   const relay = new RegionRelay([
     region('alpha', a.url), region('beta', b.url), region('gone', 'https://127.0.0.1:1'),
   ], { ownCommit: 'abc1234' });
-  global = createApi({ global: relay, auth: new TokenAuth([{ name: 'viewer', role: 'auditor', hash: hashToken(VIEWER) }]) });
+  global = createApi({ global: relay, auth: new TokenAuth([
+    { name: 'viewer', role: 'auditor', hash: hashToken(VIEWER) },
+    { name: 'writer', role: 'admin', hash: hashToken(WRITER) },
+  ]) });
   await new Promise<void>((r) => global.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${(global.address() as AddressInfo).port}`;
 }, 60_000);
@@ -122,22 +136,46 @@ describe('요약', () => {
 });
 
 describe('중계', () => {
-  it('허용된 경로는 상태·본문·쿼리를 그대로 넘긴다', async () => {
+  it('허용된 경로는 상태·본문·쿼리를 그대로 넘긴다 — **보는 사람의 자격으로**', async () => {
+    a.seen.length = 0;
     const r = await get('/api/v1/regions/alpha/audit?limit=5');
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ q: '/api/v1/audit?limit=5' });
+    expect(a.seen.at(-1)).toMatchObject({ method: 'GET', auth: `Bearer ${VIEWER}` });
     expect((await get('/api/v1/regions/alpha/listeners')).status).toBe(404); // 지역의 404 를 그대로
   });
 
   it('**허용 목록 밖(config/export·backup)은 전역이 404** — 지역에 묻지도 않는다', async () => {
-    for (const p of ['config/export', 'backup', 'plans/x']) {
+    for (const p of ['config/export', 'backup', 'config/model']) {
       const r = await get(`/api/v1/regions/alpha/${p}`);
       expect(r.status).toBe(404);
       expect((await r.json() as { code: string }).code).toBe('global_mode');
     }
   });
 
-  it('**쓰기 메서드는 없다** — 405', async () => {
+  it('**쓰기는 보는 사람의 자격 그대로 그 지역으로 간다** — 메서드·경로·본문·If-Match 를 넘긴다', async () => {
+    a.seen.length = 0;
+    const r = await fetch(`${base}/api/v1/regions/alpha/changesets/cs%201`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${WRITER}`, 'content-type': 'application/json', 'if-match': '"e7"' },
+      body: JSON.stringify({ patch: [{ op: 'add' }] }),
+    });
+    expect(r.status).toBe(201);
+    expect(await r.json()).toEqual({ wrote: '/api/v1/changesets/cs%201' });
+    const seen = a.seen.at(-1)!;
+    expect(seen).toMatchObject({ method: 'PATCH', url: '/api/v1/changesets/cs%201', auth: `Bearer ${WRITER}`, ifMatch: '"e7"' });
+    expect(JSON.parse(seen.body)).toEqual({ patch: [{ op: 'add' }] });
+    expect(seen.xff).toBeDefined();
+  });
+
+  it('쓰기 범위는 전역이 먼저 거른다 — auditor 는 지역에 보내지도 않는다', async () => {
+    a.seen.length = 0;
+    const r = await fetch(`${base}/api/v1/regions/alpha/apply`, { method: 'POST', headers: { authorization: `Bearer ${VIEWER}` }, body: '{}' });
+    expect(r.status).toBe(403);
+    expect(a.seen).toEqual([]);
+  });
+
+  it('**목록에 없는 쓰기는 없다** — 405', async () => {
     const r = await fetch(`${base}/api/v1/regions/alpha/status`, { method: 'POST', headers: { authorization: `Bearer ${VIEWER}` }, body: '{}' });
     expect(r.status).toBe(405);
   });
