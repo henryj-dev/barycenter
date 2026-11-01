@@ -4,6 +4,7 @@
   import { page } from '$app/state';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import type { Session } from '#lib/account/session.svelte.ts';
+  import type { Scope } from '#lib/global/scope.svelte.ts';
   import PasswordStep from '#lib/account/PasswordStep.svelte';
   import MfaStep from '#lib/account/MfaStep.svelte';
   import { accountApi } from '#lib/account/api';
@@ -11,6 +12,7 @@
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const session = getContext<Session>('session');
+  const scope = getContext<Scope>('scope');
   /** 자체 로그인 단계 — 비밀번호 → (필요하면) 인증 코드. */
   let step = $state<'password' | 'mfa'>('password');
   /** 메일이 켜진 배포에서만 「비밀번호를 잊었다」를 그린다. */
@@ -105,6 +107,15 @@
     tokenError = undefined;
     tokenBusy = true;
     desk.token = tokenInput.trim();
+    if (scope.mode === 'global') {
+      // 전역에는 스트림이 없다 — 지역 목록으로 토큰을 잰다. 지역을 고르면 그 지역 스트림에 붙는다.
+      const r = await fetch('/api/v1/regions', { headers: { authorization: `Bearer ${desk.token}` } });
+      tokenBusy = false;
+      if (r.ok) { tokenInput = ''; await goto('/regions'); return; }
+      tokenError = r.status === 401 ? '토큰이 거절됐다' : `regions ${r.status}`;
+      desk.token = '';
+      return;
+    }
     void desk.connect();
     // 스트림이 붙으면 들어간다. 거절되면 desk 가 오류를 남긴다.
     for (let i = 0; i < 40 && !desk.live && desk.error === undefined; i++) await new Promise((r) => setTimeout(r, 150));
