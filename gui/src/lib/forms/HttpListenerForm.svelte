@@ -21,7 +21,13 @@
   let { tls = false }: { tls?: boolean } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
 
-  const pools = $derived(desk.pools.rows.filter((p) => p.protocolClass === 'http').map((p) => ({ value: p.key })));
+  const pools = $derived(desk.pools.rows.filter((p) => p.protocolClass === 'http'));
+  const REJECT = '';
+  /** 빈 값 = 「거절」. 설정 탭(ListenerForm)과 같은 선택지다. */
+  const choices = $derived([
+    { value: REJECT, label: '거절', hint: '라우트에 맞지 않으면 끊어요' },
+    ...pools.map((p) => ({ value: p.key, label: `풀 ${p.key}` })),
+  ]);
   const policies = $derived(desk.policies.map((p) => ({ value: p })));
   const certs = $derived(desk.certs.rows.filter((c) => c.hasMaterial).map((c) => ({ value: c.key })));
 
@@ -29,7 +35,9 @@
   let bind = $state('0.0.0.0');
   // svelte-ignore state_referenced_locally
   let port = $state(tls ? '443' : '80');
-  let pool = $state<string | undefined>();
+  /** 아직 안 골랐으면 undefined. 기본 동작은 사람이 고른다 — 거절과 풀 모두 흔하다. */
+  let action = $state<string | undefined>();
+  const pool = $derived(action === undefined || action === REJECT ? undefined : action);
   let policy = $state<string | undefined>();
   let certificate = $state<string | undefined>();
   let opts = $state<ListenerOptionFlags>({});
@@ -43,19 +51,19 @@
   const hostsOk = $derived((hostList ?? []).every((h) => hostLine(h) === undefined));
 
   const ready = $derived(
-    filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined && hostsOk && redirectOk
+    filled(key, keyError) && filled(bind) && filled(port, portError) && action !== undefined && hostsOk && redirectOk
     && (!tls || (policy !== undefined && certificate !== undefined)),
   );
   const submit = (): void => {
-    if (pool === undefined) return;
+    if (action === undefined) return;
     const k = key.trim();
     const b = bind.trim();
     const n = Number(port);
     if (tls) {
       if (policy === undefined || certificate === undefined) return;
-      void desk.insertHttpsListener(k, { bind: b, port: n, pool, policy, certificate, ...(hostList === undefined ? {} : { hosts: hostList }), ...(redirectOn ? { httpRedirect: { port: Number(redirectPort) } } : {}) }, opts, allow).then(after(resourcePath('listener', k)));
+      void desk.insertHttpsListener(k, { bind: b, port: n, ...(pool === undefined ? {} : { pool }), policy, certificate, ...(hostList === undefined ? {} : { hosts: hostList }), ...(redirectOn ? { httpRedirect: { port: Number(redirectPort) } } : {}) }, opts, allow).then(after(resourcePath('listener', k)));
     } else {
-      void desk.insertHttpListener(k, { bind: b, port: n, pool, ...(hostList === undefined ? {} : { hosts: hostList }) }, opts, allow).then(after(resourcePath('listener', k)));
+      void desk.insertHttpListener(k, { bind: b, port: n, ...(pool === undefined ? {} : { pool }), ...(hostList === undefined ? {} : { hosts: hostList }) }, opts, allow).then(after(resourcePath('listener', k)));
     }
   };
 </script>
@@ -65,8 +73,8 @@
   <ListenerHostsSection bind:value={hosts} />
 
   <FormSection title="동작">
-    <FormRow label="기본 풀" required help={pools.length === 0 ? 'HTTP 풀이 없어요. 풀을 먼저 만들어요.' : '라우트에 맞지 않는 요청을 이 풀로 보내요.'}>
-      <Select label="기본 풀" bind:value={pool} options={pools} placeholder="풀을 골라요" width="100%" disabled={pools.length === 0} />
+    <FormRow label="기본 동작" required help={pools.length === 0 ? '라우트에 맞지 않는 요청을 끊어요. 풀로 보내려면 HTTP 풀을 먼저 만들어요.' : '라우트에 맞지 않는 요청을 끊거나, 고른 풀로 보내요.'}>
+      <Select label="기본 동작" bind:value={action} options={choices} placeholder="동작을 골라요" width="100%" />
     </FormRow>
     {#if tls}
       <FormRow label="TLS 정책" required help={policies.length === 0 ? 'TLS 정책이 없어요. 정책을 먼저 만들어요.' : undefined}>

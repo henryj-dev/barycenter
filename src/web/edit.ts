@@ -328,7 +328,7 @@ export type PutHttpListenerOp = {
     sourceAllow?: string[];
     hosts?: string[];
     http: {
-      /** 리스너를 새로 여는 폼은 언제나 풀이다. URL 프록시가 라우트를 만들 때만 'reject' (#112). */
+      /** 풀을 안 주면 'reject' — 라우트에 맞지 않는 요청을 끊는다 (2026-11-01). URL 프록시도 쓴다 (#112). */
       defaultAction: { pool: string } | 'reject';
       limits?: ProxyLimitsInput;
       headers?: HeaderRulesInput;
@@ -338,10 +338,19 @@ export type PutHttpListenerOp = {
   };
 };
 
-/** HTTP 만. HTTPS 는 tls 결박이 따로 있다. */
+/**
+ * 기본 동작. 풀이 없으면 「거절」 이다 — 라우트에 맞지 않는 요청을 끊는다.
+ * 빈 문자열은 거절이 아니라 실수다 — 막는다.
+ */
+function httpDefaultAction(pool: string | undefined): { pool: string } | 'reject' {
+  if (pool === '') throw new Error('풀이 비어 있다');
+  return pool === undefined ? 'reject' : { pool };
+}
+
+/** HTTP 만. HTTPS 는 tls 결박이 따로 있다. `pool` 이 없으면 기본 동작이 거절이다. */
 export function putHttpListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string } & ListenerOptions & SourceAllowInput & HostsInput,
+  body: { bind: string; port: number; pool?: string } & ListenerOptions & SourceAllowInput & HostsInput,
 ): PutHttpListenerOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.bind === '') throw new Error('바인드가 비어 있다');
@@ -360,7 +369,7 @@ export function putHttpListenerPatch(
       enabled: true,
       ...sourceAllowField(body.sourceAllow),
       ...hostsField(body.hosts),
-      http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
+      http: { defaultAction: httpDefaultAction(body.pool), ...listenerOptionFields(body) },
     },
   }];
 }
@@ -494,7 +503,7 @@ export type PutHttpsListenerOp = {
     /** 평문으로 오면 HTTPS 로 보낸다 (2026-10-31). */
     httpRedirect?: { port: number };
     http: {
-      /** URL 프록시가 라우트를 만들 때만 'reject' (#112·#116). */
+      /** 풀을 안 주면 'reject' (2026-11-01). URL 프록시도 쓴다 (#112·#116). */
       defaultAction: { pool: string } | 'reject';
       limits?: ProxyLimitsInput;
       headers?: HeaderRulesInput;
@@ -523,7 +532,7 @@ export function checkRedirectPort(port: number | undefined, httpsPort: number): 
  */
 export function putHttpsListenerPatch(
   key: string,
-  body: { bind: string; port: number; pool: string; policy: string; certificate: string } & SourceAllowInput
+  body: { bind: string; port: number; pool?: string; policy: string; certificate: string } & SourceAllowInput
     & ListenerOptions & HostsInput & HttpRedirectInput,
 ): PutHttpsListenerOp[] {
   checkRedirectPort(body.httpRedirect?.port, body.port);
@@ -547,7 +556,7 @@ export function putHttpsListenerPatch(
       ...sourceAllowField(body.sourceAllow),
       ...hostsField(body.hosts),
       ...(body.httpRedirect === undefined ? {} : { httpRedirect: { port: body.httpRedirect.port } }),
-      http: { defaultAction: { pool: body.pool }, ...listenerOptionFields(body) },
+      http: { defaultAction: httpDefaultAction(body.pool), ...listenerOptionFields(body) },
       tls: { policy: body.policy, defaultCertificate: body.certificate },
     },
   }];
