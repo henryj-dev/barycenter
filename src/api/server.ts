@@ -56,6 +56,7 @@ import { PATH_SEGMENT_RULE, PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import { AuthFailureLimiter } from './auth-rate-limit.js';
+import { clientAddress, type TrustedProxies } from './client-address.js';
 import { RELAY_PATHS, type RegionRelay } from '../global/relay.js';
 import type { HostAddressFacts } from '../engine/host-addresses.js';
 import {
@@ -67,6 +68,8 @@ import {
 } from './oidc-code.js';
 
 export type ApiOptions = {
+  /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
+  trustedProxies?: TrustedProxies;
   /**
    * 클러스터 모드 (ADR-CLUSTER, #118). 없으면 이 인스턴스는 클러스터가 아니다.
    * `node` 는 이 노드의 이름, `staleAfterMs` 를 넘긴 신호는 「연락 없음」이다.
@@ -150,6 +153,8 @@ export function parseBuildInfo(text: string): BuildInfo | null {
  * 지역과 같은 코드를 지난다(계정은 공용 계정 PG 에 산다 — 사용자 결정).
  */
 export type GlobalApiOptions = {
+  /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
+  trustedProxies?: TrustedProxies;
   global: RegionRelay;
   auth: TokenAuth;
   maxBodyBytes?: number;
@@ -1169,7 +1174,7 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
 async function auditGlobalView(api: GlobalApiOptions, c: Ctx, region: string | null, path: string, stream = false): Promise<boolean> {
   const view = { region, path, ...(stream ? { stream: true } : {}) };
   if (api.accounts === undefined) {
-    log.info('global.view', { actor: c.who.name, ...view, ip: c.req.socket.remoteAddress });
+    log.info('global.view', { actor: c.who.name, ...view, ip: ipOf(c.req) });
     return true;
   }
   try {
@@ -1270,11 +1275,17 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
  * 없었다. 그러면 TLS 를 켜려고 라우팅을 한 벌 더 쓰게 되고, 두 벌은 갈라진다 —
  * `renderCapsOf` 를 한 자리로 모은 이유(B-02)와 같은 종류의 사고다.
  */
+/** 요청마다 한 번 정한 보낸 사람 주소 (`client-address.ts`). 시도 제한 · 감사 IP 가 모두 이것을 쓴다. */
+const CLIENT_IP = new WeakMap<IncomingMessage, string>();
+const ipOf = (req: IncomingMessage): string | undefined => CLIENT_IP.get(req) ?? req.socket.remoteAddress;
+
 export function apiHandler(api: AnyApi): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const authFailures = new AuthFailureLimiter();
   api.sessions ??= new BrowserSessions();
   return (req, res) => {
+    const ip = clientAddress(req, api.trustedProxies);
+    if (ip !== undefined) CLIENT_IP.set(req, ip);
     void handle(req, res, api, max, authFailures).catch((e) => {
       /**
        * 여기까지 온 것은 핸들러 밖의 실패다. 조용히 끊지 않는다.
@@ -1433,7 +1444,7 @@ const MFA_COOKIE = 'bary_mfa';
  */
 const PASSWORD_BODY_MAX = 64 * 1024;
 /** 시도 제한 키(공용 계정 PG 의 `auth_throttle`). 재설정 요청 수는 로그인 실패와 나눠 센다. */
-const throttleKey = (use: 'login' | 'reset', req: IncomingMessage): string => `${use}:${req.socket.remoteAddress ?? 'unknown'}`;
+const throttleKey = (use: 'login' | 'reset', req: IncomingMessage): string => `${use}:${ipOf(req) ?? 'unknown'}`;
 const MFA_PATH = '/api/v1/session/mfa';
 
 function accountsOf(api: { accounts?: AccountService }): AccountService {
@@ -1453,7 +1464,7 @@ function personOf(who: Principal): { userId: string; sessionHash: string } {
 function metaOf(req: IncomingMessage): AccountMeta {
   const ua = req.headers['user-agent'];
   return {
-    ...(req.socket.remoteAddress === undefined ? {} : { ip: req.socket.remoteAddress }),
+    ...(ipOf(req) === undefined ? {} : { ip: ipOf(req) as string }),
     ...(typeof ua === 'string' ? { userAgent: ua.slice(0, 200) } : {}),
   };
 }
@@ -2031,7 +2042,7 @@ async function handle(
       ...((oidc ?? '') !== '' ? [expiredCookie(SESSION_COOKIE, api.sessionSecure === true)] : []),
     ];
     if (stale.length > 0) res.setHeader('set-cookie', stale);
-    const key = req.socket.remoteAddress ?? 'unknown';
+    const key = ipOf(req) ?? 'unknown';
     count('bary_auth_failures_total');
     const retryAfter = authFailures.record(key);
     if (retryAfter !== undefined) {
@@ -2044,7 +2055,7 @@ async function handle(
     }
     return;
   }
-  authFailures.clear(req.socket.remoteAddress ?? 'unknown');
+  authFailures.clear(ipOf(req) ?? 'unknown');
 
   if (isGlobal(api)) {
     await dispatch(req, res, url, who, api, [...GLOBAL_ROUTES, ...ACCOUNT_ROUTES as Route<GlobalApiOptions>[]], max, {
