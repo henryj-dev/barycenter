@@ -20,7 +20,10 @@ export type TrustedProxies = BlockList;
  * 주소의 일부가 아니고 `BlockList` 가 받지 않는다.
  */
 function normalize(addr: string): string {
-  const s = addr.trim().replace(/%.*$/, '');
+  const t = addr.trim();
+  // 정규식을 쓰지 않는다 — 헤더 값은 클라이언트가 정하고, `%` 가 많은 값에서 느려진다(CodeQL polynomial-redos).
+  const pct = t.indexOf('%');
+  const s = pct < 0 ? t : t.slice(0, pct);
   const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(s);
   return m?.[1] ?? s;
 }
