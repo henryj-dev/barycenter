@@ -121,7 +121,7 @@
 
   const regionLabel = $derived(scope.mode === 'global'
     ? `전역 · ${scope.region?.name ?? '지역을 고른다'}`
-    : node !== undefined ? `${node} · 이 인스턴스` : '이 인스턴스');
+    : [scope.self, node].filter((x) => x !== undefined).join(' · ') || '이 인스턴스');
   const crumbs = $derived(crumbsOf(place, detail ? decodeURIComponent(page.params['key'] ?? page.params['node'] ?? '') : undefined));
 </script>
 
