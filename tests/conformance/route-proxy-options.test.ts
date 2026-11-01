@@ -143,3 +143,22 @@ describe('렌더', () => {
     expect(decoded.ok).toBe(true);
   });
 });
+
+/**
+ * 기본 동작으로 풀에 보내는 `location /` 도 보낸 사람 주소를 넘긴다 (2026-11-01, web-01). 라우트에만 냈다.
+ * 그래서 barycenter 의 GUI 를 기본 동작으로 낸 리스너 뒤에서 API 는 모든 사람을 nginx 주소 하나로 봤다.
+ */
+describe('기본 동작 location', () => {
+  const toPool = (): unknown => {
+    const m = model([]) as { listeners: { http: Record<string, unknown> }[] };
+    m.listeners[0]!.http['defaultAction'] = { pool: 'ext' };
+    return m;
+  };
+
+  it('X-Forwarded-For · X-Forwarded-Proto 를 라우트와 같이 넘긴다', () => {
+    const loc = location(conf(toPool()), '/');
+    expect(loc).toContain('proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;');
+    expect(loc).toContain('proxy_set_header X-Forwarded-Proto $scheme;');
+    expect(loc.indexOf('proxy_set_header Host $host;')).toBeLessThan(loc.indexOf('X-Forwarded-For'));
+  });
+});
