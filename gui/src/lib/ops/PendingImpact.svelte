@@ -22,6 +22,7 @@
       tone: 'warn' as const, icon: '▲',
       text: `롤백은 영향을 미리 재지 않아요. 소켓이 열리거나 닫히고 세션이 끊길 수 있어요. 기록 화면에서 r${view.rollbackOf} 와 지금의 차이를 먼저 봐요.`,
     }]),
+    ...view.bindBlockers.map((s) => ({ tone: 'danger' as const, icon: '✕', text: `적용할 수 없어요 — ${s}` })),
     ...view.socketsRemoved.map((s) => ({ tone: 'danger' as const, icon: '✕', text: `소켓을 닫아요: ${s}` })),
     ...view.sessions.map((s) => ({ tone: 'warn' as const, icon: '▲', text: s })),
     ...view.routeWarnings.map((s) => ({ tone: 'warn' as const, icon: '▲', text: `라우트 순서 — ${s}` })),
@@ -36,12 +37,16 @@
 </script>
 
 {#if view !== undefined}
-  <ImpactCard tone={view.requiresReload ? 'warn' : 'ok'} title={view.headline} {breaking} {quiet} quietLabel="어디에 걸리나 · 평면 · 리스너 · 인증서">
+  <ImpactCard tone={view.bindBlockers.length > 0 ? 'danger' : view.requiresReload ? 'warn' : 'ok'} title={view.headline} {breaking} {quiet} quietLabel="어디에 걸리나 · 평면 · 리스너 · 인증서">
     {#snippet sub()}plan <code>{view.planId}</code> → r{view.revision}{#if view.rollbackOf === undefined && view.socketsAdded.length === 0 && view.socketsRemoved.length === 0} · 소켓 변화 없음{/if}{/snippet}
     {#snippet footer()}
       {#if !ro}
-        <Button variant="primary" loading={desk.applying} onclick={() => { void desk.apply(); }}>{desk.applying ? '적용하는 중' : '적용해요'}</Button>
-        <FieldMessage>적용하면 트래픽이 바뀌어요.</FieldMessage>
+        <Button variant="primary" loading={desk.applying} disabled={view.bindBlockers.length > 0} onclick={() => { void desk.apply(); }}>{desk.applying ? '적용하는 중' : '적용해요'}</Button>
+        {#if view.bindBlockers.length > 0}
+          <FieldMessage>이 변경은 한 번에 적용할 수 없어요. 위 안내대로 두 번에 나눠 적용해요.</FieldMessage>
+        {:else}
+          <FieldMessage>적용하면 트래픽이 바뀌어요.</FieldMessage>
+        {/if}
       {:else}
         <FieldMessage>전역 화면은 읽기만 해요. 적용은 그 지역의 GUI 에서 해요.</FieldMessage>
       {/if}

@@ -35,6 +35,12 @@ nginx 는 이 모양을 그대로 받는다. 막는 것은 우리 모델과 검�
      실측: `tests/golden/bind-precedence.test.ts`.
      처음 결정은 「어느 server 가 받는지가 주소에 따라 바뀐다」 를 이유로 막았다. 그 동작이 곧 특정 주소 우선이고,
      결과는 결정적이다.
+     **단, reload 로는 넘어가지 못하는 전환이 있다** (2026-11-01, web-01). 지금 특정 주소 소켓만 열린 포트에
+     와일드카드를 새로 열거나, 그 반대이면 reload 가 `Address already in use` 로 실패한다. reload 는 옛 소켓을 연 채로
+     새 소켓을 bind 하고, Linux 는 LISTEN 중인 소켓과 주소가 겹치는 bind 를 막는다. plan 은 이것을
+     `impact.bindTransitions` 로 말하고, apply 는 reload 를 보내기 전에 409 `bind_transition` 으로 거절한다.
+     두 번에 나눠 적용한다: 옛 소켓을 닫는 변경을 먼저 적용하고, 그다음 원하는 바인드를 적용한다.
+     실측: `tests/unit/bind-transition.test.ts` · `tests/store/bind-transition.test.ts`.
    - 소켓 단위 옵션이 같다: PROXY protocol 수신(`listen … proxy_protocol`).
    - 그 소켓에서 **호스트 이름이 겹치지 않는다** — 호스트 리스너의 `hosts` 와 호스트 없는 리스너의 라우트 호스트를
      모두 합쳐 본다. 겹치면 nginx 는 경고만 내고 먼저 나온 server 에 준다(E36). 조용한 오동작이다.

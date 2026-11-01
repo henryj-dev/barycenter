@@ -27,6 +27,8 @@ export type Impact = {
     warnings: { kind: string; listener: string; routes: string[]; message: string }[];
   };
   capabilityWarnings?: { kind: string; message: string }[];
+  /** reload 로 못 여는 소켓 (2026-11-01). 있으면 apply 가 거절한다. 옛 plan 에는 없다. */
+  bindTransitions?: { opens: string; blockedBy: string[]; message: string }[];
   planes: readonly string[];
   confDiff?: { before: number; after: number };
 };
@@ -47,6 +49,8 @@ export type ImpactView = {
   certificates: string[];
   routeWarnings: string[];
   capabilityWarnings: string[];
+  /** 이것이 있으면 적용이 막힌다 — reload 로 못 여는 소켓. */
+  bindBlockers: string[];
   /** 롤백 plan 이면 되돌아가는 리비전. 이때 위 목록은 비어 있다 — 「없다」 가 아니라 「재지 않았다」 다. */
   rollbackOf?: string;
 };
@@ -81,6 +85,7 @@ function viewOfRollback(pending: PendingApply, rollbackOf: string): ImpactView {
     certificates: [],
     routeWarnings: [],
     capabilityWarnings: [],
+    bindBlockers: [],
     rollbackOf,
   };
 }
@@ -130,6 +135,7 @@ export function viewOfImpact(pending: PendingApply, impact: Impact): ImpactView 
     ),
     routeWarnings: (impact.routeOrderChanges?.warnings ?? []).map((w) => w.message),
     capabilityWarnings: (impact.capabilityWarnings ?? []).map((w) => w.message),
+    bindBlockers: (impact.bindTransitions ?? []).map((b) => b.message),
   };
 }
 
