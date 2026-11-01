@@ -19,8 +19,9 @@
   /** 상태 한 줄 — 리소스마다 이미 받은 값에서 읽는다. 모르면 안 쓴다. */
   const state = $derived.by((): { text: string; tone: Tone; icon?: string } | undefined => {
     if (kind === 'listener') {
-      const row = desk.listeners.rows.find((r) => r.key === key && r.mark !== 'leave');
+      const row = desk.listeners.rows.find((r) => r.key === key);
       if (row === undefined) return undefined;
+      if (row.mark === 'off') return { text: '꺼져 있어 열지 않아요', tone: 'neutral' };
       return row.mark === 'join' ? { text: '적용하면 열려요', tone: 'pending' } : { text: '서빙 중', tone: 'ok' };
     }
     if (kind === 'backend') {

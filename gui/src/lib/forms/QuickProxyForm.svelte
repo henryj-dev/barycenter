@@ -15,7 +15,7 @@
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const httpListeners = $derived(desk.listeners.rows
-    .filter((l) => l.mark !== 'leave' && (l.protocol === 'http' || l.protocol === 'https'))
+    .filter((l) => (l.protocol === 'http' || l.protocol === 'https'))
     .map((l) => ({ value: l.key, hint: l.protocol })));
   const certs = $derived(desk.certs.rows.filter((c) => c.hasMaterial).map((c) => ({ value: c.key })));
   const policies = $derived(desk.policies.map((p) => ({ value: p })));

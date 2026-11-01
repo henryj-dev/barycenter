@@ -14,7 +14,7 @@
   const idle = $derived(backends.filter((k) => desk.traffic.get(k)?.receivingTraffic === false));
   const certSoon = $derived(desk.certs.rows.filter((c) => !c.hasMaterial || (c.expiresInDays !== undefined && c.expiresInDays < 30)));
   const cards = $derived([
-    { href: '/traffic/listener', label: '리스너', n: desk.listeners.rows.filter((r) => r.mark !== 'leave').length },
+    { href: '/traffic/listener', label: '리스너', n: desk.listeners.rows.length },
     { href: '/traffic/route/http', label: '라우트', n: desk.routes.order.length + desk.routes.passthrough.length },
     { href: '/traffic/pool', label: '풀', n: desk.pools.rows.length },
     { href: '/traffic/backend', label: '백엔드', n: backends.length },

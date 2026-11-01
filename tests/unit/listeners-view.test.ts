@@ -9,7 +9,7 @@ describe('리스너 목록', () => {
   it('커밋됐지만 아직 안 열린 소켓을 join 으로 표시한다', () => {
     const view = viewOfListeners(
       [{ key: 'front', protocol: 'http', bind: '0.0.0.0', port: 999 }],
-      { added: ['tcp://0.0.0.0:999'], removed: [] },
+      { added: ['tcp://0.0.0.0:999'] },
     );
     expect(socketOf(view.rows[0]!)).toBe('tcp://0.0.0.0:999');
     expect(view.rows).toEqual([
@@ -28,15 +28,20 @@ describe('리스너 목록', () => {
     expect(view.rows.map((r) => [r.key, r.sourceAllow.length])).toEqual([['cf', 2], ['open', 0]]);
   });
 
-  it('head 에서 빠진 소켓은 아직 엔진에 있다고 leave 로 남긴다', () => {
+  it('**head 에서 빠진 소켓은 행을 만들지 않는다** — 목록은 head 의 리스너만 (2026-11-01)', () => {
+    // 전에는 삭제한 리스너의 소켓을 `tcp://…` 이름의 「적용하면 닫힘」 행으로 그렸다. 리스너가 아닌 행이 섞였다.
     const view = viewOfListeners(
       [{ key: 'keep', protocol: 'http', bind: '127.0.0.1', port: 80 }],
-      { added: [], removed: ['tcp://0.0.0.0:999'] },
+      { added: [] },
     );
-    expect(view.rows.map((r) => [r.socket, r.mark])).toEqual([
-      ['tcp://127.0.0.1:80', 'stay'],
-      ['tcp://0.0.0.0:999', 'leave'],
-    ]);
+    expect(view.rows.map((r) => [r.key, r.mark])).toEqual([['keep', 'stay']]);
+  });
+
+  it('**꺼진 리스너는 「서빙 중」 이 아니다** — 적용하면 열지 않는다', () => {
+    const view = viewOfListeners([
+      { key: 'off', protocol: 'https', bind: '0.0.0.0', port: 443, enabled: false, httpRedirect: { port: 80 } },
+    ], { added: ['tcp://0.0.0.0:443'] });
+    expect(view.rows.map((r) => r.mark)).toEqual(['off']);
   });
 
   it('대기 열이 없으면 목록은 지금 모델 그대로다', () => {
@@ -45,7 +50,7 @@ describe('리스너 목록', () => {
       { key: 'a', protocol: 'tcp', bind: '127.0.0.1', port: 22 },
     ]);
     expect(view.rows.map((r) => r.key)).toEqual(['a', 'b']);
-    expect(view.rows.every((r) => r.mark === 'stay')).toBe(true);
+    expect(view.rows.map((r) => r.mark)).toEqual(['stay', 'off']);
     expect(view.rows[1]?.enabled).toBe(false);
   });
 });
@@ -67,13 +72,8 @@ describe('리다이렉트 소켓', () => {
   });
 
   it('리다이렉트 소켓만 새로 열려도 「적용하면 열림」 이다', () => {
-    const [row] = viewOfListeners([https], { added: ['tcp://10.253.65.250:80'], removed: [] }).rows;
+    const [row] = viewOfListeners([https], { added: ['tcp://10.253.65.250:80'] }).rows;
     expect(row?.mark).toBe('join');
-  });
-
-  it('닫힘 목록에 리다이렉트 소켓이 와도 따로 「닫힘」 행을 만들지 않는다 — 지금 있는 소켓이다', () => {
-    const rows = viewOfListeners([https], { added: [], removed: ['tcp://10.253.65.250:80'] }).rows;
-    expect(rows.map((r) => r.mark)).toEqual(['stay']);
   });
 
   it('http 리스너에는 붙이지 않는다', () => {

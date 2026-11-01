@@ -119,7 +119,7 @@ export function createDesk(scope?: { api(path: string): string }) {
     setModel('listeners', body);
     listeners = viewOfListeners(
       facts,
-      impact === undefined ? undefined : { added: impact.socketsAdded, removed: impact.socketsRemoved },
+      impact === undefined ? undefined : { added: impact.socketsAdded },
     );
   };
 
