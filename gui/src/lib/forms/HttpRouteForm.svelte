@@ -16,7 +16,7 @@
   type Action = 'proxy' | 'redirect' | 'reject';
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const listeners = $derived(desk.listeners.rows
-    .filter((l) => l.mark !== 'leave' && (l.protocol === 'http' || l.protocol === 'https'))
+    .filter((l) => (l.protocol === 'http' || l.protocol === 'https'))
     .map((l) => ({ value: l.key, hint: l.protocol })));
   const pools = $derived(desk.pools.rows.filter((p) => p.protocolClass === 'http').map((p) => ({ value: p.key })));
   const ACTIONS: { value: Action; label: string }[] = [

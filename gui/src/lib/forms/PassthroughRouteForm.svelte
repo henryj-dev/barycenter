@@ -14,7 +14,7 @@
   type Action = 'proxy' | 'reject';
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const listeners = $derived(desk.listeners.rows
-    .filter((l) => l.mark !== 'leave' && l.protocol === 'tls_passthrough').map((l) => ({ value: l.key })));
+    .filter((l) => l.protocol === 'tls_passthrough').map((l) => ({ value: l.key })));
   const pools = $derived(desk.pools.rows.filter((p) => p.protocolClass === 'tcp').map((p) => ({ value: p.key })));
   const ACTIONS: { value: Action; label: string }[] = [{ value: 'proxy', label: '풀로 보내기' }, { value: 'reject', label: '연결을 끊어요' }];
 

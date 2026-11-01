@@ -1,9 +1,10 @@
 /**
  * Listeners 화면이 읽는 값 — DESIGN.md §10
  *
- * GET /api/v1/listeners 는 **head 모델**이다. 커밋됐지만 아직 적용되지 않은
- * plan 이 있으면, 그 목록은 이미 미래다. 엔진에 아직 있는 소켓은 impact 의
- * removed 로만 보인다. 충돌 판정은 검증기의 몫이다 — 여기서 다시 재지 않는다.
+ * GET /api/v1/listeners 는 **head 모델**이다. 목록은 head 의 리스너만 그린다 —
+ * 지금 서빙 중이거나 적용하면 그렇게 될 것만 (2026-11-01). 삭제했거나 꺼서 적용하면
+ * 닫힐 소켓은 따로 행을 만들지 않는다. 그 변경은 적용 대기 화면의 영향 목록이 보여 준다.
+ * 충돌 판정은 검증기의 몫이다 — 여기서 다시 재지 않는다.
  */
 export type ListenerFact = {
   key: string;
@@ -17,9 +18,11 @@ export type ListenerFact = {
   httpRedirect?: { port: number };
 };
 
-export type SocketDelta = { added: string[]; removed: string[] };
+/** impact 의 socketsAdded. 닫힐 소켓(removed)은 목록이 안 쓴다. */
+export type SocketDelta = { added: string[] };
 
-export type ListenerMark = 'stay' | 'join' | 'leave';
+/** stay = 서빙 중 · join = 적용하면 열림 · off = 꺼져 있어 열지 않음. */
+export type ListenerMark = 'stay' | 'join' | 'off';
 
 export type ListenerRow = {
   key: string;
@@ -56,11 +59,6 @@ export function viewOfListeners(
     l.protocol === 'https' && l.httpRedirect !== undefined
       ? { port: l.httpRedirect.port, socket: socketOf({ protocol: 'http', bind: l.bind, port: l.httpRedirect.port }) }
       : undefined;
-  // 리다이렉트 소켓도 「지금 있는 소켓」 이다 — 그것이 닫힘 목록에 오면 리스너가 아닌 행으로 따로 그린다.
-  const current = new Set(listeners.flatMap((l) => {
-    const r = redirectOf(l);
-    return r === undefined ? [socketOf(l)] : [socketOf(l), r.socket];
-  }));
   const rows: ListenerRow[] = listeners.map((l) => {
     const socket = socketOf(l);
     const redirect = redirectOf(l);
@@ -71,44 +69,14 @@ export function viewOfListeners(
       port: l.port,
       enabled: l.enabled !== false,
       socket,
-      mark: added.has(socket) || (redirect !== undefined && added.has(redirect.socket)) ? 'join' : 'stay',
+      mark: l.enabled === false ? 'off'
+        : added.has(socket) || (redirect !== undefined && added.has(redirect.socket)) ? 'join' : 'stay',
       sourceAllow: l.sourceAllow ?? [],
       ...(redirect === undefined ? {} : { redirect }),
     };
   });
-  for (const socket of pending?.removed ?? []) {
-    if (current.has(socket)) continue;
-    const parsed = parseSocket(socket);
-    rows.push({
-      key: parsed.key,
-      protocol: parsed.protocol,
-      bind: parsed.bind,
-      port: parsed.port,
-      enabled: true,
-      socket,
-      mark: 'leave',
-      sourceAllow: [],
-    });
-  }
   rows.sort((a, b) => a.port - b.port || a.key.localeCompare(b.key) || a.socket.localeCompare(b.socket));
   return { rows };
-}
-
-function parseSocket(socket: string): {
-  key: string; protocol: string; bind: string; port: number;
-} {
-  const protocol = socket.startsWith('udp://') ? 'udp' : 'tcp';
-  const rest = socket.replace(/^(tcp|udp):\/\//, '');
-  const cut = rest.lastIndexOf(':');
-  if (cut < 0) return { key: socket, protocol, bind: rest, port: 0 };
-  const bind = rest.slice(0, cut);
-  const port = Number(rest.slice(cut + 1));
-  return {
-    key: socket,
-    protocol,
-    bind,
-    port: Number.isFinite(port) ? port : 0,
-  };
 }
 
 /**
