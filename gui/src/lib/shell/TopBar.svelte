@@ -5,6 +5,7 @@
    * **로그인 상태에서는 토큰 칸을 어디에도 안 보인다** — 토큰 연결은 로그인 화면에 있다.
    */
   import { ConnectionStatus, Menu, type MenuItem } from '#lib/ui';
+  import type { ConnState } from '@web/reconnect';
 
   type Theme = 'system' | 'dark' | 'light';
   let { crumbs, node, head, conn, pending = 0, user, role, theme = $bindable('system'), onlogout, ondisconnect, menuOpen = $bindable(false) }: {
@@ -12,7 +13,7 @@
     /** 클러스터면 이 노드 이름. */
     node?: string;
     head?: string;
-    conn: 'live' | 'reconnecting' | 'down';
+    conn: ConnState;
     pending?: number;
     /** 사람 계정이면 이름. 토큰으로 붙었으면 undefined. */
     user?: string;

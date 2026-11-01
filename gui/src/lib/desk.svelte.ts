@@ -18,7 +18,7 @@ import { viewOfCertificates, type CertificateFact, type CertsView, type OrderFac
 import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
-import { backoffMs } from '@web/reconnect';
+import { backoffMs, hasStream } from '@web/reconnect';
 import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import type { ModelLike, ResourceKind } from '@web/resources';
@@ -49,7 +49,7 @@ export type HostAddressFacts = {
 /** ACME 계정 한 줄 — `GET /api/v1/acme/accounts`. */
 export type AcmeAccountRow = { id: string; key: string; directoryUrl: string; contact: string[]; registered: boolean };
 
-export function createDesk(scope?: { api(path: string): string }) {
+export function createDesk(scope?: { api(path: string): string; mode: string; region?: unknown }) {
   const api = (path: string): string => scope?.api(path) ?? path;
   // OIDC 로그인은 HttpOnly 세션 쿠키를 쓴다. 수동 Bearer 입력은 새로고침하면 사라지는
   // 메모리 값으로만 남긴다 — 브라우저 저장소에 API 자격증명을 보관하지 않는다.
@@ -348,6 +348,8 @@ export function createDesk(scope?: { api(path: string): string }) {
   const connect = async (): Promise<void> => {
     stop?.();
     error = undefined;
+    // 전역에서 지역을 고르기 전에는 붙을 스트림이 없다 — `/regions` 가 고른 뒤 다시 부른다.
+    if (scope !== undefined && !hasStream(scope)) return;
     const ac = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     stop = () => {

@@ -11,6 +11,7 @@
   import { goto } from '$app/navigation';
   import { isDynamicGuiPath, pageOf } from '@web/page';
   import { PAGE_META, STANDALONE, crumbsOf } from '@web/nav';
+  import { connStateOf, hasStream } from '@web/reconnect';
   import { createDesk } from '#lib/desk.svelte.ts';
   import { createSession } from '#lib/account/session.svelte.ts';
   import StepUpDialog from '#lib/account/StepUpDialog.svelte';
@@ -103,7 +104,7 @@
   $effect(() => { void page.url.pathname; menuOpen = false; });
 
   /** 실시간 연결 — 붙어 있으면 수신 중, 자격은 있는데 끊겼으면 재연결 중, 자격이 없으면 끊김. */
-  const conn = $derived(desk.live ? 'live' : (session.me !== undefined || desk.token !== '') ? 'reconnecting' : 'down');
+  const conn = $derived(connStateOf({ live: desk.live, signedIn: session.me !== undefined || desk.token !== '', hasStream: hasStream(scope) }));
 
   /** 클러스터면 이 노드 이름을 상단 바에 보인다. 붙을 때 한 번 묻는다. */
   let node = $state<string | undefined>();
