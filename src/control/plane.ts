@@ -776,22 +776,20 @@ export class ControlPlane {
   /**
    * 지금 서빙 중인 세대의 렌더 digest 와 epoch.
    *
-   * **적용된 리비전에서 다시 렌더한다.** 세대 디렉토리의 conf 를 읽어 해시하면 될 것
-   * 같지만, 그건 `rendered.digest`(conf 문자열의 sha256)와 같은 값을 보장하지 않는다 —
-   * manifest 의 digest 는 **파일 집합 + 평면**으로 계산되기 때문이다. 두 수를 비교하려면
-   * 같은 방법으로 만들어야 한다.
+   * **그 세대를 낸 plan 의 `render_digest` 를 읽는다** (2026-11-01, web-01). 전에는 적용된 리비전을 **지금 판의
+   * 렌더러로** 다시 렌더했다. 그러면 렌더러가 바뀐 뒤에도 digest 가 새 렌더와 같아 보이고, 같은 리비전을 다시 적용하면
+   * 멤버십만 옮기고 끝났다 — #163 의 X-Forwarded-For 가 nginx 에 나가지 않았다. plan 의 digest 는 커밋 때 같은
+   * 렌더 능력으로 구운 conf 의 sha256 이라 `rendered.digest` 와 같은 방법의 수다. 세대 디렉토리의 conf 를 해시하지
+   * 않는 이유는 그대로다 — manifest 의 digest 는 파일 집합 + 평면의 수다.
    */
   private async activeRenderDigest(): Promise<{ digest: string; epoch: string } | undefined> {
     const r = (await this.db.query(
-      `SELECT revision, activation_epoch::text AS epoch FROM operations
-        WHERE phase = 'activated' ORDER BY activation_epoch DESC LIMIT 1`,
+      `SELECT o.activation_epoch::text AS epoch, p.render_digest FROM operations o
+         JOIN plans p ON p.id = o.plan_id
+        WHERE o.phase = 'activated' ORDER BY o.activation_epoch DESC, o.created_at DESC LIMIT 1`,
     )).rows[0];
     if (r === undefined) return undefined;
-    const model = await this.store.modelAt(String(r['revision']));
-    return {
-      digest: render(model, this.opts.renderCaps ?? { streamRealip: false }).digest,
-      epoch: String(r['epoch']),
-    };
+    return { digest: String(r['render_digest']), epoch: String(r['epoch']) };
   }
 
   /**

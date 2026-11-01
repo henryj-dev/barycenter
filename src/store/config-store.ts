@@ -1370,6 +1370,18 @@ export class ConfigStore {
   }
 
   /**
+   * 엔진이 지금 돌리는 conf 의 digest — 마지막으로 활성화된 작업의 plan 이 커밋 때 구운 값. `control/plane.ts` 의
+   * `activeRenderDigest` 와 같은 기준이다. 없으면 undefined.
+   */
+  async servedDigest(): Promise<string | undefined> {
+    const r = (await this.db.query(
+      `SELECT p.render_digest FROM operations o JOIN plans p ON p.id = o.plan_id
+        WHERE o.phase = 'activated' ORDER BY o.activation_epoch DESC, o.created_at DESC LIMIT 1`,
+    )).rows[0];
+    return r === undefined ? undefined : String(r['render_digest']);
+  }
+
+  /**
    * 엔진이 지금 돌리는 리비전 — 마지막으로 **활성화된** 적용 작업의 리비전. 없으면 undefined.
    * `control/plane.ts` 의 `followActive` · `activeRenderDigest` 와 같은 기준이다(activation_epoch 가 가장 큰 것).
    */
@@ -1457,7 +1469,9 @@ export class ConfigStore {
     const active = await this.activeRevision();
     const priorModel = active === undefined ? model : await this.modelAt(active);
     const before = safeRender(priorModel, this.caps);
-    const impact = impactOf({ model: priorModel, conf: before?.conf ?? '' }, { model, rendered }, this.caps, this.certFacts);
+    const impact = impactOf(
+      { model: priorModel, conf: before?.conf ?? '', servedDigest: await this.servedDigest() },
+      { model, rendered }, this.caps, this.certFacts);
     const planId = randomUUID();
     await this.db.tx(async (c) => {
       // head 를 잠근다 — 그 사이 커밋이 들어오면 이 plan 은 낡는다. 그러면 만들지 않는다.
@@ -2236,7 +2250,11 @@ function capabilityWarningsOf(model: Model, caps: RenderCapabilities): Impact['c
 }
 
 function impactOf(
-  before: { model: Model; conf: string },
+  /**
+   * `servedDigest` — 엔진이 **실제로** 돌리는 conf 의 digest (그 세대를 낸 plan 의 `render_digest`). 주면 reload 판정은
+   * 이것과 비교한다. `conf` 는 옛 모델을 지금 판의 렌더러로 다시 렌더한 것이라, 렌더러가 바뀐 뒤에는 새 렌더와 같아 보인다.
+   */
+  before: { model: Model; conf: string; servedDigest?: string | undefined },
   after: { model: Model; rendered: RenderedConfig },
   caps: RenderCapabilities,
   facts?: Pick<SecretStore, 'facts'>,
@@ -2245,7 +2263,9 @@ function impactOf(
   const { model, rendered } = after;
   // 리다이렉트 소켓(HTTPS 의 평문 포트)도 여는 소켓이다 — 열리고 닫히는 것이 보여야 한다.
   const sockets = new Set(withRedirectListeners(model.listeners).filter((l) => l.enabled).map(socketOf));
-  const requiresReload = beforeConf !== rendered.conf;
+  const requiresReload = before.servedDigest !== undefined
+    ? before.servedDigest !== rendered.digest
+    : beforeConf !== rendered.conf;
   /**
    * **멤버십 평면이 있어야 멤버십 전용 전환이 가능하다** (`control/plane.ts`).
    *
