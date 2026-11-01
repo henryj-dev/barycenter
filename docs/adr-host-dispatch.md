@@ -45,9 +45,9 @@
    - redirect URI: 전역 화면은 `BARY_OIDC_REDIRECT_URI` 의 호스트만 `BARY_GLOBAL_HOST` 로 바꾸고 포트를 뗀다. 경로는 같다.
      예: `https://util-icn-vtr.barycenter.tinyuniver.se:8443/login` → `https://barycenter.tinyuniver.se/login`.
      IdP 에는 두 주소를 모두 등록한다.
-3. 설치 스크립트와 문서에서 별도 전역 서비스(`--mode global`, 9443)를 걷는다. 8443 직결로 두 이름을 쓰려면 인증서 하나가
-   두 이름을 모두 덮어야 한다(`*.barycenter.tinyuniver.se` 는 `barycenter.tinyuniver.se` 를 덮지 않는다). 데이터 플레인 443 을
-   거치면 nginx 가 이름마다 인증서를 고른다.
+3. (끝, 2026-11-01) 별도 전역 서비스(`--mode global`, `barycenter-global`, 9443)를 걷었다. `BARY_MODE=global` 이면
+   기동을 거부한다. 전역 주소는 데이터 플레인 443 으로 들어온다 — nginx 가 SNI 로 `barycenter.tinyuniver.se` 의
+   인증서를 고르고 관리 API 로 넘긴다(`runbook-global.md` 「주소 · 인증서 · DNS」). 엔진이 고장 나면 관리 포트(8443)로 바로 간다.
 
 ## 대가
 
