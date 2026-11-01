@@ -1160,6 +1160,15 @@ export async function main(): Promise<void> {
   }
   const build = readBuildInfo(prefix);
   const dispatch = hostDispatchFromEnv(process.env, build?.commit);
+  /**
+   * 계정이 꺼져 있으면 SSO 로그인 중 상태가 **이 프로세스 메모리**에 있다. 전역 호스트는 DNS 로 여러 노드에 나뉘므로, 시작과
+   * 콜백이 다른 노드로 가면 로그인이 끝나지 않는다. 계정을 켜면 그 상태가 계정 PG 에 있다(`login_flows`).
+   */
+  if (dispatch.globalSurface !== undefined && oidcRp !== undefined && accounts === undefined) {
+    log.warn('oidc.login_state_in_memory', {
+      reason: 'BARY_GLOBAL_HOST 와 SSO 가 켜졌는데 계정(BARY_ACCOUNTS_DSN)이 꺼졌다 — 노드가 여럿이면 SSO 로그인이 끊긴다',
+    });
+  }
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
     ...dispatch,

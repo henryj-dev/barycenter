@@ -106,6 +106,11 @@ describe('한 프로세스의 두 화면', () => {
       election: { state: { isLeader: true, token: '1', holder: 'test', since: '' } } as LeaderElection,
       region: 'util-icn-vtr',
       globalSurface: { host: 'barycenter.tinyuniver.se', relay },
+      oidcRp: {
+        issuer: 'https://idp.example', audience: 'bary', key: 'k'.repeat(32),
+        authorizationEndpoint: 'https://idp.example/authorize', tokenEndpoint: 'https://idp.example/token',
+        clientId: 'bary', redirectUri: 'https://util-icn-vtr.barycenter.tinyuniver.se:8443/login/callback',
+      },
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     port = (server.address() as AddressInfo).port;
@@ -160,6 +165,16 @@ describe('한 프로세스의 두 화면', () => {
     expect(row).not.toHaveProperty('status');
     expect(String(row?.['error'])).toMatch(/'beta'/);
     fakeSays = 'alpha';
+  });
+
+  it('**SSO 는 들어온 호스트로 돌아온다** — 로그인 쿠키가 호스트에 묶인다', async () => {
+    const back = async (host: string): Promise<string | null> => {
+      const r = await call(host, '/api/v1/oidc/authorization-request');
+      expect(r.status).toBe(200);
+      return new URL(String(r.body['url'])).searchParams.get('redirect_uri');
+    };
+    expect(await back('barycenter.tinyuniver.se')).toBe('https://barycenter.tinyuniver.se/login/callback');
+    expect(await back('util-icn-vtr.barycenter.tinyuniver.se')).toBe('https://util-icn-vtr.barycenter.tinyuniver.se:8443/login/callback');
   });
 
   it('인증 실패는 두 화면이 함께 센다 — 화면을 바꿔 가며 두 배로 시도하지 못한다', async () => {
