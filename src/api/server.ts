@@ -108,6 +108,11 @@ export type ApiOptions = {
   /** HTTPS 서버에서만 Secure 쿠키를 붙인다. */
   sessionSecure?: boolean;
   /**
+   * 계정 세션 쿠키를 함께 쓰는 도메인 (`BARY_SESSION_DOMAIN`, 2026-11-01). 전역과 지역 화면 사이를 오가도
+   * 로그인이 유지된다. 그 도메인 밖(IP 등)으로 들어오면 지금처럼 그 호스트만 쓰는 쿠키다.
+   */
+  sessionDomain?: string;
+  /**
    * 사람 계정 (공통 회원정책 1차 · 계획 A). 공용 계정 PG 에 산다. 없으면 계정 경로는 404
    * `accounts_disabled` 이고 사람 로그인은 지금처럼 OIDC 메모리 세션뿐이다.
    */
@@ -171,6 +176,7 @@ export type GlobalApiOptions = {
   plaintextExposed?: boolean;
   sessions?: BrowserSessions;
   sessionSecure?: boolean;
+  sessionDomain?: string;
   accounts?: AccountService;
   build?: BuildInfo | null;
 };
@@ -1019,7 +1025,7 @@ const ROUTES: Route[] = [
  * 사람 계정 경로가 쓰는 것만. 지역(`ApiOptions`)과 전역(`GlobalApiOptions`)이 **같은 표**를 쓴다 —
  * 전역에서도 로그인·내 계정·사람 관리를 한다(계정은 공용 계정 PG 에 산다).
  */
-type AccountApi = { accounts?: AccountService; oidcRp?: OidcRpSettings; sessionSecure?: boolean };
+type AccountApi = { accounts?: AccountService; oidcRp?: OidcRpSettings; sessionSecure?: boolean; sessionDomain?: string };
 
 const ACCOUNT_ROUTES: Route<AccountApi>[] = [
   // ── 사람 계정 (공통 회원정책 1차 · 계획 A) ─────────────────────────────
@@ -1034,7 +1040,7 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
 
   route<AccountApi>('POST', '/api/v1/session/logout-all', 'read', async (c, api) => {
     const n = await accountsOf(api).logoutAll(personOf(c.who).userId, c.who.name, metaOf(c.req));
-    c.res.setHeader('set-cookie', expiredCookie(accountCookie(api), api.sessionSecure === true));
+    c.res.setHeader('set-cookie', clearSessionCookies(api, c.req));
     json(c.res, 200, { revoked: n });
   }, { leaderFree: true }),
 
@@ -1325,6 +1331,7 @@ function globalViewOf(api: ApiOptions): GlobalApiOptions | undefined {
     ...(api.plaintextExposed === undefined ? {} : { plaintextExposed: api.plaintextExposed }),
     ...(api.sessions === undefined ? {} : { sessions: api.sessions }),
     ...(api.sessionSecure === undefined ? {} : { sessionSecure: api.sessionSecure }),
+    ...(api.sessionDomain === undefined ? {} : { sessionDomain: api.sessionDomain }),
     ...(api.accounts === undefined ? {} : { accounts: api.accounts }),
     ...(api.build === undefined ? {} : { build: api.build }),
     ...(api.trustedProxies === undefined ? {} : { trustedProxies: api.trustedProxies }),
@@ -1496,6 +1503,45 @@ function crossSite(res: ServerResponse): void {
  */
 const accountCookie = (api: { sessionSecure?: boolean }): string =>
   api.sessionSecure === true ? '__Host-bary_sid' : 'bary_sid';
+/**
+ * **도메인을 함께 쓰는 세션 쿠키** (`BARY_SESSION_DOMAIN`, 2026-11-01). `__Host-` 는 Domain 을 못 붙이므로 `__Secure-` 다.
+ * 그 도메인 아래 호스트는 이 쿠키를 받고 심을 수도 있다 — 그 아래에는 barycenter 화면만 둔다(docs/runbook-global.md).
+ * 이 서버가 HTTPS 일 때만 쓴다.
+ */
+const DOMAIN_COOKIE = '__Secure-bary_sid';
+
+type CookieApi = { sessionSecure?: boolean; sessionDomain?: string };
+
+/** 이 요청에 심을 세션 쿠키. 요청의 호스트가 그 도메인 안일 때만 Domain 을 붙인다 — 밖이면 브라우저가 버린다. */
+export function sessionCookieFor(api: CookieApi, req: IncomingMessage): { name: string; domain?: string } {
+  const d = api.sessionDomain;
+  if (api.sessionSecure !== true || d === undefined) return { name: accountCookie(api) };
+  const h = requestHost(req);
+  return h === d || h.endsWith(`.${d}`) ? { name: DOMAIN_COOKIE, domain: d } : { name: accountCookie(api) };
+}
+
+/** 요청이 실어 온 계정 세션 id. 도메인 쿠키가 먼저다. 옛 호스트 쿠키도 읽는다 — 켜기 전 로그인이 끊기지 않는다. */
+export function accountSidOf(api: CookieApi, req: IncomingMessage): string | undefined {
+  const h = req.headers.cookie;
+  const shared = api.sessionSecure === true && api.sessionDomain !== undefined ? cookieValue(h, DOMAIN_COOKIE) : undefined;
+  return shared !== undefined && shared !== '' ? shared : cookieValue(h, accountCookie(api));
+}
+
+/** 계정 세션 쿠키를 심는다. 다른 쪽 쿠키는 지운다 — 둘이 서로 다른 세션을 가리키지 않게. */
+export function setSessionCookies(api: CookieApi, req: IncomingMessage, value: string, maxAge: number): string[] {
+  const secure = api.sessionSecure === true;
+  const c = sessionCookieFor(api, req);
+  const out = [sessionCookie(c.name, value, secure, maxAge, c.domain)];
+  if (c.domain !== undefined) out.push(expiredCookie(accountCookie(api), secure));
+  return out;
+}
+
+/** 계정 세션 쿠키를 모두 지운다 — 호스트 쿠키와, 도메인 안이면 도메인 쿠키도. */
+export function clearSessionCookies(api: CookieApi, req: IncomingMessage): string[] {
+  const secure = api.sessionSecure === true;
+  const c = sessionCookieFor(api, req);
+  return [expiredCookie(accountCookie(api), secure), ...(c.domain === undefined ? [] : [expiredCookie(c.name, secure, c.domain)])];
+}
 /** MFA 대기 표 — MFA 단계에만 실린다. */
 const MFA_COOKIE = 'bary_mfa';
 /**
@@ -1554,7 +1600,7 @@ function ssoCookie(value: string, secure: boolean, maxAge: number): string {
  * IdP 의 MFA 도 인정하지 않는다 — 관리자·인증 앱 등록자는 이어서 로컬 TOTP 단계다(공급자 계약 미해결).
  */
 async function finishAccountSso(
-  req: IncomingMessage, res: ServerResponse, api: { oidcFetch?: typeof fetch; sessionSecure?: boolean }, accounts: AccountService,
+  req: IncomingMessage, res: ServerResponse, api: { oidcFetch?: typeof fetch; sessionSecure?: boolean; sessionDomain?: string }, accounts: AccountService,
   rp: OidcRpSettings, code: string, state: string,
 ): Promise<void> {
   const secure = api.sessionSecure === true;
@@ -1577,7 +1623,7 @@ async function finishAccountSso(
   }, metaOf(req));
   switch (out.kind) {
     case 'session':
-      res.setHeader('set-cookie', [clearFlow, sessionCookie(accountCookie(api), out.sessionId, secure, out.maxAgeS)]);
+      res.setHeader('set-cookie', [clearFlow, ...setSessionCookies(api, req, out.sessionId, out.maxAgeS)]);
       json(res, 200, { status: 'ok', authenticated: true });
       return;
     case 'mfa':
@@ -1787,7 +1833,7 @@ async function handle(
     const clear = [
       expiredCookie(SESSION_COOKIE, api.sessionSecure === true),
       expiredCookie(LOGIN_COOKIE, api.sessionSecure === true),
-      expiredCookie(accountCookie(api), api.sessionSecure === true),
+      ...clearSessionCookies(api, req),
     ];
     /**
      * **쿠키를 지운 것으로 로그아웃을 끝내지 않는다**(공통 정책). 사람 계정이면 서버에서 그 세션을
@@ -1796,7 +1842,7 @@ async function handle(
      */
     if (api.accounts !== undefined) {
       try {
-        await api.accounts.logout(cookieValue(req.headers.cookie, accountCookie(api)), metaOf(req));
+        await api.accounts.logout(accountSidOf(api, req), metaOf(req));
       } catch (e) {
         if (!(e instanceof AccountStoreUnavailable)) throw e;
         res.setHeader('set-cookie', clear);
@@ -1917,7 +1963,7 @@ async function handle(
         return;
       }
       res.setHeader('set-cookie', [
-        sessionCookie(accountCookie(api), out.sessionId, secure, out.maxAgeS),
+        ...setSessionCookies(api, req, out.sessionId, out.maxAgeS),
         mfaCookie('', secure, 0),
       ]);
       json(res, 200, { status: 'ok' });
@@ -2066,7 +2112,7 @@ async function handle(
   if (bearer === undefined && api.accounts !== undefined) {
     // 쿠키 유무로 가르지 않는다 — `authenticate` 가 빈 값을 스스로 거른다(DB 에 묻지 않고 undefined).
     try {
-      session = await api.accounts.authenticate(cookieValue(req.headers.cookie, accountCookie(api)));
+      session = await api.accounts.authenticate(accountSidOf(api, req));
     } catch (e) {
       if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
       throw e;
@@ -2087,7 +2133,7 @@ async function handle(
      * `/api/v1/me` 를 부른다. 그것까지 세면 새로고침 몇 번에 그 출처가 429 로 잠겼다. 맞혀 볼 값이 없는 요청은
      * 무차별 대입이 아니다. 틀린 토큰 · 낡은 세션 쿠키 · 매핑 없는 인증서는 전처럼 센다.
      */
-    const sid = cookieValue(req.headers.cookie, accountCookie(api));
+    const sid = accountSidOf(api, req);
     const oidc = cookieValue(req.headers.cookie, SESSION_COOKIE);
     const presented = (req.headers.authorization ?? '') !== '' || (sid ?? '') !== '' || (oidc ?? '') !== ''
       || peerCertOf(req) !== undefined;
@@ -2098,7 +2144,7 @@ async function handle(
     }
     // 낡은 세션 쿠키는 지운다. 남겨 두면 로그인 화면이 새로고침마다 그것을 다시 보내 실패로 세어진다.
     const stale = [
-      ...((sid ?? '') !== '' ? [expiredCookie(accountCookie(api), api.sessionSecure === true)] : []),
+      ...((sid ?? '') !== '' ? clearSessionCookies(api, req) : []),
       ...((oidc ?? '') !== '' ? [expiredCookie(SESSION_COOKIE, api.sessionSecure === true)] : []),
     ];
     if (stale.length > 0) res.setHeader('set-cookie', stale);

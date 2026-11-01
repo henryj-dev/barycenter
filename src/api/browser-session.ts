@@ -93,10 +93,11 @@ export function cookieValue(header: string | undefined, name: string): string | 
   return undefined;
 }
 
-export function sessionCookie(name: string, value: string, secure: boolean, maxAge: number): string {
-  return `${name}=${value}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
+/** `domain` 을 주면 그 도메인과 그 아래 호스트가 함께 쓴다(`BARY_SESSION_DOMAIN`). 없으면 그 호스트만 쓴다. */
+export function sessionCookie(name: string, value: string, secure: boolean, maxAge: number, domain?: string): string {
+  return `${name}=${value}; Max-Age=${maxAge}; Path=/;${domain === undefined ? '' : ` Domain=${domain};`} HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
 }
 
-export function expiredCookie(name: string, secure: boolean): string {
-  return sessionCookie(name, '', secure, 0);
+export function expiredCookie(name: string, secure: boolean, domain?: string): string {
+  return sessionCookie(name, '', secure, 0, domain);
 }
