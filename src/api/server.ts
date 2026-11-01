@@ -120,6 +120,13 @@ export type ApiOptions = {
    * 없으면 `null` — 모른다는 것이지 판이 없다는 것이 아니다.
    */
   build?: BuildInfo | null;
+  /** 이 지역의 이름 (`BARY_REGION`). `/status` · `/readyz` 의 `region` 으로 나간다. 전역이 목록의 이름과 맞춰 본다. */
+  region?: string;
+  /**
+   * **같은 프로세스의 전역 화면** (docs/adr-host-dispatch.md). 요청의 Host 가 `host` 이면 전역으로 답하고,
+   * 나머지 Host(지역 이름 · IP)는 지역으로 답한다. 인증 · 계정 · 세션 · GUI 는 지역과 함께 쓴다.
+   */
+  globalSurface?: { host: string; relay: RegionRelay };
   /**
    * 이 서버에 할당된 IP (2026-10-31). GUI 의 바인드 선택이 읽는다. 없으면 `available: false` 를 낸다 —
    * 그러면 GUI 는 바인드를 손으로 받는다.
@@ -851,7 +858,7 @@ const ROUTES: Route[] = [
     json(c.res, 200, await nodeHistory(api.db, c.params['name'] ?? ''));
   }),
   route('GET', '/api/v1/status', 'read', async (c, api) => {
-    json(c.res, 200, { ...await api.control.status(), build: api.build ?? null });
+    json(c.res, 200, { ...await api.control.status(), build: api.build ?? null, ...(api.region === undefined ? {} : { region: api.region }) });
   }),
 
   /**
@@ -1275,6 +1282,35 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
  * 없었다. 그러면 TLS 를 켜려고 라우팅을 한 벌 더 쓰게 되고, 두 벌은 갈라진다 —
  * `renderCapsOf` 를 한 자리로 모은 이유(B-02)와 같은 종류의 사고다.
  */
+/**
+ * 요청의 호스트 이름. 소문자로, 포트와 끝 점을 뗀다. 없으면 `''` — 지역으로 간다.
+ * Host 는 클라이언트가 정한다. 그래도 두 화면은 각자 인증한다 — Host 를 바꿔서 얻는 권한은 없다.
+ */
+export function requestHost(req: IncomingMessage): string {
+  const raw = (req.headers.host ?? '').trim().toLowerCase();
+  const name = raw.startsWith('[') ? raw.slice(0, raw.indexOf(']') + 1) : raw.split(':')[0] ?? '';
+  return name.endsWith('.') ? name.slice(0, -1) : name;
+}
+
+/** 지역 옵션에서 같은 프로세스의 전역 화면 옵션을 만든다. 인증 · 계정 · 세션 객체를 **그대로** 함께 쓴다. */
+function globalViewOf(api: ApiOptions): GlobalApiOptions | undefined {
+  const g = api.globalSurface;
+  if (g === undefined) return undefined;
+  return {
+    global: g.relay, auth: api.auth,
+    ...(api.maxBodyBytes === undefined ? {} : { maxBodyBytes: api.maxBodyBytes }),
+    ...(api.guiRoot === undefined ? {} : { guiRoot: api.guiRoot }),
+    ...(api.oidcRp === undefined ? {} : { oidcRp: api.oidcRp }),
+    ...(api.oidcFetch === undefined ? {} : { oidcFetch: api.oidcFetch }),
+    ...(api.plaintextExposed === undefined ? {} : { plaintextExposed: api.plaintextExposed }),
+    ...(api.sessions === undefined ? {} : { sessions: api.sessions }),
+    ...(api.sessionSecure === undefined ? {} : { sessionSecure: api.sessionSecure }),
+    ...(api.accounts === undefined ? {} : { accounts: api.accounts }),
+    ...(api.build === undefined ? {} : { build: api.build }),
+    ...(api.trustedProxies === undefined ? {} : { trustedProxies: api.trustedProxies }),
+  };
+}
+
 /** 요청마다 한 번 정한 보낸 사람 주소 (`client-address.ts`). 시도 제한 · 감사 IP 가 모두 이것을 쓴다. */
 const CLIENT_IP = new WeakMap<IncomingMessage, string>();
 const ipOf = (req: IncomingMessage): string | undefined => CLIENT_IP.get(req) ?? req.socket.remoteAddress;
@@ -1283,10 +1319,14 @@ export function apiHandler(api: AnyApi): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const authFailures = new AuthFailureLimiter();
   api.sessions ??= new BrowserSessions();
+  const globalApi = isGlobal(api) ? undefined : globalViewOf(api);
+  const globalHost = isGlobal(api) ? undefined : api.globalSurface?.host;
   return (req, res) => {
     const ip = clientAddress(req, api.trustedProxies);
     if (ip !== undefined) CLIENT_IP.set(req, ip);
-    void handle(req, res, api, max, authFailures).catch((e) => {
+    // 실패 제한은 두 화면이 함께 센다 — 화면을 바꿔 가며 두 배로 시도하지 못한다.
+    const target = globalApi !== undefined && requestHost(req) === globalHost ? globalApi : api;
+    void handle(req, res, target, max, authFailures).catch((e) => {
       /**
        * 여기까지 온 것은 핸들러 밖의 실패다. 조용히 끊지 않는다.
        *
@@ -1716,7 +1756,7 @@ async function handle(
       return;
     }
     const r = await api.control.readiness();
-    json(res, r.ok ? 200 : 503, r);
+    json(res, r.ok ? 200 : 503, { ...r, ...(api.region === undefined ? {} : { region: api.region }) });
     return;
   }
 

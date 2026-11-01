@@ -19,12 +19,15 @@ const OWN = ['/api/v1/me', '/api/v1/session', '/api/v1/oidc', '/api/v1/invitatio
 export function createScope() {
   let mode = $state<'unknown' | 'region' | 'global'>('unknown');
   let region = $state<RegionSummary | undefined>();
+  /** 지역 인스턴스가 말한 자기 이름 (`BARY_REGION`). 없으면 undefined. */
+  let self = $state<string | undefined>();
 
   const detect = async (): Promise<void> => {
     try {
       const r = await fetch('/readyz');
-      const body = (await r.json()) as { mode?: unknown };
+      const body = (await r.json()) as { mode?: unknown; region?: unknown };
       mode = body.mode === 'global' ? 'global' : 'region';
+      self = typeof body.region === 'string' ? body.region : undefined;
     } catch {
       mode = 'region';
     }
@@ -33,6 +36,7 @@ export function createScope() {
   return {
     get mode() { return mode; },
     get region() { return region; },
+    get self() { return self; },
     /** 전역에서 지역을 고르기 전이거나 고른 뒤 — 어느 쪽이든 설정은 읽기만. */
     get readOnly() { return mode === 'global'; },
     detect,

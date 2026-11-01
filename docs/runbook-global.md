@@ -3,6 +3,10 @@
 > 설계: `docs/design-global-mode.md`(#74). 전역은 지역들을 **읽기 전용**으로 모아 보이는 `barycenterd` 다 —
 > 설정 PG·데이터 플레인·리더가 없고, 사람 계정은 지역과 같은 공용 계정 PG 를 쓴다.
 
+> ⚠️ **2026-11-01 부터 전역은 지역 `barycenterd` 안에서 Host 로 고른다** (`docs/adr-host-dispatch.md`). 지역 env 에
+> `BARY_GLOBAL_HOST` · `BARY_GLOBAL_REGIONS` · `BARY_REGION` 을 준다. 아래의 별도 전역 서비스(`--mode global`, 9443)는
+> 3 단계에서 걷는다. 지역 목록 파일의 모양과 auditor 토큰 준비는 그대로다.
+
 ## 지역 쪽 준비 (지역마다)
 
 1. 전역 인스턴스용 auditor 토큰을 만든다 — **전역 인스턴스마다 따로**(`global-az01` …):

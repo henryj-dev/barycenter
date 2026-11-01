@@ -31,7 +31,7 @@ import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
 import { Sealer } from '../accounts/seal.js';
 import { AccountService } from '../accounts/service.js';
 import { smtpMailer } from '../accounts/mail.js';
-import { loadRegistry } from '../global/registry.js';
+import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
 import { JwksCache } from '../api/jwks.js';
 import { EventHub } from '../api/events.js';
@@ -615,6 +615,32 @@ async function mainGlobal(): Promise<void> {
   process.on('SIGINT', stop);
 }
 
+/**
+ * **같은 프로세스의 전역 화면** (docs/adr-host-dispatch.md). `BARY_GLOBAL_HOST` 로 들어온 요청은 전역으로 답한다.
+ * 둘 중 하나만 있으면 기동을 거부한다 — 켰다고 믿는데 아무것도 안 하는 상태를 만들지 않는다.
+ */
+export function hostDispatchFromEnv(source: NodeJS.ProcessEnv = process.env, ownCommit?: string): {
+  region?: string; globalSurface?: { host: string; relay: RegionRelay };
+} {
+  const region = (source['BARY_REGION'] ?? '').trim();
+  if (region !== '' && !REGION_NAME.test(region)) {
+    throw new Error(`BARY_REGION '${region}' 이 모양에 안 맞는다 (${REGION_NAME.source})`);
+  }
+  const host = (source['BARY_GLOBAL_HOST'] ?? '').trim().toLowerCase().replace(/\.$/, '');
+  const regions = (source['BARY_GLOBAL_REGIONS'] ?? '').trim();
+  if (host === '' && regions !== '') throw new Error('BARY_GLOBAL_REGIONS 를 쓰려면 BARY_GLOBAL_HOST 도 준다 (전역 화면의 호스트 이름)');
+  if (host !== '' && regions === '') throw new Error('BARY_GLOBAL_HOST 를 쓰려면 BARY_GLOBAL_REGIONS 도 준다 (지역 목록 파일)');
+  if (host !== '' && (host.includes(':') || host.includes('/') || !/^[a-z0-9.-]+$/.test(host))) {
+    throw new Error(`BARY_GLOBAL_HOST 는 호스트 이름만 적는다 (포트 · 경로 없이): ${host}`);
+  }
+  return {
+    ...(region === '' ? {} : { region }),
+    ...(host === '' ? {} : {
+      globalSurface: { host, relay: new RegionRelay(loadRegistry(regions), ownCommit === undefined ? {} : { ownCommit }) },
+    }),
+  };
+}
+
 export async function main(): Promise<void> {
   if (process.argv[2] === 'account') {
     await accountCli(process.argv.slice(3));
@@ -1132,12 +1158,15 @@ export async function main(): Promise<void> {
     log.info('accounts.enabled', {});
     tidyAccounts(accounts);
   }
+  const build = readBuildInfo(prefix);
+  const dispatch = hostDispatchFromEnv(process.env, build?.commit);
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
+    ...dispatch,
     // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.
     ...(clusterOn ? { cluster: { node: nodeName, staleAfterMs: clusterSyncMs * 5 } } : {}),
     ...(accounts === undefined ? {} : { accounts }),
-    build: readBuildInfo(prefix),
+    build,
     plaintextExposed: false,
     sessionSecure: false,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
@@ -1153,7 +1182,12 @@ export async function main(): Promise<void> {
    * 선택이다 — 안 켜면 지금과 같다. 다만 반만 켜지지는 않는다(`apiTlsOptions` 가 던진다).
    * 클라이언트 CA 는 **망 관문**까지만 연다. 누구인지는 여전히 토큰이 답한다.
    */
-  const server = await listenApi(host, port, apiOpts, { prefix, adminSocket, tokens: auth.size, gui: serveRoot ?? false });
+  const server = await listenApi(host, port, apiOpts, {
+    prefix, adminSocket, tokens: auth.size, gui: serveRoot ?? false,
+    region: dispatch.region ?? false,
+    globalHost: dispatch.globalSurface?.host ?? false,
+    ...(dispatch.globalSurface === undefined ? {} : { regions: dispatch.globalSurface.relay.regions.map((r) => r.name) }),
+  });
 
   /**
    * 종료 (검수 D9).
@@ -1176,6 +1210,7 @@ export async function main(): Promise<void> {
    */
   const stop = (): void => {
     events.closeAll();
+    dispatch.globalSurface?.relay.close();
     /**
      * **마감을 씌운다.** ①·② 로 안 끝나는 경우가 남는다 — 느린 클라이언트, 우리가 아직
      * 모르는 keep-alive. 나가는 길이 막히는 것보다 덜 깨끗하게 나가는 편이 낫다.

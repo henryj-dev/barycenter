@@ -105,6 +105,12 @@ export class RegionRelay {
       } catch {
         return { ...base, reachable: true, ...last(), error: '지역 status 가 JSON 이 아니다' };
       }
+      // **이름을 맞춰 본다** (docs/adr-host-dispatch.md). 목록에 이름을 잘못 적으면 다른 지역을 그 이름으로 보인다.
+      // 지역이 이름을 말하지 않으면(`BARY_REGION` 없음) 비교하지 않는다 — 모르는 것을 「같다」로 접지 않는다.
+      const said = (status as { region?: unknown } | null)?.region;
+      if (typeof said === 'string' && said !== r.name) {
+        return { ...base, reachable: true, ...last(), error: `지역이 자기 이름을 '${said}' 라고 한다 — 목록의 '${r.name}' 과 다르다` };
+      }
       const at = this.#now().toISOString();
       this.#lastOk.set(r.name, at);
       return { ...base, reachable: true, status, observedAt: at, lastOkAt: at, ...this.#mismatch(status) };
