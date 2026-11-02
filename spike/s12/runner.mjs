@@ -129,6 +129,11 @@ op.targetGeneration = generation;
 const result = await new ApplyRunner(new DpAgent(store), effects).run(op);
 
 process.stdout.write(`RESULT ${result.phase}\n`);
+// **왜 그 단계로 끝났는지도 낸다** (2026-11-02). `RESULT failed` 만으로는 원인을 못
+// 좁힌다 — `S12.lock` 이 게이트에서 간헐로 떨어질 때 남은 것이 POINT 줄뿐이었다.
+// 사유와 마지막 증거가 저널에 이미 있다. 밖으로 꺼내기만 하면 된다.
+if (result.failure !== undefined) process.stdout.write(`FAILURE ${result.failure}\n`);
+if (result.evidence !== undefined) process.stdout.write(`EVIDENCE ${JSON.stringify(result.evidence)}\n`);
 process.stdout.write(`CURRENT ${existsSync(join(prefix, 'current'))
   ? sh(`readlink ${prefix}/current`) : '(없음)'}\n`);
 // 주입한 지점을 못 지났다는 뜻 — 스윕이 그 지점을 헛돈 것이므로 성공으로 세면 안 된다.
