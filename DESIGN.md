@@ -2389,6 +2389,17 @@ authz 에는 http-01 이 **아예 없다**(`dns-01, dns-account-01, dns-persist-
 설정에 남는 것은 `certificates.material_ref` 뿐이고, **발급과 게시는 다른 사건이다** —
 주문이 성공하면 그 참조를 바꾸는 changeset 을 만든다.
 
+**⑥-1 의도 커밋은 적용 대기에 남지 않는다** (2026-11-02). 인증서를 만들면 ACME 의도만 리비전에 들어간다. 자료가
+없으니 nginx 에 나갈 것이 없고, 러너는 head 를 보고 바로 발급한다. 그래서 커밋 API 가 그런 커밋을 바로 활성으로
+올린다(`ControlPlane.applyIfTrafficNeutral`). 조건은 넷이다: 멤버십 평면이 있다(reload 없는 길) · 그 plan 이 head 다 ·
+서빙 중인 리비전과 **인증서 의도만** 다르다 · 산출물 digest 가 서빙 중인 세대와 같다. 하나라도 어긋나면 지금처럼
+적용 대기에 남는다.
+
+**⑥-2 게시는 남의 적용 대기를 끌고 나가지 않는다** (2026-11-02). 리비전은 설정 전체이고 apply 는 head 를 건다.
+그래서 게시가 자동 적용하면, 사람이 커밋만 해 둔 변경도 함께 트래픽에 나갔다 — 갱신은 사람 없이 30일마다 일어난다.
+다른 적용 대기가 있으면 게시는 **커밋까지만** 하고 `acme.publish.held` 를 남긴다(`bary_acme_publish_total{outcome="held"}`).
+인증서 교체는 그 대기와 함께 적용 대기에 올라가고, 사람이 묶음을 보고 적용한다.
+
 **⑦ 상태는 CA 의 것과 1:1 이 아니다.** CA 는 `pending/ready/processing/valid/invalid` 를
 말하는데 그것만으로는 *"언제 다시 시도할 것인가"* 를 표현할 수 없다. 우리 상태는
 `pending · validating · ready · issued · failed · abandoned` 이고, 재시도·백오프·포기를

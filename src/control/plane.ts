@@ -29,7 +29,7 @@ import { certificateFiles, type SecretStore } from '../dp/secrets.js';
 import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
 import { bindTransitionConflicts } from '../validate/bind-transition.js';
-import type { Model } from '../model/provisional.js';
+import type { Certificate, Model } from '../model/provisional.js';
 import {
   count, fileBytes, measureGenerations, type Gauges, type LabeledGauge,
 } from '../obs/metrics.js';
@@ -321,6 +321,35 @@ export class ControlPlane {
       );
     }
     return certificateFiles(withMaterial, store);
+  }
+
+  /**
+   * **트래픽에 닿지 않는 커밋이면 바로 활성으로 올린다** (2026-11-02).
+   *
+   * 인증서를 만들면 ACME 의도만 리비전에 들어간다. 자료가 없으니 nginx 에 나갈 것이 없고, 발급은 head 를 보고
+   * 바로 시작한다. 그런데도 「적용 대기」 에 1건이 남아, 할 일이 없는 적용을 사람에게 시켰다.
+   *
+   * 조건 넷이 모두 맞을 때만 한다. 하나라도 안 맞으면 지금처럼 적용 대기에 남는다:
+   *   · 멤버십 평면이 있다 — 그래야 apply 가 세대도 reload 도 없는 지름길로 간다
+   *   · 이 plan 이 head 다
+   *   · 서빙 중인 리비전과 **인증서 의도만** 다르다(`certificateIntentOnly`) — 다른 대기 변경이 끼어 있으면 아니다
+   *   · 산출물 digest 가 서빙 중인 세대와 같다
+   *
+   * 커밋 권한(`write`)으로 부른다. 트래픽이 안 바뀌므로 `apply` 권한이 지키는 것을 건드리지 않는다.
+   * 실패해도 커밋은 그대로다 — 적용 대기에 남을 뿐이다.
+   */
+  async applyIfTrafficNeutral(planId: string, by: string): Promise<OperationView | undefined> {
+    const caps = this.opts.renderCaps ?? { streamRealip: false };
+    if (caps.httpLua !== true && caps.streamLua !== true) return undefined;
+    const plan = await this.store.getPlan(planId);
+    if (plan.state !== 'committed' || plan.targetRevision === undefined) return undefined;
+    if (plan.targetRevision !== (await this.store.head()).revision) return undefined;
+    const active = await this.store.activeRevision();
+    if (active === undefined) return undefined;
+    if (!certificateIntentOnly(await this.store.modelAt(active), plan.model)) return undefined;
+    const live = await this.activeRenderDigest();
+    if (live === undefined || live.digest !== plan.renderDigest) return undefined;
+    return this.apply(planId, by);
   }
 
   /**
@@ -1197,6 +1226,46 @@ const viewOf = (r: Row): OperationView => ({
   phase: String(r['phase']),
   detail: r['detail'],
 });
+
+/** 객체 키 순서를 고정한 JSON. 같은 내용이면 같은 문자열이다. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v !== null && typeof v === 'object') {
+    return `{${Object.keys(v).sort()
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/**
+ * **두 모델이 인증서 의도만 다른가** (2026-11-02).
+ *
+ * 인증서 밖은 모두 같아야 한다. 인증서는 키마다 본다:
+ *   · 양쪽 다 자료가 없다 → 무엇이 바뀌어도 된다. 렌더러가 자료 없는 인증서를 내지 않는다
+ *   · 양쪽 다 자료가 있다 → `acme` 밖은 같아야 한다. 계정이나 도메인만 바꾼 것이다
+ *   · 한쪽만 자료가 있다 → 아니다. 자료가 생기거나 사라지면 세대에 들어가는 파일이 바뀐다
+ */
+export function certificateIntentOnly(before: Model, after: Model): boolean {
+  const { certificates: bc, ...brest } = before;
+  const { certificates: ac, ...arest } = after;
+  if (canonical(brest) !== canonical(arest)) return false;
+  const byKey = (cs: readonly Certificate[]): Map<string, Certificate> => new Map(cs.map((c) => [c.key, c]));
+  const b = byKey(bc);
+  const a = byKey(ac);
+  for (const key of new Set([...b.keys(), ...a.keys()])) {
+    const x = b.get(key);
+    const y = a.get(key);
+    const hasX = x?.materialRef !== undefined;
+    const hasY = y?.materialRef !== undefined;
+    if (hasX !== hasY) return false;
+    if (!hasX) continue;
+    const { acme: _xa, ...xm } = x!;
+    const { acme: _ya, ...ym } = y!;
+    if (canonical(xm) !== canonical(ym)) return false;
+  }
+  return true;
+}
 
 /**
  * 적용 대기 plan — 커밋됐지만 미적용이고, **이미 더 새 리비전이 활성화되지 않은 것** (§5.3).

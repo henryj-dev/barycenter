@@ -23,6 +23,7 @@ import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBacke
 import { pullSse } from '@web/sse-parse';
 import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
+import { noteCommit } from '#lib/commit-note';
 
 export type StatusSnap = {
   head?: string;
@@ -421,6 +422,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
         error = (committed.body['message'] as string | undefined) ?? `commit ${committed.status}`;
         return false;
       }
+      noteCommit(committed.body['applied'] !== undefined);
       return true;
     } finally {
       if (csId !== undefined && error !== undefined) {

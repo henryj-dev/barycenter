@@ -12,13 +12,15 @@
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
-  let { ready, problem, submitLabel = '만들기', cancelHref, onsubmit, children }: {
+  let { ready, problem, submitLabel = '만들기', cancelHref, note = '만들면 커밋하고 적용 대기로 보내요.', onsubmit, children }: {
     /** 필수 칸이 다 맞는가. 아니면 「만들기」 가 잠긴다. */
     ready: boolean;
     problem?: string;
     submitLabel?: string;
     /** 「취소」 가 가는 곳 — 대개 목록. */
     cancelHref?: string;
+    /** 폼 아래 한 줄. 트래픽이 안 바뀌는 만들기(ACME 인증서)는 적용 대기로 안 가므로 바꿔 말한다. */
+    note?: string;
     onsubmit: () => void;
     children: Snippet;
   } = $props();
@@ -30,7 +32,7 @@
   <p class="wait">연결하면 여기서 만들어요.</p>
 {:else}
   <Writable>
-    <Form note="만들면 커밋하고 적용 대기로 보내요." onsubmit={() => { if (ready && !desk.editing) onsubmit(); }}>
+    <Form {note} onsubmit={() => { if (ready && !desk.editing) onsubmit(); }}>
       {@render children()}
       {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}
       {#snippet actions()}
