@@ -32,9 +32,40 @@
  * *"넷에 복사하지 않고 여기 둔다. 같은 판정이 다섯 자리에 흩어지면 언젠가 하나가
  * 뒤처지고, 그때 그 스위트만 조용히 다시 경합한다."*
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 기동 스크립트의 `apk add` 한 토막. **성공하면 조용하고, 실패하면 이유를 stderr 에 남긴다.**
+ *
+ * ── 무엇이 깨졌나 (CI 41393428259, 2026-11-02)
+ *
+ * `cluster.test.ts` 가 이렇게 죽었다:
+ *
+ *   컨테이너: exited exit=11 oom=false err=
+ *   로그(40줄): **비어 있다**
+ *
+ * `11` 은 시그널이 아니다(시그널이면 128+n). **`apk add` 의 종료 코드는 apk 가 센 오류
+ * 수다** — 패키지 하나를 못 받을 때마다 하나다. `nodejs` 는 의존성까지 10 개를 받는다.
+ * 즉 그 순간 CDN 이 답하지 않았다.
+ * 그런데 기동 스크립트가 `apk add ... >/dev/null 2>&1` 로 **오류까지 지워서** 로그가
+ * 비었다. N4 때 `waitForDaemon` 이 「비어 있다」를 말하게 고쳤지만, 지우는 자리는 그대로였다.
+ * 그리고 지우지 않았어도 안 보였다 — `logsOf` 의 머리말을 본다.
+ *
+ * 그래서 출력은 파일에 받고, 실패했을 때만 그 꼬리를 stderr 로 낸다. 종료 코드는 apk 의
+ * 것을 그대로 돌려준다 — 바꾸면 「몇 개가 실패했나」가 사라진다. **다시 시도하지 않는다** —
+ * 망이 안 되면 그 사실을 보이는 것이 이 함수의 일이다.
+ *
+ * 기동 스크립트는 `' && '` 로 잇는다. 그 사이에 끼어도 `||` 가 앞 명령까지 묶지 않도록
+ * 통째로 `{ ...; }` 로 감싼다.
+ */
+export function apkAdd(...packages: string[]): string {
+  const pkgs = packages.join(' ');
+  return `{ apk add --no-cache ${pkgs} >/tmp/apk.log 2>&1 || { rc=$?;`
+    + ` echo "apk add ${pkgs} 실패: exit=$rc (apk 가 센 오류 수 — 대개 망이다)" >&2;`
+    + ' tail -n 20 /tmp/apk.log >&2; exit $rc; }; }';
+}
 
 /** `docker` 한 번. 실패하면 이유를 문자열로 돌려준다 — 여기서 던지면 진단이 사라진다. */
 function docker(...args: string[]): string {
@@ -43,6 +74,24 @@ function docker(...args: string[]): string {
   } catch (e) {
     return `(docker ${args[0]} 실패: ${(e as Error).message})`;
   }
+}
+
+/**
+ * 컨테이너 로그 꼬리. **stdout 과 stderr 를 둘 다** 돌려준다.
+ *
+ * `docker logs` 는 컨테이너의 stderr 를 **자기 stderr** 로 낸다. 위 `docker()` 는 stdout 만
+ * 돌려주므로, 이 자리를 `docker('logs', ...)` 로 두면 node 의 스택 추적도, apk 의 오류도,
+ * 기동 스크립트의 `>&2` 도 **전부 버려진다** — 컨테이너에 로그가 있어도 「비어 있다」가 된다.
+ * 두 흐름을 한 파일에 받아 순서를 지킨다.
+ */
+function logsOf(container: string, tail: number): string {
+  // 셸이 두 흐름을 한 파이프로 합친다(`2>&1`) — 임시 파일을 안 써서 쓰고 다시 읽는 사이의 경쟁이 없다(CodeQL
+  // js/file-system-race). 이름과 줄 수는 위치 인자로 넘긴다 — 명령 문자열에 섞이지 않는다.
+  const r = spawnSync('sh', ['-c', 'docker logs --tail "$1" "$2" 2>&1', 'sh', String(tail), container], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (r.error) return `(docker logs 실패: ${r.error.message})`;
+  return `${r.stdout ?? ''}`.trim();
 }
 
 /**
@@ -77,7 +126,7 @@ export async function waitForDaemon(opts: {
     await sleep(250);
   }
 
-  const logs = docker('logs', '--tail', String(opts.tail ?? 40), opts.container);
+  const logs = logsOf(opts.container, opts.tail ?? 40);
   const state = stateOf(opts.container);
   throw new Error(
     `데몬이 ${budget}ms 안에 안 떴다.\n`

@@ -17,6 +17,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const TLS_PORT = 18931;
@@ -82,8 +83,7 @@ function serve(conf: string): string {
       `-addext "subjectAltName=DNS:${cn}" -keyout /prefix/conf/certs/${key}/${V}/privkey.pem ` +
       `-out /prefix/conf/certs/${key}/${V}/fullchain.pem >/dev/null 2>&1; `;
     return execFileSync('docker',
-      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-        'apk add --no-cache openssl curl >/dev/null 2>&1 || { echo "설치 실패 (망?)" >&2; exit 70; }; ' +
+      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
         mk('ca', 'a.test') + mk('cb', 'b.test') +
         '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.5; ' +
         'sh /prefix/probe.sh; echo "---errorlog---"; tail -5 /prefix/logs/error.log'],

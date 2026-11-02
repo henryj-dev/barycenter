@@ -11,7 +11,7 @@
  * **안 일어난 일**을 재야 한다.
  *
  *   · 마스터 PID 불변        재시작이 아니었다
- *   · 워커 기동 수 불변      **reload 가 없었다** (HUP 은 워커를 새로 띄운다)
+ *   · reload 명령 실행 수 불변 **reload 가 없었다** (데몬이 HUP 을 안 보냈다)
  *   · 활성 세대 불변         세대 전환이 없었다
  *   · 세대 디렉토리 수 불변  새 아티팩트를 안 만들었다
  *
@@ -24,7 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
-import { waitForDaemon } from './daemon-up.js';
+import { apkAdd, waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
@@ -78,24 +78,58 @@ async function api(method: string, path: string, body?: unknown): Promise<ApiRes
   }
 }
 
-/** 데이터 플레인에 진짜 요청. */
+/**
+ * 데이터 플레인에 진짜 요청.
+ *
+ * **요청마다 새 연결이다** (2026-11-02). 전에는 fetch 의 keep-alive 풀이 연결을 다시 썼다.
+ * 그 연결은 워커 하나에 붙어 있다. HUP 이 그 워커를 내리면 워커가 유휴 연결을 닫는다
+ * (§6.5 P8.keepalive_closed). 그 사이 `observe()` 의 `execFileSync` 가 이벤트 루프를
+ * 막으면 fetch 는 닫힘을 못 본다. 다음 `hit()` 이 죽은 연결에 쓰고 `fetch failed` 를 받는다.
+ * 그것은 라우팅의 답이 아니라 시험 클라이언트의 답이다.
+ *
+ * CI 41274395275 가 이 모양이었다. 옛 러너가 첫 apply 에서 HUP 을 두 번 보냈다(#185 가
+ * 고쳤다). 두 번째 HUP 이 방금 B11 을 준 워커를 내렸고, 다음 시험의 첫 `hit()` 이 그
+ * 연결에서 죽었다. 그 시험이 push 전에 멈춰 b12 가 안 생겼고, 뒤 시험 넷이 따라 빨개졌다.
+ *
+ * 재는 것은 「새 요청이 어디로 가는가」다. curl 처럼 새 연결로 묻는다. HUP 이 몇 번
+ * 갔는지는 이 함수가 아니라 `observe().reloads` 가 잰다.
+ */
 async function hit(): Promise<string> {
   try {
-    const r = await fetch(`http://127.0.0.1:${DATA_PORT}/`, { signal: AbortSignal.timeout(4000) });
+    const r = await fetch(`http://127.0.0.1:${DATA_PORT}/`, {
+      headers: { connection: 'close' },
+      signal: AbortSignal.timeout(4000),
+    });
     return (await r.text()).trim();
   } catch (e) {
     return `err:${String(e).slice(0, 40)}`;
   }
 }
 
-/** **안 일어난 일**을 재기 위한 관측치. */
-function observe(): { master: string; workers: number; generations: number } {
+/** 데몬이 reload 명령을 실행한 횟수. 아래 `BARY_RELOAD_CMD` 가 한 줄씩 적는다. */
+const RELOAD_LOG = '/prefix/logs/reloads';
+
+/**
+ * **안 일어난 일**을 재기 위한 관측치.
+ *
+ * **reload 는 실행된 명령으로 센다** (2026-11-02). 전에는 error.log 의
+ * `start worker process` 를 셌다. 그 줄은 notice 수준이고, 렌더러는 error_log 를 안
+ * 적으므로 기본 수준(error)에서는 안 남는다. 그리고 `grep -c` 는 0 건이면 `0` 을 찍고
+ * 1 로 끝난다. 그래서 `|| echo 0` 이 `0` 을 하나 더 찍었다. 값은 `"0\n0"` 이고
+ * `Number()` 는 `NaN` 이었다. `NaN` 은 `toBe(NaN)` 을 통과한다. 「reload 가 없었다」
+ * 단언 둘이 아무것도 안 쟀다.
+ *
+ * 워커 PID 집합으로 재지 않는다. nginx 마스터는 새 워커를 띄우고 100ms 뒤에 옛 워커에
+ * QUIT 을 보낸다. 그 창에서는 옛 워커와 새 워커의 이름이 같다.
+ */
+function observe(): { master: string; reloads: number; generations: number } {
   const master = docker('exec', DP, 'sh', '-c', 'cat /prefix/logs/nginx.pid').trim();
-  const workers = Number(docker('exec', DP, 'sh', '-c',
-    'grep -c "start worker process" /prefix/logs/error.log 2>/dev/null || echo 0').trim());
+  const reloads = Number(docker('exec', DP, 'sh', '-c',
+    `cat ${RELOAD_LOG} 2>/dev/null | wc -l`).trim());
   const generations = Number(docker('exec', DP, 'sh', '-c',
     'ls /prefix/generations | wc -l').trim());
-  return { master, workers, generations };
+  if (!Number.isInteger(reloads)) throw new Error(`reload 횟수를 못 읽었다: ${reloads}`);
+  return { master, reloads, generations };
 }
 
 /** 한 바퀴: changeset → plan → commit → apply. */
@@ -141,11 +175,11 @@ beforeAll(async () => {
     '-e', 'BARY_LISTEN=0.0.0.0:8088', '-e', 'BARY_ALLOW_PLAINTEXT_EXPOSED=1',
     '-e', 'BARY_ENGINE_BIN=/usr/local/openresty/bin/openresty',
     '-e', `BARY_TOKENS=[{"name":"tester","hash":"sha256:${hash}","scopes":["read","write","apply"]}]`,
-    '-e', 'BARY_RELOAD_CMD=kill -HUP $(cat /prefix/logs/nginx.pid)',
+    '-e', `BARY_RELOAD_CMD=echo hup >> ${RELOAD_LOG}; kill -HUP $(cat /prefix/logs/nginx.pid)`,
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
       'set -e',
-      'apk add --no-cache nodejs >/dev/null 2>&1',
+      apkAdd('nodejs'),
       'mkdir -p /prefix/logs /prefix/state /prefix/generations /backend/logs',
       // 컨트롤 플레인이 **모르는** 백엔드 둘.
       `printf '%s' 'error_log logs/e.log warn;
@@ -233,7 +267,7 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
     // **그리고 아무것도 안 일어났다.**
     const after = observe();
     expect(after.master, '마스터 PID 가 바뀌었다 — 재시작이다').toBe(before.master);
-    expect(after.workers, '워커가 새로 떴다 — reload 가 일어났다').toBe(before.workers);
+    expect(after.reloads, 'reload 명령이 실행됐다').toBe(before.reloads);
     expect(after.generations, '세대가 새로 생겼다').toBe(before.generations);
     expect(apply.body.activationEpoch, 'epoch 가 움직였다 — 세대 전환이다')
       .toBe((await api('GET', '/api/v1/status')).body.planes.http.activationEpoch);
@@ -254,6 +288,8 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
 
     const after = observe();
     expect(after.generations, '세대가 안 생겼다 — 설정 변경인데').toBeGreaterThan(before.generations);
+    // 대조군이다. 이 수가 여기서 안 움직이면 위 시험들의 「reload 가 없었다」도 못 믿는다.
+    expect(after.reloads, 'reload 를 셌는데 안 늘었다 — 세는 자리가 죽었다').toBeGreaterThan(before.reloads);
   }, 180_000);
 
   it('**죽은 백엔드가 슬롯에서 빠진다 — reload 없이** (§6.5 · §6.6)', async () => {
@@ -310,7 +346,7 @@ describe('v0.3 멤버십 평면 — reload 없는 교체', () => {
     // 백엔드 하나 죽을 때마다 워커를 새로 띄우면 장수 연결이 계속 끊긴다.
     const after = observe();
     expect(after.master).toBe(before.master);
-    expect(after.workers, 'reload 가 일어났다').toBe(before.workers);
+    expect(after.reloads, 'reload 가 일어났다').toBe(before.reloads);
     expect(after.generations, '세대가 생겼다').toBe(before.generations);
 
     // 판정이 API 로 보인다 — `unknown` 을 숨기지 않는다.

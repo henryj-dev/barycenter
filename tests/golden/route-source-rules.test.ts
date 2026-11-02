@@ -22,6 +22,7 @@ import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
 import { validateModel } from '../../src/validate/model.js';
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
 const FRONT = 18981;
@@ -95,9 +96,8 @@ function serve(conf: string): string {
     writeFileSync(join(dir, 'conf', 'nginx.conf'), `daemon off;\n${conf}`, 'utf8');
     writeFileSync(join(dir, 'probe.sh'), PROBE, 'utf8');
     return execFileSync('docker',
-      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-        'apk add --no-cache curl >/dev/null 2>&1 || { echo "설치 실패 (망?)" >&2; exit 70; }; '
-        + '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.5; '
+      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
+        '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.5; '
         + 'sh /prefix/probe.sh; echo "---errorlog---"; tail -5 /prefix/logs/error.log'],
       { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
   } finally {

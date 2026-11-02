@@ -9,6 +9,7 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -66,12 +67,10 @@ function nginxProbe(conf: string, probe: string): string {
     writeFileSync(join(dir, 'probe.sh'), probe, 'utf8');
     return execFileSync(
       'docker',
-      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-       // **설치 실패를 삼키지 않는다.** 전에는 `2>/dev/null` 뒤에 그냥 진행해서,
-       // apk 가 망 때문에 실패하면 프로브가 `curl: not found` 로 죽었다 — 읽는 사람은
-       // 이미지가 이상한 줄 안다. 실패한 자리에서 실패했다고 말하게 한다.
-       'apk add --no-cache curl >/dev/null 2>&1 || ' +
-       '{ echo "curl 설치 실패 (망?) — 이미지 문제가 아니다" >&2; exit 70; }; ' +
+      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
+       // **`curl` 은 도구 이미지에 있다.** 전에는 여기서 매번 `apk add` 했고, 망이
+       // 흔들리면 프로브가 `curl: not found` 로 죽었다. 이제 설치는 `tools-image.ts`
+       // 가 한 번 하고, 실패하면 그 자리에서 크게 말한다.
        '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.2; ' +
        'sh /prefix/probe.sh'],
       { stdio: ['ignore', 'pipe', 'pipe'] },

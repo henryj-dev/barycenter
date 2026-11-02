@@ -28,7 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
-import { waitForDaemon } from './daemon-up.js';
+import { apkAdd, waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
@@ -184,7 +184,7 @@ beforeAll(async () => {
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
       'set -e',
-      'apk add --no-cache nodejs >/dev/null 2>&1',
+      apkAdd('nodejs'),
       'mkdir -p /prefix/logs /prefix/state /prefix/generations',
       // 백엔드 A:11 — 컨트롤 플레인이 모르는 별개 프로세스다.
       // `logs/` 가 없으면 nginx 는 **access_log 를 열다가** 죽는다. error_log 를 절대경로로
@@ -439,7 +439,7 @@ describe('v0.1 완료 판정', () => {
       '-e', 'BARY_NODE_NAME=standby',
       '-e', `BARY_TOKENS=${tokensEnv()}`,
       '--entrypoint', '/bin/sh', IMAGE, '-c', [
-        'apk add --no-cache nodejs >/dev/null 2>&1',
+        apkAdd('nodejs'),
         'mkdir -p /standby-prefix/logs /standby-prefix/state',
         'exec node /app/dist/bin/barycenterd.js',
       ].join(' && '));

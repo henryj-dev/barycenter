@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
 
@@ -95,8 +96,7 @@ function serve(conf: string): string {
     writeFileSync(join(dir, 'conf', 'nginx.conf'), `daemon off;\n${conf}`, 'utf8');
     writeFileSync(join(dir, 'probe.sh'), PROBE, 'utf8');
     return execFileSync('docker', [
-      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-      'apk add --no-cache curl >/dev/null 2>&1; ' +
+      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
       '/usr/local/openresty/bin/openresty -p /w -c conf/nginx.conf -t 2>&1 | tail -2; ' +
       '/usr/local/openresty/bin/openresty -p /w -c conf/nginx.conf & sleep 1.5; ' +
       'sh /w/probe.sh; echo "---errorlog---"; tail -3 /w/logs/error.log',
