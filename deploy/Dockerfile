@@ -27,12 +27,12 @@
 # 런타임 의존성만 따로 준비한다. 런타임 이미지에 `npm` 을 넣지 않기 위해서다 —
 # 처음엔 거기서 `npm ci` 를 돌리려다 `exit 127` 로 죽었다(openresty 이미지에는 `nodejs`
 # 는 넣어도 `npm` 은 없다). 도구를 프로덕션 이미지에 끌어들이지 않는 편이 낫다.
-FROM docker.io/library/node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS deps
+FROM docker.io/library/node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS deps
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-FROM docker.io/library/node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
+FROM docker.io/library/node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
 # 빌드에는 devDependency(typescript)가 필요하다.
