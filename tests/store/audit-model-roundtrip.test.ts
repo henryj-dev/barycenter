@@ -117,6 +117,11 @@ const rich = (): Model => ({
       // 031 — 경로 여럿(text[])이 순서 그대로 돌아와야 한다.
       key: 'r-many', listener: 'secure', hosts: ['a.test'], priority: 1,
       pathPrefixes: ['/v2/', '/graphql'], action: { kind: 'reject', status: 404 },
+      // 032 — 출발지 규칙(jsonb)이 순서 · 모양 그대로 돌아와야 한다.
+      sourceRules: [
+        { from: ['10.0.0.0/8'], action: { kind: 'proxy', pool: 'app', websocket: false, requestHeaders: [{ name: 'X-Zone', value: 'in' }] } },
+        { from: ['203.0.113.7'], action: { kind: 'redirect', to: 'https://a.test/out/', status: 302 } },
+      ],
     },
   ],
   passthroughRoutes: [],

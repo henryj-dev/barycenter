@@ -764,6 +764,24 @@ export type HttpRoute = {
    */
   pathPrefixes?: string[];
   action: HttpAction;
+  /**
+   * **출발지별 동작** (2026-11-02). 요청의 출발지가 `from` 에 들면 `action` 대신 그 규칙의 동작을 한다. 위에서부터
+   * 보고 처음 맞는 것을 쓴다. 맞는 것이 없으면 `action` 이다.
+   *
+   * 출발지는 **realip 이 바꾼 뒤의 주소**(`$remote_addr`)다 — 리스너의 `realIpFromHeader` · PROXY 수신을 지나 방문자
+   * 주소다. 리스너 `sourceAllow` 는 연결 주소(`$realip_remote_addr`)를 본다. 둘의 용도가 달라서다: 리스너 제한은
+   * 「Cloudflare 만 붙는다」, 라우트 규칙은 「사무실 IP 는 내부 풀로」.
+   *
+   * 뒤 규칙의 대역이 앞 규칙의 대역 안에 들면 그 대역은 결코 맞지 않는다 — 검증기가 막는다. 그래서 nginx `geo` 의
+   * 최장 접두사 선택이 「위에서부터 처음 맞는 것」 과 같아진다.
+   */
+  sourceRules?: HttpSourceRule[];
+};
+
+/** 출발지 규칙 하나 — `from`(CIDR · IP · `@주소집합`) 에서 온 요청은 `action` 을 한다. */
+export type HttpSourceRule = {
+  from: string[];
+  action: HttpAction;
 };
 
 /** 패스스루는 TLS 를 종단하지 않으므로 HTTP status 를 가질 수 없다. */

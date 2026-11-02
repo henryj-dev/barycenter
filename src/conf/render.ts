@@ -33,6 +33,7 @@ import { decodeModel } from '../model/decode.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
 import { routePathKey, routePaths } from '../model/route-paths.js';
+import { routeActions } from '../model/route-rules.js';
 import type {
   HttpListener,
   HttpsListener,
@@ -41,6 +42,7 @@ import type {
   UdpListener,
   Backend,
   HttpRoute,
+  HttpAction,
   Listener,
   Model,
   HeaderRule,
@@ -243,6 +245,80 @@ function sourceAllowGeo(listener: Listener): ConfNode[] {
     entry(lit('default'), lit('1')),
     ...listener.sourceAllow.map((cidr) => entry(lit(cidr), lit('0'))),
   ])];
+}
+
+/**
+ * **라우트 출발지 규칙** (2026-11-02). 규칙마다 `geo` 변수 하나 — 출발지가 그 규칙의 대역에 들면 1 이다.
+ *
+ * `geo` 는 기본으로 `$remote_addr` 를 본다. realip 이 바꾼 **뒤**의 주소다(리스너 `realIpFromHeader` · PROXY 수신을
+ * 지난 방문자 주소). 리스너 `sourceAllow` 는 바꾸기 **전** 주소(`$realip_remote_addr`)를 본다 — 용도가 다르다.
+ *
+ * 규칙마다 변수를 따로 두는 이유: location 안에서 위 규칙부터 `if ($변수)` 로 본다. 그러면 앞 규칙이 좁고 뒤 규칙이
+ * 넓어도 앞 규칙이 먼저 걸린다 — 「위에서부터 처음 맞는 것」 이 그대로다. 한 `geo` 에 규칙 번호를 담으면 최장 접두사가
+ * 이겨 순서가 뒤집히고, nginx `if` 는 값 비교를 하려면 공백이 든 조건이 필요해 이 렌더러의 리터럴이 막는다.
+ */
+const routeRuleVar = (routeKey: string, i: number): string => varName('bary_rsrc_', routeKey, `_${i + 1}`);
+
+function routeSourceGeos(r: HttpRoute): ConfNode[] {
+  return (r.sourceRules ?? []).map((rule, i) => block('geo', [variable(routeRuleVar(r.key, i))], [
+    entry(lit('default'), lit('0')),
+    ...rule.from.map((cidr) => entry(lit(cidr), lit('1'))),
+  ]));
+}
+
+/**
+ * 프록시 규칙이 넘어가는 named location 의 `error_page` 코드. 규칙마다 하나다 — 한 location 안에서 코드가 같으면 마지막
+ * 것만 남는다. 570 부터 20 개(해독기가 규칙 수를 20 으로 막는다). 응답에는 안 나간다 — named location 이 응답한다.
+ */
+const RULE_CODE_BASE = 570;
+
+/** 정규식에서 경로 접두사를 글자 그대로 맞추게 한다. 경로 문자는 `[A-Za-z0-9-._~/%]` 다 — `.` 만 특별하다. */
+const literalRegex = (path: string): string => path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * 출발지 규칙을 location 본문 앞에 붙인다. 거절 · 리다이렉트는 `if` 안의 `return` 이다(nginx 가 `if` 안에서 안전하다고
+ * 보장하는 둘 중 하나다). 프록시는 `error_page <코드> = @이름` 과 `return <코드>` 로 named location 에 넘긴다 — 규칙마다
+ * 요청 헤더 · 경로 바꾸기가 다를 수 있고, `proxy_set_header` 는 `if` 안에 못 쓴다.
+ *
+ * named location 의 `proxy_pass` 에는 URI 를 못 붙인다. 경로 바꾸기는 `rewrite … break` 로 같은 일을 한다 — location 이
+ * 접두사를 바꾸는 것과 같은 정규화된 URI 를 바꾼다.
+ *
+ * 풀에 백엔드가 없으면 503 이다. 규칙이 없을 때처럼 location 을 빼면, 그 출발지 요청이 다른 동작으로 샌다.
+ */
+function withSourceRules(
+  r: HttpRoute, path: string, body: ConfNode[],
+  build: (action: HttpAction) => ConfNode[],
+): { body: ConfNode[]; named: ConfNode[] } {
+  const rules = r.sourceRules;
+  if (rules === undefined) return { body, named: [] };
+  const pi = routePaths(r).indexOf(path);
+  const head: ConfNode[] = [];
+  const named: ConfNode[] = [];
+  rules.forEach((rule, i) => {
+    const cond = [lit(`($${routeRuleVar(r.key, i)})`)];
+    const a = rule.action;
+    if (a.kind !== 'proxy') {
+      head.push(block('if', cond, build(a)));
+      return;
+    }
+    const { rewritePrefix, ...plain } = a;
+    const inner = build(plain);
+    if (inner.length === 0) {
+      head.push(block('if', cond, [directive('return', [num(503)])]));
+      return;
+    }
+    const name = `@${varName('bary_rule_', r.key, `_${pi}_${i + 1}`)}`;
+    const code = RULE_CODE_BASE + i;
+    head.push(directive('error_page', [num(code), lit('='), lit(name)]));
+    head.push(block('if', cond, [directive('return', [num(code)])]));
+    named.push(block('location', [lit(name)], [
+      ...(rewritePrefix === undefined ? [] : [
+        directive('rewrite', [regex(`^${literalRegex(path)}(.*)$`), lit(`${rewritePrefix}$1`), lit('break')]),
+      ]),
+      ...inner,
+    ]));
+  });
+  return { body: [...head, ...(body.length > 0 ? body : [directive('return', [num(503)])])], named };
 }
 
 function sourceAllowGuard(listener: Listener): ConfNode[] {
@@ -770,10 +846,12 @@ function httpServerBlocks(
 
     const locations: ConfNode[] = [];
     for (const { r, path } of ordered) {
-      const body = locationBody(
-        r, poolsWithBackends, listener.http?.headers?.request, pools, certs,
+      const build = (action: HttpAction): ConfNode[] => locationBody(
+        { ...r, action }, poolsWithBackends, listener.http?.headers?.request, pools, certs,
       );
-      if (body.length > 0) locations.push(block('location', [lit(path)], body));
+      // 출발지 규칙이 있으면 본문 앞에 규칙이 서고, 프록시 규칙의 named location 이 함께 선다 (2026-11-02).
+      const { body, named } = withSourceRules(r, path, build(r.action), build);
+      if (body.length > 0) locations.push(block('location', [lit(path)], body), ...named);
     }
     if (listener.hosts !== undefined) {
       // 라우트가 `/` 를 안 덮으면 리스너의 기본 동작이 덮는다. 덮으면 안 낸다 — 같은 location 이 둘이면
@@ -1827,11 +1905,12 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
     for (const l of httpListeners) {
       const da = l.http?.defaultAction;
       if (da !== undefined && da !== 'reject' && poolsWithBackends.has(da.pool)) usedPools.add(da.pool);
-      for (const r of routesByListener.get(l.key) ?? []) {
-        if (r.action.kind !== 'proxy') continue;
-        if (!poolsWithBackends.has(r.action.pool)) continue;
-        usedPools.add(r.action.pool);
-        if (r.action.websocket) anyWebsocket = true;
+      // 출발지 규칙의 풀도 쓰는 풀이다 (2026-11-02) — 빼면 named location 이 없는 upstream 을 가리킨다.
+      for (const r of routesByListener.get(l.key) ?? []) for (const a of routeActions(r)) {
+        if (a.kind !== 'proxy') continue;
+        if (!poolsWithBackends.has(a.pool)) continue;
+        usedPools.add(a.pool);
+        if (a.websocket) anyWebsocket = true;
       }
     }
 
@@ -1847,6 +1926,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       ...httpListeners.flatMap((l) => rateLimitZoneNodes(l.key, l.http?.rateLimit)),
       // 출발지 제한의 `geo` 도 http 블록에만 있을 수 있다. server 블록보다 앞이면 된다.
       ...httpListeners.flatMap((l) => sourceAllowGeo(l)),
+      // 라우트 출발지 규칙의 `geo` 도 여기다 (2026-11-02). 평문 리다이렉트 소켓은 리스너 키가 따로라 라우트가 없다.
+      ...httpListeners.flatMap((l) => (routesByListener.get(l.key) ?? []).flatMap(routeSourceGeos)),
       adminInclude,
     ];
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).

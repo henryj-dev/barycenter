@@ -4,6 +4,7 @@
    * 합쳤다. 저장 경로는 그대로 셋이다(`insertHttpRoute` · `insertHttpRedirect` · `insertHttpReject`).
    * 경로 바꾸기 · 이 라우트의 요청 헤더(#109)는 「프록시 옵션」 에 접혀 있다.
    * 경로 접두사 칸은 여럿을 받는다(2026-11-02) — 호스트 칸처럼 쉼표나 공백으로 나눈다.
+   * 「출발지별 동작」(2026-11-02)에 규칙을 위에서부터 둔다 — `SourceRulesField`.
    */
   import { getContext } from 'svelte';
   import { parsePathList, type RedirectStatus, type RejectStatus } from '@web/edit';
@@ -12,6 +13,7 @@
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
+  import SourceRulesField, { toSourceRules, type SourceRuleRow } from './SourceRulesField.svelte';
   import { KEY_HELP, filled, keyError, words } from './checks';
 
   type Action = 'proxy' | 'redirect' | 'reject';
@@ -38,6 +40,7 @@
   let to = $state('');
   let redirectStatus = $state('302');
   let rejectStatus = $state('403');
+  let rules = $state<SourceRuleRow[]>([]);
 
   const pathBad = $derived(pathPrefix.includes('*') ? '▲ * 는 일반 글자로 저장돼요. 접두사에는 쓰지 않아요.' : undefined);
   const ready = $derived(
@@ -49,7 +52,12 @@
     if (listener === undefined) return;
     // 경로는 여럿일 수 있다 (2026-11-02). 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 로 싣는다(`pathFieldsOf`).
     const paths = parsePathList(pathPrefix);
-    const base = { key: key.trim(), listener, hosts: words(hosts), ...(paths.length === 0 ? {} : { pathPrefixes: paths }) };
+    const sourceRules = toSourceRules(rules);
+    const base = {
+      key: key.trim(), listener, hosts: words(hosts),
+      ...(paths.length === 0 ? {} : { pathPrefixes: paths }),
+      ...(sourceRules.length === 0 ? {} : { sourceRules }),
+    };
     if (action === 'proxy') {
       if (pool === undefined) return;
       const lines = headers.filter((h) => h.name.trim() !== '').map((h) => `${h.name.trim()}: ${h.value}`).join('\n');
@@ -103,6 +111,16 @@
     {/if}
   </FormSection>
 
+  <Disclosure title="출발지별 동작" hint={rules.length === 0 ? '출발지 대역마다 다른 동작' : `규칙 ${rules.length}개`}>
+    <FormSection>
+      <p class="note">
+        요청의 출발지가 규칙의 대역에 들면 위 「동작」 대신 그 규칙의 동작을 해요. 위 규칙부터 보고 처음 맞는 것을 써요.
+        출발지는 방문자 주소예요 — 리스너가 원본 IP 헤더나 PROXY 수신으로 바꾼 뒤의 주소예요.
+      </p>
+      <SourceRulesField bind:rules {pools} />
+    </FormSection>
+  </Disclosure>
+
   {#if action === 'proxy'}
     <Disclosure title="프록시 옵션" hint="경로 바꾸기 · 이 라우트의 요청 헤더">
       <FormSection>
@@ -119,3 +137,7 @@
     </Disclosure>
   {/if}
 </CreateForm>
+
+<style>
+  .note { margin: 0 0 8px; font-size: 13px; color: var(--tx2); }
+</style>

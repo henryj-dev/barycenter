@@ -1964,6 +1964,21 @@ http {
 | DB | 031: `http_routes.path_prefixes text[]`. `path_prefix` 와 함께 NULL 아님을 CHECK 로 막는다 |
 | 저작 | CLI `route create --path-prefix` 를 여러 번(쉼표로 나누지 않는다 — 경로에 쉼표가 들어갈 수 있다). GUI 라우트 폼의 경로 칸은 쉼표 · 공백으로 나눈다 |
 
+**라우트 출발지 규칙 (2026-11-02).** 한 라우트가 출발지마다 다르게 간다 — 사무실 대역은 내부 풀로, 특정 대역은 거절, 나머지는
+기본 동작.
+
+| | 지금 |
+|---|---|
+| `sourceRules` | `{ from: CIDR · IP · @주소집합[], action }[]`. 위에서부터 보고 처음 맞는 규칙의 동작을 한다. 맞는 것이 없으면 라우트 `action`. 1–20 개 |
+| 출발지 | **realip 이 바꾼 뒤**의 주소(`$remote_addr`) — 리스너 `realIpFromHeader` · PROXY 수신을 지난 방문자 주소다. 리스너 `sourceAllow` 는 바꾸기 **전**(`$realip_remote_addr`)을 본다. 용도가 달라서다: 리스너 제한은 「Cloudflare 만 붙는다」, 라우트 규칙은 「사무실 IP 는 내부 풀로」. 믿지 않는 앞단이 보낸 헤더는 안 먹는다(실측) |
+| 가려진 규칙 | 뒤 규칙의 대역이 앞 규칙의 대역 안에 들면 결코 맞지 않는다 — 검증기 `source_rule_shadowed`. 집합을 펼친 뒤에 본다. 앞이 좁고 뒤가 넓은 것은 받는다 |
+| 렌더 | 규칙마다 `geo $bary_rsrc_<라우트>_<n>`(맞으면 1). location 안에서 위 규칙부터 `if ($변수)`. 거절 · redirect 는 `if` 안의 `return`. 프록시는 `error_page 57x = @bary_rule_…` + `return 57x` 로 named location 에 넘긴다 — 규칙마다 요청 헤더가 다를 수 있고 `proxy_set_header` 는 `if` 안에 못 쓴다. named location 의 `proxy_pass` 에는 URI 를 못 붙여서 경로 바꾸기는 `rewrite ^<경로>(.*)$ <바꿀값>$1 break` 다. 규칙마다 변수를 따로 두는 이유: 한 `geo` 에 번호를 담으면 최장 접두사가 이겨 순서가 뒤집힌다 |
+| 백엔드 없는 풀 | 503. 규칙이 없을 때처럼 location 을 빼면 그 출발지 요청이 다른 동작으로 샌다 |
+| 쓰는 자리 | 풀 참조 · 웹소켓 · 리스너 폐포 · 연결 그래프는 `routeActions()`(기본 + 규칙 동작)로 읽는다. 주소 집합은 `referencedSetsOfRoute()` · `expandAddressSets` 가 규칙까지 펼친다 |
+| DB | 032: `http_routes.source_rules jsonb`(배열, 1–20). 규칙의 풀은 FK 가 아니라 검증기가 본다 |
+| 저작 | GUI 라우트 폼의 「출발지별 동작」(위 · 아래로 순서를 바꾼다). 「흐름」 은 규칙을 줄마다, 그다음 「그 밖의 출발지」 를 보인다. CLI 는 아직 없다 — patch 로 넣는다 |
+| 실측 | `tests/golden/route-source-rules.test.ts` — 출발지 넷(`curl --interface`) · 경로 바꾸기 · 쿼리 · 경로 여럿 · 순서 · 원본 IP 헤더 |
+
 외부 HTTPS 대상은 풀의 `upstreamTls`(`sni`)와 백엔드 `host:443` 으로 표현한다. 그 풀의 HTTP
 프로브는 TLS 로 찌른다(#107).
 

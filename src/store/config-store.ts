@@ -42,6 +42,7 @@ import type {
   TlsPolicy,
   SniOutcome,
   HeaderRule,
+  HttpSourceRule,
   HeaderRules,
   HttpProfile,
   ProxyLimits,
@@ -49,7 +50,8 @@ import type {
   RealIpHeaderName,
 } from '../model/provisional.js';
 import type { Db, Queryable, Row } from './pg.js';
-import { referencedSets } from '../model/address-sets.js';
+import { referencedSets, referencedSetsOfRoute } from '../model/address-sets.js';
+import { routeActions } from '../model/route-rules.js';
 import {
   exportManifest, importPatch, parseManifest, type ImportMode, type Manifest,
 } from './manifest.js';
@@ -468,7 +470,7 @@ async function readModel(c: Queryable): Promise<Model> {
   });
 
   const httpRoutes = (await c.query(
-    `SELECT r.key, l.key AS listener, r.hosts, r.priority, r.path_prefix, r.path_prefixes,
+    `SELECT r.key, l.key AS listener, r.hosts, r.priority, r.path_prefix, r.path_prefixes, r.source_rules,
             r.action_kind, p.key AS pool, r.websocket, r.redirect_to, r.status,
             r.request_headers, r.rewrite_prefix
        FROM http_routes r
@@ -483,6 +485,8 @@ async function readModel(c: Queryable): Promise<Model> {
     ...(maybeText(r, 'path_prefix') !== undefined ? { pathPrefix: text(r, 'path_prefix') } : {}),
     // 031. NULL 이면 키를 안 만든다 — 경로 하나(`path_prefix`)인 라우트다.
     ...(Array.isArray(r['path_prefixes']) ? { pathPrefixes: list(r, 'path_prefixes') } : {}),
+    // 032. NULL 이면 키를 안 만든다 — 출발지 규칙이 없는 라우트다.
+    ...(Array.isArray(r['source_rules']) ? { sourceRules: r['source_rules'] as HttpSourceRule[] } : {}),
     action:
       text(r, 'action_kind') === 'proxy'
         ? {
@@ -833,13 +837,13 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       await c.query(
         `INSERT INTO http_routes (id,key,listener_id,listener_protocol,hosts,priority,path_prefix,
                                   action_kind,pool_id,pool_cls,websocket,redirect_to,status,
-                                  request_headers,rewrite_prefix,path_prefixes,
+                                  request_headers,rewrite_prefix,path_prefixes,source_rules,
                                   created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$15,$16,$17,$13,$13,$14)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$15,$16,$17,$18,$13,$13,$14)
          ON CONFLICT (key) DO UPDATE SET
            listener_id=EXCLUDED.listener_id, listener_protocol=EXCLUDED.listener_protocol,
            hosts=EXCLUDED.hosts, priority=EXCLUDED.priority, path_prefix=EXCLUDED.path_prefix,
-           path_prefixes=EXCLUDED.path_prefixes,
+           path_prefixes=EXCLUDED.path_prefixes, source_rules=EXCLUDED.source_rules,
            action_kind=EXCLUDED.action_kind, pool_id=EXCLUDED.pool_id, pool_cls=EXCLUDED.pool_cls,
            websocket=EXCLUDED.websocket, redirect_to=EXCLUDED.redirect_to, status=EXCLUDED.status,
            request_headers=EXCLUDED.request_headers, rewrite_prefix=EXCLUDED.rewrite_prefix,
@@ -856,7 +860,9 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
             ? JSON.stringify(action['requestHeaders']) : null,
           kind === 'proxy' ? action['rewritePrefix'] ?? null : null,
           // $17 — 031. 경로 여럿. 없으면 NULL.
-          Array.isArray(b['pathPrefixes']) ? b['pathPrefixes'] : null],
+          Array.isArray(b['pathPrefixes']) ? b['pathPrefixes'] : null,
+          // $18 — 032. 출발지 규칙. jsonb 는 문자열로 넘긴다.
+          Array.isArray(b['sourceRules']) ? JSON.stringify(b['sourceRules']) : null],
       );
       return;
     }
@@ -1941,12 +1947,17 @@ function assertDirectiveStrings(op: PatchOp & { op: 'put' }, body: Record<string
         if (!r.ok) fail(`pathPrefixes[${i}]`, r.message);
       });
     }
-    const action = obj(body['action']);
-    if (action['kind'] === 'redirect' && typeof action['to'] === 'string') {
-      // 리다이렉트 목적지는 헤더 값과 같은 규칙이다 — 제어문자 금지 + 변수 화이트리스트.
-      // `$host`·`$request_uri` 는 실제로 쓸모가 있어서 화이트리스트에 있다.
-      const r = validateHeaderValue(action['to']);
-      if (!r.ok) fail('action.to', r.message);
+    // 출발지 규칙의 리다이렉트도 `return` 으로 간다 (2026-11-02) — 같은 검사를 지난다.
+    const rules = Array.isArray(body['sourceRules']) ? (body['sourceRules'] as unknown[]) : [];
+    const actions: [Record<string, unknown>, string][] = [[obj(body['action']), 'action'],
+      ...rules.map((x, i): [Record<string, unknown>, string] => [obj(obj(x)['action']), `sourceRules[${i}].action`])];
+    for (const [action, at] of actions) {
+      if (action['kind'] === 'redirect' && typeof action['to'] === 'string') {
+        // 리다이렉트 목적지는 헤더 값과 같은 규칙이다 — 제어문자 금지 + 변수 화이트리스트.
+        // `$host`·`$request_uri` 는 실제로 쓸모가 있어서 화이트리스트에 있다.
+        const r = validateHeaderValue(action['to']);
+        if (!r.ok) fail(`${at}.to`, r.message);
+      }
     }
   }
 }
@@ -2011,6 +2022,7 @@ function listenerClosure(model: Model, l: Listener): string {
   const certs = new Set<string>();
   const policies = new Set<string>();
   const parts: unknown[] = [l];
+  let routeSets: string[] = [];
 
   const addPool = (p: string | undefined): void => { if (p !== undefined) pools.add(p); };
 
@@ -2019,7 +2031,10 @@ function listenerClosure(model: Model, l: Listener): string {
     if (typeof da === 'object') addPool(da.pool);
     const routes = model.httpRoutes.filter((r) => r.listener === l.key).sort(byKey);
     parts.push(routes);
-    for (const r of routes) if (r.action.kind === 'proxy') addPool(r.action.pool);
+    // 출발지 규칙의 풀도 폐포다 (2026-11-02) — 그 풀의 백엔드가 바뀌면 이 리스너가 바뀐다.
+    for (const r of routes) for (const a of routeActions(r)) if (a.kind === 'proxy') addPool(a.pool);
+    // 출발지 규칙이 참조한 주소 집합도 폐포다 — 대역이 바뀌면 `geo` 가 바뀐다.
+    routeSets = [...new Set(routes.flatMap(referencedSetsOfRoute))].sort();
   }
   if (l.protocol === 'https') {
     policies.add(l.tls.policy);
@@ -2049,6 +2064,7 @@ function listenerClosure(model: Model, l: Listener): string {
   // **참조한 주소 집합도 폐포다** (#114). 리스너는 그대로인데 `@cloudflare` 의 대역이 바뀌면
   // 렌더가 바뀐다 — 그 리스너를 「변경」으로 실어야 한다.
   parts.push(referencedSets(l).map((k) => (model.addressSets ?? []).find((x) => x.key === k) ?? null));
+  parts.push(routeSets.map((k) => (model.addressSets ?? []).find((x) => x.key === k) ?? null));
   return JSON.stringify(canon(parts));
 }
 

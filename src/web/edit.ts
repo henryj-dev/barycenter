@@ -862,6 +862,31 @@ export function putSourceIpHashPoolWithBackendPatch(input: {
   ];
 }
 
+/** 출발지 규칙 하나 — 라우트 몸통에 그대로 실린다 (모델 `HttpSourceRule` 과 같은 모양). */
+export type SourceRuleInput = {
+  from: string[];
+  action:
+    | { kind: 'proxy'; pool: string; websocket: boolean }
+    | { kind: 'redirect'; to: string; status: RedirectStatus }
+    | { kind: 'reject'; status: RejectStatus };
+};
+
+/**
+ * 출발지 규칙 입력 → 라우트 몸통의 `sourceRules` (2026-11-02). 대역 칸의 빈 값을 지우고, `from` 이 빈 규칙은 버린다 —
+ * 폼에서 「＋ 규칙」 을 눌러 놓고 비운 줄이다. 남는 것이 없으면 아무것도 안 싣는다(해독기가 빈 목록을 거절한다).
+ * 대역의 모양 · 가려진 규칙은 해독기와 검증기가 본다 — 여기서 같은 규칙을 다시 짓지 않는다.
+ */
+export function sourceRulesOf(rules: readonly SourceRuleInput[] | undefined): SourceRuleInput[] | undefined {
+  const out = (rules ?? [])
+    .map((r) => ({ ...r, from: r.from.map((x) => x.trim()).filter((x) => x !== '') }))
+    .filter((r) => r.from.length > 0);
+  for (const r of out) {
+    if (r.action.kind === 'proxy' && r.action.pool.trim() === '') throw new Error('출발지 규칙의 풀이 비어 있다');
+    if (r.action.kind === 'redirect' && r.action.to.trim() === '') throw new Error('출발지 규칙의 대상이 비어 있다');
+  }
+  return out.length === 0 ? undefined : out;
+}
+
 /**
  * 경로 입력 → 라우트 몸통의 경로 칸 (2026-11-02). 빈 칸과 중복을 지운다. 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 다 —
  * 하나를 `pathPrefixes` 로 실으면 같은 뜻의 두 표기가 생긴다. 없으면 아무것도 안 싣는다(`/`).
@@ -889,6 +914,7 @@ export type PutHttpRouteOp = {
     priority: number;
     pathPrefix?: string;
     pathPrefixes?: string[];
+    sourceRules?: SourceRuleInput[];
     action: {
       kind: 'proxy'; pool: string; websocket: boolean;
       requestHeaders?: HeaderRuleInput[];
@@ -909,6 +935,8 @@ export function putHttpRoutePatch(input: {
   pathPrefix?: string;
   /** 경로 여럿 (2026-11-02). `pathPrefix` 와 합쳐 읽는다 — 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 로 싣는다. */
   pathPrefixes?: readonly string[];
+  /** 출발지별 동작 (2026-11-02). 위에서부터 처음 맞는 것. `from` 이 빈 줄은 버린다. */
+  sourceRules?: readonly SourceRuleInput[];
   priority?: number;
   websocket?: boolean;
   /** 이 라우트에만 거는 요청 헤더. 같은 이름이면 리스너 것을 대신한다 (#109). */
@@ -933,6 +961,8 @@ export function putHttpRoutePatch(input: {
     action: { kind: 'proxy', pool: input.pool, websocket: input.websocket === true },
   };
   Object.assign(body, paths);
+  const rules = sourceRulesOf(input.sourceRules);
+  if (rules !== undefined) body.sourceRules = rules;
   // **안 적으면 키를 안 만든다** — 빈 목록·빈 문자열을 실으면 해독기가 거절하거나 렌더가 바뀐다.
   const requestHeaders = headerList(input.requestHeaders);
   if (requestHeaders !== undefined) body.action.requestHeaders = requestHeaders;
@@ -980,6 +1010,7 @@ export type PutHttpRedirectOp = {
     priority: number;
     pathPrefix?: string;
     pathPrefixes?: string[];
+    sourceRules?: SourceRuleInput[];
     action: { kind: 'redirect'; to: string; status: RedirectStatus };
   };
 };
@@ -997,6 +1028,8 @@ export function putHttpRedirectPatch(input: {
   pathPrefix?: string;
   /** 경로 여럿 (2026-11-02). `pathPrefix` 와 합쳐 읽는다 — 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 로 싣는다. */
   pathPrefixes?: readonly string[];
+  /** 출발지별 동작 (2026-11-02). 위에서부터 처음 맞는 것. `from` 이 빈 줄은 버린다. */
+  sourceRules?: readonly SourceRuleInput[];
   priority?: number;
 }): PutHttpRedirectOp[] {
   if (input.key === '') throw new Error('키가 비어 있다');
@@ -1021,6 +1054,8 @@ export function putHttpRedirectPatch(input: {
     action: { kind: 'redirect', to, status },
   };
   Object.assign(body, paths);
+  const rules = sourceRulesOf(input.sourceRules);
+  if (rules !== undefined) body.sourceRules = rules;
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
 }
 
@@ -1038,6 +1073,7 @@ export type PutHttpRejectOp = {
     priority: number;
     pathPrefix?: string;
     pathPrefixes?: string[];
+    sourceRules?: SourceRuleInput[];
     action: { kind: 'reject'; status: RejectStatus };
   };
 };
@@ -1054,6 +1090,8 @@ export function putHttpRejectPatch(input: {
   pathPrefix?: string;
   /** 경로 여럿 (2026-11-02). `pathPrefix` 와 합쳐 읽는다 — 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 로 싣는다. */
   pathPrefixes?: readonly string[];
+  /** 출발지별 동작 (2026-11-02). 위에서부터 처음 맞는 것. `from` 이 빈 줄은 버린다. */
+  sourceRules?: readonly SourceRuleInput[];
   priority?: number;
 }): PutHttpRejectOp[] {
   if (input.key === '') throw new Error('키가 비어 있다');
@@ -1076,6 +1114,8 @@ export function putHttpRejectPatch(input: {
     action: { kind: 'reject', status },
   };
   Object.assign(body, paths);
+  const rules = sourceRulesOf(input.sourceRules);
+  if (rules !== undefined) body.sourceRules = rules;
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
 }
 

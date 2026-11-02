@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 120 심볼 · sha256:f0e717a5c10cd918cba07b97ac9f6d62cf92926e36ffd1958e6d2cc9d99c9821
+# 121 심볼 · sha256:049973272a35beac495718b95320b00729c116444887a1d43272ac3e74aaf814
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -318,6 +318,12 @@ export type HttpRoute = {
     pathPrefix?: string;
     pathPrefixes?: string[];
     action: HttpAction;
+    sourceRules?: HttpSourceRule[];
+};
+── HttpSourceRule
+export type HttpSourceRule = {
+    from: string[];
+    action: HttpAction;
 };
 ── HttpsListener
 export type HttpsListener = ListenerBase & {
@@ -401,7 +407,7 @@ export type ModelIssue = {
     message: string;
 };
 ── ModelIssueCode
-export type ModelIssueCode = 'unknown_address_set' | 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'strict_priority_too_many' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_hsts' | 'host_conflict' | 'route_host_outside_listener' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range' | 'invalid_value' | 'duplicate';
+export type ModelIssueCode = 'unknown_address_set' | 'source_rule_shadowed' | 'invalid_bind_address' | 'unknown_pool' | 'unknown_listener' | 'pool_has_no_backend' | 'socket_conflict' | 'route_compile_error' | 'invalid_hash_key' | 'mixed_proxy_protocol_pool' | 'listener_requires_default_pool' | 'route_protocol_mismatch' | 'pool_protocol_mismatch' | 'orphan_backend' | 'option_not_supported' | 'unknown_tls_reference' | 'sni_binding_protocol_mismatch' | 'sni_binding_missing' | 'strict_priority_too_many' | 'sni_binding_conflict' | 'invalid_sni_host' | 'acme_path_reserved' | 'certificate_has_no_material' | 'invalid_acme_intent' | 'invalid_hsts' | 'host_conflict' | 'route_host_outside_listener' | 'invalid_type' | 'invalid_enum' | 'missing_field' | 'unknown_field' | 'out_of_range' | 'invalid_value' | 'duplicate';
 ── ModelValidationError
 export declare class ModelValidationError extends Error {
     readonly issues: ModelIssue[];

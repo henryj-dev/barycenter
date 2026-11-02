@@ -11,6 +11,8 @@
  * 여기서는 오류를 **모아서** 반환한다 (`plan` 이 한 번에 보여줘야 하므로). 렌더러는 하나라도
  * 있으면 던진다 — fail closed.
  */
+import { routeActions } from '../model/route-rules.js';
+import { cidrCovers } from './ip.js';
 import { routePaths } from '../model/route-paths.js';
 import { redirectListenerOf } from '../model/redirect.js';
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
@@ -27,7 +29,7 @@ import { ACME_PREFIX } from '../conf/render.js';
 import {
   coversHost, parseHashKey, parseHostPattern, validatePathPrefix, type HostPattern,
 } from './strings.js';
-import { referencedSets } from '../model/address-sets.js';
+import { expandList, referencedSets, referencedSetsOfRoute } from '../model/address-sets.js';
 import type {
   RawListener, RawModel, ProtocolClass, SniCertificateBinding,
 } from '../model/provisional.js';
@@ -35,6 +37,8 @@ import type {
 export type ModelIssueCode =
   /** 리스너가 없는 주소 집합을 `@이름` 으로 참조한다 (#114). */
   | 'unknown_address_set'
+  /** 라우트 출발지 규칙의 대역이 앞 규칙의 대역 안에 들어 결코 맞지 않는다 (2026-11-02). */
+  | 'source_rule_shadowed'
   | 'invalid_bind_address'
   | 'unknown_pool'
   | 'unknown_listener'
@@ -603,7 +607,8 @@ export function validateModel(
   };
 
   for (const r of model.httpRoutes) {
-    if (r.action.kind === 'proxy') needPool(r.key, r.action.pool, 'http');
+    // 출발지 규칙의 동작도 풀을 가리킨다 (2026-11-02) — 빼면 그 풀을 지워도 된다고 보인다.
+    for (const a of routeActions(r)) if (a.kind === 'proxy') needPool(r.key, a.pool, 'http');
     // **https 도 http 라우트를 받는다.** TLS 를 종단하고 나면 평범한 HTTP 다.
     if (!wantProtocol(r.key, r.listener, ['http', 'https'])) continue;
     // 경로가 여럿이면 (호스트, 경로) 쌍마다 하나다 — 다른 라우트와의 겹침을 경로마다 본다.
@@ -625,6 +630,42 @@ export function validateModel(
   // nginx 의 location 은 **최장 접두사**가 이기므로 사용자가 더 긴 접두사를 내면 그쪽이
   // 먹는다. 그러면 CA 의 요청이 사용자 라우트로 가고, 증상은 "챌린지 검증 실패" 다.
   // 인증서 설정을 아무리 봐도 이상이 없어 보인다.
+  // ── 라우트 출발지 규칙 (2026-11-02) ─────────────────────────────────────
+  //
+  // **뒤 규칙의 대역이 앞 규칙의 대역 안에 들면 그 대역은 결코 맞지 않는다.** 「위에서부터 처음 맞는 것」 이 규칙인데,
+  // 렌더는 nginx `geo` 라서 최장 접두사가 이긴다. 가려진 대역을 막으면 둘이 같아진다 — 막지 않으면 nginx 가 뒤 규칙을
+  // 고르고, 사람이 읽은 순서와 다르게 간다. 집합을 펼친 뒤에 본다(`@office` 와 `10.0.0.0/8` 이 겹칠 수 있다).
+  {
+    const sets = new Set((model.addressSets ?? []).map((x) => x.key));
+    for (const r of model.httpRoutes) for (const ref of referencedSetsOfRoute(r)) {
+      if (sets.has(ref)) continue;
+      issues.push({
+        code: 'unknown_address_set',
+        subjects: [r.key, ref],
+        message: `라우트 '${r.key}' 의 출발지 규칙이 없는 주소 집합 '@${ref}' 를 참조한다`,
+      });
+    }
+    const cidrsOf = new Map((model.addressSets ?? []).map((x) => [x.key, x.cidrs]));
+    for (const r of model.httpRoutes) {
+      const seen: { cidr: string; rule: number }[] = [];
+      (r.sourceRules ?? []).forEach((rule, i) => {
+        const from = expandList(rule.from, cidrsOf);
+        for (const cidr of from) {
+          const by = seen.find((x) => cidrCovers(x.cidr, cidr));
+          if (by !== undefined) {
+            issues.push({
+              code: 'source_rule_shadowed',
+              subjects: [r.key],
+              message: `라우트 '${r.key}' 의 출발지 규칙 ${i + 1} 의 ${cidr} 는 규칙 ${by.rule + 1} 의 ${by.cidr} 안에 든다 — `
+                + '위 규칙이 먼저 맞으므로 이 대역은 결코 여기로 오지 않는다. 좁은 대역을 위로 올려라',
+            });
+          }
+        }
+        for (const cidr of from) seen.push({ cidr, rule: i });
+      });
+    }
+  }
+
   for (const r of model.httpRoutes) for (const path of routePaths(r)) {
     // 위쪽 경로(`/.well-known/`)는 허용한다 — 더 짧은 접두사라 `^~` 가 이긴다.
     if (path === ACME_PREFIX || path.startsWith(ACME_PREFIX)) {

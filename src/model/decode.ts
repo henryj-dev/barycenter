@@ -36,6 +36,7 @@ import type {
   ProxyLimits,
   RateLimit,
   HttpRoute,
+  HttpSourceRule,
   Listener,
   Model,
   PassthroughAction,
@@ -850,7 +851,7 @@ function decodeHttpRoute(iss: Issues, v: unknown, path: string): HttpRoute | und
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['key', 'listener', 'hosts', 'priority', 'pathPrefix', 'pathPrefixes', 'action']);
+  noExtraKeys(iss, v, path, ['key', 'listener', 'hosts', 'priority', 'pathPrefix', 'pathPrefixes', 'action', 'sourceRules']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
   const listener = required(iss, v, 'listener', path, () => str(iss, v['listener'], `${path}.listener`));
   const hosts = required(iss, v, 'hosts', path, () =>
@@ -861,9 +862,11 @@ function decodeHttpRoute(iss: Issues, v: unknown, path: string): HttpRoute | und
   const pathPrefixes = optional(v['pathPrefixes'], () =>
     arrayOf(iss, v['pathPrefixes'], `${path}.pathPrefixes`, (p, at) => str(iss, p, at)));
   const action = required(iss, v, 'action', path, () => decodeHttpAction(iss, v['action'], `${path}.action`));
+  const sourceRules = optional(v['sourceRules'], () => decodeSourceRules(iss, v['sourceRules'], `${path}.sourceRules`));
   if (key === undefined || listener === undefined || hosts === undefined || priority === undefined || action === undefined) {
     return undefined;
   }
+  if (v['sourceRules'] !== undefined && sourceRules === undefined) return undefined;
   // **경로 여럿** (2026-11-02). 하나와 여럿을 함께 적으면 어느 쪽이 맞는지 고를 근거가 없다. 빈 목록은 「경로 없음」 이
   // 아니라 실수다 — `/` 를 뜻하려면 필드를 비운다. 같은 경로를 두 번 적으면 nginx 가 duplicate location 으로 거절한다.
   if (pathPrefixes !== undefined) {
@@ -883,10 +886,15 @@ function decodeHttpRoute(iss: Issues, v: unknown, path: string): HttpRoute | und
   }
   // **끝의 `/` 가 같아야 한다** (2026-10-29). nginx 는 맞은 접두사를 글자 그대로 바꾼다 —
   // `/api/` → `/v1` 이면 `/api/users` 가 `/v1users`, `/api` → `/v1/` 이면 `/v1//users` 다. 경로가 여럿이면 모두 맞아야 한다.
-  if (action.kind === 'proxy' && action.rewritePrefix !== undefined) {
-    for (const matched of routePaths({ ...(pathPrefix === undefined ? {} : { pathPrefix }), ...(pathPrefixes === undefined ? {} : { pathPrefixes }) })) {
-      if (matched.endsWith('/') !== action.rewritePrefix.endsWith('/')) {
-        iss.add('invalid_value', `${path}.action.rewritePrefix`,
+  // 출발지 규칙의 프록시 동작도 같은 경로를 바꾸므로 같은 규칙을 건다 (2026-11-02).
+  const paths = routePaths({ ...(pathPrefix === undefined ? {} : { pathPrefix }), ...(pathPrefixes === undefined ? {} : { pathPrefixes }) });
+  const rewrites: [HttpAction, string][] = [[action, `${path}.action`],
+    ...(sourceRules ?? []).map((r, i): [HttpAction, string] => [r.action, `${path}.sourceRules[${i}].action`])];
+  for (const [a, at] of rewrites) {
+    if (a.kind !== 'proxy' || a.rewritePrefix === undefined) continue;
+    for (const matched of paths) {
+      if (matched.endsWith('/') !== a.rewritePrefix.endsWith('/')) {
+        iss.add('invalid_value', `${at}.rewritePrefix`,
           `끝의 '/' 가 경로 접두사(${JSON.stringify(matched)})와 같아야 한다 — 다르면 경로가 붙거나 겹친다`);
         return undefined;
       }
@@ -896,7 +904,50 @@ function decodeHttpRoute(iss: Issues, v: unknown, path: string): HttpRoute | und
     key, listener, hosts, priority, action,
     ...(pathPrefix === undefined ? {} : { pathPrefix }),
     ...(pathPrefixes === undefined ? {} : { pathPrefixes }),
+    ...(sourceRules === undefined ? {} : { sourceRules }),
   };
+}
+
+/**
+ * 라우트 출발지 규칙 (2026-11-02). 규칙마다 `from`(CIDR · IP · `@주소집합`)과 동작이다. 빈 목록 · 빈 `from` 은 실수다 —
+ * 규칙을 안 걸 거면 필드를 뺀다. 순서는 뜻이 있으므로 그대로 둔다. 가려진 규칙은 검증기가 본다(집합을 펼쳐야 보인다).
+ */
+function decodeSourceRules(iss: Issues, v: unknown, path: string): HttpSourceRule[] | undefined {
+  if (Array.isArray(v) && v.length === 0) {
+    iss.add('out_of_range', path, '비어 있을 수 없다 — 출발지 규칙을 안 걸 거면 필드를 뺀다');
+    return undefined;
+  }
+  // 렌더가 규칙마다 `error_page` 코드 하나를 쓴다(570–589). 그 이상이면 주소 집합으로 묶는다.
+  if (Array.isArray(v) && v.length > 20) {
+    iss.add('out_of_range', path, `규칙이 ${v.length} 개다 — 20 개까지다. 같은 동작의 대역은 한 규칙에 모으거나 주소 집합으로 묶는다`);
+    return undefined;
+  }
+  const before = iss.list.length;
+  const rules = arrayOf(iss, v, path, (item, at) => {
+    if (!isObject(item)) {
+      iss.add('invalid_type', at, `객체여야 한다 (받은 것: ${typeName(item)})`);
+      return undefined;
+    }
+    noExtraKeys(iss, item, at, ['from', 'action']);
+    const fromRaw = item['from'];
+    if (Array.isArray(fromRaw) && fromRaw.length === 0) {
+      iss.add('out_of_range', `${at}.from`, '비어 있을 수 없다 — 어느 출발지에 걸지 적는다');
+      return undefined;
+    }
+    const from = required(iss, item, 'from', at, () => arrayOf(iss, fromRaw, `${at}.from`, (s, sat) => {
+      const x = str(iss, s, sat);
+      if (x === undefined) return undefined;
+      if (cidrVersion(x) === 0 && addressSetRef(x) === undefined) {
+        iss.add('invalid_value', sat, `CIDR · IP 주소 · @주소집합 이 아니다: ${JSON.stringify(x)} — 예: 10.0.0.0/8 · 2001:db8::/32 · @office`);
+        return undefined;
+      }
+      return x;
+    }));
+    const action = required(iss, item, 'action', at, () => decodeHttpAction(iss, item['action'], `${at}.action`));
+    if (from === undefined || action === undefined) return undefined;
+    return { from, action };
+  });
+  return iss.list.length > before ? undefined : rules;
 }
 
 function decodePassthroughRoute(iss: Issues, v: unknown, path: string): PassthroughRoute | undefined {
