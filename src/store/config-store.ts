@@ -15,7 +15,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { render, type RenderCapabilities, type RenderedConfig } from '../conf/render.js';
+import { render, wildcardAlsoOn, type RenderCapabilities, type RenderedConfig } from '../conf/render.js';
 import { compileHostRoutes, type CompileWarning, type RouteInput } from '../route/compile.js';
 import { decodeModel } from '../model/decode.js';
 import { certCoversHost } from '../dp/certinfo.js';
@@ -2234,6 +2234,28 @@ function capabilityWarningsOf(model: Model, caps: RenderCapabilities): Impact['c
         message: `${implicit.map((l) => l.key).join(', ')} 는 h2 가 기본인데 이 엔진은 `
           + '`http2 on;` 을 못 낸다 (§4.9 — 모듈 또는 core 1.25.1+ 없음). '
           + 'ALPN 이 http/1.1 로 떨어진다',
+      });
+    }
+  }
+
+  /**
+   * **와일드카드 리스너가 특정 주소에도 붙는다** (2026-11-02). nginx 는 같은 포트에 특정 주소 리스너가 있으면 그 주소로 온
+   * 접속에서 `0.0.0.0` 리스너를 뺀다. 렌더러가 호스트 server 에 그 주소를 함께 붙여 메운다(`alsoOnSockets`). 사람이 모르는
+   * `listen` 이 conf 에 생기므로 여기서 말한다. 못 붙인 자리(PROXY protocol 이 다르다)는 더 크게 말한다 — 그 주소에서는 답하지 않는다.
+   */
+  for (const w of wildcardAlsoOn(model)) {
+    if (w.addrs.length > 0) {
+      out.push({
+        kind: 'wildcard_also_on',
+        message: `${w.listener}(:${w.port}) 는 ${w.addrs.map((a) => `${a}:${w.port}`).join(', ')} 에서도 호스트에 답한다 — `
+          + '같은 포트에 그 주소 리스너가 있어서 함께 붙였다. 모르는 이름은 그 주소 리스너가 처리한다',
+      });
+    }
+    for (const s of w.skipped) {
+      out.push({
+        kind: 'wildcard_shadowed',
+        message: `${w.listener}(:${w.port}) 는 ${s.addr}:${w.port} 로 온 접속에 답하지 않는다 — 같은 포트에 그 주소 리스너가 있고, `
+          + 'PROXY protocol 설정이 달라 함께 붙일 수 없다. 두 리스너의 PROXY protocol 을 맞추거나 bind 를 맞춰라',
       });
     }
   }
