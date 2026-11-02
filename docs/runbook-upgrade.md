@@ -69,8 +69,16 @@ sudo deploy/install.sh
 - `$PREFIX/env` 의 **관리 키** — 다시 계산해 쓴다 (`--help` 의 목록)
 - 패키지 — `--skip-packages` 를 안 주면 확인·설치한다
 
-**트래픽은 안 끊긴다** (systemd). 데몬이 재시작하는 몇 초 동안은 설정 쓰기·GUI 만 멈추고,
-nginx 는 마지막 세대로 계속 서빙한다.
+**트래픽은 안 끊긴다** (systemd). nginx 는 마지막 세대로 계속 서빙한다.
+
+**관리 화면 · API 도 실패하지 않는다** (systemd, 2026-11-02). API 포트는 `barycenterd.socket` 이 든다. 데몬이 재시작하는
+1–2 초 동안 들어온 요청은 거절되지 않고 기다렸다가 새 프로세스가 답한다. 전에는 그 사이 요청이 502 를 받았다(web-01 실측
+1.5 초). GUI 도 실시간 연결이 5 초 안에 다시 붙으면 끊김을 띄우지 않고, 읽기 요청은 잠깐 지나가는 실패(502 · 503 · 504 ·
+망 오류)를 다시 시도한다. 쓰기는 다시 보내지 않는다.
+
+- **소켓 유닛이 처음 생기는 배포(또는 `BARY_LISTEN` 이 바뀐 배포) 한 번**은 관리 화면이 몇 초 끊긴다 — 옛 프로세스가 포트를
+  쥐고 있어서 내린 뒤 소켓을 연다. 설치가 경고를 낸다. 트래픽은 그대로다.
+- 확인: `systemctl is-active barycenterd.socket` · 데몬 로그의 `listening … "socketActivated":true`.
 
 - **엔진을 바꿨을 때만**(openresty 패키지 갱신 등) 손으로 `systemctl restart barycenter-engine` 한다.
   이때는 트래픽이 몇 초 끊긴다. 클러스터면 노드를 하나씩 돌린다.

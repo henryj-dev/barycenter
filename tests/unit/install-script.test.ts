@@ -695,3 +695,17 @@ describe('⑫ 검증 — CLI 가 API 인증서를 믿는다', () => {
     expect(src).toContain("printf '\\n  export NODE_EXTRA_CA_CERTS=%s' \"$TLS_CERT\"");
   });
 });
+
+describe('API 소켓 유닛 (2026-11-02, 소켓 활성화)', () => {
+
+  it('**소켓 유닛이 BARY_LISTEN 을 들고, 서비스가 그것을 요구한다**', () => {
+    expect(src).toMatch(/cat > "\/etc\/systemd\/system\/\$SVC_NAME\.socket" <<EOF\n\[Unit\][\s\S]*?ListenStream=\$LISTEN\n/);
+    expect(src).toMatch(/Requires=\$SVC_NAME\.socket\nAfter=\$SVC_NAME\.socket/);
+  });
+
+  it('**소켓이 바뀐 배포에서만 서비스를 내리고 소켓을 다시 연다** — 평소에는 재시작만 한다', () => {
+    expect(src).toMatch(/if \[ "\$SOCKET_CHANGED" = 1 \]; then[\s\S]*?systemctl stop "\$SVC_NAME"[\s\S]*?systemctl restart "\$SVC_NAME\.socket"/);
+    const flow = src.slice(src.indexOf('if [ "$SOCKET_CHANGED" = 1 ]; then'));
+    expect(flow.indexOf('svc_start "$SVC_NAME"')).toBeGreaterThan(0);
+  });
+});

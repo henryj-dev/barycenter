@@ -18,7 +18,8 @@ import { viewOfCertificates, type CertificateFact, type CertsView, type OrderFac
 import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
-import { backoffMs, hasStream } from '@web/reconnect';
+import { RECONNECT_GRACE_MS, backoffMs, hasStream, isTransientStatus } from '@web/reconnect';
+import { retryingFetch } from '@web/retry';
 import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import type { ModelLike, ResourceKind } from '@web/resources';
@@ -51,11 +52,33 @@ export type HostAddressFacts = {
 export type AcmeAccountRow = { id: string; key: string; directoryUrl: string; contact: string[]; registered: boolean };
 
 export function createDesk(scope?: { api(path: string): string; mode: string; region?: unknown }) {
+  /**
+   * **읽기 요청은 잠깐 지나가는 실패를 다시 시도한다** (2026-11-02, `retryingFetch`). 배포하면 데몬이 1–2 초 다시 뜨고, 그 사이
+   * 읽기가 502 를 받았다. 이 안의 `fetch` 는 모두 이것이다 — 쓰기(POST · PATCH · DELETE)는 그대로 한 번만 보낸다.
+   */
+  const fetch = retryingFetch(globalThis.fetch.bind(globalThis));
   const api = (path: string): string => scope?.api(path) ?? path;
   // OIDC 로그인은 HttpOnly 세션 쿠키를 쓴다. 수동 Bearer 입력은 새로고침하면 사라지는
   // 메모리 값으로만 남긴다 — 브라우저 저장소에 API 자격증명을 보관하지 않는다.
   let token = $state('');
   let live = $state(false);
+  /**
+   * **잠깐 끊긴 것은 끊김으로 안 보인다** (2026-11-02). 붙어 있다가 끊기면 `RECONNECT_GRACE_MS` 동안 `liveShown` 이 참으로
+   * 남는다. 그 안에 다시 붙으면 화면은 아무것도 안 띄운다. 처음 붙기 전에는 유예가 없다 — 붙은 적이 없는 것을 붙었다고
+   * 보이면 안 된다.
+   */
+  let graceOver = $state(true);
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const setLive = (v: boolean): void => {
+    if (v) {
+      if (graceTimer !== undefined) clearTimeout(graceTimer);
+      graceTimer = undefined;
+      graceOver = false;
+    } else if (live && graceTimer === undefined) {
+      graceTimer = setTimeout(() => { graceOver = true; graceTimer = undefined; }, RECONNECT_GRACE_MS);
+    }
+    live = v;
+  };
   let error = $state<string | undefined>();
   let head = $state<string | undefined>();
   let view = $state<ImpactView | undefined>();
@@ -287,14 +310,24 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
    *   `stop`     우리가 끊었거나 토큰이 거절됐다 — **다시 안 붙는다**
    */
   const streamOnce = async (ac: AbortController): Promise<'served' | 'refused' | 'stop'> => {
-    const r = await fetch(api('/api/v1/events'), { headers: auth(), signal: ac.signal });
+    let r: Response;
+    try {
+      r = await fetch(api('/api/v1/events'), { headers: auth(), signal: ac.signal });
+    } catch (e) {
+      // **망 오류도 「못 붙었다」 다** (2026-11-02). 전에는 여기서 던져서 재연결 고리가 통째로 멈췄다 — 데몬에 직접 붙은
+      // 화면에서 데몬이 다시 뜨는 순간이다.
+      if ((e as { name?: string }).name === 'AbortError') { setLive(false); return 'stop'; }
+      setLive(false);
+      return 'refused';
+    }
     if (!r.ok || r.body === null) {
-      error = r.status === 401 ? '토큰이 거절됐다' : `events ${r.status}`;
-      live = false;
+      // 잠깐 지나가는 실패(502 · 503 · 504)는 오류 배너를 안 띄운다 — 다시 붙고, 오래 가면 연결 표시가 말한다.
+      if (!isTransientStatus(r.status)) error = r.status === 401 ? '토큰이 거절됐다' : `events ${r.status}`;
+      setLive(false);
       // 401 은 다시 붙어 봐야 같다. 그건 사람이 고칠 것이다.
       return r.status === 401 ? 'stop' : 'refused';
     }
-    live = true;
+    setLive(true);
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -323,12 +356,12 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     } catch (e) {
       if ((e as { name?: string }).name === 'AbortError') {
         // 우리가 끊었다. 다시 붙지 않는다.
-        live = false;
+        setLive(false);
         return 'stop';
       }
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      live = false;
+      setLive(false);
     }
     // 여기 왔다는 것은 **붙어서 흘렸다**는 뜻이다 — 위에서 이미 돌아갔을 것이므로.
     return 'served';
@@ -1013,7 +1046,11 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
   return {
     get token() { return token; },
     set token(v: string) { token = v; },
-    get live() { return live; },
+    /**
+     * 화면에 보일 연결 상태 — 끊긴 지 `RECONNECT_GRACE_MS` 안이면 아직 붙은 것으로 본다 (2026-11-02). 바깥은 모두 화면이다:
+     * 만들기 폼은 이것이 거짓이면 폼을 지우고 「연결하면」 으로 바꾼다 — 배포 1.5 초에 입력하던 것이 사라졌다.
+     */
+    get live() { return live || !graceOver; },
     get error() { return error; },
     get head() { return head; },
     get view() { return view; },
