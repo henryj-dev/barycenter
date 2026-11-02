@@ -3,7 +3,8 @@
    * 인증서 만들기 — 시안: 이름 · 도메인 · 발급자(ACME / 업로드).
    *
    * **ACME:** 「이 도메인들을 이 계정으로 자동 발급 · 갱신한다」 는 의도만 커밋한다(`acme`). 발급과 갱신은
-   * 스케줄러가 한다 — 화면에서 따로 누를 것이 없다. 검증 방식은 서버가 고른다: 보통 HTTP-01(:80 리스너가
+   * 스케줄러가 한다 — 화면에서 따로 누를 것이 없다. 트래픽이 안 바뀌므로 서버가 바로 활성으로 올린다 —
+   * 적용 대기에 남지 않는다(2026-11-02, `ControlPlane.applyIfTrafficNeutral`). 검증 방식은 서버가 고른다: 보통 HTTP-01(:80 리스너가
    * 응답한다), 와일드카드는 DNS-01. 첫 발급 전에는 자료가 없어서 리스너 · SNI 에 아직 걸 수 없다.
    *
    * **업로드:** PEM 자료를 올리고(`/certificates/material`) 그 참조로 커밋한다. 개인 키는 서버가 암호화해서
@@ -68,7 +69,8 @@
   };
 </script>
 
-<CreateForm {ready} onsubmit={submit} cancelHref="/tls/certificate" submitLabel={issuer === 'acme' ? '만들기' : '자료를 넣어요'}>
+<CreateForm {ready} onsubmit={submit} cancelHref="/tls/certificate" submitLabel={issuer === 'acme' ? '만들기' : '자료를 넣어요'}
+  note={issuer === 'acme' ? '만들면 바로 발급을 시작해요. 적용을 기다리지 않아요.' : undefined}>
   <FormSection title="기본">
     <FormRow label="이름" for="ct-key" required error={keyError(key)} help={KEY_HELP}>
       <TextInput id="ct-key" bind:value={key} invalid={keyError(key) !== undefined} autocomplete="off" placeholder="example-com" />

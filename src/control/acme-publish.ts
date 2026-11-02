@@ -28,7 +28,7 @@
  * 파일을 읽으려면 reload 가 필요하다. 갱신 주기가 그 비용의 빈도를 정한다.
  */
 import type { AcmeStore } from './acme-store.js';
-import type { ControlPlane } from './plane.js';
+import { pendingApplies, type ControlPlane } from './plane.js';
 import type { ConfigStore } from '../store/config-store.js';
 import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
@@ -40,6 +40,8 @@ export type PublishResult = {
   order: string;
   revision?: string;
   operation?: string;
+  /** 자동 적용을 미뤘다 — 이 리비전들이 먼저 적용 대기에 있었다. */
+  held?: string[];
   error?: string;
 };
 
@@ -128,11 +130,26 @@ export async function publishIssued(opts: PublisherOptions): Promise<PublishResu
       const result: PublishResult = {
         certificate: p.certificateKey, order: p.orderId, revision: committed.revision,
       };
-      if (opts.applyAutomatically !== false) {
+      /**
+       * **남이 커밋해 둔 변경이 있으면 자동 적용하지 않는다** (2026-11-02).
+       *
+       * 리비전은 설정 전체이고 apply 는 언제나 head 를 건다. 그래서 여기서 적용하면, 사람이 커밋만 하고 아직 안
+       * 건 변경도 함께 트래픽에 나간다. 갱신은 30일마다 사람 없이 일어나므로, 그 변경이 언제 나갔는지 아무도 모른다.
+       * 그때는 커밋까지만 한다. 인증서 교체는 적용 대기에 함께 올라가고, 사람이 그 묶음을 보고 적용한다.
+       */
+      const others = (await pendingApplies(opts.db)).filter((p) => p.planId !== plan.id);
+      if (opts.applyAutomatically !== false && others.length === 0) {
         // **인증서 교체는 세대 전환이다** — nginx 가 새 파일을 읽으려면 reload 가 필요하고,
         // 전환당 트래픽 2.6% 가 실측값이다. 자동이라는 사실을 로그로 남긴다.
         const op = await opts.control.apply(plan.id, by);
         result.operation = op.id;
+      } else if (opts.applyAutomatically !== false) {
+        result.held = others.map((p) => `r${p.revision}`);
+        count('bary_acme_publish_total{outcome="held"}');
+        log.warn('acme.publish.held', {
+          ...result,
+          why: '다른 변경이 적용 대기 중이다 — 함께 나가지 않게 커밋까지만 했다. 적용 대기에서 적용하라',
+        });
       }
       count('bary_acme_publish_total{outcome="committed"}');
       log.info('acme.published', result);

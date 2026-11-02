@@ -774,7 +774,19 @@ const ROUTES: Route[] = [
     const planId = field(c.body, 'plan_id');
     const out = await api.store.commit(c.params['id'] ?? '', planId, c.who.name);
     eventsOf(api).publish('revision', { revision: out.revision });
-    json(c.res, 200, out);
+    // **인증서 의도만 바꾼 커밋은 적용 대기에 남기지 않는다** (2026-11-02). 트래픽이 안 바뀌는 것만 바로 올린다 —
+    // 판정은 `applyIfTrafficNeutral` 이 한다. 거기서 실패해도 커밋은 성공이다. 적용 대기에 남을 뿐이다.
+    let applied: { operationId: string; phase: string } | undefined;
+    try {
+      const op = await api.control.applyIfTrafficNeutral(planId, c.who.name);
+      if (op !== undefined) {
+        applied = { operationId: op.id, phase: op.phase };
+        eventsOf(api).publish('apply', { planId, phase: op.phase, trafficNeutral: true });
+      }
+    } catch (e) {
+      log.warn('commit.neutral_apply_failed', { planId, error: String(e) });
+    }
+    json(c.res, 200, applied === undefined ? out : { ...out, applied });
   }),
 
   route('GET', '/api/v1/plans/:id', 'read', async (c, api) => {
