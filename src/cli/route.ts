@@ -24,6 +24,8 @@ export type RouteCreateInput = {
   reject?: boolean;
   websocket?: boolean;
   pathPrefix?: string;
+  /** 경로 여럿 (2026-11-02). `--path-prefix` 를 여러 번 적으면 여기로 온다. */
+  pathPrefixes?: string[];
   /** proxy 에만. `이름: 값` 들 (#109). */
   requestHeaders?: string[];
   /** proxy 에만. 맞은 접두사를 이 값으로 바꾼다 (#109). */
@@ -52,7 +54,7 @@ export function routeCreatePatch(
   const hosts = csv(input.hosts);
   const to = input.to?.trim() ?? '';
   const pool = input.pool?.trim() ?? '';
-  const path = input.pathPrefix?.trim() ?? '';
+  const path = [input.pathPrefix ?? '', ...(input.pathPrefixes ?? [])].map((p) => p.trim()).filter((p) => p !== '').join(' ');
   if (snis.length > 0) {
     if (hosts.length > 0 || to !== '' || path !== '' || input.websocket === true) return undefined;
     if (input.reject === true) {
@@ -68,7 +70,11 @@ export function routeCreatePatch(
   }
   if (hosts.length === 0) return undefined;
   if (to !== '' && pool !== '') return undefined;
-  const prefix = path === '' ? {} : { pathPrefix: path };
+  // 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` — 빌더가 고른다(`pathFieldsOf`).
+  const prefix = {
+    ...(input.pathPrefix === undefined ? {} : { pathPrefix: input.pathPrefix }),
+    ...(input.pathPrefixes === undefined ? {} : { pathPrefixes: input.pathPrefixes }),
+  };
   if (input.reject === true) {
     if (to !== '' || pool !== '' || input.websocket === true) return undefined;
     const status = rejectStatus(input.status ?? '403');

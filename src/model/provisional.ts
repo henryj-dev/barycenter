@@ -758,6 +758,11 @@ export type HttpRoute = {
   hosts: string[];
   priority: number;
   pathPrefix?: string;
+  /**
+   * **경로 여럿** (2026-11-02). 같은 동작으로 `/api/` · `/v2/` · `/graphql` 을 함께 덮는다. `pathPrefix` 와 함께
+   * 적지 않는다(해독기가 막는다). 읽는 자리는 모두 `routePaths()` 를 쓴다.
+   */
+  pathPrefixes?: string[];
   action: HttpAction;
 };
 

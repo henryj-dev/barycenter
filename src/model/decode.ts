@@ -17,6 +17,7 @@
  *      오타 하나가 의도를 통째로 날린다.
  *   3. **강제 변환하지 않는다.** `"8080"` 은 8080 이 아니라 오류다. 변환은 의미를 바꾼다.
  */
+import { routePaths } from './route-paths.js';
 import { validateHeaderName, validateHeaderValue } from '../validate/strings.js';
 import { addressSetRef, cidrVersion } from '../validate/ip.js';
 
@@ -849,7 +850,7 @@ function decodeHttpRoute(iss: Issues, v: unknown, path: string): HttpRoute | und
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['key', 'listener', 'hosts', 'priority', 'pathPrefix', 'action']);
+  noExtraKeys(iss, v, path, ['key', 'listener', 'hosts', 'priority', 'pathPrefix', 'pathPrefixes', 'action']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
   const listener = required(iss, v, 'listener', path, () => str(iss, v['listener'], `${path}.listener`));
   const hosts = required(iss, v, 'hosts', path, () =>
@@ -857,21 +858,45 @@ function decodeHttpRoute(iss: Issues, v: unknown, path: string): HttpRoute | und
   const priority = required(iss, v, 'priority', path, () =>
     int(iss, v['priority'], `${path}.priority`, 0, 1_000_000));
   const pathPrefix = optional(v['pathPrefix'], () => str(iss, v['pathPrefix'], `${path}.pathPrefix`));
+  const pathPrefixes = optional(v['pathPrefixes'], () =>
+    arrayOf(iss, v['pathPrefixes'], `${path}.pathPrefixes`, (p, at) => str(iss, p, at)));
   const action = required(iss, v, 'action', path, () => decodeHttpAction(iss, v['action'], `${path}.action`));
   if (key === undefined || listener === undefined || hosts === undefined || priority === undefined || action === undefined) {
     return undefined;
   }
-  // **끝의 `/` 가 같아야 한다** (2026-10-29). nginx 는 맞은 접두사를 글자 그대로 바꾼다 —
-  // `/api/` → `/v1` 이면 `/api/users` 가 `/v1users`, `/api` → `/v1/` 이면 `/v1//users` 다.
-  if (action.kind === 'proxy' && action.rewritePrefix !== undefined) {
-    const matched = pathPrefix ?? '/';
-    if (matched.endsWith('/') !== action.rewritePrefix.endsWith('/')) {
-      iss.add('invalid_value', `${path}.action.rewritePrefix`,
-        `끝의 '/' 가 경로 접두사(${JSON.stringify(matched)})와 같아야 한다 — 다르면 경로가 붙거나 겹친다`);
+  // **경로 여럿** (2026-11-02). 하나와 여럿을 함께 적으면 어느 쪽이 맞는지 고를 근거가 없다. 빈 목록은 「경로 없음」 이
+  // 아니라 실수다 — `/` 를 뜻하려면 필드를 비운다. 같은 경로를 두 번 적으면 nginx 가 duplicate location 으로 거절한다.
+  if (pathPrefixes !== undefined) {
+    if (pathPrefix !== undefined) {
+      iss.add('invalid_value', `${path}.pathPrefixes`, "'pathPrefix' 와 'pathPrefixes' 를 함께 적을 수 없다 — 하나만 적어라");
+      return undefined;
+    }
+    if (pathPrefixes.length === 0) {
+      iss.add('invalid_value', `${path}.pathPrefixes`, "비어 있다 — '/' 하나를 뜻하려면 필드를 빼라");
+      return undefined;
+    }
+    const dup = pathPrefixes.find((p, i) => pathPrefixes.indexOf(p) !== i);
+    if (dup !== undefined) {
+      iss.add('invalid_value', `${path}.pathPrefixes`, `같은 경로 ${JSON.stringify(dup)} 가 두 번 있다`);
       return undefined;
     }
   }
-  return { key, listener, hosts, priority, action, ...(pathPrefix === undefined ? {} : { pathPrefix }) };
+  // **끝의 `/` 가 같아야 한다** (2026-10-29). nginx 는 맞은 접두사를 글자 그대로 바꾼다 —
+  // `/api/` → `/v1` 이면 `/api/users` 가 `/v1users`, `/api` → `/v1/` 이면 `/v1//users` 다. 경로가 여럿이면 모두 맞아야 한다.
+  if (action.kind === 'proxy' && action.rewritePrefix !== undefined) {
+    for (const matched of routePaths({ ...(pathPrefix === undefined ? {} : { pathPrefix }), ...(pathPrefixes === undefined ? {} : { pathPrefixes }) })) {
+      if (matched.endsWith('/') !== action.rewritePrefix.endsWith('/')) {
+        iss.add('invalid_value', `${path}.action.rewritePrefix`,
+          `끝의 '/' 가 경로 접두사(${JSON.stringify(matched)})와 같아야 한다 — 다르면 경로가 붙거나 겹친다`);
+        return undefined;
+      }
+    }
+  }
+  return {
+    key, listener, hosts, priority, action,
+    ...(pathPrefix === undefined ? {} : { pathPrefix }),
+    ...(pathPrefixes === undefined ? {} : { pathPrefixes }),
+  };
 }
 
 function decodePassthroughRoute(iss: Issues, v: unknown, path: string): PassthroughRoute | undefined {

@@ -26,6 +26,8 @@
     listener: String(route['listener']),
     hosts: Array.isArray(route['hosts']) ? route['hosts'] as string[] : [],
     ...(typeof route['pathPrefix'] === 'string' ? { pathPrefix: route['pathPrefix'] } : {}),
+    // 경로가 여럿인 라우트도 그대로 둔다 (2026-11-02) — 빠뜨리면 다시 만들 때 `/` 하나가 된다.
+    ...(Array.isArray(route['pathPrefixes']) ? { pathPrefixes: route['pathPrefixes'] as string[] } : {}),
   });
   const preview = $derived.by((): { ops: { kind: string; key: string }[]; error?: string } => {
     if (input === undefined || input.url === '') return { ops: [], error: '새 URL 을 넣으면 만들 리소스가 여기 보여요.' };
@@ -49,7 +51,7 @@
         <DescriptionList items={[
           { label: '리스너', value: String(route['listener']), mono: true },
           { label: '호스트', value: input.hosts.join(', ') || '(없음)', mono: true },
-          { label: '경로', value: input.pathPrefix ?? '/', mono: true },
+          { label: '경로', value: input.pathPrefixes?.join(', ') ?? input.pathPrefix ?? '/', mono: true },
         ]} />
       </Card>
       <FormSection title="새 대상">

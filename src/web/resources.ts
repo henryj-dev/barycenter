@@ -240,7 +240,9 @@ const outcomeTarget = (model: ModelLike, v: unknown, health: HealthOf): Target =
 
 const routeMatch = (r: Item): string => {
   const hosts = Array.isArray(r['hosts']) ? r['hosts'] as string[] : Array.isArray(r['snis']) ? r['snis'] as string[] : [];
-  const path = typeof r['pathPrefix'] === 'string' ? r['pathPrefix'] : '';
+  // 경로가 여럿이면 `{a,b}` 로 묶는다 — 한 줄에 라우트 하나다.
+  const many = Array.isArray(r['pathPrefixes']) ? (r['pathPrefixes'] as unknown[]).filter((p): p is string => typeof p === 'string') : [];
+  const path = many.length > 1 ? `{${many.join(',')}}` : many.length === 1 ? many[0]! : typeof r['pathPrefix'] === 'string' ? r['pathPrefix'] : '';
   return `${hosts.join(', ') || '*'}${path}`;
 };
 
@@ -343,7 +345,7 @@ export function summaryOf(kind: ResourceKind, item: Item): { label: string; valu
   };
   switch (kind) {
     case 'httpRoute':
-      add('리스너', item['listener']); add('호스트', item['hosts']); add('경로', item['pathPrefix'] ?? '/');
+      add('리스너', item['listener']); add('호스트', item['hosts']); add('경로', item['pathPrefixes'] ?? item['pathPrefix'] ?? '/');
       add('우선순위', item['priority']); add('동작', actionText());
       break;
     case 'passthroughRoute':

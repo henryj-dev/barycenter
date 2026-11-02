@@ -32,6 +32,7 @@ import { redirectListenerOf } from '../model/redirect.js';
 import { decodeModel } from '../model/decode.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
+import { routePathKey, routePaths } from '../model/route-paths.js';
 import type {
   HttpListener,
   HttpsListener,
@@ -750,28 +751,34 @@ function httpServerBlocks(
     if (!parsed.ok) continue; // validateModel 이 이미 막았다
     const lowered = plan.lowered.has(hostPatternKey(parsed.value));
 
-    const inputs: RouteInput[] = hostRoutes.map((r) =>
-      r.pathPrefix === undefined
-        ? { key: r.key, host, priority: r.priority }
-        : { key: r.key, host, priority: r.priority, pathPrefix: r.pathPrefix },
+    // **경로마다 하나다** (2026-11-02). 경로가 여럿인 라우트는 경로마다 같은 본문의 location 을 낸다. `rewritePrefix` 는
+    // location 마다 자기 접두사를 바꾸므로 그대로 맞다(`/api/` → `/v1/`, `/v2/` → `/v1/`).
+    const entries = hostRoutes.flatMap((r) => {
+      const paths = routePaths(r);
+      return paths.map((path) => ({ r, path, ck: routePathKey(r.key, path, paths.length > 1) }));
+    });
+    const inputs: RouteInput[] = entries.map((e) =>
+      e.r.pathPrefix === undefined && e.r.pathPrefixes === undefined
+        ? { key: e.ck, host, priority: e.r.priority }
+        : { key: e.ck, host, priority: e.r.priority, pathPrefix: e.path },
     );
     const compiled = compileHostRoutes(inputs);
     const ordered =
       compiled.errors.length > 0
-        ? hostRoutes
-        : compiled.order.map((c) => hostRoutes.find((r) => r.key === c.key)!);
+        ? entries
+        : compiled.order.map((c) => entries.find((e) => e.ck === c.key)!);
 
     const locations: ConfNode[] = [];
-    for (const r of ordered) {
+    for (const { r, path } of ordered) {
       const body = locationBody(
         r, poolsWithBackends, listener.http?.headers?.request, pools, certs,
       );
-      if (body.length > 0) locations.push(block('location', [lit(r.pathPrefix ?? '/')], body));
+      if (body.length > 0) locations.push(block('location', [lit(path)], body));
     }
     if (listener.hosts !== undefined) {
       // 라우트가 `/` 를 안 덮으면 리스너의 기본 동작이 덮는다. 덮으면 안 낸다 — 같은 location 이 둘이면
       // nginx 가 거절한다(duplicate location).
-      const coversRoot = ordered.some((r) => (r.pathPrefix ?? '/') === '/');
+      const coversRoot = ordered.some((e) => e.path === '/');
       if (!coversRoot) locations.push(...defaultActionLocations(listener, poolsWithBackends, pools, certs));
     }
     if (locations.length === 0) continue;

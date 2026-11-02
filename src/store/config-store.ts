@@ -13,6 +13,7 @@
  * 3 이 `render()` 다 — 렌더러가 `decodeModel` + `validateModel` 을 자기 안에서 다시 돌린다
  * (fail closed, 4차 검수 Critical). 그래서 "렌더가 나왔다" 는 것 자체가 검증 통과의 증거다.
  */
+import { routePathKey, routePaths } from '../model/route-paths.js';
 import { randomUUID } from 'node:crypto';
 
 import { render, wildcardAlsoOn, type RenderCapabilities, type RenderedConfig } from '../conf/render.js';
@@ -467,7 +468,7 @@ async function readModel(c: Queryable): Promise<Model> {
   });
 
   const httpRoutes = (await c.query(
-    `SELECT r.key, l.key AS listener, r.hosts, r.priority, r.path_prefix,
+    `SELECT r.key, l.key AS listener, r.hosts, r.priority, r.path_prefix, r.path_prefixes,
             r.action_kind, p.key AS pool, r.websocket, r.redirect_to, r.status,
             r.request_headers, r.rewrite_prefix
        FROM http_routes r
@@ -480,6 +481,8 @@ async function readModel(c: Queryable): Promise<Model> {
     hosts: list(r, 'hosts'),
     priority: num(r, 'priority'),
     ...(maybeText(r, 'path_prefix') !== undefined ? { pathPrefix: text(r, 'path_prefix') } : {}),
+    // 031. NULL 이면 키를 안 만든다 — 경로 하나(`path_prefix`)인 라우트다.
+    ...(Array.isArray(r['path_prefixes']) ? { pathPrefixes: list(r, 'path_prefixes') } : {}),
     action:
       text(r, 'action_kind') === 'proxy'
         ? {
@@ -830,12 +833,13 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       await c.query(
         `INSERT INTO http_routes (id,key,listener_id,listener_protocol,hosts,priority,path_prefix,
                                   action_kind,pool_id,pool_cls,websocket,redirect_to,status,
-                                  request_headers,rewrite_prefix,
+                                  request_headers,rewrite_prefix,path_prefixes,
                                   created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$15,$16,$13,$13,$14)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$15,$16,$17,$13,$13,$14)
          ON CONFLICT (key) DO UPDATE SET
            listener_id=EXCLUDED.listener_id, listener_protocol=EXCLUDED.listener_protocol,
            hosts=EXCLUDED.hosts, priority=EXCLUDED.priority, path_prefix=EXCLUDED.path_prefix,
+           path_prefixes=EXCLUDED.path_prefixes,
            action_kind=EXCLUDED.action_kind, pool_id=EXCLUDED.pool_id, pool_cls=EXCLUDED.pool_cls,
            websocket=EXCLUDED.websocket, redirect_to=EXCLUDED.redirect_to, status=EXCLUDED.status,
            request_headers=EXCLUDED.request_headers, rewrite_prefix=EXCLUDED.rewrite_prefix,
@@ -850,7 +854,9 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           // $15·$16 — 026. proxy 에만 (DB 도 같은 CHECK). jsonb 는 문자열로 넘긴다.
           kind === 'proxy' && Array.isArray(action['requestHeaders']) && action['requestHeaders'].length > 0
             ? JSON.stringify(action['requestHeaders']) : null,
-          kind === 'proxy' ? action['rewritePrefix'] ?? null : null],
+          kind === 'proxy' ? action['rewritePrefix'] ?? null : null,
+          // $17 — 031. 경로 여럿. 없으면 NULL.
+          Array.isArray(b['pathPrefixes']) ? b['pathPrefixes'] : null],
       );
       return;
     }
@@ -1926,6 +1932,15 @@ function assertDirectiveStrings(op: PatchOp & { op: 'put' }, body: Record<string
       const r = validatePathPrefix(prefix);
       if (!r.ok) fail('pathPrefix', r.message);
     }
+    // 경로 여럿도 하나하나 `location` 으로 간다 — 같은 검사를 지난다 (2026-11-02).
+    const prefixes = body['pathPrefixes'];
+    if (Array.isArray(prefixes)) {
+      prefixes.forEach((p: unknown, i) => {
+        if (typeof p !== 'string') return;
+        const r = validatePathPrefix(p);
+        if (!r.ok) fail(`pathPrefixes[${i}]`, r.message);
+      });
+    }
     const action = obj(body['action']);
     if (action['kind'] === 'redirect' && typeof action['to'] === 'string') {
       // 리다이렉트 목적지는 헤더 값과 같은 규칙이다 — 제어문자 금지 + 변수 화이트리스트.
@@ -2170,10 +2185,14 @@ function routeOrderOf(model: Model): Map<string, { order: string[]; warnings: Co
     if (l.protocol !== 'http' && l.protocol !== 'https') continue;
     const inputs: RouteInput[] = model.httpRoutes
       .filter((r) => r.listener === l.key)
-      .flatMap((r) => r.hosts.map((host) => ({
-        key: r.key, host, priority: r.priority,
-        ...(r.pathPrefix === undefined ? {} : { pathPrefix: r.pathPrefix }),
-      })));
+      .flatMap((r) => {
+        // 경로가 여럿이면 경로마다 순서에 오른다. 하나면 지금처럼 라우트 키 그대로다.
+        const paths = routePaths(r);
+        return r.hosts.flatMap((host) => paths.map((p) => ({
+          key: routePathKey(r.key, p, paths.length > 1), host, priority: r.priority,
+          ...(r.pathPrefix === undefined && r.pathPrefixes === undefined ? {} : { pathPrefix: p }),
+        })));
+      });
     if (inputs.length === 0) continue;
     const compiled = compileHostRoutes(inputs);
     // 오류가 있으면 컴파일러가 순서를 안 낸다 — 반쯤 컴파일된 순서는 거짓말이다.

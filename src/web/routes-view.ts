@@ -6,6 +6,7 @@
  * 클래스가 아니므로 컴파일하지 않고 사실만 나열한다.
  */
 import { compileHostRoutes } from '../route/compile.js';
+import { routePathKey, routePaths } from '../model/route-paths.js';
 import type { HostPattern } from '../validate/strings.js';
 
 export type HttpRouteFact = {
@@ -14,6 +15,8 @@ export type HttpRouteFact = {
   hosts: string[];
   priority: number;
   pathPrefix?: string;
+  /** 경로 여럿 (2026-11-02). 행은 경로마다 하나다. */
+  pathPrefixes?: string[];
   action: { kind: string };
 };
 
@@ -61,19 +64,25 @@ export function viewOfRoutes(
   http: readonly HttpRouteFact[],
   passthrough: readonly PassthroughFact[],
 ): RoutesView {
-  const inputs = http.flatMap((r) => r.hosts.map((host) => ({
-    key: r.key,
-    host,
-    priority: r.priority,
-    ...(r.pathPrefix === undefined ? {} : { pathPrefix: r.pathPrefix }),
-  })));
+  // 경로가 여럿이면 컴파일 열쇠가 `키 경로` 다. 행에는 라우트 키를 그대로 낸다 — 화면은 그 키로 상세를 연다.
+  const owner = new Map<string, HttpRouteFact>();
+  const inputs = http.flatMap((r) => {
+    const paths = routePaths(r);
+    return r.hosts.flatMap((host) => paths.map((path) => {
+      const ck = routePathKey(r.key, path, paths.length > 1);
+      owner.set(ck, r);
+      return {
+        key: ck, host, priority: r.priority,
+        ...(r.pathPrefix === undefined && r.pathPrefixes === undefined ? {} : { pathPrefix: path }),
+      };
+    }));
+  });
   const compiled = compileHostRoutes(inputs);
-  const byKey = new Map(http.map((r) => [r.key, r]));
   return {
     order: compiled.order.map((c) => {
-      const r = byKey.get(c.key);
+      const r = owner.get(c.key);
       return {
-        key: c.key,
+        key: r?.key ?? c.key,
         listener: r?.listener ?? '',
         host: hostOf(c.pattern),
         pathPrefix: c.pathPrefix,
