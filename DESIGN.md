@@ -1977,7 +1977,7 @@ http {
 | 백엔드 없는 풀 | 503. 규칙이 없을 때처럼 location 을 빼면 그 출발지 요청이 다른 동작으로 샌다 |
 | 쓰는 자리 | 풀 참조 · 웹소켓 · 리스너 폐포 · 연결 그래프는 `routeActions()`(기본 + 규칙 동작)로 읽는다. 주소 집합은 `referencedSetsOfRoute()` · `expandAddressSets` 가 규칙까지 펼친다 |
 | DB | 032: `http_routes.source_rules jsonb`(배열, 1–20). 규칙의 풀은 FK 가 아니라 검증기가 본다 |
-| 저작 | GUI 라우트 폼의 「출발지별 동작」(위 · 아래로 순서를 바꾼다). 「흐름」 은 규칙을 줄마다, 그다음 「그 밖의 출발지」 를 보인다. CLI 는 아직 없다 — patch 로 넣는다 |
+| 저작 | GUI 라우트 폼의 「출발지별 동작」(위 · 아래로 순서를 바꾼다). 「흐름」 은 규칙을 줄마다, 그다음 「그 밖의 출발지」 를 보인다. CLI `bary route create --source-rule '[conn:]대역,…=동작'`(여러 번, 적은 순서 — `parseSourceRule`. 동작 `pool:<풀>[:ws]` · `redirect:<코드>:<URL>` · `reject:<코드>`) |
 | 경로별 묶음 | GUI `/traffic/route/http/new/group` — 한 호스트의 규칙을 「경로 · 출발지 · 동작」 줄로 적으면 라우트 여럿으로 편다(`routeGroupPatch`). 경로 목록이 같은 줄끼리 라우트 하나 · 출발지 줄은 규칙 · 출발지 없는 줄은 기본 동작 · 기본 동작이 없으면 저장 때의 리스너 기본 동작. 한 경로가 서로 다른 묶음에 있으면 거절. 이름은 `이름`, `이름-p2` … 모델은 그대로다 |
 | 실측 | `tests/golden/route-source-rules.test.ts` — 출발지 넷(`curl --interface`) · 경로 바꾸기 · 쿼리 · 경로 여럿 · 순서 · 원본 IP 헤더 |
 
