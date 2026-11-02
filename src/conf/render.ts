@@ -369,6 +369,84 @@ function listenArgs(l: Listener): ConfValue[] {
   return base;
 }
 
+/**
+ * 와일드카드 리스너가 **함께 붙어야 하는 특정 주소 소켓** (2026-11-02, web-01).
+ *
+ * nginx 는 들어온 접속의 주소에 맞는 `listen` 이 있으면 **그 주소의 server 만** 고른다. 같은 포트에
+ * `10.0.0.5:443` 리스너가 하나라도 있으면, `0.0.0.0:443` 리스너는 `10.0.0.5` 로 온 접속에서 사라진다.
+ * 사람은 `0.0.0.0` 을 「모든 주소」 로 읽는다. web-01 에서 `counter.tinyuniver.se`(0.0.0.0) 가 내부 IP 로는
+ * 「모르는 이름」 으로 TLS 를 거절당했다 — 같은 포트에 관리 화면 리스너가 내부 IP 로 묶여 있었다.
+ *
+ * 그래서 와일드카드 리스너의 **호스트 server** 에 그 주소의 `listen` 을 함께 붙인다. 붙이지 않는 것:
+ *   · 기본 server — 그 주소의 기본 동작은 그 주소 리스너의 것이다(모르는 이름은 그쪽이 끊는다)
+ *   · 그 주소 리스너가 이미 맡은 호스트 — 같은 이름이 두 server 에 있으면 nginx 가 하나를 버린다
+ *   · PROXY protocol 이 다른 소켓 — `listen` 의 그 옵션은 주소:포트 단위로 합쳐진다. 섞으면 그 주소 리스너가 깨진다
+ *
+ * `listen` 인자는 **그 주소 리스너의 것**을 쓴다. 소켓 옵션은 그 소켓의 주인이 정한다.
+ */
+export type AlsoOn = {
+  /** 함께 붙는 소켓의 주소 (정규형). */
+  addr: string;
+  args: ConfValue[];
+  /** 그 주소 리스너가 이미 맡은 호스트 — 여기는 안 붙인다. */
+  hosts: Set<string>;
+};
+
+export function alsoOnSockets(
+  l: HttpListener | HttpsListener,
+  all: readonly (HttpListener | HttpsListener)[],
+  routesByListener: ReadonlyMap<string, readonly HttpRoute[]>,
+): { alsoOn: AlsoOn[]; skipped: { addr: string; why: 'proxy_protocol' }[] } {
+  const me = normalizeBind(l.bind);
+  if (!me.ok || !me.value.wildcard) return { alsoOn: [], skipped: [] };
+  const byAddr = new Map<string, AlsoOn>();
+  const skipped = new Map<string, 'proxy_protocol'>();
+  for (const s of all) {
+    if (s === l || s.protocol !== l.protocol || s.port !== l.port) continue;
+    const n = normalizeBind(s.bind);
+    if (!n.ok || n.value.wildcard || n.value.family !== me.value.family) continue;
+    if ((s.acceptProxyProtocol === undefined) !== (l.acceptProxyProtocol === undefined)) {
+      skipped.set(n.value.addr, 'proxy_protocol');
+      continue;
+    }
+    const at = byAddr.get(n.value.addr) ?? { addr: n.value.addr, args: listenArgs(s), hosts: new Set<string>() };
+    for (const h of s.hosts ?? (routesByListener.get(s.key) ?? []).flatMap((r) => r.hosts)) at.hosts.add(h);
+    byAddr.set(n.value.addr, at);
+  }
+  for (const a of skipped.keys()) byAddr.delete(a);
+  const sorted = <T,>(m: Map<string, T>): [string, T][] => [...m.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return {
+    alsoOn: sorted(byAddr).map(([, v]) => v),
+    skipped: sorted(skipped).map(([addr, why]) => ({ addr, why })),
+  };
+}
+
+/**
+ * 모델 전체에서 **와일드카드 리스너가 특정 주소에도 붙는 자리** — plan 영향이 알린다(`capabilityWarnings`).
+ * 렌더와 같은 리스너 집합(켜진 것 + 평문 리다이렉트 소켓)과 같은 함수(`alsoOnSockets`)를 쓴다. 두 자리가 갈리면
+ * plan 이 거짓말한다.
+ */
+export function wildcardAlsoOn(model: Model): {
+  listener: string; port: number; addrs: string[]; skipped: { addr: string; why: 'proxy_protocol' }[];
+}[] {
+  const http = model.listeners.filter(
+    (l): l is HttpListener | HttpsListener => l.enabled && (l.protocol === 'http' || l.protocol === 'https'));
+  for (const l of [...http]) {
+    const r = l.protocol === 'https' ? redirectListenerOf(l) : undefined;
+    if (r !== undefined) http.push(r);
+  }
+  const routes = new Map<string, HttpRoute[]>();
+  for (const r of model.httpRoutes) routes.set(r.listener, [...(routes.get(r.listener) ?? []), r]);
+  return byKey(http).flatMap((l) => {
+    // 호스트 server 가 있어야 붙는다. 호스트가 그 주소 리스너의 것뿐이면 붙는 블록이 없다.
+    const hosts = l.hosts ?? (routes.get(l.key) ?? []).flatMap((r) => r.hosts);
+    if (hosts.length === 0) return [];
+    const { alsoOn, skipped } = alsoOnSockets(l, http, routes);
+    const addrs = alsoOn.filter((a) => hosts.some((h) => !a.hosts.has(h))).map((a) => a.addr);
+    return addrs.length === 0 && skipped.length === 0 ? [] : [{ listener: l.key, port: l.port, addrs, skipped }];
+  });
+}
+
 function algorithmDirectives(pool: Pool, sourceIpVar: string): ConfNode[] {
   switch (pool.algorithm) {
     case 'round_robin':
@@ -626,6 +704,8 @@ function httpServerBlocks(
   acme: boolean,
   pools: Map<string, Pool>,
   certs: Map<string, Certificate>,
+  /** 와일드카드 리스너면 함께 붙을 특정 주소 소켓들 (`alsoOnSockets`). */
+  alsoOn: readonly AlsoOn[] = [],
 ): ConfNode[] {
   // (호스트, 라우트) 쌍으로 펼친다.
   const byHost = new Map<string, HttpRoute[]>();
@@ -728,6 +808,8 @@ function httpServerBlocks(
 
     const node = block('server', [], [
       directive('listen', listenArgs(listener)),
+      // 같은 포트의 특정 주소에서도 이 호스트에 답한다 — 그 주소 리스너가 이 호스트를 안 맡을 때만.
+      ...alsoOn.filter((a) => !a.hosts.has(host)).map((a) => directive('listen', a.args)),
       directive('server_name', [nameArg]),
       ...tlsBody,
       ...realipNodes(listener),
@@ -1843,6 +1925,7 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       children.push(
         ...httpServerBlocks(
           l, routesByListener.get(l.key) ?? [], poolsWithBackends, tls, acme, pools, certs,
+          alsoOnSockets(l, httpListeners, routesByListener).alsoOn,
         ),
       );
     }

@@ -41,6 +41,14 @@ nginx 는 이 모양을 그대로 받는다. 막는 것은 우리 모델과 검�
      `impact.bindTransitions` 로 말하고, apply 는 reload 를 보내기 전에 409 `bind_transition` 으로 거절한다.
      두 번에 나눠 적용한다: 옛 소켓을 닫는 변경을 먼저 적용하고, 그다음 원하는 바인드를 적용한다.
      실측: `tests/unit/bind-transition.test.ts` · `tests/store/bind-transition.test.ts`.
+     **와일드카드 리스너의 호스트는 특정 주소에서도 답한다** (2026-11-02, web-01). 위 규칙대로면 같은 포트에 특정 주소
+     리스너가 있을 때, 그 주소로 온 와일드카드 리스너의 이름은 갈 곳이 없다. web-01 에서 `counter.tinyuniver.se`(0.0.0.0:443)
+     가 내부 IP 로는 「모르는 이름」 으로 TLS 를 거절당했다 — 관리 화면 리스너가 내부 IP:443 에 있었다. 사람은 `0.0.0.0` 을
+     「모든 주소」 로 읽는다. 그래서 렌더러가 와일드카드 리스너의 **호스트 server** 에 그 주소의 `listen` 을 함께 붙인다.
+     기본 server 에는 안 붙인다 — 그 주소의 기본(모르는 이름 처리)은 그 주소 리스너의 것이다. 그 주소 리스너가 이미 맡은
+     호스트, PROXY protocol 이 다른 소켓에도 안 붙인다. plan 은 붙인 자리를 `capabilityWarnings` 의 `wildcard_also_on` 으로,
+     못 붙인 자리를 `wildcard_shadowed` 로 말한다. 특정 주소 리스너의 이름은 여전히 그 주소에서만 답한다 — 분리는 남는다.
+     실측: `tests/golden/wildcard-also-on.test.ts` · `tests/unit/wildcard-also-on.test.ts`.
    - 소켓 단위 옵션이 같다: PROXY protocol 수신(`listen … proxy_protocol`).
    - 그 소켓에서 **호스트 이름이 겹치지 않는다** — 호스트 리스너의 `hosts` 와 호스트 없는 리스너의 라우트 호스트를
      모두 합쳐 본다. 겹치면 nginx 는 경고만 내고 먼저 나온 server 에 준다(E36). 조용한 오동작이다.
