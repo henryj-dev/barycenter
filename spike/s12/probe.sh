@@ -312,7 +312,12 @@ if [ "$REC" = "activated" ]; then
   ok S12.lock "**죽은 주인의 락을 회수한다** ($LOCKED → 다음 프로세스가 activated)"
 else
   bad S12.lock "락을 회수하지 못했다 ($LOCKED → '$REC')"
-  printf '%s\n' "$REC_OUT" | grep -v '^RESULT ' | tail -6 | sed 's/^/          /'
+  # **사유를 먼저 낸다.** 꼬리 6 줄은 POINT 줄로 차서, 원인(러너의 `failure`)이
+  # 한 번도 안 보였다. 지점 번호는 경로의 길이(HUP 몇 번)를 말하므로 꼬리도 남긴다.
+  printf '%s\n' "$REC_OUT" | grep -E '^(FAILURE|EVIDENCE) ' | sed 's/^/          /'
+  printf '%s\n' "$REC_OUT" | grep -c '^POINT [0-9]* reload:before' \
+    | sed 's/^/          HUP 횟수: /'
+  printf '%s\n' "$REC_OUT" | grep -vE '^(RESULT|FAILURE|EVIDENCE) ' | tail -6 | sed 's/^/          /'
 fi
 
 # ── 중복 cycle 상한 ────────────────────────────────────────────────────

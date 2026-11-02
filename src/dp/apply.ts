@@ -705,9 +705,18 @@ export class ApplyRunner {
             // 증거 오염을 내 손으로 재현하지는 못했다(낡은 러너가 게이트를 건넌 뒤 첫
             // 쓰기에서 죽는다). **그래도 모은다** — 주석이 말하는 술어와 코드가 다른
             // 것 자체가 부채이고, 술어가 갈라져 있으면 언젠가 하나가 뒤처진다.
+            //
+            // **증명했으면 그 자리에서 `reload_observed` 로 넘어간다** (2026-11-02).
+            // 전에는 증거만 적고 `reload_intent` 로 돌아가 **한 번 더** 읽었다. HUP 직후는
+            // 새 워커와 옛 워커가 같은 소켓에서 함께 accept 하는 창이라, 그 한 번이 옛
+            // 워커에 닿으면 이미 본 활성화를 "안 일어났다" 로 읽고 HUP 을 다시 보내거나
+            // 상한에 닿아 `failed` 로 닫았다 — 세계는 목표 세대인데. CI 의 S12 간헐
+            // 빨강이 이것이었다 (`tests/unit/apply-handover-flap.test.ts`).
             const now = this.agent.readJournal();
             if (ownsJournal(now, j.op) && now !== undefined) {
-              await ignoreConflict(this.write(next(now, { evidence: after })));
+              await ignoreConflict(this.write(next(now, provesActivation(after, gen)
+                ? { phase: 'reload_observed', evidence: after }
+                : { evidence: after })));
             }
           }
           break;
@@ -723,7 +732,12 @@ export class ApplyRunner {
             break;
           }
           // 다시 관측한다. 저널을 쓴 사이에 세대가 또 바뀌었을 수 있다.
-          const evidence = await this.observe();
+          //
+          // **한 번이 아니라 예산 안에서 본다** (2026-11-02). 워커 교대 창에서는 한 번의
+          // 읽기가 옛 워커에 닿을 수 있다. 그 한 번으로 `reload_intent` 로 돌아가면 거기서
+          // 또 한 번 읽고 HUP 을 다시 보낸다. 세대가 정말 바뀌었으면 예산 내내 목표가
+          // 안 보이고, 그때는 전과 같이 `reload_intent` 로 돌아간다.
+          const evidence = await this.awaitActivation(gen);
           if (!provesActivation(evidence, gen)) {
             await ignoreConflict(this.write(next(j, { phase: 'reload_intent' })));
             break;

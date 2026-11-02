@@ -490,7 +490,7 @@ cat <<'GATES'
      통째로 잘렸다). **게이트가 원인을 버리고 있었다.**
 
  ✅ S12  크래시 저널        **열렸다 (2026-08-17).** spike/s12 — process.abort() 로
-         실물 FileStore·FsEffects·nginx 위에서 38 지점을 훑는다. 전부 수렴하고,
+         실물 FileStore·FsEffects·nginx 위에서 36 지점을 훑는다. 전부 수렴하고,
          죽은 주인의 락을 회수하며, 중복 cycle 이 유계다(§12.0 은 exactly-once 를
          요구하지 않는다). in-process 스윕은 예외로 죽어서 파일시스템이 정상
          종료 상태로 남았다 — 그게 이 스파이크가 더한 것이다.

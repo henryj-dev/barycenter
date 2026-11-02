@@ -379,7 +379,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | 스파이크 S7 | `./spike/s7/run.sh` | **9 PASS** |
 | 스파이크 S8 | `./spike/s8/run.sh` | **11 PASS** |
 | 스파이크 S11 | `./spike/s11/run.sh` | **14 PASS** |
-| 스파이크 S12 | `./spike/s12/run.sh` | **5 PASS** — 실제 프로세스를 38 지점에서 죽인다 |
+| 스파이크 S12 | `./spike/s12/run.sh` | **5 PASS** — 실제 프로세스를 36 지점에서 죽인다 |
 | 스파이크 S13 | `./spike/s13/run.sh` | **5 PASS** — 마커로는 옛 워커를 못 센다 |
 | 스파이크 S16 | `./spike/s16/run.sh` | **5 PASS** |
 | 스파이크 S17 | `./spike/s17/run.sh` | **10 PASS** |
@@ -395,7 +395,7 @@ BARY_ENGINE_IMAGE=my/custom-openresty npm run test:engine   # pin 후보 검증
 | ~ | S5 | 이중 zone 확정 / stream 평면 미측정, 부분 전환 미검증 |
 | ~ | S7 | 로그 행 수를 정본 신호로 씀 → 진단용으로 강등하고 판정 계약 재작성 필요 |
 | ~ | S8 | CN 만 비교 / key·SPKI·chain·SNI 별 자료 미검증 |
-| ✅ | **S12 크래시 저널** | **열렸다 (2026-08-17).** `process.abort()` 로 실물 `FileStore`·`FsEffects`·nginx 위에서 38 지점을 훑는다 — 전부 수렴, 죽은 주인의 락 회수, 중복 reload 유계. in-process 스윕은 예외로 죽어서 파일시스템이 정상 종료 상태로 남았다 |
+| ✅ | **S12 크래시 저널** | **열렸다 (2026-08-17).** `process.abort()` 로 실물 `FileStore`·`FsEffects`·nginx 위에서 36 지점을 훑는다 — 전부 수렴, 죽은 주인의 락 회수, 중복 reload 유계. in-process 스윕은 예외로 죽어서 파일시스템이 정상 종료 상태로 남았다 |
 | ✅ | **S16 · S17 TLS 렌더** | **열렸다 (2026-08-17).** 인증서 선택과 SNI 별 policy 가 실제 handshake 에 걸린다. `https` 를 되살린 전제 |
 | ✅ | **S18 ACME** | **열렸다 (2026-08-17).** 실물 CA(Pebble)로 발급 한 바퀴. 의존성 0 — JWS·CSR 을 직접 만든다 |
 
