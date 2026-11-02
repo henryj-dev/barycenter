@@ -782,6 +782,12 @@ export type HttpRoute = {
 export type HttpSourceRule = {
   from: string[];
   action: HttpAction;
+  /**
+   * **어느 주소를 보나** (2026-11-02). 없으면 `visitor` — realip 이 바꾼 뒤의 방문자 주소(`$remote_addr`).
+   * `connection` 은 바꾸기 전의 연결 주소(`$realip_remote_addr`)다 — 「Cloudflare 를 거쳐 왔는가」 를 묻는 자리다.
+   * 리스너가 원본 IP 헤더를 켜면 방문자 주소는 Cloudflare 대역이 아니게 되므로, 그 질문은 연결 주소로 해야 맞다.
+   */
+  address?: 'visitor' | 'connection';
 };
 
 /** 패스스루는 TLS 를 종단하지 않으므로 HTTP status 를 가질 수 없다. */

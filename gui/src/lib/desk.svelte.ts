@@ -22,6 +22,7 @@ import { RECONNECT_GRACE_MS, backoffMs, hasStream, isTransientStatus } from '@we
 import { retryingFetch } from '@web/retry';
 import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput, type SourceRuleInput } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
+import { routeGroupPatch, type RouteGroupInput } from '@web/route-group';
 import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 import { noteCommit } from '#lib/commit-note';
@@ -884,6 +885,20 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     }
   };
 
+  /** 경로별 묶음 → 라우트 여럿을 한 커밋으로 (2026-11-02, `routeGroupPatch`). */
+  const insertRouteGroup = async (input: RouteGroupInput): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(routeGroupPatch(input));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
   const insertHttpReject = async (input: {
     key: string;
     listener: string;
@@ -1110,6 +1125,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     insertHttpRoute,
     insertHttpRedirect,
     insertHttpReject,
+    insertRouteGroup,
     insertPassthroughRoute,
     insertPassthroughReject,
     disconnect() { stop?.(); },

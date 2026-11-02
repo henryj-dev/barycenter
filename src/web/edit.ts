@@ -865,6 +865,8 @@ export function putSourceIpHashPoolWithBackendPatch(input: {
 /** 출발지 규칙 하나 — 라우트 몸통에 그대로 실린다 (모델 `HttpSourceRule` 과 같은 모양). */
 export type SourceRuleInput = {
   from: string[];
+  /** 없으면 방문자 주소. `connection` 은 realip 전의 연결 주소다 (2026-11-02). */
+  address?: 'visitor' | 'connection';
   action:
     | { kind: 'proxy'; pool: string; websocket: boolean }
     | { kind: 'redirect'; to: string; status: RedirectStatus }

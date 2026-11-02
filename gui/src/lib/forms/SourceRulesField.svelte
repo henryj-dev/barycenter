@@ -4,6 +4,8 @@
   /** 폼의 규칙 한 줄. 저장할 때 `toSourceRules` 가 `SourceRuleInput` 으로 바꾼다. */
   export type SourceRuleRow = {
     from: string;
+    /** 방문자 주소(realip 뒤) 또는 연결 주소(realip 전) — 2026-11-02. */
+    address: 'visitor' | 'connection';
     kind: 'proxy' | 'redirect' | 'reject';
     pool: string | undefined;
     websocket: boolean;
@@ -13,16 +15,17 @@
   };
 
   export const emptyRule = (): SourceRuleRow => ({
-    from: '', kind: 'reject', pool: undefined, websocket: false, to: '', redirectStatus: '302', rejectStatus: '403',
+    from: '', address: 'visitor', kind: 'reject', pool: undefined, websocket: false, to: '', redirectStatus: '302', rejectStatus: '403',
   });
 
   /** 폼 줄 → 저장할 규칙. 대역이 빈 줄은 버린다(`sourceRulesOf` 가 한 번 더 거른다). */
   export const toSourceRules = (rows: readonly SourceRuleRow[]): SourceRuleInput[] => rows.flatMap((r): SourceRuleInput[] => {
     const from = r.from.split(/[\s,]+/).map((x) => x.trim()).filter((x) => x !== '');
     if (from.length === 0) return [];
-    if (r.kind === 'proxy') return [{ from, action: { kind: 'proxy', pool: r.pool ?? '', websocket: r.websocket } }];
-    if (r.kind === 'redirect') return [{ from, action: { kind: 'redirect', to: r.to.trim(), status: Number(r.redirectStatus) as RedirectStatus } }];
-    return [{ from, action: { kind: 'reject', status: Number(r.rejectStatus) as RejectStatus } }];
+    const addr = r.address === 'connection' ? { address: 'connection' as const } : {};
+    if (r.kind === 'proxy') return [{ from, ...addr, action: { kind: 'proxy', pool: r.pool ?? '', websocket: r.websocket } }];
+    if (r.kind === 'redirect') return [{ from, ...addr, action: { kind: 'redirect', to: r.to.trim(), status: Number(r.redirectStatus) as RedirectStatus } }];
+    return [{ from, ...addr, action: { kind: 'reject', status: Number(r.rejectStatus) as RejectStatus } }];
   });
 </script>
 
@@ -44,6 +47,7 @@
   const KINDS = [
     { value: 'proxy', label: '풀로 보내기' }, { value: 'redirect', label: 'redirect' }, { value: 'reject', label: 'reject' },
   ];
+  const ADDRESS = [{ value: 'visitor', label: '방문자 주소' }, { value: 'connection', label: '연결 주소' }];
   const REDIRECT = ['301', '302', '307', '308'].map((v) => ({ value: v }));
   const REJECT = ['403', '404', '444'].map((v) => ({ value: v, ...(v === '444' ? { hint: '응답 없이 끊어요' } : {}) }));
 
@@ -62,6 +66,11 @@
       <legend>규칙 {i + 1}</legend>
       <FormRow label="출발지" for="sr-from-{i}" help="CIDR · IP · @주소집합. 쉼표나 공백으로 여러 개를 넣어요.">
         <TextInput id="sr-from-{i}" bind:value={rule.from} autocomplete="off" placeholder="10.0.0.0/8, @office" />
+      </FormRow>
+      <FormRow label="보는 주소" help={rule.address === 'connection'
+        ? '연결 주소 — 우리에게 직접 붙은 주소예요. 「Cloudflare 를 거쳐 왔나」 를 물을 때 써요.'
+        : '방문자 주소 — 리스너가 원본 IP 헤더 · PROXY 수신으로 바꾼 뒤의 주소예요.'}>
+        <Select label="보는 주소" bind:value={rule.address} options={ADDRESS} mono={false} />
       </FormRow>
       <FormRow label="동작">
         <Select label="동작" bind:value={rule.kind} options={KINDS} mono={false} />

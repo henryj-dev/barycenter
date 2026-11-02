@@ -152,10 +152,10 @@ describe('Kit 경로', () => {
   it('Kit 자리가 라우트고 pageOf 가 같은 이름을 읽는다', () => {
     expect(KIT_ROUTES.some((r) => r.place === 'login' && r.path === '/login')).toBe(true);
     // 경로 분리(#124): 대시보드·적용 대기 2 · 목록 9(라우트는 세그먼트 둘) · 만들기 9 · 리스너 만들기 둘째
-    // 단계 5 · 빠른 프록시 1 · 운영 4 · 사람 1 · 계정 화면 6. 표가 정본이다 — 여기선
+    // 단계 5 · 빠른 프록시 1 · 경로별 묶음 1(2026-11-02) · 운영 4 · 사람 1 · 계정 화면 6. 표가 정본이다 — 여기선
     // 중복이 없고, 파일이 다 있는지를 본다(아래 반복).
     expect(new Set(KIT_ROUTES.map((r) => r.path)).size).toBe(KIT_ROUTES.length);
-    expect(KIT_ROUTES).toHaveLength(38); // + 디자인 시스템 견본(/design)
+    expect(KIT_ROUTES).toHaveLength(39); // + 디자인 시스템 견본(/design)
     const routesDir = join(root, 'gui/src/routes');
     for (const r of KIT_ROUTES) {
       expect(pageOf(r.path)).toBe(r.place);

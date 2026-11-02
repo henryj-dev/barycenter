@@ -647,11 +647,13 @@ export function validateModel(
     }
     const cidrsOf = new Map((model.addressSets ?? []).map((x) => [x.key, x.cidrs]));
     for (const r of model.httpRoutes) {
-      const seen: { cidr: string; rule: number }[] = [];
+      // 방문자 주소와 연결 주소는 다른 주소다 — 같은 쪽끼리만 가린다 (2026-11-02).
+      const seen: { cidr: string; rule: number; address: string }[] = [];
       (r.sourceRules ?? []).forEach((rule, i) => {
         const from = expandList(rule.from, cidrsOf);
+        const address = rule.address ?? 'visitor';
         for (const cidr of from) {
-          const by = seen.find((x) => cidrCovers(x.cidr, cidr));
+          const by = seen.find((x) => x.address === address && cidrCovers(x.cidr, cidr));
           if (by !== undefined) {
             issues.push({
               code: 'source_rule_shadowed',
@@ -661,7 +663,7 @@ export function validateModel(
             });
           }
         }
-        for (const cidr of from) seen.push({ cidr, rule: i });
+        for (const cidr of from) seen.push({ cidr, rule: i, address });
       });
     }
   }

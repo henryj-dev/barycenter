@@ -248,7 +248,7 @@ const rulesOf = (r: Item): Item[] => (Array.isArray(r['sourceRules']) ? (r['sour
 
 /** 출발지 규칙 한 줄의 「어디서」 — 라우트 매치 뒤에 붙인다. */
 const ruleMatch = (r: Item, rule: Item): string =>
-  `${routeMatch(r)} · 출발지 ${(Array.isArray(rule['from']) ? rule['from'] as unknown[] : []).map(String).join(', ')}`;
+  `${routeMatch(r)} · ${rule['address'] === 'connection' ? '연결 주소' : '출발지'} ${(Array.isArray(rule['from']) ? rule['from'] as unknown[] : []).map(String).join(', ')}`;
 
 /** 라우트 하나의 흐름 — 출발지 규칙이 위에서부터, 그다음 기본 동작이다. 엔진이 보는 순서와 같다. */
 const routeLines = (model: ModelLike, r: Item, route: Ref, health: HealthOf): TrafficLine[] => [

@@ -43,7 +43,10 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/route/http/new">＋ 생성</Button>{/snippet}
+{#snippet create()}
+  <Button href="/traffic/route/http/new/group">＋ 경로별 묶음</Button>
+  <Button variant="primary" href="/traffic/route/http/new">＋ 생성</Button>
+{/snippet}
 
 <RouteSegments current="http" />
 {#each desk.routes.errors as e (e.kind + e.message)}<Banner tone="danger">{e.message}</Banner>{/each}

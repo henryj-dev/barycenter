@@ -115,7 +115,7 @@
     <FormSection>
       <p class="note">
         요청의 출발지가 규칙의 대역에 들면 위 「동작」 대신 그 규칙의 동작을 해요. 위 규칙부터 보고 처음 맞는 것을 써요.
-        출발지는 방문자 주소예요 — 리스너가 원본 IP 헤더나 PROXY 수신으로 바꾼 뒤의 주소예요.
+        규칙마다 보는 주소를 골라요 — 방문자 주소(원본 IP 헤더 · PROXY 수신 뒤) 또는 연결 주소(우리에게 직접 붙은 주소).
       </p>
       <SourceRulesField bind:rules {pools} />
     </FormSection>
