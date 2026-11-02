@@ -144,6 +144,8 @@ const usage = (): never => {
                                  proxy 라우트는 둘을 더 받는다 (#109):
                                    --route-header 'Host: api.example.com'   (여러 번) 이 라우트에만. 같은 이름이면 리스너 것을 대신한다
                                    --rewrite-prefix /v1/                   맞은 --path-prefix 를 이 값으로 바꿔 보낸다 (끝 '/' 가 같아야 한다)
+                                   --source-rule '[conn:]대역,…=동작'      출발지 규칙 (여러 번, 위에서부터). 동작: pool:<풀>[:ws] · redirect:<코드>:<URL> · reject:<코드>
+                                                                           예: --source-rule '@cloudflare-ips-v4,@cloudflare-ips-v6=reject:444'  (conn: 은 연결 주소)
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
   bary address-set create        --name (--cidr a,b … | --cidr-file f | --cloudflare). commit 까지. apply 는 아니다 (#114)
                                  리스너는 --allow @이름 · 신뢰 대역 @이름 으로 참조한다
@@ -520,6 +522,8 @@ async function main(): Promise<void> {
       const status = flag(argv, '--status');
       // `--path-prefix` 를 여러 번 적으면 경로 여럿이다 (2026-11-02). 쉼표로 나누지 않는다 — 경로에 쉼표가 들어갈 수 있다.
       const pathPrefixes = flagAll(argv, '--path-prefix');
+      // `--source-rule` 은 적은 순서가 규칙의 순서다 (2026-11-02). 끊기는 `parseSourceRule` 한 자리.
+      const sourceRules = flagAll(argv, '--source-rule');
       const routeHeaders = flagAll(argv, '--route-header');
       const rewritePrefix = flag(argv, '--rewrite-prefix');
       try {
@@ -533,6 +537,7 @@ async function main(): Promise<void> {
           ...(reject ? { reject: true } : {}),
           ...(websocket ? { websocket: true } : {}),
           ...(pathPrefixes.length === 0 ? {} : { pathPrefixes }),
+          ...(sourceRules.length === 0 ? {} : { sourceRules }),
           ...(routeHeaders.length === 0 ? {} : { requestHeaders: routeHeaders }),
           ...(rewritePrefix === undefined ? {} : { rewritePrefix }),
         });

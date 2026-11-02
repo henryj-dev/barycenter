@@ -2,7 +2,7 @@
   /**
    * 설정 탭 — **여기가 수정하는 자리다** (시안: 「수정」 은 설정 탭으로 간다).
    *
-   * 리스너는 폼, 풀은 업스트림 TLS 폼 + JSON 수정, 인증서는 보기만(자료를 다시 넣는 것이 수정이다), 나머지는 JSON 수정이다.
+   * 리스너는 폼, 풀은 헬스체크 폼(2026-11-02) + 업스트림 TLS 폼 + JSON 수정, 인증서는 보기만(자료를 다시 넣는 것이 수정이다), 나머지는 JSON 수정이다.
    * 쓰기가 막혀 있으면(전역 모드) 모든 칸을 보기로 편다.
    */
   import { getContext } from 'svelte';
@@ -12,6 +12,7 @@
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import ListenerForm from '#lib/listener/ListenerForm.svelte';
   import PoolTlsForm from '#lib/pool/PoolTlsForm.svelte';
+  import PoolHealthForm from '#lib/pool/PoolHealthForm.svelte';
   import JsonEdit from './JsonEdit.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
@@ -32,6 +33,7 @@
         <DescriptionList labelWidth="220px" items={fields} />
       </Disclosure>
     {:else if writable && kind === 'pool'}
+      <PoolHealthForm />
       <PoolTlsForm />
       <JsonEdit {kind} />
     {:else if writable}
