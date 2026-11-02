@@ -164,6 +164,11 @@ export function edgesOf(model: ModelLike): Edge[] {
       const from: Ref = { kind, key: String(r['key']) };
       add(from, 'listener', str(r['listener']), '리스너');
       add(from, 'pool', poolOf(r['action']), '프록시');
+      // 출발지 규칙의 풀과 주소 집합도 이 라우트가 쓰는 것이다 (2026-11-02).
+      for (const rule of rulesOf(r)) {
+        add(from, 'pool', poolOf(rule['action']), '출발지 규칙');
+        sets(from, rule['from'], '출발지 규칙');
+      }
     }
   }
   for (const b of itemsOf(model, 'backend')) {
@@ -238,6 +243,19 @@ const outcomeTarget = (model: ModelLike, v: unknown, health: HealthOf): Target =
   return pool === undefined ? { kind: 'reject' } : targetOfPool(model, pool, health);
 };
 
+/** 라우트의 출발지 규칙들 (2026-11-02). 없으면 빈 목록. */
+const rulesOf = (r: Item): Item[] => (Array.isArray(r['sourceRules']) ? (r['sourceRules'] as unknown[]).map((x) => obj(x) ?? {}) : []);
+
+/** 출발지 규칙 한 줄의 「어디서」 — 라우트 매치 뒤에 붙인다. */
+const ruleMatch = (r: Item, rule: Item): string =>
+  `${routeMatch(r)} · 출발지 ${(Array.isArray(rule['from']) ? rule['from'] as unknown[] : []).map(String).join(', ')}`;
+
+/** 라우트 하나의 흐름 — 출발지 규칙이 위에서부터, 그다음 기본 동작이다. 엔진이 보는 순서와 같다. */
+const routeLines = (model: ModelLike, r: Item, route: Ref, health: HealthOf): TrafficLine[] => [
+  ...rulesOf(r).map((rule) => ({ match: ruleMatch(r, rule), route, target: targetOfAction(model, rule['action'], health) })),
+  { match: rulesOf(r).length > 0 ? `${routeMatch(r)} · 그 밖의 출발지` : routeMatch(r), route, target: targetOfAction(model, r['action'], health) },
+];
+
 const routeMatch = (r: Item): string => {
   const hosts = Array.isArray(r['hosts']) ? r['hosts'] as string[] : Array.isArray(r['snis']) ? r['snis'] as string[] : [];
   // 경로가 여럿이면 `{a,b}` 로 묶는다 — 한 줄에 라우트 하나다.
@@ -255,7 +273,7 @@ export function trafficOf(model: ModelLike, ref: Ref, health: HealthOf): Traffic
   if (ref.kind === 'httpRoute' || ref.kind === 'passthroughRoute') {
     const r = itemOf(model, ref.kind, ref.key);
     if (r === undefined) return [];
-    return [{ match: routeMatch(r), route: ref, target: targetOfAction(model, r['action'], health) }];
+    return routeLines(model, r, ref, health);
   }
   if (ref.kind === 'pool') {
     // 풀은 「어디서 이 풀로 오나」 다 — 모든 리스너의 경로 중 이 풀로 가는 줄. 앞에 리스너 이름을 붙인다.
@@ -270,11 +288,7 @@ export function trafficOf(model: ModelLike, ref: Ref, health: HealthOf): Traffic
   const routes = itemsOf(model, routeKind).filter((r) => r['listener'] === ref.key)
     .slice().sort((a, b) => Number(b['priority'] ?? 0) - Number(a['priority'] ?? 0)
       || String(a['key']).localeCompare(String(b['key'])));
-  const lines: TrafficLine[] = routes.map((r) => ({
-    match: routeMatch(r),
-    route: { kind: routeKind, key: String(r['key']) },
-    target: targetOfAction(model, r['action'], health),
-  }));
+  const lines: TrafficLine[] = routes.flatMap((r) => routeLines(model, r, { kind: routeKind, key: String(r['key']) }, health));
   const protocol = l['protocol'];
   if (protocol === 'http' || protocol === 'https') {
     lines.push({ match: '기본 동작 (맞는 라우트 없음)', target: outcomeTarget(model, obj(l['http'])?.['defaultAction'], health) });
@@ -347,6 +361,8 @@ export function summaryOf(kind: ResourceKind, item: Item): { label: string; valu
     case 'httpRoute':
       add('리스너', item['listener']); add('호스트', item['hosts']); add('경로', item['pathPrefixes'] ?? item['pathPrefix'] ?? '/');
       add('우선순위', item['priority']); add('동작', actionText());
+      // 출발지 규칙은 개수만 — 규칙마다의 동작은 「흐름」 이 줄마다 보인다 (2026-11-02).
+      if (Array.isArray(item['sourceRules'])) add('출발지 규칙', `${(item['sourceRules'] as unknown[]).length}개 (위에서부터 처음 맞는 것)`);
       break;
     case 'passthroughRoute':
       add('리스너', item['listener']); add('SNI', item['snis']); add('우선순위', item['priority']); add('동작', actionText());

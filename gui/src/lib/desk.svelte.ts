@@ -19,7 +19,7 @@ import { viewOfStatus, type StatusView } from '@web/status-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { backoffMs, hasStream } from '@web/reconnect';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput } from '@web/edit';
+import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput, type SourceRuleInput } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
@@ -809,6 +809,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     pool: string;
     pathPrefix?: string;
     pathPrefixes?: string[];
+    sourceRules?: SourceRuleInput[];
     websocket?: boolean;
     rewritePrefix?: string;
     /** `이름: 값` 줄들. 끊기는 `parseHeaderLines` 한 자리다 (#109). */
@@ -836,6 +837,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     status: RedirectStatus;
     pathPrefix?: string;
     pathPrefixes?: string[];
+    sourceRules?: SourceRuleInput[];
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -856,6 +858,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     status: RejectStatus;
     pathPrefix?: string;
     pathPrefixes?: string[];
+    sourceRules?: SourceRuleInput[];
   }): Promise<boolean> => {
     editing = true;
     error = undefined;

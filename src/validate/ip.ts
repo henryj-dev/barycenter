@@ -121,3 +121,48 @@ export function addressSetRef(input: string): string | undefined {
   const m = /^@([A-Za-z0-9][A-Za-z0-9._-]{0,62})$/.exec(input);
   return m === null ? undefined : m[1];
 }
+
+/** 주소 → 정수. IP 가 아니면 `undefined`. 존 ID 는 받지 않는다(`cidrVersion` 과 같다). */
+function ipBits(addr: string): { v: 4 | 6; n: bigint } | undefined {
+  const v = ipVersion(addr);
+  if (v === 0 || addr.includes('%')) return undefined;
+  if (v === 4) return { v, n: addr.split('.').reduce((acc, o) => (acc << 8n) | BigInt(Number(o)), 0n) };
+  let a = addr;
+  let low: bigint | undefined;
+  const lastColon = a.lastIndexOf(':');
+  const tailPart = a.slice(lastColon + 1);
+  if (tailPart.includes('.')) {
+    low = ipBits(tailPart)!.n;
+    a = `${a.slice(0, lastColon + 1)}0:0`;
+  }
+  const dbl = a.indexOf('::');
+  const head = dbl < 0 ? a.split(':') : a.slice(0, dbl) === '' ? [] : a.slice(0, dbl).split(':');
+  const tail = dbl < 0 ? [] : a.slice(dbl + 2) === '' ? [] : a.slice(dbl + 2).split(':');
+  const groups = [...head, ...new Array<string>(8 - head.length - tail.length).fill('0'), ...tail];
+  let n = groups.reduce((acc, g) => (acc << 16n) | BigInt(parseInt(g, 16)), 0n);
+  if (low !== undefined) n = (n & ~0xffffffffn) | low;
+  return { v: 6, n };
+}
+
+/**
+ * **대역 `outer` 가 대역 `inner` 를 덮는가** (2026-11-02, 라우트 출발지 규칙). 계열이 다르면 덮지 않는다. 접두사 없는
+ * 주소는 단일 호스트다. 호스트 비트가 켜진 대역은 nginx 처럼 망 주소로 읽는다. 둘 중 하나라도 CIDR 이 아니면 거짓이다.
+ */
+export function cidrCovers(outer: string, inner: string): boolean {
+  const parse = (s: string): { v: 4 | 6; net: bigint; len: number } | undefined => {
+    if (cidrVersion(s) === 0) return undefined;
+    const slash = s.indexOf('/');
+    const ip = ipBits(slash < 0 ? s : s.slice(0, slash));
+    if (ip === undefined) return undefined;
+    const width = ip.v === 4 ? 32 : 128;
+    const len = slash < 0 ? width : Number(s.slice(slash + 1));
+    const mask = len === 0 ? 0n : ((1n << BigInt(len)) - 1n) << BigInt(width - len);
+    return { v: ip.v, net: ip.n & mask, len };
+  };
+  const o = parse(outer);
+  const i = parse(inner);
+  if (o === undefined || i === undefined || o.v !== i.v || o.len > i.len) return false;
+  const width = o.v === 4 ? 32 : 128;
+  const mask = o.len === 0 ? 0n : ((1n << BigInt(o.len)) - 1n) << BigInt(width - o.len);
+  return (i.net & mask) === o.net;
+}
