@@ -33,9 +33,6 @@
  * 뒤처지고, 그때 그 스위트만 조용히 다시 경합한다."*
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -88,17 +85,13 @@ function docker(...args: string[]): string {
  * 두 흐름을 한 파일에 받아 순서를 지킨다.
  */
 function logsOf(container: string, tail: number): string {
-  const dir = mkdtempSync(join(tmpdir(), 'bary-logs-'));
-  const file = join(dir, 'logs');
-  const fd = openSync(file, 'w');
-  try {
-    const r = spawnSync('docker', ['logs', '--tail', String(tail), container], { stdio: ['ignore', fd, fd] });
-    if (r.error) return `(docker logs 실패: ${r.error.message})`;
-    return readFileSync(file, 'utf8').trim();
-  } finally {
-    closeSync(fd);
-    rmSync(dir, { recursive: true, force: true });
-  }
+  // 셸이 두 흐름을 한 파이프로 합친다(`2>&1`) — 임시 파일을 안 써서 쓰고 다시 읽는 사이의 경쟁이 없다(CodeQL
+  // js/file-system-race). 이름과 줄 수는 위치 인자로 넘긴다 — 명령 문자열에 섞이지 않는다.
+  const r = spawnSync('sh', ['-c', 'docker logs --tail "$1" "$2" 2>&1', 'sh', String(tail), container], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (r.error) return `(docker logs 실패: ${r.error.message})`;
+  return `${r.stdout ?? ''}`.trim();
 }
 
 /**
