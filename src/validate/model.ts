@@ -11,6 +11,7 @@
  * 여기서는 오류를 **모아서** 반환한다 (`plan` 이 한 번에 보여줘야 하므로). 렌더러는 하나라도
  * 있으면 던진다 — fail closed.
  */
+import { routePaths } from '../model/route-paths.js';
 import { redirectListenerOf } from '../model/redirect.js';
 import { findSocketConflicts, normalizeBind, type SocketReservation } from './sockets.js';
 import { compileHostRoutes, planStrictPriority, type RouteInput } from '../route/compile.js';
@@ -605,7 +606,10 @@ export function validateModel(
     if (r.action.kind === 'proxy') needPool(r.key, r.action.pool, 'http');
     // **https 도 http 라우트를 받는다.** TLS 를 종단하고 나면 평범한 HTTP 다.
     if (!wantProtocol(r.key, r.listener, ['http', 'https'])) continue;
-    r.hosts.forEach((h, i) => addRoute(r.listener, `${r.key}#${i}`, h, r.priority, r.pathPrefix));
+    // 경로가 여럿이면 (호스트, 경로) 쌍마다 하나다 — 다른 라우트와의 겹침을 경로마다 본다.
+    const paths = routePaths(r);
+    r.hosts.forEach((h, i) => paths.forEach((p, j) =>
+      addRoute(r.listener, paths.length > 1 ? `${r.key}#${i}.${j}` : `${r.key}#${i}`, h, r.priority, r.pathPrefix ?? r.pathPrefixes?.[j])));
   }
   for (const r of model.passthroughRoutes) {
     if (r.action.kind === 'proxy') needPool(r.key, r.action.pool, 'tcp');
@@ -621,9 +625,7 @@ export function validateModel(
   // nginx 의 location 은 **최장 접두사**가 이기므로 사용자가 더 긴 접두사를 내면 그쪽이
   // 먹는다. 그러면 CA 의 요청이 사용자 라우트로 가고, 증상은 "챌린지 검증 실패" 다.
   // 인증서 설정을 아무리 봐도 이상이 없어 보인다.
-  for (const r of model.httpRoutes) {
-    const path = r.pathPrefix;
-    if (path === undefined) continue;
+  for (const r of model.httpRoutes) for (const path of routePaths(r)) {
     // 위쪽 경로(`/.well-known/`)는 허용한다 — 더 짧은 접두사라 `^~` 가 이긴다.
     if (path === ACME_PREFIX || path.startsWith(ACME_PREFIX)) {
       issues.push({

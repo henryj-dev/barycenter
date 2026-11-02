@@ -1953,6 +1953,17 @@ http {
 | DB | 026: `http_routes.request_headers jsonb` · `rewrite_prefix text`. proxy 라우트에만 |
 | 저작 | CLI `--route-header 'Name: value'`(여러 번) · `--rewrite-prefix`. GUI 라우트 폼의 「프록시 옵션」. 끊기는 `parseHeaderLines` 한 자리 |
 
+**라우트 하나에 경로 여럿 (2026-11-02).** 같은 동작 · 헤더로 `/api/` · `/v2/` · `/graphql` 을 함께 덮는다.
+
+| | 지금 |
+|---|---|
+| `pathPrefixes` | 경로 목록. `pathPrefix` 와 함께 적지 않는다 — 해독기가 막는다. 빈 목록 · 같은 경로 두 번도 막는다. 경로 하나는 `pathPrefix` 로 적는다(빌더 `pathFieldsOf` 가 고른다). `pathPrefix` 를 없애지 않은 이유: 옛 리비전 스냅샷이 그 필드로 적혀 있어서, 해독기가 계속 읽어야 롤백이 된다 |
+| 읽기 | 검증기 · 컴파일러 · 렌더러 · plan 영향 · 화면이 모두 `routePaths()` 로 읽는다. 겹침과 ACME 예약 경로는 경로마다 본다 |
+| 렌더 | 경로마다 같은 본문의 `location`. `rewritePrefix` 는 location 마다 자기 접두사를 바꾸므로 그대로 맞다 — 끝의 `/` 규칙은 경로마다 건다 |
+| 순서 | 컴파일 열쇠가 경로 하나면 라우트 키, 여럿이면 `키 경로`(`routePathKey`). 경로 하나인 라우트의 plan 순서 비교는 전과 같다 |
+| DB | 031: `http_routes.path_prefixes text[]`. `path_prefix` 와 함께 NULL 아님을 CHECK 로 막는다 |
+| 저작 | CLI `route create --path-prefix` 를 여러 번(쉼표로 나누지 않는다 — 경로에 쉼표가 들어갈 수 있다). GUI 라우트 폼의 경로 칸은 쉼표 · 공백으로 나눈다 |
+
 외부 HTTPS 대상은 풀의 `upstreamTls`(`sni`)와 백엔드 `host:443` 으로 표현한다. 그 풀의 HTTP
 프로브는 TLS 로 찌른다(#107).
 

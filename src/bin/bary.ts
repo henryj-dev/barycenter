@@ -152,7 +152,7 @@ const usage = (): never => {
   bary proxy create              --name --url https://example.com/v1/ (--listen 127.0.0.1:8080 | --listener <키>) (#112)
                                  URL 하나를 풀·백엔드·리스너(또는 라우트)로 펼쳐 변경 하나로 commit 한다. apply 는 아니다
                                    --host a.example.com,…   있으면 라우트를 만든다 (Host 헤더·경로 바꾸기를 라우트에 싣는다)
-                                   --path-prefix /api/      라우트의 경로 접두사 (없으면 /)
+                                   --path-prefix /api/      라우트의 경로 접두사 (없으면 /). route create 는 여러 번 적으면 경로 여럿
                                    --allow · --allow-file   새 리스너의 출발지 제한
                                    --protocol https --policy <TLS 정책> --certificate <인증서>   새 리스너를 HTTPS 로 (#116)
                                  URL 경로가 / 가 아니면 --host 가 필요하다 — 경로 바꾸기는 라우트에만 있다
@@ -518,7 +518,8 @@ async function main(): Promise<void> {
       const websocket = argv.includes('--websocket');
       if (!reject && (pool === undefined || pool === '') && (to === undefined || to === '')) usage();
       const status = flag(argv, '--status');
-      const pathPrefix = flag(argv, '--path-prefix');
+      // `--path-prefix` 를 여러 번 적으면 경로 여럿이다 (2026-11-02). 쉼표로 나누지 않는다 — 경로에 쉼표가 들어갈 수 있다.
+      const pathPrefixes = flagAll(argv, '--path-prefix');
       const routeHeaders = flagAll(argv, '--route-header');
       const rewritePrefix = flag(argv, '--rewrite-prefix');
       try {
@@ -531,7 +532,7 @@ async function main(): Promise<void> {
           ...(status === undefined ? {} : { status }),
           ...(reject ? { reject: true } : {}),
           ...(websocket ? { websocket: true } : {}),
-          ...(pathPrefix === undefined ? {} : { pathPrefix }),
+          ...(pathPrefixes.length === 0 ? {} : { pathPrefixes }),
           ...(routeHeaders.length === 0 ? {} : { requestHeaders: routeHeaders }),
           ...(rewritePrefix === undefined ? {} : { rewritePrefix }),
         });

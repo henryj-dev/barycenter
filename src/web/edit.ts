@@ -4,6 +4,7 @@
  * 저장(commit)과 적용(apply)은 다르다. 여기서 만드는 것은 patch 뿐이다.
  * 메서드×경로 ALLOW/DENY 는 WAF 다. 여기 없다.
  */
+import { routePaths } from '../model/route-paths.js';
 import { parseHashKey } from '../validate/strings.js';
 import { addressSetRef, cidrVersion } from '../validate/ip.js';
 
@@ -861,6 +862,23 @@ export function putSourceIpHashPoolWithBackendPatch(input: {
   ];
 }
 
+/**
+ * 경로 입력 → 라우트 몸통의 경로 칸 (2026-11-02). 빈 칸과 중복을 지운다. 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 다 —
+ * 하나를 `pathPrefixes` 로 실으면 같은 뜻의 두 표기가 생긴다. 없으면 아무것도 안 싣는다(`/`).
+ */
+export function pathFieldsOf(input: { pathPrefix?: string; pathPrefixes?: readonly string[] }): { pathPrefix?: string; pathPrefixes?: string[] } {
+  const all = [...(input.pathPrefix === undefined ? [] : [input.pathPrefix]), ...(input.pathPrefixes ?? [])]
+    .map((p) => p.trim()).filter((p) => p !== '');
+  const list = [...new Set(all)];
+  if (list.length === 0) return {};
+  return list.length === 1 ? { pathPrefix: list[0]! } : { pathPrefixes: list };
+}
+
+/** 여러 줄 · 쉼표 · 공백으로 적은 경로 → 목록. GUI 의 경로 칸과 CLI 가 같이 쓴다. */
+export function parsePathList(text: string): string[] {
+  return text.split(/[\s,]+/).map((p) => p.trim()).filter((p) => p !== '');
+}
+
 export type PutHttpRouteOp = {
   op: 'put';
   kind: 'httpRoute';
@@ -870,6 +888,7 @@ export type PutHttpRouteOp = {
     hosts: string[];
     priority: number;
     pathPrefix?: string;
+    pathPrefixes?: string[];
     action: {
       kind: 'proxy'; pool: string; websocket: boolean;
       requestHeaders?: HeaderRuleInput[];
@@ -888,6 +907,8 @@ export function putHttpRoutePatch(input: {
   hosts: readonly string[];
   pool: string;
   pathPrefix?: string;
+  /** 경로 여럿 (2026-11-02). `pathPrefix` 와 합쳐 읽는다 — 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 로 싣는다. */
+  pathPrefixes?: readonly string[];
   priority?: number;
   websocket?: boolean;
   /** 이 라우트에만 거는 요청 헤더. 같은 이름이면 리스너 것을 대신한다 (#109). */
@@ -904,22 +925,25 @@ export function putHttpRoutePatch(input: {
   if (!Number.isInteger(priority) || priority < 0) {
     throw new Error('priority 가 0 이상 정수가 아니다');
   }
-  const pathPrefix = input.pathPrefix?.trim();
+  const paths = pathFieldsOf(input);
   const body: PutHttpRouteOp['body'] = {
     listener: input.listener,
     hosts,
     priority,
     action: { kind: 'proxy', pool: input.pool, websocket: input.websocket === true },
   };
-  if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
+  Object.assign(body, paths);
   // **안 적으면 키를 안 만든다** — 빈 목록·빈 문자열을 실으면 해독기가 거절하거나 렌더가 바뀐다.
   const requestHeaders = headerList(input.requestHeaders);
   if (requestHeaders !== undefined) body.action.requestHeaders = requestHeaders;
   const rewritePrefix = input.rewritePrefix?.trim();
   if (rewritePrefix !== undefined && rewritePrefix !== '') {
     // 해독기와 같은 규칙을 미리 건다 — 저장 못 하는 patch 를 만들지 않는다.
-    if ((pathPrefix === undefined || pathPrefix === '' ? '/' : pathPrefix).endsWith('/') !== rewritePrefix.endsWith('/')) {
-      throw new Error("경로 바꾸기의 끝 '/' 가 경로 접두사와 같아야 한다");
+    // 경로가 여럿이면 모두 맞아야 한다 — location 마다 자기 접두사를 바꾼다.
+    for (const p of paths.pathPrefixes ?? [paths.pathPrefix ?? '/']) {
+      if (p.endsWith('/') !== rewritePrefix.endsWith('/')) {
+        throw new Error(`경로 바꾸기의 끝 '/' 가 경로 접두사(${p})와 같아야 한다`);
+      }
     }
     body.action.rewritePrefix = rewritePrefix;
   }
@@ -955,6 +979,7 @@ export type PutHttpRedirectOp = {
     hosts: string[];
     priority: number;
     pathPrefix?: string;
+    pathPrefixes?: string[];
     action: { kind: 'redirect'; to: string; status: RedirectStatus };
   };
 };
@@ -970,6 +995,8 @@ export function putHttpRedirectPatch(input: {
   to: string;
   status?: RedirectStatus;
   pathPrefix?: string;
+  /** 경로 여럿 (2026-11-02). `pathPrefix` 와 합쳐 읽는다 — 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 로 싣는다. */
+  pathPrefixes?: readonly string[];
   priority?: number;
 }): PutHttpRedirectOp[] {
   if (input.key === '') throw new Error('키가 비어 있다');
@@ -986,14 +1013,14 @@ export function putHttpRedirectPatch(input: {
   if (!Number.isInteger(priority) || priority < 0) {
     throw new Error('priority 가 0 이상 정수가 아니다');
   }
-  const pathPrefix = input.pathPrefix?.trim();
+  const paths = pathFieldsOf(input);
   const body: PutHttpRedirectOp['body'] = {
     listener: input.listener,
     hosts,
     priority,
     action: { kind: 'redirect', to, status },
   };
-  if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
+  Object.assign(body, paths);
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
 }
 
@@ -1010,6 +1037,7 @@ export type PutHttpRejectOp = {
     hosts: string[];
     priority: number;
     pathPrefix?: string;
+    pathPrefixes?: string[];
     action: { kind: 'reject'; status: RejectStatus };
   };
 };
@@ -1024,6 +1052,8 @@ export function putHttpRejectPatch(input: {
   hosts: readonly string[];
   status?: RejectStatus;
   pathPrefix?: string;
+  /** 경로 여럿 (2026-11-02). `pathPrefix` 와 합쳐 읽는다 — 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 로 싣는다. */
+  pathPrefixes?: readonly string[];
   priority?: number;
 }): PutHttpRejectOp[] {
   if (input.key === '') throw new Error('키가 비어 있다');
@@ -1038,14 +1068,14 @@ export function putHttpRejectPatch(input: {
   if (!Number.isInteger(priority) || priority < 0) {
     throw new Error('priority 가 0 이상 정수가 아니다');
   }
-  const pathPrefix = input.pathPrefix?.trim();
+  const paths = pathFieldsOf(input);
   const body: PutHttpRejectOp['body'] = {
     listener: input.listener,
     hosts,
     priority,
     action: { kind: 'reject', status },
   };
-  if (pathPrefix !== undefined && pathPrefix !== '') body.pathPrefix = pathPrefix;
+  Object.assign(body, paths);
   return [{ op: 'put', kind: 'httpRoute', key: input.key, body }];
 }
 
@@ -1165,6 +1195,8 @@ export type ProxyFromUrlInput = {
   hosts?: readonly string[];
   /** 라우트의 경로 접두사. 없으면 `/`. */
   pathPrefix?: string;
+  /** 라우트의 경로 여럿 (2026-11-02). 「URL 로 다시 만들기」 가 그 라우트의 경로를 잃지 않게 그대로 넘긴다. */
+  pathPrefixes?: readonly string[];
   /** 새 리스너의 출발지 제한. */
   sourceAllow?: string[];
   /** 새 리스너의 프로토콜. 없으면 http. https 면 `tls` 가 필요하다 (#116). */
@@ -1248,9 +1280,10 @@ export function proxyFromUrlPatch(input: ProxyFromUrlInput): ProxyFromUrlOp[] {
     ops.push(...putHttpRoutePatch({
       key: name, listener: input.listener ?? name, hosts, pool: name,
       ...(input.pathPrefix === undefined ? {} : { pathPrefix: input.pathPrefix }),
+      ...(input.pathPrefixes === undefined ? {} : { pathPrefixes: input.pathPrefixes }),
       requestHeaders: hostRule,
       // `/` → `/` 는 바꾸는 것이 없다. 렌더 바이트를 늘리지 않는다.
-      ...(path === '/' && (input.pathPrefix ?? '/') === '/' ? {} : { rewritePrefix: path }),
+      ...(path === '/' && routePaths(pathFieldsOf(input)).every((p) => p === '/') ? {} : { rewritePrefix: path }),
     }));
   }
   return ops;

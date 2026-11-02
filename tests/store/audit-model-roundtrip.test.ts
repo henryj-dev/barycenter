@@ -113,6 +113,11 @@ const rich = (): Model => ({
       key: 'r-old', listener: 'secure', hosts: ['a.test'], priority: 5,
       pathPrefix: '/old/', action: { kind: 'redirect', to: 'https://a.test/new/', status: 308 },
     },
+    {
+      // 031 — 경로 여럿(text[])이 순서 그대로 돌아와야 한다.
+      key: 'r-many', listener: 'secure', hosts: ['a.test'], priority: 1,
+      pathPrefixes: ['/v2/', '/graphql'], action: { kind: 'reject', status: 404 },
+    },
   ],
   passthroughRoutes: [],
   sniBindings: [{

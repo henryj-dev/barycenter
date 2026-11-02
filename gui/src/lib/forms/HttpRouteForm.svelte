@@ -3,9 +3,10 @@
    * HTTP 라우트 만들기 (시안 구획: 기본 · 동작). 옛 폼 셋(풀로 보내기 · redirect · reject)을 「동작」 하나로
    * 합쳤다. 저장 경로는 그대로 셋이다(`insertHttpRoute` · `insertHttpRedirect` · `insertHttpReject`).
    * 경로 바꾸기 · 이 라우트의 요청 헤더(#109)는 「프록시 옵션」 에 접혀 있다.
+   * 경로 접두사 칸은 여럿을 받는다(2026-11-02) — 호스트 칸처럼 쉼표나 공백으로 나눈다.
    */
   import { getContext } from 'svelte';
-  import type { RedirectStatus, RejectStatus } from '@web/edit';
+  import { parsePathList, type RedirectStatus, type RejectStatus } from '@web/edit';
   import { Disclosure, FormRow, FormSection, KeyValueEditor, Select, Switch, TextInput, type KvRow } from '#lib/ui';
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
@@ -46,8 +47,9 @@
   );
   const submit = (): void => {
     if (listener === undefined) return;
-    const prefix = pathPrefix.trim();
-    const base = { key: key.trim(), listener, hosts: words(hosts), ...(prefix === '' ? {} : { pathPrefix: prefix }) };
+    // 경로는 여럿일 수 있다 (2026-11-02). 하나면 `pathPrefix`, 여럿이면 `pathPrefixes` 로 싣는다(`pathFieldsOf`).
+    const paths = parsePathList(pathPrefix);
+    const base = { key: key.trim(), listener, hosts: words(hosts), ...(paths.length === 0 ? {} : { pathPrefixes: paths }) };
     if (action === 'proxy') {
       if (pool === undefined) return;
       const lines = headers.filter((h) => h.name.trim() !== '').map((h) => `${h.name.trim()}: ${h.value}`).join('\n');
@@ -77,8 +79,8 @@
     <FormRow label="호스트" for="hr-hosts" help="정확한 이름이나 *.example.com 형태로 넣어요. 쉼표나 공백으로 여러 개를 넣어요.">
       <TextInput id="hr-hosts" bind:value={hosts} autocomplete="off" placeholder="app.example.com" />
     </FormRow>
-    <FormRow label="경로 접두사" for="hr-path" help={pathBad ?? '이 접두사로 시작하는 요청과 맞아요. 비우면 모든 경로예요.'}>
-      <TextInput id="hr-path" bind:value={pathPrefix} autocomplete="off" placeholder="/api/" />
+    <FormRow label="경로 접두사" for="hr-path" help={pathBad ?? '이 접두사로 시작하는 요청과 맞아요. 쉼표나 공백으로 여러 개를 넣으면 같은 동작을 함께 써요. 비우면 모든 경로예요.'}>
+      <TextInput id="hr-path" bind:value={pathPrefix} autocomplete="off" placeholder="/api/, /v2/" />
     </FormRow>
   </FormSection>
 

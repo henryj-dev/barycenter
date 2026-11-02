@@ -808,6 +808,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     hosts: string[];
     pool: string;
     pathPrefix?: string;
+    pathPrefixes?: string[];
     websocket?: boolean;
     rewritePrefix?: string;
     /** `이름: 값` 줄들. 끊기는 `parseHeaderLines` 한 자리다 (#109). */
@@ -834,6 +835,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     to: string;
     status: RedirectStatus;
     pathPrefix?: string;
+    pathPrefixes?: string[];
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -853,6 +855,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     hosts: string[];
     status: RejectStatus;
     pathPrefix?: string;
+    pathPrefixes?: string[];
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
