@@ -33,7 +33,7 @@
     "typecheck:ts5": "node node_modules/typescript-5/bin/tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
@@ -41,7 +41,7 @@
     "vitest": "^5.0.5"
   },
   "dependencies": {
-    "nodemailer": "10.2.1",
+    "nodemailer": "10.3.1",
     "pg": "^8.23.1"
   },
   "bin": {
