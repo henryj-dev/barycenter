@@ -26,7 +26,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { dumpEngineIfFailed } from './engine-diagnostics.js';
 import { waitForPg } from './pg-ready.js';
-import { waitForDaemon } from './daemon-up.js';
+import { apkAdd, waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
@@ -146,7 +146,7 @@ beforeAll(async () => {
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
       'set -e',
-      'apk add --no-cache nodejs openssl curl >/dev/null 2>&1',
+      apkAdd('nodejs', 'openssl', 'curl'),
       'mkdir -p /prefix/logs /prefix/state /prefix/generations /secrets /backend/logs',
       `printf '%s' 'error_log logs/e.log warn;
 pid logs/p.pid;

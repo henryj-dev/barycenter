@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
-import { waitForDaemon } from './daemon-up.js';
+import { apkAdd, waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
@@ -103,7 +103,7 @@ function startNode(n: typeof NODES[number]): void {
     '-e', 'BARY_SECRET_BACKEND=pg', '-e', `BARY_SECRET_KEK=${KEK}`,
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
       'set -e',
-      'apk add --no-cache nodejs >/dev/null 2>&1',
+      apkAdd('nodejs'),
       'mkdir -p /prefix/logs /prefix/state /prefix/generations /backend/logs',
       // 노드마다 자기 백엔드 :11 — 응답에 노드 이름을 싣는다. 어느 nginx 가 받았는지 가른다.
       `printf 'error_log logs/e.log warn;\\npid logs/p.pid;\\nevents{worker_connections 64;}\\nhttp{access_log off;server{listen 11;location /{return 200 "BACKEND@${n.name}";}}}\\n' > /backend/nginx.conf`,

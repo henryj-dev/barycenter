@@ -24,7 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
-import { waitForDaemon } from './daemon-up.js';
+import { apkAdd, waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
@@ -145,7 +145,7 @@ beforeAll(async () => {
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
       'set -e',
-      'apk add --no-cache nodejs >/dev/null 2>&1',
+      apkAdd('nodejs'),
       'mkdir -p /prefix/logs /prefix/state /prefix/generations /backend/logs',
       // 컨트롤 플레인이 **모르는** 백엔드 둘.
       `printf '%s' 'error_log logs/e.log warn;

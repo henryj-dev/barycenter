@@ -25,7 +25,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { waitForDaemon } from './daemon-up.js';
+import { apkAdd, waitForDaemon } from './daemon-up.js';
 
 const NAME = 'bary-diag-probe';
 
@@ -47,10 +47,10 @@ afterEach(() => {
 });
 
 /** `sh -c <script>` 로 컨테이너를 띄운다. 뜨든 죽든 그대로 둔다. */
-function start(script: string): void {
+function start(script: string, ...runArgs: string[]): void {
   quiet('rm', '-f', NAME);
   execFileSync('docker', [
-    'run', '-d', '--name', NAME, '--entrypoint', '/bin/sh',
+    'run', '-d', '--name', NAME, ...runArgs, '--entrypoint', '/bin/sh',
     'docker.io/library/alpine:3.20', '-c', script,
   ], { stdio: 'ignore' });
 }
@@ -84,6 +84,41 @@ describe('안 뜬 데몬의 진단', () => {
     expect(msg, msg).toContain('비어 있다');
     expect(msg, msg).toContain('상태와 종료 코드를 먼저 본다');
   }, 60_000);
+
+  /**
+   * **stderr 도 로그다.** `docker logs` 는 컨테이너의 stderr 를 자기 stderr 로 내므로,
+   * stdout 만 읽으면 node 의 스택 추적이 통째로 사라진다. 로그가 있는데 「비어 있다」가 된다.
+   */
+  it('stderr 로만 남긴 이유도 낸다', async () => {
+    start('echo "pg 에 못 붙었다" >&2; exit 3');
+    await new Promise((r) => setTimeout(r, 1_500));
+
+    const msg = await failureOf();
+    expect(msg, msg).toContain('pg 에 못 붙었다');
+    expect(msg, msg).toContain('exit=3');
+    expect(msg, msg).not.toContain('비어 있다');
+  }, 60_000);
+
+  /**
+   * **CI 41393428259 의 자리다.** `exit=11` 에 로그가 비었다 — `apk add` 가 패키지를 못
+   * 받았는데 그 오류를 `>/dev/null 2>&1` 이 지웠다. 망을 끊고(`--network none`) 같은
+   * 기동 스크립트 모양으로 띄운다. 망이 없으니 apk 는 **매번** 실패한다 — 결정적이다.
+   */
+  it('`apk add` 가 망 때문에 죽으면 그 이유가 로그에 남는다', async () => {
+    start(['set -e', apkAdd('nodejs'), 'exec sleep 30'].join(' && '), '--network', 'none');
+    // apk 는 색인 둘을 받으려다 포기한다 — 몇 초 걸린다. 죽을 때까지 기다린다.
+    const deadline = Date.now() + 40_000;
+    while (Date.now() < deadline && execFileSync('docker', ['inspect', '-f', '{{.State.Status}}', NAME])
+      .toString().trim() === 'running') await new Promise((r) => setTimeout(r, 250));
+
+    const msg = await failureOf();
+    expect(msg, msg).toContain('exited');
+    expect(msg, msg).not.toContain('exit=0');
+    // 무엇이 실패했는지와 apk 자신의 말이 둘 다 실린다.
+    expect(msg, msg).toContain('apk add nodejs 실패');
+    expect(msg, msg).toMatch(/nodejs \(no such package\)|ERROR/);
+    expect(msg, msg).not.toContain('비어 있다');
+  }, 90_000);
 
   /** 로그가 있으면 그것도 낸다 — 있는 것을 숨기면 안 된다. */
   it('로그가 있으면 그대로 낸다', async () => {

@@ -25,7 +25,7 @@ import { connect as tlsConnect } from 'node:tls';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
-import { waitForDaemon } from './daemon-up.js';
+import { apkAdd, waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
 
 const IMAGE = process.env['BARY_ENGINE_IMAGE'] ?? 'docker.io/openresty/openresty:alpine';
@@ -231,7 +231,7 @@ beforeAll(async () => {
     '-e', 'BARY_CONFIGTEST_CMD=/usr/local/openresty/bin/openresty -p /prefix -c /prefix/generations/{generation}/nginx.conf -t',
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
       'set -e',
-      'apk add --no-cache nodejs openssl >/dev/null 2>&1',
+      apkAdd('nodejs', 'openssl'),
       'mkdir -p /prefix/logs /prefix/state /prefix/generations',
       BACKEND_SETUP,
       // **부트스트랩도 데몬이 만든다.** 손으로 쓰면 멤버십 dict 와 admin 이 빠지고,

@@ -21,7 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { waitForPg } from './pg-ready.js';
-import { waitForDaemon } from './daemon-up.js';
+import { apkAdd, waitForDaemon } from './daemon-up.js';
 import { appMount } from './mounts.js';
 
 /** **공식 nginx 다.** 여기에는 `stream_realip` 이 있고 lua 는 없다. */
@@ -103,7 +103,7 @@ beforeAll(async () => {
     '-e', 'BARY_RELOAD_CMD=kill -HUP $(cat /prefix/logs/nginx.pid)',
     '--entrypoint', '/bin/sh', IMAGE, '-c', [
       'set -e',
-      'apk add --no-cache nodejs >/dev/null 2>&1',
+      apkAdd('nodejs'),
       'mkdir -p /prefix/logs /prefix/state /prefix/generations/bootstrap/admin /backend/logs',
       `printf '%s' 'error_log logs/e.log warn;
 pid logs/p.pid;
