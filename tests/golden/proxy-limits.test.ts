@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 import { render } from '../../src/conf/render.js';
 import type { Model, ProxyLimits } from '../../src/model/provisional.js';
 
@@ -56,10 +57,9 @@ function serve(conf: string, probe: string): string {
     writeFileSync(join(dir, 'conf', 'nginx.conf'), `daemon off;\n${conf}`, 'utf8');
     writeFileSync(join(dir, 'probe.sh'), probe, 'utf8');
     return execFileSync('docker', [
-      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-      // **`curl` 은 이 이미지에 없다.** 없으면 프로브가 조용히 빈 문자열을 내고,
+      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
+      // **`curl` 은 엔진 이미지에 없다** — 그래서 도구 이미지를 쓴다. 없으면 프로브가 조용히 빈 문자열을 내고,
       // 그 침묵은 "413 이 안 났다" 와 구분되지 않는다 — 실제로 한 번 그렇게 물렸다.
-      'apk add --no-cache curl >/dev/null 2>&1; ' +
       '/usr/local/openresty/bin/openresty -p /w -c conf/nginx.conf & sleep 1.5; ' +
       'sh /w/probe.sh; echo "---errorlog---"; tail -3 /w/logs/error.log',
     ], { encoding: 'utf8', timeout: 180_000 });

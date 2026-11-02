@@ -20,6 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -76,8 +77,7 @@ function serve(conf: string, probe: string): string {
     writeFileSync(join(dir, 'probe.sh'), probe, 'utf8');
     return execFileSync(
       'docker',
-      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-        'apk add --no-cache curl >/dev/null 2>&1; ' +
+      ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
         '/usr/local/openresty/bin/openresty -p /prefix -c conf/nginx.conf & sleep 1.5; ' +
         'sh /prefix/probe.sh; echo "---errorlog---"; tail -5 /prefix/logs/error.log'],
       { stdio: ['ignore', 'pipe', 'pipe'] },

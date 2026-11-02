@@ -59,6 +59,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 import { httpAdminConf } from '../../src/control/membership.js';
 import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
@@ -172,9 +173,8 @@ http {
     `, 'utf8');
 
     const out = execFileSync('docker', [
-      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-      'apk add --no-cache curl >/dev/null 2>&1; '
-      + '/usr/local/openresty/bin/openresty -p /w -c back.conf & sleep 1; '
+      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
+      '/usr/local/openresty/bin/openresty -p /w -c back.conf & sleep 1; '
       + '/usr/local/openresty/bin/openresty -p /w -c conf/nginx.conf & sleep 2; '
       + 'sh /w/probe.sh 2>&1; echo "---errorlog---"; tail -10 /w/logs/error.log',
     ], { encoding: 'utf8', timeout: 180_000 });

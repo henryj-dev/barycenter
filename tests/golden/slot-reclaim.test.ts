@@ -36,6 +36,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 import { httpAdminConf, streamAdminConf } from '../../src/control/membership.js';
 import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
@@ -96,11 +97,10 @@ function run(script: string): string {
     writeFileSync(join(dir, 'probe.sh'), script, 'utf8');
 
     return execFileSync('docker', [
-      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
+      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
       // **`socat` 이 필요하다.** stream admin 은 유닉스 소켓의 **생 TCP** 프로토콜이고
       // busybox `nc` 에는 `-U` 가 없다.
-      'apk add --no-cache curl socat >/dev/null 2>&1; '
-      + '/usr/local/openresty/bin/openresty -p /w -c conf/nginx.conf & sleep 2; '
+      '/usr/local/openresty/bin/openresty -p /w -c conf/nginx.conf & sleep 2; '
       + 'sh /w/probe.sh 2>&1; echo "---errorlog---"; tail -5 /w/logs/error.log',
     ], { encoding: 'utf8', timeout: 180_000 });
   } finally {

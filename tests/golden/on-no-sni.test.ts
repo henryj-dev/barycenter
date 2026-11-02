@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { dropScratch } from '../scratch.js';
+import { toolsImage } from './tools-image.js';
 import { render } from '../../src/conf/render.js';
 import type { Model } from '../../src/model/provisional.js';
 
@@ -169,9 +170,8 @@ function measure(): Record<string, string> {
       ngx.print("---json---{" .. table.concat(out, ",") .. "}")
     `), 'utf8');
     const out = execFileSync('docker', [
-      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', IMAGE, '-c',
-      'apk add --no-cache curl >/dev/null 2>&1; '
-      + '/usr/local/openresty/bin/openresty -p /w -c back.conf & sleep 1.5; '
+      'run', '--rm', '-v', `${dir}:/w:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
+      '/usr/local/openresty/bin/openresty -p /w -c back.conf & sleep 1.5; '
       + '/usr/local/openresty/bin/openresty -p /w -c conf/nginx.conf & sleep 1.5; '
       + 'curl -s --max-time 60 http://127.0.0.1:19299/probe; '
       + 'echo; echo "---errorlog---"; tail -10 /w/logs/error.log; tail -10 /w/logs/b.log',
