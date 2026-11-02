@@ -13,6 +13,7 @@
  * 그 링크가 비어 보인다(Docker bind mount 가 링크 교체를 전파 못 한다). 에이전트를
  * 원격에 두는 구성은 애초에 설계에 없다.
  */
+import { takeSystemdListenFd } from './systemd-socket.js';
 import { parseTrustedProxies } from '../api/client-address.js';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
@@ -519,9 +520,15 @@ async function listenApi(
         apiHandler(apiOpts),
       )
     : createApi(apiOpts);
-  await new Promise<void>((resolve) => {
-    server.listen(port, host, resolve);
+  // **systemd 가 소켓을 넘겼으면 그것으로 받는다** (2026-11-02). 재시작하는 동안 연결이 거절되지 않고 기다린다.
+  // 주소는 소켓 유닛이 정한다 — 설치가 같은 `BARY_LISTEN` 으로 둘을 함께 쓴다. 평문 노출 판정은 위에서 그 값으로 했다.
+  const fd = takeSystemdListenFd(process.env, process.pid);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    if (fd === undefined) server.listen(port, host, resolve);
+    else server.listen({ fd }, resolve);
   });
+  if (fd !== undefined) logFields = { ...logFields, socketActivated: true };
   /**
    * **SIGHUP 은 인증서도 다시 읽는다** (2026-10-19). 인증서 갱신(cert-manager·반출 경로가 파일을 바꾼다) 뒤
    * `systemctl reload barycenterd` 로 새 연결부터 새 인증서를 쓴다 — 재시작(데이터 플레인 끊김)이 필요 없다.

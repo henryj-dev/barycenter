@@ -1394,9 +1394,32 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+  # **API 소켓은 systemd 가 든다** (2026-11-02). 배포마다 데몬이 1–2 초 다시 떴고, 그 사이 관리 화면 요청이 502 를 받았다.
+  # 소켓 유닛이 포트를 들고 있으면 재시작하는 동안 들어온 연결은 거절되지 않고 기다린다 — 새 프로세스가 받는다.
+  # FreeBind 는 부팅 때 주소가 아직 안 붙었어도 bind 하게 한다(데몬이 직접 열 때 Restart= 가 하던 일이다).
+  # 내용이 바뀌었는지 본다 — 바뀌면 이번 한 번 소켓을 다시 연다(옛 프로세스가 포트를 쥐고 있다).
+  _sock_old=$(cat "/etc/systemd/system/$SVC_NAME.socket" 2>/dev/null || true)
+  cat > "/etc/systemd/system/$SVC_NAME.socket" <<EOF
+[Unit]
+Description=barycenter control plane API socket
+
+[Socket]
+ListenStream=$LISTEN
+FreeBind=true
+NoDelay=true
+Backlog=512
+
+[Install]
+WantedBy=sockets.target
+EOF
+  SOCKET_CHANGED=0
+  [ "$_sock_old" = "$(cat "/etc/systemd/system/$SVC_NAME.socket")" ] || SOCKET_CHANGED=1
   cat > "/etc/systemd/system/$SVC_NAME.service" <<EOF
 [Unit]
 Description=barycenter control plane
+# API 소켓을 systemd 가 넘겨준다(위 .socket). 소켓이 내려가면 데몬도 내려간다.
+Requires=$SVC_NAME.socket
+After=$SVC_NAME.socket
 $ENGINE_DEP
 # network-online.target 을 **안 쓴다.** 쓰면 그 타깃을 채우는
 # systemd-networkd-wait-online 이 못 끝나는 환경에서 start 작업이 queued 인 채로
@@ -1530,6 +1553,21 @@ else
     else
       systemctl start "$ENGINE_SVC" || die "$ENGINE_SVC 를 못 띄웠다 — journalctl -u $ENGINE_SVC"
       ok "$ENGINE_SVC 시작"
+    fi
+  fi
+  if [ "$INIT" = systemd ]; then
+    systemctl enable "$SVC_NAME.socket" >/dev/null 2>&1 || true
+    if [ "$SOCKET_CHANGED" = 1 ]; then
+      # 처음 옮기거나 BARY_LISTEN 이 바뀌었다. 옛 프로세스가 포트를 쥐고 있으니 내린 뒤 소켓을 연다.
+      if systemctl is-active --quiet "$SVC_NAME" 2>/dev/null; then
+        warn "API 소켓을 systemd 로 옮긴다(또는 주소가 바뀌었다) — 이번 한 번 관리 화면이 몇 초 끊긴다. 트래픽은 그대로다"
+        systemctl stop "$SVC_NAME" >/dev/null 2>&1 || true
+      fi
+      systemctl restart "$SVC_NAME.socket" || die "$SVC_NAME.socket 을 못 열었다 — journalctl -u $SVC_NAME.socket"
+      ok "$SVC_NAME.socket ($LISTEN)"
+    else
+      systemctl start "$SVC_NAME.socket" >/dev/null 2>&1 || true
+      ok "$SVC_NAME.socket 이 포트를 들고 있다 — 재시작하는 동안 연결이 기다린다"
     fi
   fi
   svc_start "$SVC_NAME"

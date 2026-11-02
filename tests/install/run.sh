@@ -18,6 +18,7 @@
 #   4. **재기동 뒤에도** 1·2 가 참인가      — `--write-bootstrap` 이 활성 세대를 되돌리지
 #                                             않는다는 것은 재기동해 봐야만 안다
 #   4-b. 데몬 재시작·정지가 nginx 를 안 건드리는가 (systemd, #122) — 마스터 PID 가 그대로
+#   4-c. 데몬을 재시작하는 동안 API 요청이 실패하지 않는가 (systemd, 소켓 활성화 2026-11-02)
 #   5. `bary status` 가 답하는가            — 토큰 해시와 API 가 맞물렸는가
 #   5-b. reload 가 재시작 없이 토큰을 들이는가 — PID 가 그대로여야 한다. `/status` 의 판 표시도
 #   5-c. 사람 계정이 설치에서 바로 서는가 — 첫 관리자 링크 → TOTP 관리자 → 로그인 → MFA → /me
@@ -302,6 +303,18 @@ run_plane() {                  # run_plane <이름> <베이스> <초기화> <추
   master_pid=$(docker exec "$c" sh -c "ps -eo pid=,args= | grep '[n]ginx: master' | head -1 | awk '{print \$1}'" | tr -d ' \n')
   if [ "$init" = systemd ]; then
     expect "엔진 유닛 active (barycenter-engine)" "$c" systemctl is-active --quiet barycenter-engine || rc=1
+    # **API 소켓은 systemd 가 든다** (2026-11-02) — 재시작하는 동안 들어온 요청이 거절되지 않고 기다린다.
+    # 재시작을 걸어 두고 0.1 초마다 부른다. 하나라도 연결 거절(000)이면 소켓 활성화가 안 걸린 것이다.
+    expect "API 소켓 유닛 active (barycenterd.socket)" "$c" systemctl is-active --quiet barycenterd.socket || rc=1
+    local refused
+    refused=$(docker exec "$c" sh -c 'systemctl restart barycenterd & i=0; while [ $i -lt 30 ]; do
+        curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 http://127.0.0.1:8088/healthz; i=$((i + 1)); sleep 0.1; done; wait' \
+      | grep -cv '^200$' || true)
+    if [ "$refused" = 0 ]; then
+      printf '    ok   데몬을 재시작하는 동안에도 요청이 실패하지 않는다 (30 번)\n'
+    else
+      printf '    NO   데몬 재시작 중 요청 %s 번이 실패했다 — 소켓 활성화가 안 걸렸다\n' "$refused"; rc=1
+    fi
     docker exec "$c" systemctl restart barycenterd >/dev/null 2>&1 || rc=1
   else
     docker exec "$c" rc-service barycenterd restart >/dev/null 2>&1 || rc=1
