@@ -51,6 +51,8 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   ...LISTENER_PROTOCOLS.map((p) => ({ place: 'listeners' as const, path: `/traffic/listener/new/${p}` })),
   // 빠른 프록시 만들기 — URL 하나로 풀·백엔드·리스너(또는 라우트)를 한 번에.
   { place: 'listeners', path: '/traffic/listener/new/quick' },
+  // 경로별 묶음으로 라우트 여럿을 한 번에 (2026-11-02) — 경로 · 출발지 · 동작 줄을 라우트들로 펼친다(`routeGroupPatch`).
+  { place: 'routes', path: '/traffic/route/http/new/group' },
   { place: 'status', path: '/ops/status' },
   { place: 'cluster', path: '/ops/cluster' },
   { place: 'rendered', path: '/ops/rendered' },

@@ -260,7 +260,11 @@ function sourceAllowGeo(listener: Listener): ConfNode[] {
 const routeRuleVar = (routeKey: string, i: number): string => varName('bary_rsrc_', routeKey, `_${i + 1}`);
 
 function routeSourceGeos(r: HttpRoute): ConfNode[] {
-  return (r.sourceRules ?? []).map((rule, i) => block('geo', [variable(routeRuleVar(r.key, i))], [
+  // `connection` 이면 realip 이 바꾸기 전의 연결 주소를 본다 (2026-11-02) — 리스너 `sourceAllow` 와 같은 변수다.
+  return (r.sourceRules ?? []).map((rule, i) => block('geo', [
+    ...(rule.address === 'connection' ? [variable('realip_remote_addr')] : []),
+    variable(routeRuleVar(r.key, i)),
+  ], [
     entry(lit('default'), lit('0')),
     ...rule.from.map((cidr) => entry(lit(cidr), lit('1'))),
   ]));

@@ -928,7 +928,12 @@ function decodeSourceRules(iss: Issues, v: unknown, path: string): HttpSourceRul
       iss.add('invalid_type', at, `객체여야 한다 (받은 것: ${typeName(item)})`);
       return undefined;
     }
-    noExtraKeys(iss, item, at, ['from', 'action']);
+    noExtraKeys(iss, item, at, ['from', 'action', 'address']);
+    const address = item['address'];
+    if (address !== undefined && address !== 'visitor' && address !== 'connection') {
+      iss.add('invalid_value', `${at}.address`, `'visitor'(방문자 주소) 또는 'connection'(연결 주소)이어야 한다 (받은 것: ${JSON.stringify(address)})`);
+      return undefined;
+    }
     const fromRaw = item['from'];
     if (Array.isArray(fromRaw) && fromRaw.length === 0) {
       iss.add('out_of_range', `${at}.from`, '비어 있을 수 없다 — 어느 출발지에 걸지 적는다');
@@ -945,7 +950,7 @@ function decodeSourceRules(iss: Issues, v: unknown, path: string): HttpSourceRul
     }));
     const action = required(iss, item, 'action', at, () => decodeHttpAction(iss, item['action'], `${at}.action`));
     if (from === undefined || action === undefined) return undefined;
-    return { from, action };
+    return { from, action, ...(address === undefined ? {} : { address: address as 'visitor' | 'connection' }) };
   });
   return iss.list.length > before ? undefined : rules;
 }

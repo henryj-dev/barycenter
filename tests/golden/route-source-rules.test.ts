@@ -10,6 +10,7 @@
  *   · 위 규칙이 먼저다 — 규칙 2(127.0.0.5/32)가 규칙 3(127.0.0.4/30) 안에 들어도 127.0.0.5 는 규칙 2 로 간다
  *   · 경로가 여럿이면 경로마다 규칙이 선다
  *   · 출발지는 원본 IP 헤더(`realIpFromHeader`)가 바꾼 뒤의 주소다 — 믿는 앞단에서 온 헤더만 먹는다
+ *   · `address: 'connection'` 규칙은 바꾸기 전의 연결 주소를 본다 (2026-11-02)
  */
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -40,7 +41,8 @@ const model: Model = {
     { key: 'back', protocol: 'http', bind: '127.0.0.1', port: BACK, enabled: true, http: { defaultAction: 'reject' } },
     // 앞단 프록시 뒤 — 127.0.0.1 이 보낸 X-Real-IP 를 믿는다. 규칙은 그 방문자 주소를 본다.
     { key: 'via', protocol: 'http', bind: '127.0.0.1', port: VIA, enabled: true, http: { defaultAction: 'reject' },
-      realIpFromHeader: { header: 'X-Real-IP', trustedCidrs: ['127.0.0.1/32'] } },
+      // 127.0.0.3 도 믿는다 — 거기서 온 요청은 방문자 주소가 헤더 값(203.0.113.7)이 되고, 연결 주소만 127.0.0.3 이다.
+      realIpFromHeader: { header: 'X-Real-IP', trustedCidrs: ['127.0.0.1/32', '127.0.0.3/32'] } },
   ],
   httpRoutes: [
     // 뒤쪽: 받은 경로를 Location 에 담아 돌려준다 — 앞쪽이 무엇을 보냈는지 보인다.
@@ -55,7 +57,11 @@ const model: Model = {
       ] },
     { key: 'visitor', listener: 'via', hosts: ['x.test'], priority: 0,
       action: { kind: 'redirect', to: 'https://not-visitor/', status: 302 },
-      sourceRules: [{ from: ['203.0.113.0/24'], action: { kind: 'redirect', to: 'https://visitor/', status: 302 } }] },
+      sourceRules: [
+        // 연결 주소(2026-11-02) — 원본 IP 헤더와 상관없이 우리에게 직접 붙은 주소를 본다.
+        { from: ['127.0.0.3/32'], address: 'connection', action: { kind: 'redirect', to: 'https://by-connection/', status: 302 } },
+        { from: ['203.0.113.0/24'], action: { kind: 'redirect', to: 'https://visitor/', status: 302 } },
+      ] },
   ],
   passthroughRoutes: [],
   pools: [{ key: 'back', protocolClass: 'http', algorithm: 'round_robin' }],
@@ -77,6 +83,7 @@ echo "s4=$(hit 127.0.0.4 /api/users)"
 via() { curl -s -o /dev/null -D - --interface "$1" -H 'Host: x.test' -H "X-Real-IP: $2" "http://127.0.0.1:${VIA}/" 2>/dev/null | tr -d '\\r' | sed -n 's/^[Ll]ocation: https:\\/\\/\\(.*\\)$/\\1/p'; }
 echo "via_trusted=$(via 127.0.0.1 203.0.113.7)"
 echo "via_untrusted=$(via 127.0.0.2 203.0.113.7)"
+echo "via_connection=$(via 127.0.0.3 203.0.113.7)"
 `;
 
 function serve(conf: string): string {
@@ -124,6 +131,11 @@ describe('출발지 규칙 — 실물 nginx', () => {
     if (!dockerAvailable()) return;
     expect(value(out, 'via_trusted'), out).toBe('visitor/');
     expect(value(out, 'via_untrusted'), out).toBe('not-visitor/');
+  });
+
+  it('**연결 주소 규칙은 원본 IP 헤더와 상관없이 직접 붙은 주소를 본다** — 방문자 주소로는 아래 규칙에 맞는데도', () => {
+    if (!dockerAvailable()) return;
+    expect(value(out, 'via_connection'), out).toBe('by-connection/');
   });
 
   it('**프록시 규칙은 경로 바꾸기까지 한다** — 쿼리는 그대로, 경로마다 같다', () => {
