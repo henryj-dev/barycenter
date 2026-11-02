@@ -81,3 +81,17 @@ export function connStateOf(o: { live: boolean; signedIn: boolean; hasStream: bo
   if (!o.signedIn) return 'down';
   return o.hasStream ? 'reconnecting' : 'idle';
 }
+
+/**
+ * **잠깐 끊긴 것은 끊김으로 안 보인다** (2026-11-02). 배포하면 `barycenterd` 가 1–2 초 다시 뜬다(엔진은 그대로다). 그때마다
+ * 「실시간 연결이 끊겼어요」 가 번쩍였다. 다시 붙는 동안 이만큼은 연결된 것으로 보인다 — 이보다 길면 끊김을 띄운다.
+ */
+export const RECONNECT_GRACE_MS = 5_000;
+
+/**
+ * **잠깐 지나가는 실패인가.** 앞단(nginx)이 뒤가 다시 뜨는 동안 내는 코드다. 이것으로 스트림이 못 붙으면 오류 배너를 안 띄우고
+ * 다시 붙는다 — 오류 배너는 사람이 고칠 것(토큰 거절 등)에만 쓴다.
+ */
+export function isTransientStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
