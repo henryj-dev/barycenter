@@ -25,7 +25,8 @@ const caps = { streamRealip: false, httpLua: true, streamLua: false, sslRejectHa
 /** server_name 이 `name` 인 server 블록 본문. */
 function serverOf(conf: string, name: string): string {
   const blocks = conf.split(/\n(?=\s*server \{)/);
-  return blocks.find((b) => new RegExp(`server_name ${name.replace(/\./g, '\\.')};`).test(b)) ?? '';
+  // 정규식을 짓지 않는다 — 이름을 그대로 찾는다(이스케이프를 빠뜨릴 자리가 없다).
+  return blocks.find((b) => b.includes(`server_name ${name};`)) ?? '';
 }
 
 describe('와일드카드 리스너의 호스트 server', () => {
