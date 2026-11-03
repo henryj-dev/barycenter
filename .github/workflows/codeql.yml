@@ -36,8 +36,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # **문서만 바뀌면 분석을 안 돈다.** CodeQL 은 `.md` 를 훑지 않으니 같은 트리를 한 번 더
+  # 재는 셈이다. 판정은 `scripts/docs-only.sh` 한 군데다 (verify.yml 도 같은 것을 부른다).
+  # 주기 실행과 손 실행은 언제나 돈다 — 질의 묶음이 바뀌는 것을 보는 자리다.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.code.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 문서만 바뀌었나
+        id: code
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PR_BASE" ]; then
+            BASE="$PR_BASE"
+          elif [ "$EVENT" = push ] && [ -n "$PUSH_BEFORE" ] \
+            && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            BASE="$PUSH_BEFORE"
+          else
+            BASE=""
+          fi
+          if [ -z "$BASE" ] || [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ]; then
+            echo "code=1" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE"...HEAD | ./scripts/docs-only.sh; then
+            echo "code=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=1" >> "$GITHUB_OUTPUT"
+          fi
+
   analyze:
     name: analyze (${{ matrix.language }})
+    needs: changes
+    if: needs.changes.outputs.code == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -81,9 +121,12 @@ jobs:
   # ⚠️ **이 체크가 묻는 것은 "분석이 돌았는가" 이지 "경고가 없는가" 가 아니다.**
   # 위 머리말대로 경고는 Security 탭에 쌓이고 머지를 막지 않는다 — 그건 그대로다.
   # 여기서 막는 것은 질의가 깨져 **아무것도 훑지 않은 채로 초록이 되는** 경우다.
+  #
+  # 문서만 바뀌어 분석을 건너뛴 경우는 통과다 — 그때만이다. 판정 잡이 깨지거나 코드가
+  # 바뀌었는데 분석이 안 돌았으면 빨강이다.
   codeql:
     name: codeql
-    needs: [analyze]
+    needs: [changes, analyze]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -91,8 +134,14 @@ jobs:
       - name: 분석이 돌았는가
         env:
           RESULT: ${{ needs.analyze.result }}
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
         run: |
           set -euo pipefail
-          echo "analyze: $RESULT"
+          echo "changes: $CHANGES (code=$CODE) · analyze: $RESULT"
+          if [ "$CHANGES" = success ] && [ "$CODE" = 0 ] && [ "$RESULT" = skipped ]; then
+            echo "문서만 바뀌었다 — 분석을 건너뛰었다"
+            exit 0
+          fi
           test "$RESULT" = "success" \
             || { echo "::error::CodeQL 분석이 끝까지 돌지 않았다 ($RESULT)"; exit 1; }
