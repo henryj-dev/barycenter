@@ -13,6 +13,7 @@ before any coordinate moves.
 [![verify](https://github.com/henryj-dev/barycenter/actions/workflows/verify.yml/badge.svg)](https://github.com/henryj-dev/barycenter/actions/workflows/verify.yml)
 [![codeql](https://github.com/henryj-dev/barycenter/actions/workflows/codeql.yml/badge.svg)](https://github.com/henryj-dev/barycenter/actions/workflows/codeql.yml)
 [![scorecard](https://github.com/henryj-dev/barycenter/actions/workflows/scorecard.yml/badge.svg)](https://github.com/henryj-dev/barycenter/actions/workflows/scorecard.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16282/badge)](https://www.bestpractices.dev/projects/16282)
 
 <br/>
 
