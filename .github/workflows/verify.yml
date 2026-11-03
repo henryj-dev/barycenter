@@ -207,6 +207,13 @@ jobs:
           docker pull docker.io/openresty/openresty:alpine
           docker pull docker.io/library/postgres:17-alpine
 
+      # **골든 도구 이미지를 여기서 만든다** (2026-11-03). 골든이 쓰는 curl · openssl · socat 을 엔진 이미지 위에 한 번
+      # 얹는다(tests/golden/tools-image.ts). 시험 안에서 처음 만들면 apk 의 망 실패가 시험 하나의 엉뚱한 빨강으로
+      # 보인다 — 여기서 실패하면 「준비 단계가 망에서 못 받았다」 로 따로 보인다. 정의는 그 파일 한 자리다.
+      - name: 골든 도구 이미지 준비
+        if: matrix.group == 'render'
+        run: node -e "import('./tests/golden/tools-image.ts').then((m) => console.log(m.toolsImage()))"
+
       # `${{ }}` 를 `run:` 본문에 박지 않는다. 여기 오는 값은 우리 스크립트가 낸
       # 이름이지만 — **안전한 것은 값이지 자리가 아니다.**
       - name: verify

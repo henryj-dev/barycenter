@@ -97,7 +97,10 @@ describe('ACME http-01 예약 라우트', () => {
 # **안 일어난 일을 재기 위한 관측치.** 토큰이 서빙된다는 것만으로는 부족하다 —
 # HUP 을 보내도 그렇게 되기 때문이다.
 master_before=$(cat /prefix/logs/nginx.pid)
-workers_before=$(grep -c 'start worker process' /prefix/logs/error.log)
+# 워커는 **PID 로** 센다 (2026-11-02). 전에는 error.log 의 'start worker process' 를 셌는데, 그 줄은 notice
+# 수준이라 렌더한 conf 의 기본 수준(error)에서는 안 남는다 — 앞뒤가 늘 0/0 이라 이 단언은 아무것도 재지 않았다.
+workers() { pgrep -P "$(cat /prefix/logs/nginx.pid)" | sort -n | tr '\n' ','; }
+workers_before=$(workers)
 
 echo "before=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}${ACME_PREFIX}tok1)"
 
@@ -115,9 +118,13 @@ echo "default=$(curl -s -H 'Host: brand-new.test' http://127.0.0.1:${PORT}${ACME
 echo "readback=$(curl -s --unix-socket ${ADMIN} http://admin/acme/read)"
 
 master_after=$(cat /prefix/logs/nginx.pid)
-workers_after=$(grep -c 'start worker process' /prefix/logs/error.log)
+workers_after=$(workers)
 echo "master=$master_before/$master_after"
 echo "workers=$workers_before/$workers_after"
+
+# **대조:** 이 자가 reload 를 잡는지 본다. HUP 을 보내면 워커 PID 가 바뀌어야 한다 — 안 바뀌면 자가 죽은 것이다.
+kill -HUP "$master_after"; sleep 1.5
+echo "workers_hup=$(workers)"
 `);
   }, 180_000);
 
@@ -137,9 +144,16 @@ echo "workers=$workers_before/$workers_after"
       expect(before, out).toBe(after);
       const [wb, wa] = val('workers').split('/');
       // HUP 이었다면 워커가 새로 뜬다. 이게 이 설계의 전부다.
+      expect(wb, out).toMatch(/^[0-9]+(,[0-9]+)*,$/);
       expect(wb, out).toBe(wa);
     },
   );
+
+  it.runIf(dockerAvailable())('대조: 이 자가 reload 를 잡는다 — HUP 을 보내면 워커 PID 가 바뀐다', () => {
+    const [, wa] = val('workers').split('/');
+    expect(val('workers_hup'), out).toMatch(/^[0-9]+(,[0-9]+)*,$/);
+    expect(val('workers_hup'), out).not.toBe(wa);
+  });
 
   it.runIf(dockerAvailable())(
     '모르는 토큰은 **404 다 — 빈 200 이 아니다**',
