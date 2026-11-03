@@ -4,7 +4,6 @@
   import { page } from '$app/state';
   import { detailOfListener } from '@web/listeners-view';
   import { itemOf, relationsOf, resourcePath, summaryOf, type ResourceKind } from '@web/resources';
-  import { reasonLabels } from '@web/pools-view';
   import { Badge, Card, DescriptionList, type Tone } from '#lib/ui';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import Acme from './Acme.svelte';
@@ -18,18 +17,7 @@
   const rel = $derived(relationsOf(desk.model, { kind, key }));
   /** 상태 한 줄 — 리소스마다 이미 받은 값에서 읽는다. 모르면 안 쓴다. */
   const state = $derived.by((): { text: string; tone: Tone; icon?: string } | undefined => {
-    if (kind === 'listener') {
-      const row = desk.listeners.rows.find((r) => r.key === key);
-      if (row === undefined) return undefined;
-      if (row.mark === 'off') return { text: '꺼져 있어 열지 않아요', tone: 'neutral' };
-      return row.mark === 'join' ? { text: '적용하면 열려요', tone: 'pending' } : { text: '서빙 중', tone: 'ok' };
-    }
-    if (kind === 'backend') {
-      const h = desk.health.find((x) => x.backendKey === key)?.state ?? 'unknown';
-      const t = desk.traffic.get(key);
-      if (t !== undefined && !t.receivingTraffic) return { text: `트래픽 없음 — ${reasonLabels(t.reasons).join(' · ')}`, tone: 'warn' };
-      return h === 'healthy' ? { text: '정상', tone: 'ok' } : h === 'unhealthy' ? { text: '비정상', tone: 'danger' } : { text: '관측 없음', tone: 'neutral' };
-    }
+    // 리스너 · 풀 · 백엔드의 상태는 상세 머리의 배지가 말한다(facts.statusOf). 백엔드의 「왜 안 받나」 는 아래 헬스 카드다.
     if (kind === 'certificate') {
       const c = desk.certs.rows.find((r) => r.key === key);
       if (c === undefined) return undefined;

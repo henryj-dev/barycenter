@@ -1,5 +1,8 @@
 <script lang="ts">
-  /** 풀의 소속 백엔드 — 주소 · 가중치 · 헬스 · 트래픽 수신. 드레인은 백엔드 목록이나 상세에서 한다. */
+  /**
+   * 풀의 소속 백엔드 — 이름 · 호스트:포트 · 가중치 · 헬스(시안 「소속 백엔드」) · 트래픽 수신.
+   * 드레인은 백엔드 목록이나 상세에서 한다. `pool` 을 주면 그 풀이다(목록의 분할 상세). 없으면 주소의 풀이다.
+   */
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
@@ -8,10 +11,12 @@
   import { Badge, Button, DataTable, type Column } from '#lib/ui';
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import { DRAIN_MARK, HEALTH_MARK, backendDraining, backendHealth, type Mark } from './facts';
 
-  type Row = { key: string; target: string; weight: string; health: string; why?: string };
+  type Row = { key: string; target: string; weight: string; mark: Mark; why?: string };
+  let { pool }: { pool?: string } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
-  const key = $derived(page.params['key'] ?? '');
+  const key = $derived(pool ?? page.params['key'] ?? '');
   const rows = $derived<Row[]>(itemsOf(desk.model, 'backend').filter((b) => b['pool'] === key).map((b) => {
     const k = String(b['key']);
     const t = desk.traffic.get(k);
@@ -19,26 +24,25 @@
       key: k,
       target: `${String(b['host'])}:${String(b['port'])}`,
       weight: String(b['weight'] ?? ''),
-      health: desk.health.find((h) => h.backendKey === k)?.state ?? 'unknown',
+      mark: backendDraining(desk, k) ? DRAIN_MARK : HEALTH_MARK[backendHealth(desk, k)],
       ...(t?.receivingTraffic === false ? { why: reasonLabels(t.reasons).join(' · ') } : {}),
     };
   }));
   const columns: Column<Row>[] = [
     { key: 'key', label: '이름', mono: true, sort: (r) => r.key },
-    { key: 'target', label: '주소', mono: true, text: (r) => r.target, sort: (r) => r.target },
+    { key: 'target', label: '호스트:포트', mono: true, text: (r) => r.target, sort: (r) => r.target },
     { key: 'weight', label: '가중치', mono: true, align: 'right', text: (r) => r.weight, width: '80px' },
-    { key: 'health', label: '헬스', sort: (r) => r.health },
-    { key: 'why', label: '트래픽', text: (r) => r.why ?? '받는 중' },
+    { key: 'health', label: '헬스', sort: (r) => r.mark.text },
+    { key: 'why', label: '트래픽 수신', text: (r) => r.why ?? '수신 중' },
   ];
   const addHref = $derived(`/traffic/backend/new?pool=${encodeURIComponent(key)}`);
 </script>
 
 {#snippet cell(r: Row, c: Column<Row>)}
   {#if c.key === 'key'}<a class="lnk" href={resourcePath('backend', r.key)}>{r.key}</a>
-  {:else if c.key === 'health'}
-    {#if r.health === 'healthy'}<Badge tone="ok">정상</Badge>{:else if r.health === 'unhealthy'}<Badge tone="danger">비정상</Badge>{:else}<Badge>관측 없음</Badge>{/if}
+  {:else if c.key === 'health'}<Badge tone={r.mark.tone} icon={r.mark.icon}>{r.mark.text}</Badge>
   {:else if c.key === 'why'}
-    {#if r.why !== undefined}<Badge tone="warn">{r.why}</Badge>{:else}받는 중{/if}
+    {#if r.why !== undefined}<Badge tone="warn" icon="▲">{r.why}</Badge>{:else}<span class="ok">● 수신 중</span>{/if}
   {:else}{c.text?.(r) ?? ''}{/if}
 {/snippet}
 
@@ -59,4 +63,5 @@
 <style>
   .lnk { color: var(--accent); font-family: var(--mono); text-decoration: none; }
   .lnk:hover { text-decoration: underline; }
+  .ok { color: var(--ok); }
 </style>

@@ -157,7 +157,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
    * 보이게 하면 안 되므로 실패는 빈 맵이 아니라 **표시를 안 만드는 것**으로 흐른다.
    */
   let acmeOrders = $state<Record<string, unknown>[]>([]);
-  let traffic = $state<Map<string, { receivingTraffic: boolean; reasons: string[] }>>(new Map());
+  /** `observedAt` · `detail` — 마지막 헬스 관측 시각(ISO)과 프로버의 말. 상태 API 가 줄 때만 있다. */
+  let traffic = $state<Map<string, { receivingTraffic: boolean; reasons: string[]; observedAt?: string; detail?: string }>>(new Map());
 
   const refreshPools = async (): Promise<void> => {
     const [pr, br, sr] = await Promise.all([
@@ -168,8 +169,12 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     // 상태 API 는 **선택**이다. 못 읽어도 풀 화면은 서야 한다 — 헬스와 드레인은
     // 다른 경로로 오고, 이 줄 하나 때문에 화면 전체가 비면 그게 더 나쁘다.
     traffic = sr.ok
-      ? new Map((await sr.json() as { key: string; receivingTraffic: boolean; reasons: string[] }[])
-        .map((r) => [r.key, { receivingTraffic: r.receivingTraffic, reasons: r.reasons }]))
+      ? new Map((await sr.json() as { key: string; receivingTraffic: boolean; reasons: string[]; health?: { observedAt?: string; detail?: string } }[])
+        .map((r) => [r.key, {
+          receivingTraffic: r.receivingTraffic, reasons: r.reasons,
+          ...(typeof r.health?.observedAt === 'string' ? { observedAt: r.health.observedAt } : {}),
+          ...(typeof r.health?.detail === 'string' ? { detail: r.health.detail } : {}),
+        }]))
       : new Map();
     if (!pr.ok || !br.ok) {
       error = `pools ${pr.status}/${br.status}`;
