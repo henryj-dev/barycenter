@@ -349,7 +349,7 @@ export class ControlPlane {
     if (!certificateIntentOnly(await this.store.modelAt(active), plan.model)) return undefined;
     const live = await this.activeRenderDigest();
     if (live === undefined || live.digest !== plan.renderDigest) return undefined;
-    return this.apply(planId, by);
+    return this.apply(planId, by, { trigger: 'auto' });
   }
 
   /**
@@ -359,7 +359,11 @@ export class ControlPlane {
    * 돌려준다 (§5.3). 그 보장은 `operations.plan_id` 의 UNIQUE 제약이 진다 — 애플리케이션
    * 로직으로 지키면 동시 요청 둘이 각자 확인하고 각자 만든다.
    */
-  async apply(planId: string, by: string): Promise<OperationView> {
+  /**
+   * `trigger: 'auto'` — 사람이 누르지 않은 적용(트래픽에 닿지 않는 커밋의 즉시 적용 · ACME 게시)이다. 감사 줄에 남겨서
+   * 기록 화면이 「자동 적용」 을 추정하지 않고 사실로 말하게 한다 (2026-11-03).
+   */
+  async apply(planId: string, by: string, opts: { trigger?: 'auto' } = {}): Promise<OperationView> {
     const existing = await this.findOperation(planId);
     if (existing !== undefined) return existing;
 
@@ -464,7 +468,8 @@ export class ControlPlane {
     await this.recordPhase(op.operationId, result.phase, result);
     count(`bary_apply_total{phase="${result.phase}"}`);
     await this.store.audit(by, 'apply', planId, undefined,
-      { operationId: op.operationId, generation, phase: result.phase }, plan.targetRevision);
+      { operationId: op.operationId, generation, phase: result.phase, ...(opts.trigger === undefined ? {} : { trigger: opts.trigger }) },
+      plan.targetRevision);
 
     if (result.phase === 'activated') {
       await this.db.query(`UPDATE plans SET state='applied' WHERE id=$1`, [planId]);

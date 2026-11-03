@@ -15,6 +15,8 @@ export type AuditRow = {
   action: string;
   subject: string | undefined;
   revision: string | undefined;
+  /** 사람이 누르지 않은 적용이면 `'auto'` (2026-11-03). */
+  trigger?: 'auto';
 };
 
 const text = (v: unknown): string | undefined =>
@@ -36,6 +38,7 @@ export function viewOfAudit(body: unknown): AuditView {
       action,
       subject: text(rec['subject']),
       revision: text(rec['revision']),
+      ...(rec['trigger'] === 'auto' ? { trigger: 'auto' as const } : {}),
     });
   }
   return { rows };
