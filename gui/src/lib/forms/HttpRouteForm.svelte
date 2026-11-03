@@ -2,19 +2,21 @@
   /**
    * HTTP 라우트 만들기 (시안 구획: 기본 · 동작). 옛 폼 셋(풀로 보내기 · redirect · reject)을 「동작」 하나로
    * 합쳤다. 저장 경로는 그대로 셋이다(`insertHttpRoute` · `insertHttpRedirect` · `insertHttpReject`).
-   * 경로 바꾸기 · 이 라우트의 요청 헤더(#109)는 「프록시 옵션」 에 접혀 있다.
+   * 경로 바꾸기 · 예시 요청 미리보기 · 이 라우트의 요청 헤더(#109)는 시안처럼 「동작」 안에 있다(풀로 보낼 때).
    * 경로 접두사 칸은 여럿을 받는다(2026-11-02) — 호스트 칸처럼 쉼표나 공백으로 나눈다.
-   * 「출발지별 동작」(2026-11-02)에 규칙을 위에서부터 둔다 — `SourceRulesField`.
+   * 「출발지별 동작」(2026-11-02)에 규칙을 위에서부터 둔다 — `SourceRulesField`. 가려진 규칙은 입력 즉시 행 오류다.
    */
   import { getContext } from 'svelte';
   import { parsePathList, type RedirectStatus, type RejectStatus } from '@web/edit';
-  import { Disclosure, FormRow, FormSection, KeyValueEditor, Select, Switch, TextInput, type KvRow } from '#lib/ui';
-  import { resourcePath } from '@web/resources';
+  import { FormRow, FormSection, KeyValueEditor, Select, Switch, TextInput, type KvRow } from '#lib/ui';
+  import { itemsOf, resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
-  import SourceRulesField, { toSourceRules, type SourceRuleRow } from './SourceRulesField.svelte';
+  import SourceRulesField, { rulesBlocked, toSourceRules, type SourceRuleRow } from './SourceRulesField.svelte';
   import { KEY_HELP, filled, keyError, words } from './checks';
+  import { setCidrsOf } from './source-rules';
+  import { exampleRequest, matchPrefix, rewriteError, rewritePath } from './rewrite';
 
   type Action = 'proxy' | 'redirect' | 'reject';
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -41,12 +43,29 @@
   let redirectStatus = $state('302');
   let rejectStatus = $state('403');
   let rules = $state<SourceRuleRow[]>([]);
+  let exPath = $state('');
+
+  const sets = $derived(setCidrsOf(itemsOf(desk.model, 'addressSet')));
+  const rulesBad = $derived(rulesBlocked(rules, sets));
+  /** 경로 목록 — 비면 `/` 하나다(`routePaths`). */
+  const paths = $derived(((ps) => (ps.length === 0 ? ['/'] : ps))(parsePathList(pathPrefix)));
+  const rw = $derived(rewritePrefix.trim());
+  const rwErr = $derived(action === 'proxy' ? rewriteError(rw, paths) : undefined);
+  // 예시 요청 → 백엔드로 가는 경로. 시안 「예시 요청」 미리보기.
+  const req = $derived(exPath.trim() === '' ? exampleRequest(paths) : exPath.trim());
+  const hit = $derived(matchPrefix(paths, req));
+  const out = $derived(hit === undefined ? undefined : rewritePath(hit, rwErr === undefined ? rw : '', req));
+  const outHelp = $derived(out === undefined ? '이 경로는 접두사와 맞지 않아요. 라우트에 걸리지 않아요.'
+    : rw === '' || rwErr !== undefined ? '경로를 그대로 보내요.'
+      : paths.length > 1 ? `경로마다 자기 접두사를 바꿔요. ${paths.map((p) => `${p} → ${rw}`).join(' · ')}`
+        : `접두사 ${paths[0]}를 ${rw}로 바꿔 보내요.`);
 
   const pathBad = $derived(pathPrefix.includes('*') ? '▲ * 는 일반 글자로 저장돼요. 접두사에는 쓰지 않아요.' : undefined);
   const ready = $derived(
     filled(key, keyError) && listener !== undefined
     && (action !== 'proxy' || pool !== undefined)
-    && (action !== 'redirect' || filled(to)),
+    && (action !== 'redirect' || filled(to))
+    && rwErr === undefined && !rulesBad,
   );
   const submit = (): void => {
     if (listener === undefined) return;
@@ -101,6 +120,19 @@
         <Select label="풀" bind:value={pool} options={pools} placeholder="풀을 골라요" width="100%" disabled={pools.length === 0} />
       </FormRow>
       <FormRow label="WebSocket" help="켜면 Upgrade 요청을 백엔드로 넘겨요."><Switch bind:checked={websocket}>켜요</Switch></FormRow>
+      <FormRow label="경로 바꾸기" for="hr-rw" error={rwErr} help={rw === '' ? '비우면 경로를 그대로 보내요. 끝의 /는 접두사와 같아야 해요.' : '맞은 접두사를 이 값으로 바꿔요.'}>
+        <TextInput id="hr-rw" bind:value={rewritePrefix} invalid={rwErr !== undefined} autocomplete="off" placeholder="/v1/" />
+      </FormRow>
+      <FormRow label="예시 요청" for="hr-ex" help={outHelp}>
+        <div class="pv">
+          <TextInput id="hr-ex" bind:value={exPath} autocomplete="off" placeholder={exampleRequest(paths)} />
+          <span class="arrow" aria-hidden="true">→</span>
+          <code class="out" class:miss={out === undefined} aria-label="백엔드로 가는 경로">{out ?? '—'}</code>
+        </div>
+      </FormRow>
+      <FormRow label="이 라우트의 요청 헤더" help="같은 이름이면 리스너의 요청 헤더 대신 이 값을 보내요.">
+        <KeyValueEditor bind:rows={headers} ops={[]} namePlaceholder="Host" addLabel="＋ 헤더를 더해요" />
+      </FormRow>
     {:else if action === 'redirect'}
       <FormRow label="대상" for="hr-to" required help="이 주소로 보내요. 예: https://example.com/">
         <TextInput id="hr-to" bind:value={to} autocomplete="off" placeholder="https://example.com/" />
@@ -111,33 +143,20 @@
     {/if}
   </FormSection>
 
-  <Disclosure title="출발지별 동작" hint={rules.length === 0 ? '출발지 대역마다 다른 동작' : `규칙 ${rules.length}개`}>
-    <FormSection>
-      <p class="note">
-        요청의 출발지가 규칙의 대역에 들면 위 「동작」 대신 그 규칙의 동작을 해요. 위 규칙부터 보고 처음 맞는 것을 써요.
-        규칙마다 보는 주소를 골라요 — 방문자 주소(원본 IP 헤더 · PROXY 수신 뒤) 또는 연결 주소(우리에게 직접 붙은 주소).
-      </p>
-      <SourceRulesField bind:rules {pools} />
-    </FormSection>
-  </Disclosure>
-
-  {#if action === 'proxy'}
-    <Disclosure title="프록시 옵션" hint="경로 바꾸기 · 이 라우트의 요청 헤더">
-      <FormSection>
-        <FormRow
-          label="경로 바꾸기" for="hr-rw"
-          help="맞은 경로 접두사를 이 값으로 바꿔 보내요. 예: 접두사 /api/ + /v1/ → /api/users 를 /v1/users 로 보내요. 끝의 / 는 접두사와 같아야 해요. 비우면 경로를 그대로 보내요."
-        >
-          <TextInput id="hr-rw" bind:value={rewritePrefix} autocomplete="off" placeholder="/v1/" />
-        </FormRow>
-        <FormRow label="요청 헤더" help="이 라우트에만 걸어요. 같은 이름이면 리스너의 헤더 대신 이 값을 보내요.">
-          <KeyValueEditor bind:rows={headers} ops={[]} namePlaceholder="Host" addLabel="＋ 헤더를 더해요" />
-        </FormRow>
-      </FormSection>
-    </Disclosure>
-  {/if}
+  <FormSection title="출발지별 동작" hint={rules.length === 0 ? '선택' : `규칙 ${rules.length}개`} stack>
+    <p class="note">
+      위에서부터 보고 처음 맞는 규칙의 동작을 해요. 맞는 규칙이 없으면 위의 기본 동작을 해요.
+      리스너의 출발지 제한은 누가 붙을 수 있나를 정하고, 이 규칙은 출발지마다 어디로 보내나를 정해요.
+    </p>
+    <SourceRulesField bind:rules {pools} />
+  </FormSection>
 </CreateForm>
 
 <style>
-  .note { margin: 0 0 8px; font-size: 13px; color: var(--tx2); }
+  .note { margin: 0 0 8px; font: var(--t-small); color: var(--tx2); }
+  .pv { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pv :global(input) { flex: 1 1 200px; min-width: 0; }
+  .arrow { color: var(--tx3); }
+  .out { font-family: var(--mono); font-size: 13px; color: var(--tx); overflow-wrap: anywhere; }
+  .out.miss { color: var(--warn); }
 </style>
