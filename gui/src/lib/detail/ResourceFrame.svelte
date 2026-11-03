@@ -9,9 +9,10 @@
   import { page } from '$app/state';
   import { RESOURCES, itemOf, resourcePath, type ResourceKind } from '@web/resources';
   import { after } from '#lib/after';
-  import { Button, ConfirmDialog, DetailHeader, Skeleton } from '#lib/ui';
+  import { Badge, Button, ConfirmDialog, DetailHeader, Skeleton } from '#lib/ui';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import { relationCount, statusOf } from './facts';
 
   let { kind, children }: { kind: ResourceKind; children: Snippet } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -25,7 +26,13 @@
   const scope = getContext<Scope | undefined>('scope');
   const ro = $derived(scope?.readOnly === true);
   let asking = $state(false);
-  const tabs = $derived(extra !== undefined ? undefined : spec.tabs.map((t) => ({ key: t.slug, label: t.label, href: resourcePath(kind, key, t.slug) })));
+  // 시안: 「연결된 리소스」 탭에 수를 단다.
+  const relCount = $derived(relationCount(desk, kind, key));
+  const tabs = $derived(extra !== undefined ? undefined : spec.tabs.map((t) => ({
+    key: t.slug, label: t.label, href: resourcePath(kind, key, t.slug), ...(t.slug === 'resources' ? { count: relCount } : {}),
+  })));
+  /** 제목 옆 상태 배지(시안) — 리스너 · 풀 · 백엔드. 모르면 안 단다. */
+  const mark = $derived(statusOf(desk, kind, key));
   const listHref = $derived(spec.base);
   /**
    * 방금 만든 리소스는 모델에 조금 늦게 온다 — 커밋 뒤 스트림의 `revision` 이벤트가 와야 다시 읽는다.
@@ -51,6 +58,9 @@
     <DetailHeader
       crumbs={[{ label: spec.label, href: listHref }, ...(extra !== undefined ? [{ label: key, href: base }, { label: extra }] : [{ label: key }])]}
       title={key} {tabs} currentTab={rest} tabLabel="{spec.label} 상세">
+      {#snippet badges()}
+        {#if mark !== undefined}<Badge tone={mark.tone} icon={mark.icon}>{mark.text}</Badge>{/if}
+      {/snippet}
       {#snippet actions()}
         {#if !ro}
           {#if spec.editable && rest !== 'settings'}<Button href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}

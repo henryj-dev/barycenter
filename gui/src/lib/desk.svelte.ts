@@ -52,12 +52,13 @@ export type HostAddressFacts = {
 /** ACME 계정 한 줄 — `GET /api/v1/acme/accounts`. */
 export type AcmeAccountRow = { id: string; key: string; directoryUrl: string; contact: string[]; registered: boolean };
 
-export function createDesk(scope?: { api(path: string): string; mode: string; region?: unknown }) {
+export function createDesk(scope?: { api(path: string): string; mode: string; region?: unknown; wrap?(f: typeof fetch): typeof fetch }) {
   /**
    * **읽기 요청은 잠깐 지나가는 실패를 다시 시도한다** (2026-11-02, `retryingFetch`). 배포하면 데몬이 1–2 초 다시 뜨고, 그 사이
    * 읽기가 502 를 받았다. 이 안의 `fetch` 는 모두 이것이다 — 쓰기(POST · PATCH · DELETE)는 그대로 한 번만 보낸다.
    */
-  const fetch = retryingFetch(globalThis.fetch.bind(globalThis));
+  // 전역 모드면 `scope.wrap` 이 지역으로 가는 요청을 본다(연락 없음 · 403 을 지역 이름으로 알린다). 없으면 그대로다.
+  const fetch = retryingFetch(scope?.wrap?.(globalThis.fetch.bind(globalThis)) ?? globalThis.fetch.bind(globalThis));
   const api = (path: string): string => scope?.api(path) ?? path;
   // OIDC 로그인은 HttpOnly 세션 쿠키를 쓴다. 수동 Bearer 입력은 새로고침하면 사라지는
   // 메모리 값으로만 남긴다 — 브라우저 저장소에 API 자격증명을 보관하지 않는다.
@@ -157,7 +158,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
    * 보이게 하면 안 되므로 실패는 빈 맵이 아니라 **표시를 안 만드는 것**으로 흐른다.
    */
   let acmeOrders = $state<Record<string, unknown>[]>([]);
-  let traffic = $state<Map<string, { receivingTraffic: boolean; reasons: string[] }>>(new Map());
+  /** `observedAt` · `detail` — 마지막 헬스 관측 시각(ISO)과 프로버의 말. 상태 API 가 줄 때만 있다. */
+  let traffic = $state<Map<string, { receivingTraffic: boolean; reasons: string[]; observedAt?: string; detail?: string }>>(new Map());
 
   const refreshPools = async (): Promise<void> => {
     const [pr, br, sr] = await Promise.all([
@@ -168,8 +170,12 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     // 상태 API 는 **선택**이다. 못 읽어도 풀 화면은 서야 한다 — 헬스와 드레인은
     // 다른 경로로 오고, 이 줄 하나 때문에 화면 전체가 비면 그게 더 나쁘다.
     traffic = sr.ok
-      ? new Map((await sr.json() as { key: string; receivingTraffic: boolean; reasons: string[] }[])
-        .map((r) => [r.key, { receivingTraffic: r.receivingTraffic, reasons: r.reasons }]))
+      ? new Map((await sr.json() as { key: string; receivingTraffic: boolean; reasons: string[]; health?: { observedAt?: string; detail?: string } }[])
+        .map((r) => [r.key, {
+          receivingTraffic: r.receivingTraffic, reasons: r.reasons,
+          ...(typeof r.health?.observedAt === 'string' ? { observedAt: r.health.observedAt } : {}),
+          ...(typeof r.health?.detail === 'string' ? { detail: r.health.detail } : {}),
+        }]))
       : new Map();
     if (!pr.ok || !br.ok) {
       error = `pools ${pr.status}/${br.status}`;
