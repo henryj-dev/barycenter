@@ -8,9 +8,9 @@
  * 감사는 성공한 단계만 남긴다(실패하면 기록 전에 던진다). 그래서 단계는 언제나 「성공」 이고,
  * 「실패」 는 이 기록으로 말할 수 없다.
  *
- * **자동 적용** — 트래픽이 안 바뀌는 커밋(서버가 커밋 응답에서 바로 올린다)과 ACME 갱신(`acme-publish`)은
- * 커밋한 주체의 이름으로 `apply` 가 남는다. 감사 줄에 「자동」 표시는 없다. 그래서 **같은 주체가 커밋 직후
- * (`AUTO_APPLY_MS` 안에) 같은 리비전을 적용했으면** 자동 적용으로 본다. 사람이 영향을 보고 누르는 적용은 그보다 늦다.
+ * **자동 적용** — 트래픽이 안 바뀌는 커밋(서버가 커밋 응답에서 바로 올린다)과 ACME 게시(`acme-publish`)는
+ * 커밋한 주체의 이름으로 `apply` 가 남고, 그 줄에 `trigger: 'auto'` 가 붙는다. 시각으로 추정하지 않는다 —
+ * 스크립트가 커밋 직후 바로 적용하면 사람이 누른 적용도 몇 초 안에 온다(quickstart 에서 실측).
  */
 
 /**
@@ -19,12 +19,10 @@
  */
 export type AuditRow = {
   id: string; at: string | undefined; principal: string; action: string; subject: string | undefined; revision: string | undefined;
+  trigger?: 'auto';
 };
 /** 결과 배지의 톤 — `#lib/ui` 의 `Tone` 중 여기서 쓰는 것만. */
 export type ResultTone = 'ok' | 'pending' | 'neutral';
-
-/** 커밋 뒤 이 안에 같은 주체의 apply 가 있으면 자동 적용으로 본다. */
-export const AUTO_APPLY_MS = 5000;
 
 export type AuditStep = AuditRow & { name: string; note?: string };
 
@@ -106,8 +104,7 @@ export function groupAudit(rows: readonly AuditRow[], pending: readonly string[]
     const first = d.rows[0]!;
     const commit = d.rows.find((r) => r.action === 'changeset.commit' || r.action === 'rollback');
     const apply = d.rows.find((r) => r.action === 'apply');
-    const auto = commit !== undefined && apply !== undefined && apply.principal === commit.principal
-      && ms(apply.at) - ms(commit.at) <= AUTO_APPLY_MS;
+    const auto = apply?.trigger === 'auto';
     const steps = d.rows.map((r): AuditStep => ({
       ...r, name: STEP[r.action] ?? r.action, ...(auto && r === apply ? { note: '자동 적용' } : {}),
     }));

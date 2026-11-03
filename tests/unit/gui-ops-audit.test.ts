@@ -2,12 +2,12 @@
  * 기록 화면의 묶음 (#126 3단계) — 감사 줄을 「변경 하나 = 한 묶음」 으로 접는 규칙.
  *
  * API 는 줄마다 id · 시각 · 주체 · 동작 · 대상 · 리비전만 준다. changeset 단계는 대상(changeset id)으로,
- * apply 는 리비전으로 묶는다. 자동 적용은 커밋한 주체의 이름으로 `apply` 가 바로 뒤에 남는 것으로 안다.
+ * apply 는 리비전으로 묶는다. 자동 적용은 apply 줄의 `trigger: 'auto'` 로 안다 — 시각으로 추정하지 않는다.
  */
 import { describe, expect, it } from 'vitest';
 import { groupAudit, whenText } from '../../gui/src/lib/ops/audit';
 
-type Row = { id: string; at: string; principal: string; action: string; subject?: string; revision?: string };
+type Row = { id: string; at: string; principal: string; action: string; subject?: string; revision?: string; trigger?: 'auto' };
 const row = (id: number, sec: number, principal: string, action: string, subject?: string, revision?: string): Row => ({
   id: String(id), at: new Date(Date.UTC(2026, 10, 3, 5, 0, sec)).toISOString(), principal, action,
   ...(subject === undefined ? {} : { subject }), ...(revision === undefined ? {} : { revision }),
@@ -28,14 +28,23 @@ describe('감사 기록 묶음', () => {
     expect(g[0]!.result).toEqual({ tone: 'ok', text: '적용됨' });
   });
 
-  it('커밋한 주체가 곧바로 apply 하면 자동 적용이다', () => {
+  it('**apply 줄에 trigger: auto 가 있어야 자동 적용이다**', () => {
     const g = groupAudit(asRows([
       row(1, 0, 'acme', 'changeset.create', 'cs2'), row(2, 0, 'acme', 'changeset.commit', 'cs2', '11'),
-      row(3, 1, 'acme', 'apply', 'plan-2', '11'),
+      { ...row(3, 1, 'acme', 'apply', 'plan-2', '11'), trigger: 'auto' as const },
     ]));
     expect(g[0]!.auto).toBe(true);
     expect(g[0]!.result?.text).toBe('적용됨 · 자동 적용');
     expect(g[0]!.steps.at(-1)?.note).toBe('자동 적용');
+  });
+
+  it('**커밋 1초 뒤에 사람이(또는 스크립트가) 적용해도 표시가 없으면 자동이 아니다** — quickstart 에서 실측한 오판', () => {
+    const g = groupAudit(asRows([
+      row(1, 0, 'dev', 'changeset.create', 'cs3'), row(2, 0, 'dev', 'changeset.commit', 'cs3', '2'),
+      row(3, 1, 'dev', 'apply', 'plan-3', '2'),
+    ]));
+    expect(g[0]!.auto).toBe(false);
+    expect(g[0]!.result?.text).toBe('적용됨');
   });
 
   it('적용 대기 · 뒤 리비전과 함께 적용됨 · 버림을 가른다', () => {
