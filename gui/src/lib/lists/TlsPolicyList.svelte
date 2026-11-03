@@ -9,7 +9,7 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import DeleteConfirm from './DeleteConfirm.svelte';
 
-  type Row = { key: string; min: string; max: string; cipher: string; hsts: boolean; mismatch: string; used: number };
+  type Row = { key: string; min: string; max: string; cipher: string; hsts?: number; mismatch: string; used: number };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
   const ro = $derived(scope?.readOnly === true);
@@ -18,10 +18,12 @@
   const rows = $derived<Row[]>(itemsOf(desk.model, 'tlsPolicy').map((p) => {
     const key = String(p['key']);
     const cp = p['cipherPolicy'];
+    const hsts = p['hsts'] as Record<string, unknown> | undefined;
     return {
       key, min: String(p['minVersion'] ?? ''), max: typeof p['maxVersion'] === 'string' ? p['maxVersion'] : '—',
-      cipher: typeof cp === 'string' ? cp : cp === undefined ? '기본' : JSON.stringify(cp),
-      hsts: p['hsts'] !== undefined, mismatch: typeof p['sniHostMismatch'] === 'string' ? p['sniHostMismatch'] : '기본',
+      cipher: typeof cp === 'string' ? cp : cp === undefined ? 'intermediate-2026 (기본)' : JSON.stringify(cp),
+      ...(typeof hsts?.['maxAgeSeconds'] === 'number' ? { hsts: hsts['maxAgeSeconds'] } : {}),
+      mismatch: p['sniHostMismatch'] === 'reject_421' ? '거절 (421)' : '허용',
       used: relationsOf(desk.model, { kind: 'tlsPolicy', key }).usedBy.length,
     };
   }));
@@ -30,8 +32,8 @@
     { key: 'min', label: '최소 버전', mono: true, sort: (r) => r.min },
     { key: 'max', label: '최대 버전', mono: true, muted: true, sort: (r) => r.max },
     { key: 'cipher', label: '암호군', mono: true, muted: true, sort: (r) => r.cipher },
-    { key: 'hsts', label: 'HSTS', sort: (r) => (r.hsts ? 1 : 0) },
-    { key: 'mismatch', label: 'SNI-Host 불일치', mono: true, muted: true, hidden: true },
+    { key: 'hsts', label: 'HSTS', sort: (r) => r.hsts ?? -1 },
+    { key: 'mismatch', label: 'SNI-Host 불일치', sort: (r) => r.mismatch },
     { key: 'used', label: '사용처', align: 'right', mono: true, sort: (r) => r.used },
   ];
   const menu = (r: Row): MenuItem[] => [
@@ -47,12 +49,14 @@
 {#snippet create()}<Button variant="primary" href="/tls/policy/new">＋ 생성</Button>{/snippet}
 
 <DataTable label="TLS 정책 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}
+  search={{ placeholder: '이름으로 찾기', match: (r, q) => r.key.toLowerCase().includes(q) }}
   emptyTitle="TLS 정책이 없어요" emptyBody="HTTPS 리스너를 열려면 하나가 필요해요."
   onopen={(r) => { void goto(resourcePath('tlsPolicy', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
     {#if c.key === 'key'}<a href={resourcePath('tlsPolicy', r.key)}>{r.key}</a>
     {:else if c.key === 'min'}TLS {r.min}
-    {:else if c.key === 'hsts'}{#if r.hsts}<Badge tone="ok" icon="●">켜짐</Badge>{:else}<span class="sub">꺼짐</span>{/if}
+    {:else if c.key === 'max'}{r.max === '—' ? '—' : `TLS ${r.max}`}
+    {:else if c.key === 'hsts'}{#if r.hsts !== undefined}<Badge tone="ok" icon="●">max-age {r.hsts}s</Badge>{:else}<span class="sub">꺼짐</span>{/if}
     {:else if c.key === 'used'}{r.used}
     {:else}{String(r[c.key as keyof Row])}{/if}
   {/snippet}
