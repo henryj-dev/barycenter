@@ -42,17 +42,24 @@
 </script>
 
 <div class="std">
+  <!-- 시안: 둘째 단계는 제목을 바꾼다. 첫 단계 제목은 페이지 머리(「비밀번호 재설정」)가 한다. -->
+  {#if token !== ''}
+    <div class="head">
+      <h2>새 비밀번호 설정</h2>
+      <p>새 비밀번호를 두 번 입력해요.</p>
+    </div>
+  {/if}
   {#if token !== ''}
     <form class="std" onsubmit={(e) => { e.preventDefault(); void reset(); }}>
       <FormSection stack>
         <FormRow label="새 비밀번호" for="rs-pass" help={PASSWORD_HELP}>
           <TextInput id="rs-pass" type="password" autocomplete="new-password" mono={false} bind:value={password} required />
         </FormRow>
-        <FormRow label="새 비밀번호 확인" for="rs-conf" error={mismatch ? '두 비밀번호가 달라요.' : undefined}>
+        <FormRow label="새 비밀번호 확인" for="rs-conf" error={mismatch ? '비밀번호가 서로 달라요. 같은 값을 두 번 입력해요.' : undefined}>
           <TextInput id="rs-conf" type="password" autocomplete="new-password" mono={false} bind:value={confirm} invalid={mismatch} required />
         </FormRow>
       </FormSection>
-      <div><Button variant="primary" type="submit" loading={busy} disabled={!matches}>바꾸기</Button></div>
+      <Button variant="primary" type="submit" loading={busy} disabled={!matches} style="width: 100%">비밀번호 변경</Button>
     </form>
   {:else if note === undefined || !note.ok}
     <form class="std" onsubmit={(e) => { e.preventDefault(); void request(); }}>
@@ -61,7 +68,7 @@
           <TextInput id="rs-mail" type="email" autocomplete="email" bind:value={email} required />
         </FormRow>
       </FormSection>
-      <div><Button variant="primary" type="submit" loading={busy}>재설정 링크 받기</Button></div>
+      <Button variant="primary" type="submit" loading={busy} style="width: 100%">링크 보내기</Button>
     </form>
   {/if}
   {#if note !== undefined}<Banner tone={note.ok ? 'ok' : 'danger'}>{note.text}</Banner>{/if}
@@ -71,4 +78,7 @@
 <style>
   .std { display: grid; gap: 12px; }
   a { color: var(--accent); font: var(--t-small); }
+  .head { display: grid; gap: 4px; }
+  h2 { font: var(--t-h); margin: 0; }
+  .head p { margin: 0; font: var(--t-small); color: var(--tx2); }
 </style>

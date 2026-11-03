@@ -65,6 +65,12 @@
     { key: 'err', label: '마지막 오류' },
     { key: 'id', label: '주문', mono: true, muted: true, hideable: true, hidden: true, text: (r) => r.id },
   ];
+  /** 맨 위 요약 줄 — 시안: 「계정 이름 · 마지막 주문 상태 · 검증 방식」.
+   * 주문 목록은 서버가 최근에 바뀐 것부터 준다(`AcmeStore.list` — updated_at DESC). 그래서 맨 앞이 마지막 주문이다.
+   * 검증 방식은 서버가 도메인을 보고 고른다(와일드카드 → DNS-01).
+   */
+  const last = $derived(orders[0]);
+  const challenge = $derived((acme?.domains ?? []).some((d) => d.startsWith('*.')) ? 'DNS-01' : 'HTTP-01');
 </script>
 
 {#snippet cell(r: Order, c: Column<Order>)}
@@ -86,6 +92,16 @@
       </Banner>
     </div>
   {/if}
+  <div class="sum">
+    <span class="lab">계정 <b>{acme.account ?? '—'}</b></span>
+    {#if last !== undefined}
+      {@const s = STATE[last.state] ?? { tone: 'neutral' as Tone, text: last.state }}<Badge tone={s.tone}>{s.text}</Badge>
+      {#if last.attempts > 1}<span class="lab">시도 {last.attempts}번</span>{/if}
+    {:else}
+      <Badge tone="pending">주문 전</Badge>
+    {/if}
+    <span class="lab">{challenge}{current !== undefined ? ` · ${caLabel(current.directoryUrl)}` : ''}</span>
+  </div>
   <DescriptionList labelWidth="120px" items={[
     { label: '계정', value: `${acme.account ?? '—'}${current !== undefined ? ` · ${caLabel(current.directoryUrl)}` : ''}`, mono: true },
     { label: '도메인', value: (acme.domains ?? []).join(', '), mono: true },
@@ -113,6 +129,9 @@
 
 <style>
   .orders { margin-top: 12px; }
+  .sum { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; padding: 10px 12px; background: var(--bg-page); border: 1px solid var(--bd); border-radius: var(--r-md); }
+  .lab { font: var(--t-cap); color: var(--tx3); }
+  .lab b { font-family: var(--mono); color: var(--tx); }
   .note { margin-bottom: 12px; }
   .switch { margin-top: 12px; }
   .go { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }

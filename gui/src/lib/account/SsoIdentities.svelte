@@ -3,7 +3,7 @@
    * 연결된 SSO 계정. 잇기·끊기 둘 다 **비밀번호를 다시 넣는다**(공통 정책). 이메일·이름이 같다고 저절로
    * 이어지지 않는다. 비밀번호가 없는 계정(SSO 로 생긴 것)은 더 잇거나 끊지 못한다 — 유일한 증거가 IdP 다.
    */
-  import { Button, Card, DataTable, FieldMessage, FormRow, FormSection, TextInput, type Column } from '#lib/ui';
+  import { Badge, Button, Card, DataTable, FieldMessage, FormRow, FormSection, TextInput, type Column } from '#lib/ui';
   import { accountApi, type Me } from './api';
 
   type Ident = Me['identities'][number];
@@ -27,19 +27,21 @@
   };
   const columns: Column<Ident>[] = [
     { key: 'issuer', label: '공급자', mono: true, text: (r) => r.issuer },
-    { key: 'subject', label: '주체', mono: true, text: (r) => r.subject },
+    { key: 'state', label: '상태', width: '110px' },
+    { key: 'subject', label: '주체', mono: true, muted: true, hideable: true, text: (r) => r.subject },
     { key: 'last', label: '마지막 로그인', muted: true, text: (r) => (r.lastLoginAt === null ? '—' : new Date(r.lastLoginAt).toLocaleString()) },
-    { key: 'act', label: '', align: 'right', width: '90px' },
+    { key: 'act', label: '', align: 'right', width: '110px' },
   ];
 </script>
 
 {#snippet cell(r: Ident, c: Column<Ident>)}
-  {#if c.key === 'act'}
-    {#if me.hasPassword}<Button size="sm" disabled={password === ''} title="비밀번호를 먼저 넣어요" onclick={() => { void unlink(r.issuer, r.subject); }}>끊기</Button>{/if}
+  {#if c.key === 'state'}<Badge tone="ok" icon="●">연결됨</Badge>
+  {:else if c.key === 'act'}
+    {#if me.hasPassword}<Button size="sm" disabled={password === ''} title="비밀번호를 먼저 넣어요" onclick={() => { void unlink(r.issuer, r.subject); }}>연결 끊기</Button>{/if}
   {:else}{c.text?.(r) ?? ''}{/if}
 {/snippet}
 
-<Card title="SSO 연결">
+<Card title="SSO 연결" sub="이메일 · 이름이 같아도 저절로 잇지 않아요.">
   <div class="sso">
     <DataTable rows={me.identities} rowKey={(r) => r.issuer + r.subject} {columns} {cell} label="연결된 SSO 계정" emptyTitle="연결된 SSO 계정이 없어요" minHeight="0" />
     {#if me.hasPassword}
@@ -48,7 +50,7 @@
           <TextInput id="sso-pass" type="password" autocomplete="current-password" mono={false} bind:value={password} />
         </FormRow>
       </FormSection>
-      <div><Button disabled={password === ''} onclick={() => { void link(); }}>SSO 계정 잇기 ↗</Button></div>
+      <div><Button disabled={password === ''} onclick={() => { void link(); }}>SSO 계정 연결 ↗</Button></div>
     {:else}
       <FieldMessage>SSO 로 만든 계정이라 비밀번호가 없어요. 연결을 바꾸려면 관리자에게 부탁해요.</FieldMessage>
     {/if}

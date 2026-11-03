@@ -27,8 +27,8 @@
   const columns: Column<Row>[] = [
     { key: 'key', label: '이름', mono: true, sort: (r) => r.key },
     { key: 'domains', label: '도메인', mono: true, sort: (r) => r.domains },
-    { key: 'acme', label: '발급', sort: (r) => (r.acme ? 1 : 0) },
-    { key: 'days', label: '만료', sort: (r) => r.days ?? -1 },
+    { key: 'acme', label: '발급자', sort: (r) => (r.acme ? 1 : 0) },
+    { key: 'days', label: '만료일', sort: (r) => r.days ?? -1 },
     { key: 'used', label: '사용처', align: 'right', mono: true, sort: (r) => r.used },
   ];
   const chips: FilterChip<Row>[] = [
@@ -58,8 +58,8 @@
     {:else if c.key === 'acme'}{#if r.acme}<Badge tone="info" icon="↻">ACME{r.order ? ` · ${r.order}` : ''}</Badge>{:else}<span class="sub">업로드</span>{/if}
     {:else if c.key === 'days'}
       {#if r.mark === 'missing' && r.acme}<Badge tone="pending">발급 대기</Badge>{:else if r.mark === 'missing'}<Badge tone="neutral">자료 없음</Badge>
-      {:else if r.mark === 'expired'}<Badge tone="danger">만료됨</Badge>
-      {:else if r.days !== undefined && r.days < SOON}<Badge tone="warn">만료 {r.days}일 전</Badge>
+      {:else if r.mark === 'expired'}<Badge tone="danger">{r.notAfter !== undefined ? `${r.notAfter.slice(0, 10)} · ` : ''}만료됨</Badge>
+      {:else if r.days !== undefined && r.days < SOON}<Badge tone="warn">{r.notAfter !== undefined ? `${r.notAfter.slice(0, 10)} · ` : ''}만료 {r.days}일 전</Badge>
       {:else}<span class="mono">{r.notAfter?.slice(0, 10) ?? '—'}</span>{#if r.days !== undefined}<span class="sub"> · {r.days}일</span>{/if}{/if}
     {:else if c.key === 'used'}{r.used}
     {/if}

@@ -23,6 +23,8 @@
   const isRecovery = $derived(preview?.kind === 'recovery');
   const passwordsMatch = $derived(password !== '' && password === confirm);
   const mismatch = $derived(confirm !== '' && !passwordsMatch);
+  /** 시안의 역할 이름. 서버 값은 옆에 둔다. */
+  const ROLE_LABEL: Record<string, string> = { admin: '관리자', operator: '운영자', auditor: '보기' };
 
   onMount(async () => {
     token = location.hash.replace(/^#/, '');
@@ -53,6 +55,7 @@
   {#if done !== undefined}
     <h2>{isRecovery ? '다시 설정했어요' : '계정을 만들었어요'}</h2>
     {#if done.recoveryCodes !== undefined}<RecoveryCodes codes={done.recoveryCodes} />{/if}
+    <p class="lead">새 비밀번호로 로그인해요.</p>
     <div><Button variant="primary" href="/login">로그인하러 가기</Button></div>
   {:else if preview !== undefined}
     <h2>
@@ -63,7 +66,7 @@
     <p class="lead">
       {#if preview.kind === 'bootstrap'}이 설치의 첫 관리자 계정을 만들어요.
       {:else if isRecovery}<b>{preview.username}</b> 계정의 비밀번호{preview.needsTotp ? '와 인증 앱' : ''}을 다시 정해요.
-      {:else}<Badge tone="accent" icon={null}>{preview.role}</Badge> 역할로 초대받았어요{preview.email !== null ? ` (${preview.email})` : ''}.{/if}
+      {:else}초대한 계정{#if preview.email !== null} <b>{preview.email}</b>{/if} · <Badge tone="accent" icon={null}>{ROLE_LABEL[preview.role] ?? preview.role}</Badge> 비밀번호를 설정해요.{/if}
     </p>
     <form class="std" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
       <FormSection stack>
@@ -75,14 +78,14 @@
         <FormRow label="비밀번호" for="iv-pass" help={PASSWORD_HELP}>
           <TextInput id="iv-pass" type="password" autocomplete="new-password" mono={false} bind:value={password} required />
         </FormRow>
-        <FormRow label="비밀번호 확인" for="iv-conf" error={mismatch ? '두 비밀번호가 달라요.' : undefined}>
+        <FormRow label="비밀번호 확인" for="iv-conf" error={mismatch ? '비밀번호가 서로 달라요. 같은 값을 두 번 입력해요.' : undefined}>
           <TextInput id="iv-conf" type="password" autocomplete="new-password" mono={false} bind:value={confirm} invalid={mismatch} required />
         </FormRow>
       </FormSection>
       {#if preview.totp !== undefined}
         <TotpSetup secret={preview.totp.secret} uri={preview.totp.uri} bind:code />
       {/if}
-      <div><Button variant="primary" type="submit" loading={busy} disabled={!passwordsMatch}>{isRecovery ? '다시 설정' : '계정 만들기'}</Button></div>
+      <Button variant="primary" type="submit" loading={busy} disabled={!passwordsMatch} style="width: 100%">{isRecovery ? '다시 설정' : '수락'}</Button>
       {#if error !== undefined}<Banner tone="danger">{error}</Banner>{/if}
     </form>
   {:else if error !== undefined}

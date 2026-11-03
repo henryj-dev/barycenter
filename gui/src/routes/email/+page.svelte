@@ -21,7 +21,7 @@
   {:else}
     <Banner tone={note.ok ? 'ok' : 'danger'}>{note.text}</Banner>
   {/if}
-  <div><Button href="/account">내 계정</Button></div>
+  <div><Button href="/account">내 계정으로 가기</Button></div>
 </div>
 
 <style>

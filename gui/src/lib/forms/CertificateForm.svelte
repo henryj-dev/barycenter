@@ -4,7 +4,8 @@
    *
    * **ACME:** 「이 도메인들을 이 계정으로 자동 발급 · 갱신한다」 는 의도만 커밋한다(`acme`). 발급과 갱신은
    * 스케줄러가 한다 — 화면에서 따로 누를 것이 없다. 트래픽이 안 바뀌므로 서버가 바로 활성으로 올린다 —
-   * 적용 대기에 남지 않는다(2026-11-02, `ControlPlane.applyIfTrafficNeutral`). 검증 방식은 서버가 고른다: 보통 HTTP-01(:80 리스너가
+   * 적용 대기에 남지 않는다(2026-11-02, `ControlPlane.applyIfTrafficNeutral`). 단, 다른 변경이 적용 대기 중이면
+   * 같이 적용해야 한다 — 「적용」 줄이 `desk.pendingCount` 로 미리 말한다. 검증 방식은 서버가 고른다: 보통 HTTP-01(:80 리스너가
    * 응답한다), 와일드카드는 DNS-01. 첫 발급 전에는 자료가 없어서 리스너 · SNI 에 아직 걸 수 없다.
    *
    * **업로드:** PEM 자료를 올리고(`/certificates/material`) 그 참조로 커밋한다. 개인 키는 서버가 암호화해서
@@ -16,7 +17,7 @@
   import { getContext } from 'svelte';
   import { resourcePath } from '@web/resources';
   import {
-    Badge, FormRow, FormSection, ListInput, RadioGroup, TextArea, TextInput,
+    Badge, Banner, Button, FieldMessage, FormRow, FormSection, ListInput, RadioGroup, TextArea, TextInput,
   } from '#lib/ui';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
@@ -53,6 +54,13 @@
   const chainBad = $derived(pem(fullchain, 'CERTIFICATE'));
   const keyBad = $derived(privkey.trim() === '' || /-----BEGIN [A-Z ]*PRIVATE KEY/.test(privkey) ? undefined : 'PEM 개인 키가 아니에요. -----BEGIN … PRIVATE KEY 로 시작해요.');
 
+  /**
+   * 바로 적용되나 — 서버(`applyIfTrafficNeutral`)는 활성 리비전과 이 커밋의 차이가 인증서 의도뿐일 때만 바로 올린다.
+   * 다른 변경이 적용 대기 중이면 그 차이에 섞이므로 바로 올리지 않는다. 화면은 미리 말만 하고,
+   * 실제로 올라갔는지는 커밋 응답(`applied`)을 `after` 가 토스트로 알린다.
+   */
+  const waiting = $derived(desk.pendingCount > 0);
+
   const ready = $derived(filled(key, keyError) && (issuer === 'acme'
     ? account !== undefined && domainsOk
     : filled(fullchain) && filled(privkey) && chainBad === undefined && keyBad === undefined));
@@ -70,7 +78,7 @@
 </script>
 
 <CreateForm {ready} onsubmit={submit} cancelHref="/tls/certificate" submitLabel={issuer === 'acme' ? '만들기' : '자료를 넣어요'}
-  note={issuer === 'acme' ? '만들면 바로 발급을 시작해요. 적용을 기다리지 않아요.' : undefined}>
+  note={issuer === 'acme' && !waiting ? '만들면 바로 적용해요. 발급은 이어서 진행해요.' : undefined}>
   <FormSection title="기본">
     <FormRow label="이름" for="ct-key" required error={keyError(key)} help={KEY_HELP}>
       <TextInput id="ct-key" bind:value={key} invalid={keyError(key) !== undefined} autocomplete="off" placeholder="example-com" />
@@ -86,17 +94,33 @@
         <ListInput label="도메인" bind:value={domains} check={domainLine} minRows={2} placeholder={'app.example.com\nwww.example.com'} />
       </FormRow>
       <AcmeAccountField bind:account prefer="staging" />
+      <FormRow label="자동 갱신" help="만료 전에 스케줄러가 다시 받아요. 따로 누를 것이 없어요.">
+        <Badge tone="ok">켜짐</Badge>
+      </FormRow>
+      <!-- 검증 방식은 서버가 도메인을 보고 고른다(와일드카드 → DNS-01, 나머지 → HTTP-01). 모델에 고르는 칸이 없다. -->
       <FormRow label="검증 방식" help={wildcard
         ? '와일드카드는 DNS-01 로만 받아요. DNS 프로바이더 연결이 필요해요.'
         : 'HTTP-01 이에요. CA 가 공개 DNS 로 이 이름을 찾아 :80 의 /.well-known/acme-challenge/ 로 확인해요. :80 HTTP 리스너가 있어야 해요. 리스너의 기본 동작이 거절이어도 확인 경로는 응답해요.'}>
         {#if wildcard}<Badge tone="info" icon={null}>DNS-01</Badge>{:else}<Badge tone="info" icon={null}>HTTP-01</Badge>{/if}
       </FormRow>
-      <FormRow label="자동 갱신" help="만료 전에 스케줄러가 다시 받아요. 따로 누를 것이 없어요.">
-        <Badge tone="ok">켜짐</Badge>
+      {#if wildcard}
+        <FormRow label="DNS 공급자" help="DNS-01 공급자 설정은 아직 화면에 없어요. 준비 중이에요.">
+          <Badge tone="neutral" icon={null}>준비 중</Badge>
+        </FormRow>
+      {/if}
+      <FormRow label="적용">
+        {#if waiting}
+          <Banner tone="warn">
+            적용 대기 중인 변경이 있어서 함께 적용해야 해요. 적용하면 발급을 시작해요.
+            {#snippet action()}<Button size="sm" variant="text" href="/change/pending">적용 대기로 가기</Button>{/snippet}
+          </Banner>
+        {:else}
+          <FieldMessage>트래픽이 바뀌지 않아서 바로 적용해요. 발급은 이어서 진행해요.</FieldMessage>
+        {/if}
       </FormRow>
     </FormSection>
   {:else}
-    <FormSection title="자료" hint="PEM">
+    <FormSection title="자료" hint="PEM · 적용해야 트래픽에 걸려요">
       <FormRow label="인증서 체인" for="ct-chain" required error={chainBad} help="서버 인증서 다음에 중간 인증서를 붙여요(fullchain).">
         <TextArea id="ct-chain" bind:value={fullchain} invalid={chainBad !== undefined} rows={8} placeholder="-----BEGIN CERTIFICATE-----" />
       </FormRow>

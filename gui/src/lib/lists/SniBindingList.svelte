@@ -9,20 +9,26 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import DeleteConfirm from './DeleteConfirm.svelte';
 
-  type Row = { key: string; listener: string; hosts: string; cert: string; certMissing: boolean };
+  type Row = { key: string; listener: string; hosts: string; count: number; first: string; cert: string; certMissing: boolean };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
   const ro = $derived(scope?.readOnly === true);
   let del = $state<{ kind: 'sniBinding'; key: string } | undefined>();
 
-  const rows = $derived<Row[]>(itemsOf(desk.model, 'sniBinding').map((b) => ({
-    key: String(b['key']), listener: String(b['listener']),
-    hosts: Array.isArray(b['hosts']) ? (b['hosts'] as string[]).join(', ') : '',
-    cert: String(b['certificate']), certMissing: itemOf(desk.model, 'certificate', String(b['certificate'])) === undefined,
-  })));
+  const rows = $derived<Row[]>(itemsOf(desk.model, 'sniBinding').map((b) => {
+    const hs = Array.isArray(b['hosts']) ? (b['hosts'] as string[]) : [];
+    return {
+      key: String(b['key']), listener: String(b['listener']),
+      hosts: hs.join(', '), count: hs.length,
+      // 시안: 첫 호스트와 「외 N」. 전체는 title 과 상세에서 본다.
+      first: hs.length === 0 ? '—' : `${hs[0]}${hs.length > 1 ? ` 외 ${hs.length - 1}` : ''}`,
+      cert: String(b['certificate']), certMissing: itemOf(desk.model, 'certificate', String(b['certificate'])) === undefined,
+    };
+  }));
   const columns: Column<Row>[] = [
     { key: 'key', label: '이름', mono: true, sort: (r) => r.key },
     { key: 'listener', label: '리스너', mono: true, sort: (r) => r.listener },
+    { key: 'count', label: '호스트 수', align: 'right', mono: true, sort: (r) => r.count },
     { key: 'hosts', label: '호스트', mono: true, sort: (r) => r.hosts },
     { key: 'cert', label: '인증서', mono: true, sort: (r) => r.cert },
   ];
@@ -46,6 +52,8 @@
     {#if c.key === 'key'}<a href={resourcePath('sniBinding', r.key)}>{r.key}</a>
     {:else if c.key === 'listener'}<a class="sub" href={resourcePath('listener', r.listener)}>{r.listener}</a>
     {:else if c.key === 'cert'}{#if r.certMissing}<Badge tone="danger">{r.cert} — 없음</Badge>{:else}<a class="sub" href={resourcePath('certificate', r.cert)}>{r.cert}</a>{/if}
+    {:else if c.key === 'count'}{r.count}개
+    {:else if c.key === 'hosts'}<span title={r.hosts}>{r.first}</span>
     {:else}{String(r[c.key as keyof Row])}{/if}
   {/snippet}
 </DataTable>

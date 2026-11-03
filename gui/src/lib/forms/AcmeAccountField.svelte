@@ -22,7 +22,7 @@
   import type { AcmeAccountRow, createDesk } from '#lib/desk.svelte.ts';
   import { keyError } from './checks';
 
-  let { account = $bindable(), label = '계정', except, prefer }: {
+  let { account = $bindable(), label = 'ACME 계정', except, prefer }: {
     account?: string;
     label?: string;
     except?: string;
@@ -42,6 +42,13 @@
   let problem = $state<string | undefined>();
 
   const shown = $derived((accounts ?? []).filter((a) => a.key !== except));
+  /** 셀렉트의 한 줄 — 시안: 「이름 · 연락 이메일」. 그 뒤에 CA 와 등록 여부. */
+  const mail = (a: AcmeAccountRow): string | undefined => a.contact.map((c) => c.replace(/^mailto:/, ''))[0];
+  const hintOf = (a: AcmeAccountRow): string =>
+    [mail(a), caLabel(a.directoryUrl), a.registered ? undefined : '첫 주문 때 등록'].filter((x) => x !== undefined).join(' · ');
+  /** 비워도 되지만, 넣었으면 메일 주소 모양이어야 한다. */
+  const mailError = $derived(newContact.trim() === '' || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newContact.trim().replace(/^mailto:/, ''))
+    ? undefined : 'name@example.com 형식으로 입력해요.');
   const noAccount = $derived(accounts !== undefined && shown.length === 0);
 
   const load = async (): Promise<void> => {
@@ -57,6 +64,7 @@
   const create = async (): Promise<void> => {
     problem = undefined;
     if (newKey.trim() === '' || keyError(newKey) !== undefined) { problem = '계정 이름 규칙에 맞지 않아요.'; return; }
+    if (mailError !== undefined) { problem = mailError; return; }
     creating = true;
     const contact = newContact.trim() === '' ? [] : [`mailto:${newContact.trim().replace(/^mailto:/, '')}`];
     const ok = await desk.createAcmeAccount({ key: newKey.trim(), directoryUrl: newCa, contact });
@@ -73,7 +81,7 @@
 <FormRow {label} required help={noAccount ? '고를 ACME 계정이 없어요. 먼저 만들어요. 계정 키는 서버가 만들어 보관하고, CA 등록은 첫 주문 때 해요.' : undefined}>
   {#if !noAccount}
     <Select label="ACME 계정" bind:value={account} width="100%" placeholder="계정을 골라요" disabled={accounts === undefined}
-      options={shown.map((a) => ({ value: a.key, hint: `${caLabel(a.directoryUrl)}${a.registered ? '' : ' · 첫 주문 때 등록'}` }))} />
+      options={shown.map((a) => ({ value: a.key, hint: hintOf(a) }))} />
     {#if !adding}
       <div class="add"><Button variant="text" size="sm" onclick={() => { adding = true; }}>＋ 계정 생성</Button></div>
     {/if}
@@ -88,8 +96,8 @@
         <FormRow label="CA" help="처음에는 스테이징으로 확인해요. 운영 CA 는 실패가 잦으면 잠시 막아요(속도 제한).">
           <Select label="CA" bind:value={newCa} options={CAS} width="100%" mono={false} />
         </FormRow>
-        <FormRow label="연락 이메일" for="acme-mail" help="만료 · 문제 알림을 CA 가 보내요. 비워도 돼요.">
-          <TextInput id="acme-mail" type="email" bind:value={newContact} autocomplete="email" placeholder="ops@example.com" />
+        <FormRow label="연락 이메일" for="acme-mail" error={mailError} help="만료 · 문제 알림을 CA 가 보내요. 비워도 돼요.">
+          <TextInput id="acme-mail" type="email" bind:value={newContact} invalid={mailError !== undefined} autocomplete="email" placeholder="ops@example.com" />
         </FormRow>
       </FormSection>
       <div class="acct">

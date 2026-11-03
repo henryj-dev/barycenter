@@ -126,13 +126,17 @@
 </script>
 
 <section>
-  <h2>계정으로 로그인</h2>
+  <!-- 시안: 단계마다 제목과 한 줄 설명. 둘째 단계는 인증 코드만 받는다. -->
+  <div class="head">
+    <h2>{step === 'password' ? '계정으로 로그인' : '2단계 인증'}</h2>
+    <p>{step === 'password' ? '계정으로 콘솔에 로그인해요.' : '인증 앱의 6자리 코드를 입력해요.'}</p>
+  </div>
   {#if step === 'password'}
     <PasswordStep onDone={(next) => { if (next === 'mfa') step = 'mfa'; else void signedIn(); }} />
   {:else}
     <MfaStep onDone={() => { void signedIn(); }} onRestart={() => { step = 'password'; }} />
   {/if}
-  {#if mailOn && step === 'password'}<p><a href="/reset">비밀번호를 잊었어요</a></p>{/if}
+  {#if mailOn && step === 'password'}<p><a href="/reset">비밀번호 찾기</a></p>{/if}
 </section>
 
 <section>
@@ -156,6 +160,7 @@
   section { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--bd); }
   section:first-of-type { padding-top: 0; border-top: 0; }
   h2 { font: var(--t-h); margin: 0; }
+  .head { display: grid; gap: 4px; }
   p { margin: 0; color: var(--tx2); font: var(--t-small); }
   .tok { display: flex; gap: 8px; }
 </style>
