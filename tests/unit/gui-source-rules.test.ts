@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { sourceRuleErrors, groupKeyOf, setCidrsOf, type RuleText } from '../../gui/src/lib/forms/source-rules.js';
+import { exampleRequest, matchPrefix, rewriteError, rewritePath, slashMismatch } from '../../gui/src/lib/forms/rewrite.js';
 import { decodeModel } from '../../src/model/decode.js';
 import { validateModel } from '../../src/validate/model.js';
 
@@ -108,5 +109,23 @@ describe('경로별 묶음', () => {
   it('묶음 열쇠는 route-group 과 같다 — 빈 칸은 /', () => {
     expect(groupKeyOf('')).toBe(groupKeyOf('/'));
     expect(groupKeyOf('/b, /a /a')).toBe(groupKeyOf('/a /b'));
+  });
+});
+
+describe('경로 바꾸기 미리보기 (gui/src/lib/forms/rewrite.ts)', () => {
+  it('맞은 접두사를 갈고 질의 문자열은 그대로 붙인다 · 가장 긴 접두사를 고른다', () => {
+    expect(rewritePath('/api/', '/v1/', '/api/users?id=1')).toBe('/v1/users?id=1');
+    expect(rewritePath('/api/', '', '/api/users')).toBe('/api/users');
+    expect(rewritePath('/api/', '/v1/', '/web/')).toBeUndefined();
+    expect(matchPrefix(['/', '/api/'], '/api/x')).toBe('/api/');
+    expect(exampleRequest(['/api'])).toBe('/api/users?id=1');
+  });
+
+  it('끝 / 가 경로마다 같아야 한다 — 해독기와 같은 판정', () => {
+    expect(slashMismatch('/api/', '/v1')).toBe(true);
+    expect(rewriteError('/v1', ['/api/'])).toBe('끝의 /가 접두사와 같아야 해요. 다르면 경로가 붙거나 겹쳐요.');
+    expect(rewriteError('/v1/', ['/api/', '/v2/'])).toBeUndefined();
+    expect(rewriteError('/$x/', ['/api/'])).toContain('만 써요');
+    expect(rewriteError('v1/', ['/api/'])).toBe('경로는 /로 시작해야 해요.');
   });
 });
