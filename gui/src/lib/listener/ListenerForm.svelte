@@ -2,22 +2,24 @@
   /**
    * 리스너 설정 폼 — 리스너 상세의 설정 탭(`/traffic/listener/<key>/settings`, 2026-10-30).
    *
-   * 고치는 칸: 바인드 · 포트 · 켜짐 · 출발지 제한 · 기본 동작. 나머지 칸(헤더 규칙·레이트리밋·TLS
-   * 결박 …)은 head 의 값을 그대로 싣는다 — `editListenerPatch`. 저장은 commit 이고, 적용은
-   * 적용 대기 화면에서 한다. 출발지 제한 구획은 만들기 폼과 같은 것을 쓴다.
+   * 고치는 칸: 바인드 · 포트 · 켜짐 · 출발지 제한 · 기본 동작 · 원본 IP(시안 · `realIpFromHeader` /
+   * `acceptProxyProtocol`). 나머지 칸(헤더 규칙·레이트리밋·TLS 결박 …)은 head 의 값을 그대로 싣는다 —
+   * `editListenerPatch`. 원본 IP 는 그 body 위에 덮어 `putResource` 로 올린다(같은 commit 길이다).
+   * 저장은 commit 이고, 적용은 적용 대기 화면에서 한다. 출발지 제한 구획은 만들기 폼과 같은 것을 쓴다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { parseListenerHosts, parseSourceAllow, type ListenerEdit } from '@web/edit';
+  import { editListenerPatch, parseListenerHosts, parseSourceAllow, type ListenerEdit } from '@web/edit';
   import { Banner, Button, Form, FormRow, FormSection, Select, Switch, TextInput } from '#lib/ui';
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import SourceAllowSection from '#lib/forms/SourceAllowSection.svelte';
   import ListenerHostsSection from '#lib/forms/ListenerHostsSection.svelte';
   import HttpRedirectField from '#lib/forms/HttpRedirectField.svelte';
-  import { filled, hostLine, portError } from '#lib/forms/checks';
+  import { filled, hostLine, portError, sourceAllowLine } from '#lib/forms/checks';
   import BindField from '#lib/forms/BindField.svelte';
   import Writable from '#lib/global/Writable.svelte';
+  import RealIpSection, { realIpOf, type RealIpHeader, type RealIpSource } from './RealIpSection.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -41,6 +43,9 @@
   let action = $state('');
   let redirectOn = $state(false);
   let redirectPort = $state('80');
+  let ipSource = $state<RealIpSource>('none');
+  let ipHeader = $state<RealIpHeader>('CF-Connecting-IP');
+  let ipTrusted = $state('');
   let problem = $state<string | undefined>();
   let loaded = $state<string | undefined>();
 
@@ -58,13 +63,24 @@
     const http = model['http'] as { defaultAction?: unknown } | undefined;
     const da = isHttp ? http?.defaultAction : model['defaultPool'] === undefined ? undefined : { pool: model['defaultPool'] };
     action = typeof da === 'object' && da !== null ? String((da as { pool: unknown }).pool) : '';
+    const ip = realIpOf(model);
+    ipSource = ip.source;
+    ipHeader = ip.header;
+    ipTrusted = ip.trusted;
     loaded = key;
   });
 
   const hostList = $derived(parseListenerHosts(hosts) ?? []);
   const hostsOk = $derived(hostList.every((h) => hostLine(h) === undefined));
   const redirectOk = $derived(protocol !== 'https' || !redirectOn || (filled(redirectPort, portError) && redirectPort.trim() !== port.trim()));
-  const ready = $derived(filled(bind) && filled(port, portError) && (!hasPool || isHttp || action !== '') && hostsOk && redirectOk);
+  /** UDP 는 PROXY 수신이 없다. 헤더는 http 계열만. tcp · 패스스루의 PROXY 수신은 출발지 제한과 함께 못 쓴다. */
+  const hasRealIp = $derived(protocol !== '' && protocol !== 'udp');
+  const realIpOk = $derived(!hasRealIp || ipSource === 'none' || (
+    ipTrusted.trim() !== '' && ipTrusted.split(/[\s,]+/).every((l) => l.trim() === '' || sourceAllowLine(l.trim()) === undefined)
+    && (ipSource !== 'header' || isHttp)
+    && (isHttp || ipSource !== 'proxy' || allow.trim() === '')
+  ));
+  const ready = $derived(filled(bind) && filled(port, portError) && (!hasPool || isHttp || action !== '') && hostsOk && redirectOk && realIpOk);
   const save = (): void => {
     if (!ready || desk.editing) return;
     problem = undefined;
@@ -85,7 +101,24 @@
       problem = e instanceof Error ? e.message : String(e);
       return;
     }
-    void desk.updateListener(key, edit).then(after(resourcePath('listener', key)));
+    if (model === undefined) return;
+    let body: Record<string, unknown>;
+    try {
+      const [op] = editListenerPatch(model, edit);
+      if (op === undefined) return;
+      body = op.body;
+      // 원본 IP — 출처는 하나만 싣는다. 「없음」 이면 둘 다 지운다.
+      delete body['realIpFromHeader'];
+      delete body['acceptProxyProtocol'];
+      if (hasRealIp && ipSource !== 'none') {
+        const trustedCidrs = parseSourceAllow(ipTrusted) ?? [];
+        body[ipSource === 'header' ? 'realIpFromHeader' : 'acceptProxyProtocol'] = ipSource === 'header' ? { header: ipHeader, trustedCidrs } : { trustedCidrs };
+      }
+    } catch (e) {
+      problem = e instanceof Error ? e.message : String(e);
+      return;
+    }
+    void desk.putResource('listener', key, body).then(after(resourcePath('listener', key)));
   };
   const reset = (): void => { loaded = undefined; };
 </script>
@@ -111,6 +144,7 @@
         </FormSection>
       {/if}
       <SourceAllowSection bind:value={allow} {port} http={isHttp} />
+      {#if hasRealIp}<RealIpSection bind:source={ipSource} bind:header={ipHeader} bind:trusted={ipTrusted} http={isHttp} allowUsed={allow.trim() !== ''} />{/if}
       {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}
       {#snippet actions()}
         <Button variant="primary" type="submit" loading={desk.editing} disabled={!ready}>{desk.editing ? '저장 중' : '저장'}</Button>
