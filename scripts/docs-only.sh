@@ -9,9 +9,10 @@
 #
 # 문서는 `.md` 뿐이다. 문서만 바뀌어도 `verify.sh --quick` 은 돈다 — conformance 시험이
 # DESIGN.md · STATUS.md · 런북을 직접 읽어 코드와 대조하기 때문이다. 건너뛰는 것은 도커
-# 조각 · quickstart · CodeQL 분석이다 (`.github/workflows/verify.yml`, `codeql.yml`).
+# 조각 · quickstart 다 (`.github/workflows/verify.yml`). CodeQL 은 언제나 돈다 — Scorecard
+# SAST 가 커밋마다 분석을 보기 때문이다 (`codeql.yml` 머리말).
 #
-# 정의는 여기 한 군데다. 두 워크플로가 이 스크립트를 부르고,
+# 정의는 여기 한 군데다. verify.yml 이 이 스크립트를 부르고,
 # `tests/unit/docs-only.test.ts` 가 이 스크립트를 그대로 돌린다.
 set -eu
 
