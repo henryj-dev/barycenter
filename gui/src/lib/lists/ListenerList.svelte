@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
-   * 리스너 목록 — 시안 §5.3. 이름 · 프로토콜 · 바인드:포트 · 기본 동작 · 라우트 수 · 출발지 제한 · 상태 · 활성화.
+   * 리스너 목록 — 시안 §5.3. 이름 · 프로토콜 · 바인드:포트 · 호스트 · 기본 풀 / 동작 · 라우트 수 · 출발지 제한 · 상태 · 활성화.
    * 상태는 적용 대기를 반영한다 — 커밋했지만 적용 안 한 리스너는 「적용하면 열림」, 지울 리스너는 「적용하면 닫힘」.
+   * 행을 누르면 아래에 분할 상세가 열린다(시안).
    */
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
@@ -12,6 +13,7 @@
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
 
   type Row = {
@@ -26,15 +28,16 @@
   const scope = getContext<Scope | undefined>('scope');
   const ro = $derived(scope?.readOnly === true);
   let del = $state<{ kind: 'listener'; key: string } | undefined>();
+  let selected = $state<string[]>([]);
 
   const actionOf = (m: Record<string, unknown> | undefined): string => {
     if (m === undefined) return '—';
     const http = m['http'] as { defaultAction?: unknown } | undefined;
     const da = http?.defaultAction;
     if (m['protocol'] === 'http' || m['protocol'] === 'https') {
-      return typeof da === 'object' && da !== null ? `풀 ${String((da as { pool: string }).pool)}` : '거절';
+      return typeof da === 'object' && da !== null ? String((da as { pool: string }).pool) : '거절';
     }
-    if (typeof m['defaultPool'] === 'string') return `풀 ${m['defaultPool']}`;
+    if (typeof m['defaultPool'] === 'string') return m['defaultPool'];
     return 'SNI 라우트';
   };
   const rows = $derived<Row[]>(desk.listeners.rows.map((r) => {
@@ -51,9 +54,10 @@
   }));
   const columns: Column<Row>[] = [
     { key: 'key', label: '이름', mono: true, sort: (r) => r.key },
-    { key: 'protocol', label: '프로토콜 · 바인드:포트', mono: true, sort: (r) => r.bind },
+    { key: 'protocol', label: '프로토콜', sort: (r) => r.protocol },
+    { key: 'bind', label: '바인드:포트', mono: true, sort: (r) => r.bind },
     { key: 'hosts', label: '호스트', mono: true, text: (r) => r.hosts, sort: (r) => r.hosts },
-    { key: 'action', label: '기본 동작', mono: true, muted: true, sort: (r) => r.action },
+    { key: 'action', label: '기본 풀 / 동작', mono: true, sort: (r) => r.action },
     { key: 'routes', label: '라우트', align: 'right', mono: true, sort: (r) => r.routes },
     { key: 'allow', label: '출발지 제한', sort: (r) => r.allow },
     { key: 'mark', label: '상태', sort: (r) => r.mark },
@@ -71,10 +75,10 @@
     void desk.putResource('listener', key, { ...body, enabled: m['enabled'] === false }).then(after());
   };
   const menu = (r: Row): MenuItem[] => [
-    { label: '상세를 봐요', href: resourcePath('listener', r.key) },
+    { label: '상세 페이지 열기', href: resourcePath('listener', r.key) },
     ...(ro ? [] : [
-      { label: '수정해요', href: resourcePath('listener', r.key, 'settings') },
-      { label: r.enabled ? '비활성화해요' : '활성화해요', onselect: () => toggle(r.key) },
+      { label: '수정', href: resourcePath('listener', r.key, 'settings') },
+      { label: r.enabled ? '비활성화' : '활성화', onselect: () => toggle(r.key) },
       { label: '삭제…', danger: true, onselect: () => { del = { kind: 'listener', key: r.key }; } },
     ]),
   ];
@@ -86,26 +90,31 @@
   <Button variant="primary" href="/traffic/listener/new">＋ 생성</Button>
 {/snippet}
 
-<DataTable label="리스너 목록" {rows} rowKey={(r) => r.id} {columns} {chips} loading={!desk.live}
+{#snippet table()}
+<DataTable label="리스너 목록" {rows} rowKey={(r) => r.id} {columns} {chips} loading={!desk.live} bind:selected
   search={{ placeholder: '이름·주소로 찾기', match: (r, q) => `${r.key} ${r.bind} ${r.protocol} ${r.action} ${r.hosts} ${r.redirect ?? ''}`.toLowerCase().includes(q) }}
   emptyTitle="리스너가 없어요" emptyBody="포트를 열면 트래픽을 받아요. 패스스루는 인증서를 제시하지 않아요."
   onopen={(r) => { void goto(resourcePath('listener', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
     {#if c.key === 'key'}
       <a href={resourcePath('listener', r.key)}>{r.key}</a>
-    {:else if c.key === 'protocol'}<span class="proto">{r.protocol.toUpperCase().replace('TLS_PASSTHROUGH', 'TLS 패스스루')}</span> {r.bind}{#if r.redirect !== undefined}<span class="muted" title="HTTP 로 오면 HTTPS 로 301"> · HTTP :{r.redirect} → HTTPS</span>{/if}
+    {:else if c.key === 'protocol'}{r.protocol.toUpperCase().replace('TLS_PASSTHROUGH', 'TLS 패스스루')}
+    {:else if c.key === 'bind'}{r.bind}{#if r.redirect !== undefined}<span class="muted" title="HTTP 로 오면 HTTPS 로 301"> · HTTP :{r.redirect} → HTTPS</span>{/if}
     {:else if c.key === 'hosts'}{#if r.hosts === '기본'}<span class="muted">기본</span>{:else}{r.hosts}{/if}
     {:else if c.key === 'routes'}{r.routes}
-    {:else if c.key === 'allow'}{#if r.allow > 0}<Badge tone="warn" icon="⊘">{r.allow}개 대역만</Badge>{:else}<span class="muted">누구나</span>{/if}
+    {:else if c.key === 'allow'}{#if r.allow > 0}<Badge tone="warn" icon="⊘">{r.allow}개 대역만</Badge>{:else}<span class="muted">제한 없음</span>{/if}
     {:else if c.key === 'mark'}
-      {#if r.mark === 'join'}<Badge tone="pending">적용하면 열림</Badge>{:else if r.mark === 'off'}<span class="muted">열지 않음</span>{:else}<Badge tone="ok">서빙 중</Badge>{/if}
-    {:else if c.key === 'enabled'}{#if r.enabled}<Badge tone="ok" icon="●">켜짐</Badge>{:else}<Badge tone="neutral">꺼짐</Badge>{/if}
-    {:else}{r.action}{/if}
+      {#if r.mark === 'join'}<Badge tone="pending" icon="◐">적용하면 열림</Badge>{:else if r.mark === 'off'}<span class="muted">열지 않음</span>{:else}<Badge tone="ok" icon="●">서빙 중</Badge>{/if}
+    {:else if c.key === 'enabled'}{#if r.enabled}<span class="on">● 켜짐</span>{:else}<span class="muted">○ 꺼짐</span>{/if}
+    {:else}{#if r.action === '거절'}<span class="muted">거절</span>{:else}{r.action}{/if}{/if}
   {/snippet}
 </DataTable>
+{/snippet}
+
+<ListSplit kind="listener" bind:selected {table} />
 <DeleteConfirm bind:target={del} />
 
 <style>
-  .proto { color: var(--tx2); }
   .muted { color: var(--tx3); }
+  .on { color: var(--tx2); }
 </style>
