@@ -1,5 +1,8 @@
 <script lang="ts">
-  /** 내 계정 — 누구인가 · 비밀번호 · 이메일 · 인증 앱 · SSO 연결 · 열린 세션. */
+  /**
+   * 내 계정 — 누구인가 · 비밀번호 · 인증 앱 · 복구 코드 · SSO 연결 · 이메일 · 열린 세션.
+   * 시안의 순서를 따른다. 시안의 「토큰」 표는 사람 세션으로 API 토큰을 만들고 거두는 API 가 없어서 뺐다.
+   */
   import { getContext, onMount } from 'svelte';
   import { accountApi, type Me } from '#lib/account/api';
   import type { Session } from '#lib/account/session.svelte.ts';
@@ -27,6 +30,7 @@
     note = r.ok ? { ok: true, text: `세션 ${r.data.revoked}개를 끊었어요. 이 기기도 다시 로그인해요.` } : { ok: false, text: r.message };
     await session.refresh();
   };
+  const ROLE_LABEL: Record<string, string> = { admin: '관리자', operator: '운영자', auditor: '보기' };
   const columns: Column<Sess>[] = [
     { key: 'last', label: '마지막 사용', mono: true, width: '200px', text: (r) => new Date(r.lastSeenAt).toLocaleString(), sort: (r) => r.lastSeenAt },
     { key: 'methods', label: '인증', mono: true, text: (r) => r.methods.join(' + ') },
@@ -48,7 +52,7 @@
   {@const me = session.me}
   <div class="acct">
     <Card title={me.username}>
-      {#snippet actions()}<Badge tone="accent" icon={null}>{me.role}</Badge>{/snippet}
+      {#snippet actions()}<Badge tone="accent" icon={null}>{ROLE_LABEL[me.role] ?? me.role} · {me.role}</Badge>{/snippet}
       <DescriptionList items={[
         { label: '이름', value: me.displayName ?? '—' },
         { label: '이메일', value: me.email ?? '—', mono: true },
@@ -56,10 +60,10 @@
       ]} />
     </Card>
     {#if me.hasPassword}<ChangePassword />{/if}
-    {#if mailOn}<ChangeEmail />{/if}
     <TotpManage {me} onChanged={session.refresh} />
     {#if ssoOn}<SsoIdentities {me} onChanged={session.refresh} />{/if}
-    <Card title="열린 세션" sub={`${me.sessions.length}개`} padded={false}>
+    {#if mailOn}<ChangeEmail />{/if}
+    <Card title="열린 세션 · {me.sessions.length}" padded={false}>
       {#snippet actions()}<Button size="sm" variant="danger" onclick={() => { void logoutAll(); }}>모든 기기에서 로그아웃</Button>{/snippet}
       <DataTable rows={me.sessions} rowKey={(r) => r.createdAt + r.lastSeenAt} {columns} label="열린 세션" emptyTitle="열린 세션이 없어요" minHeight="0" />
     </Card>
@@ -68,6 +72,6 @@
 {/if}
 
 <style>
-  .acct { display: flex; flex-direction: column; gap: 16px; max-width: 860px; }
+  .acct { display: flex; flex-direction: column; gap: 16px; max-width: 820px; }
   .pad { margin-top: 12px; }
 </style>
