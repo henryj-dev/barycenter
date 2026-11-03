@@ -28,6 +28,17 @@ describe('기록', () => {
     }]);
   });
 
+  it('**자동 적용 표시(trigger: auto)를 싣는다** — 기록 화면이 시각으로 추정하지 않게 (2026-11-03)', () => {
+    const rows = viewOfAudit([
+      { id: '3', principal: 'dev', action: 'apply', subject: 'p1', revision: '2', trigger: 'auto' },
+      { id: '4', principal: 'dev', action: 'apply', subject: 'p2', revision: '3' },
+      { id: '5', principal: 'dev', action: 'apply', subject: 'p3', revision: '4', trigger: 'manual' },
+    ]).rows;
+    expect(rows[0]?.trigger).toBe('auto');
+    expect(rows[1]).not.toHaveProperty('trigger');
+    expect(rows[2]).not.toHaveProperty('trigger');
+  });
+
   it('모르는 본문은 빈 목록이다 — 지어내지 않는다', () => {
     const view = viewOfAudit({ id: 1, action: 'commit' });
     expect(view.rows).toEqual([]);

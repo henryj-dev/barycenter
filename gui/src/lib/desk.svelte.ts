@@ -52,12 +52,13 @@ export type HostAddressFacts = {
 /** ACME 계정 한 줄 — `GET /api/v1/acme/accounts`. */
 export type AcmeAccountRow = { id: string; key: string; directoryUrl: string; contact: string[]; registered: boolean };
 
-export function createDesk(scope?: { api(path: string): string; mode: string; region?: unknown }) {
+export function createDesk(scope?: { api(path: string): string; mode: string; region?: unknown; wrap?(f: typeof fetch): typeof fetch }) {
   /**
    * **읽기 요청은 잠깐 지나가는 실패를 다시 시도한다** (2026-11-02, `retryingFetch`). 배포하면 데몬이 1–2 초 다시 뜨고, 그 사이
    * 읽기가 502 를 받았다. 이 안의 `fetch` 는 모두 이것이다 — 쓰기(POST · PATCH · DELETE)는 그대로 한 번만 보낸다.
    */
-  const fetch = retryingFetch(globalThis.fetch.bind(globalThis));
+  // 전역 모드면 `scope.wrap` 이 지역으로 가는 요청을 본다(연락 없음 · 403 을 지역 이름으로 알린다). 없으면 그대로다.
+  const fetch = retryingFetch(scope?.wrap?.(globalThis.fetch.bind(globalThis)) ?? globalThis.fetch.bind(globalThis));
   const api = (path: string): string => scope?.api(path) ?? path;
   // OIDC 로그인은 HttpOnly 세션 쿠키를 쓴다. 수동 Bearer 입력은 새로고침하면 사라지는
   // 메모리 값으로만 남긴다 — 브라우저 저장소에 API 자격증명을 보관하지 않는다.
