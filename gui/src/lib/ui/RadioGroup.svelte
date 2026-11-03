@@ -1,8 +1,14 @@
 <script lang="ts" generics="T extends string">
-  /** 라디오 묶음 — 디자인 시스템 §3. 고르면 테두리가 두꺼워진다(5px 강조 색). ←→↑↓ 로 옮긴다. */
+  /**
+   * 라디오 묶음 — 디자인 시스템 §3. 고르면 테두리가 두꺼워진다(5px 강조 색). ←→↑↓ 로 옮긴다.
+   * `item` 을 주면 글자 대신 그것을 그린다(리비전 한 줄처럼 여러 칸인 선택지). `dot={false}` 면 동그라미를 안 그린다 —
+   * 고른 것은 `aria-checked` 로 부르는 쪽이 꾸민다.
+   */
+  import type { Snippet } from 'svelte';
   type Option = { value: T; label?: string; disabled?: boolean };
-  let { value = $bindable(), options, label, direction = 'row', onchange }: {
+  let { value = $bindable(), options, label, direction = 'row', onchange, item, dot = true }: {
     value?: T; options: readonly Option[]; label: string; direction?: 'row' | 'column'; onchange?: (v: T) => void;
+    item?: Snippet<[Option]>; dot?: boolean;
   } = $props();
 
   const pick = (v: T): void => { value = v; onchange?.(v); };
@@ -19,7 +25,7 @@
   {#each options as o, i (o.value)}
     <button type="button" role="radio" aria-checked={o.value === value} tabindex={o.value === value || (value === undefined && i === 0) ? 0 : -1}
       disabled={o.disabled} onclick={() => pick(o.value)} onkeydown={(e) => key(e, i)}>
-      <span class="dot" aria-hidden="true"></span>{o.label ?? o.value}
+      {#if dot}<span class="dot" aria-hidden="true"></span>{/if}{#if item}{@render item(o)}{:else}{o.label ?? o.value}{/if}
     </button>
   {/each}
 </div>

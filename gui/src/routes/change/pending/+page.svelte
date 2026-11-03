@@ -14,5 +14,5 @@
 </div>
 
 <style>
-  .pend { display: flex; flex-direction: column; gap: 24px; max-width: 960px; }
+  .pend { display: flex; flex-direction: column; gap: 24px; max-width: 1200px; }
 </style>
