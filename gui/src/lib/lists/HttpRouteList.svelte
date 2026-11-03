@@ -17,6 +17,7 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import DeleteConfirm from './DeleteConfirm.svelte';
   import RouteSegments from './RouteSegments.svelte';
+  import { routeOrder } from './route-order';
 
   type Act = { kind: string; pool?: string; websocket?: boolean; to?: string; status?: number; rewritePrefix?: string; requestHeaders?: unknown[] };
   type Row = {
@@ -28,23 +29,7 @@
   const ro = $derived(scope?.readOnly === true);
   let del = $state<{ kind: 'httpRoute'; key: string } | undefined>();
 
-  /** 컴파일 열쇠(`키` 또는 `키 경로`) → 라우트 키. 공백은 키 문법에 없다(`routePathKey`). */
-  const routeOf = (ck: string): string => ck.split(' ')[0] ?? ck;
-  /** 라우트마다 엔진이 처음 보는 자리(1부터). */
-  const ordOf = $derived.by(() => {
-    const m = new Map<string, number>();
-    desk.routes.order.forEach((r, i) => { if (!m.has(r.key)) m.set(r.key, i + 1); });
-    return m;
-  });
-  /** 가려진 라우트 → 이유. 더 높은 클래스가 먼저 잡는 쪽(경고의 둘째)이다. */
-  const shadowOf = $derived.by(() => {
-    const m = new Map<string, string>();
-    for (const w of desk.routes.warnings) {
-      const lo = w.routes[1];
-      if (w.kind === 'priority_inversion' && lo !== undefined && !m.has(routeOf(lo))) m.set(routeOf(lo), w.message);
-    }
-    return m;
-  });
+  const meta = $derived(routeOrder(desk.routes));
 
   const rows = $derived<Row[]>(itemsOf(desk.model, 'httpRoute').map((r) => {
     const key = String(r['key']);
@@ -57,7 +42,7 @@
       priority: Number(r['priority'] ?? 0),
       rules: Array.isArray(r['sourceRules']) ? r['sourceRules'].length : 0,
       headers: Array.isArray(act.requestHeaders) ? act.requestHeaders.length : 0,
-      ord: ordOf.get(key), shadow: shadowOf.get(key),
+      ord: meta.ord.get(key), shadow: meta.shadow.get(key),
     };
   }).sort((a, b) => (a.ord ?? Infinity) - (b.ord ?? Infinity) || a.key.localeCompare(b.key)));
 
