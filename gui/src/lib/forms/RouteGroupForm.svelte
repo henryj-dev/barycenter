@@ -8,16 +8,24 @@
    * 저장하면 같은 뜻의 라우트 여럿으로 펼친다(`routeGroupPatch`) — 경로 목록이 같은 줄끼리 라우트 하나, 출발지가 있는 줄은
    * 그 라우트의 출발지 규칙, 출발지가 없는 줄은 그 라우트의 기본 동작이다. 기본 동작을 안 적은 경로는 **리스너의 기본
    * 동작**을 따른다(저장할 때의 값을 옮겨 적는다). 아래 「만들 라우트」 가 펼친 결과를 저장 전에 보인다.
+   *
+   * 줄 오류는 입력 즉시 그 줄 아래에 보인다(시안 `ruleErrs(lines, true)`) — 가려진 대역은 같은 라우트가 될 줄끼리만 비교하고
+   * 「n번째 줄」 로 말한다(`sourceRuleErrors`). 경로가 다른 묶음과 섞이거나 기본 동작이 두 번이면 `routeGroupPatch` 가
+   * 거절하는 것을 그 줄에서 먼저 말한다.
    */
   import { getContext } from 'svelte';
   import { parsePathList, type RedirectStatus, type RejectStatus } from '@web/edit';
   import { fallbackOfListener, routeGroupPatch, type GroupLine } from '@web/route-group';
-  import { itemOf, resourcePath } from '@web/resources';
-  import { Banner, Button, FormRow, FormSection, Select, Switch, TextInput } from '#lib/ui';
+  import { itemOf, itemsOf, resourcePath } from '@web/resources';
+  import { Banner, Button, FieldMessage, FormRow, FormSection, Select, Switch, TextInput } from '#lib/ui';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
   import { KEY_HELP, filled, keyError, words } from './checks';
+  import { fromTokens, groupKeyOf, setCidrsOf, sourceRuleErrors } from './source-rules';
+
+  /** 줄 수 상한 — 시안과 같다. 라우트 하나의 규칙은 해독기가 20개로 막는다. */
+  const MAX_LINES = 40;
 
   type Row = {
     paths: string; from: string; address: 'visitor' | 'connection';
@@ -87,7 +95,34 @@
     }
   });
 
-  const ready = $derived(filled(key, keyError) && listener !== undefined && preview.error === undefined && preview.routes.length > 0);
+  const sets = $derived(setCidrsOf(itemsOf(desk.model, 'addressSet')));
+  /** 줄마다 오류 — 위 줄의 오류를 먼저 말한다. 없으면 `undefined`. */
+  const lineErrs = $derived.by((): (string | undefined)[] => {
+    const shadow = sourceRuleErrors(rows.map((r) => ({ from: r.from, address: r.address, paths: r.paths })), sets, { lines: true });
+    const owner = new Map<string, string>();
+    const defaults = new Set<string>();
+    return rows.map((r, i) => {
+      const gk = groupKeyOf(r.paths);
+      const ps = [...new Set(fromTokens(r.paths))];
+      let err: string | undefined;
+      for (const p of ps.length === 0 ? ['/'] : ps) {
+        const o = owner.get(p);
+        if (o !== undefined && o !== gk) err ??= `경로 ${p}가 다른 줄 묶음에도 있어요. 경로를 똑같이 적어요.`;
+        if (o === undefined) owner.set(p, gk);
+      }
+      if (fromTokens(r.from).length === 0) {
+        if (defaults.has(gk)) err ??= '이 경로의 기본 동작이 두 번 나왔어요. 한 줄만 비워요.';
+        defaults.add(gk);
+      }
+      err ??= shadow[i];
+      if (r.kind === 'proxy' && r.pool === undefined) err ??= '풀을 골라요.';
+      if (r.kind === 'redirect' && r.to.trim() === '') err ??= '이동할 URL을 넣어요.';
+      return err;
+    });
+  });
+  const linesBad = $derived(rows.length > MAX_LINES || lineErrs.some((e) => e !== undefined));
+
+  const ready = $derived(filled(key, keyError) && listener !== undefined && !linesBad && preview.error === undefined && preview.routes.length > 0);
 
   const move = (i: number, d: -1 | 1): void => {
     const j = i + d;
@@ -119,14 +154,14 @@
     </FormRow>
   </FormSection>
 
-  <FormSection title="경로별 동작">
+  <FormSection title="경로별 동작" stack>
     <p class="note">
       줄마다 경로 · 출발지 · 동작을 적어요. 경로를 똑같이 적은 줄끼리 한 라우트가 돼요. 출발지를 비우면 그 경로의 기본 동작이에요.
       같은 경로 안에서는 위 줄부터 보고 처음 맞는 것을 써요.
     </p>
     {#each rows as row, i (i)}
-      <fieldset class="line">
-        <legend>줄 {i + 1}</legend>
+      <fieldset class="line" aria-invalid={lineErrs[i] !== undefined || undefined}>
+        <legend>{i + 1}번째 줄</legend>
         <FormRow label="경로" for="rg-paths-{i}" help="쉼표나 공백으로 여러 개. 비우면 / 예요.">
           <TextInput id="rg-paths-{i}" bind:value={row.paths} autocomplete="off" placeholder="/count.js, /count" />
         </FormRow>
@@ -148,23 +183,32 @@
         {:else}
           <FormRow label="응답 코드"><Select label="응답 코드" bind:value={row.rejectStatus} options={REJECT} width="200px" /></FormRow>
         {/if}
+        {#if lineErrs[i] !== undefined}<div class="err"><FieldMessage tone="error">{lineErrs[i]}</FieldMessage></div>{/if}
         <div class="act">
-          <Button variant="text" size="sm" disabled={i === 0} onclick={() => move(i, -1)}>위로</Button>
-          <Button variant="text" size="sm" disabled={i === rows.length - 1} onclick={() => move(i, 1)}>아래로</Button>
-          <Button variant="text" size="sm" disabled={rows.length === 1} onclick={() => { rows = rows.filter((_, j) => j !== i); }}>지워요</Button>
+          <Button variant="text" size="sm" disabled={i === 0} aria-label="{i + 1}번째 줄을 위로" onclick={() => move(i, -1)}>↑ 위로</Button>
+          <Button variant="text" size="sm" disabled={i === rows.length - 1} aria-label="{i + 1}번째 줄을 아래로" onclick={() => move(i, 1)}>↓ 아래로</Button>
+          <Button variant="text" size="sm" disabled={rows.length === 1} aria-label="{i + 1}번째 줄을 지워요" onclick={() => { rows = rows.filter((_, j) => j !== i); }}>지워요</Button>
         </div>
       </fieldset>
     {/each}
-    <div class="add"><Button variant="text" size="sm" onclick={() => { rows = [...rows, blank()]; }}>＋ 줄을 더해요</Button></div>
+    <div class="add">
+      <Button variant="text" size="sm" disabled={rows.length >= MAX_LINES} onclick={() => { rows = [...rows, blank()]; }}>＋ 줄을 더해요</Button>
+      {#if rows.length >= MAX_LINES}<FieldMessage tone={rows.length > MAX_LINES ? 'error' : 'help'}>줄은 {MAX_LINES}개까지예요.</FieldMessage>{/if}
+    </div>
   </FormSection>
 
-  <FormSection title="만들 라우트">
-    {#if preview.error !== undefined}
+  <FormSection title="만들 라우트" hint={preview.error === undefined && !linesBad ? `라우트 ${preview.routes.length}개` : undefined} stack>
+    {#if linesBad}
+      <Banner tone="danger">잘못된 줄이 있어요. 표시된 줄을 고쳐요.</Banner>
+    {:else if preview.error !== undefined}
       <Banner tone={preview.routes.length === 0 && key.trim() !== '' && listener !== undefined && words(hosts).length > 0 ? 'danger' : 'info'}>{preview.error}</Banner>
     {:else}
       <ul class="plan">
         {#each preview.routes as r (r.key)}
-          <li><code>{r.key}</code> — 경로 <code>{r.paths}</code> · 기본 {r.action}{r.rules > 0 ? ` · 출발지 규칙 ${r.rules}개` : ''}</li>
+          <li>
+            <code class="name">{r.key}</code>
+            <span class="desc"><code>{r.paths}</code> · 출발지 규칙 {r.rules}개 · 기본 동작 {r.action}</span>
+          </li>
         {/each}
       </ul>
     {/if}
@@ -172,10 +216,21 @@
 </CreateForm>
 
 <style>
-  .note { margin: 0 0 8px; font-size: 13px; color: var(--tx2); }
-  .line { border: 1px solid var(--bd); border-radius: 8px; padding: 8px 12px 4px; margin: 0 0 12px; min-width: 0; }
-  legend { font-size: 12px; color: var(--tx2); padding: 0 4px; }
+  .note { margin: 0 0 8px; font: var(--t-small); color: var(--tx2); }
+  .line {
+    grid-column: 1 / -1;
+    border: 1px solid var(--bd); border-radius: var(--r-md); padding: 8px 12px 4px; margin: 0; min-width: 0;
+    display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 16px; align-items: start;
+  }
+  .line[aria-invalid='true'] { border-color: var(--danger); }
+  legend { font: var(--t-cap); color: var(--tx2); padding: 0 4px; }
+  .err, .act { grid-column: 1 / -1; }
   .act { display: flex; gap: 4px; justify-content: flex-end; padding-bottom: 4px; }
-  .plan { margin: 0; padding-left: 18px; font-size: 13px; }
-  .plan li { margin: 2px 0; overflow-wrap: anywhere; }
+  .add { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+  .plan { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font: var(--t-small); }
+  .plan li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .name { font-family: var(--mono); color: var(--tx); }
+  .desc { color: var(--tx2); }
+  .desc code { font-family: var(--mono); }
+  @media (max-width: 720px) { .line { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
 </style>

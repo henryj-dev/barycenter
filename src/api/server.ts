@@ -1021,13 +1021,15 @@ const ROUTES: Route[] = [
     const asked = Number(c.url.searchParams.get('limit') ?? '100') || 100;
     const limit = Math.min(Math.max(Math.floor(asked), 1), 1000);
     const rows = (await api.db.query(
-      `SELECT id, at, principal, action, subject, revision FROM audit
+      `SELECT id, at, principal, action, subject, revision, after->>'trigger' AS trigger FROM audit
         ORDER BY id DESC LIMIT $1`, [limit],
     )).rows;
+    // 본문(before/after)은 안 준다. `trigger` 한 칸만 꺼낸다 — 자동 적용을 사람이 누른 적용과 가르는 표시다.
     json(c.res, 200, rows.map((r) => ({
       id: String(r['id']), at: r['at'], principal: r['principal'],
       action: r['action'], subject: r['subject'],
       revision: r['revision'] === null ? null : String(r['revision']),
+      ...(r['trigger'] === 'auto' ? { trigger: 'auto' } : {}),
     })));
   }),
 

@@ -9,15 +9,19 @@
    *
    * 머리: 한 줄 판정(톤 · 아이콘 · 제목 · 부제). 본문: 「끊기거나 바뀌는 것」 목록, 접힌 「영향 없음」,
    * 진행 중이면 `progress`(StepList 등), 끝났으면 `result`. 아래 `footer` 에 적용 버튼.
+   * `calm` 은 끊기는 것이 없을 때 그 자리에 쓰는 한 줄, `details` 는 끊기는 것 아래 · 「영향 없음」 위에 둘 구획이다
+   * (적용 대기의 포함된 커밋 · 소켓 변화 · 영향 리스너 표). 둘 다 없으면 전과 같다.
    */
   import type { Snippet } from 'svelte';
   import { TONE_ICON } from './Badge.svelte';
 
-  let { tone = 'warn', title, sub, breaking = [], quiet = [], quietLabel, progress, result, footer }: {
+  let { tone = 'warn', title, sub, breaking = [], calm, details, quiet = [], quietLabel, progress, result, footer }: {
     tone?: Tone;
     title: string;
     sub?: Snippet;
     breaking?: readonly ImpactLine[];
+    calm?: string;
+    details?: Snippet;
     quiet?: readonly string[];
     quietLabel?: string;
     progress?: Snippet;
@@ -40,7 +44,10 @@
           {#each breaking as l, i (i)}<div class="line"><span style:color="var(--{l.tone})">{l.icon}</span><span>{l.text}</span></div>{/each}
         </div>
       </div>
+    {:else if calm !== undefined}
+      <div class="calm">● {calm}</div>
     {/if}
+    {#if details}{@render details()}{/if}
     {#if quiet.length > 0}
       <div class="sec">
         <button type="button" class="qt" aria-expanded={quietOpen} onclick={() => { quietOpen = !quietOpen; }}>
@@ -71,6 +78,7 @@
   .s { color: var(--tx2); font: var(--t-small); }
   .body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; font: var(--t-small); }
   .bt { font: 600 12px/16px var(--font); color: var(--danger); margin-bottom: 6px; }
+  .calm { color: var(--ok); }
   .lines { display: flex; flex-direction: column; gap: 6px; }
   .line { display: flex; gap: 8px; }
   .sec { padding-top: 10px; border-top: 1px solid var(--bd); }

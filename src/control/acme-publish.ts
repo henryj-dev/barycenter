@@ -141,7 +141,7 @@ export async function publishIssued(opts: PublisherOptions): Promise<PublishResu
       if (opts.applyAutomatically !== false && others.length === 0) {
         // **인증서 교체는 세대 전환이다** — nginx 가 새 파일을 읽으려면 reload 가 필요하고,
         // 전환당 트래픽 2.6% 가 실측값이다. 자동이라는 사실을 로그로 남긴다.
-        const op = await opts.control.apply(plan.id, by);
+        const op = await opts.control.apply(plan.id, by, { trigger: 'auto' });
         result.operation = op.id;
       } else if (opts.applyAutomatically !== false) {
         result.held = others.map((p) => `r${p.revision}`);
