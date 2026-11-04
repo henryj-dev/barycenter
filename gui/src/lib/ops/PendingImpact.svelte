@@ -14,6 +14,7 @@
   import WriteNote from '#lib/global/WriteNote.svelte';
   import { LOST_LABEL, LOST_MESSAGE, type RegionSummary, type Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import { RESOURCES, type ResourceKind } from '@web/resources';
   import ClusterConvergence from './ClusterConvergence.svelte';
 
   type Rev = { revision: string; createdBy: string; note: string | null; rollbackOf: string | null };
@@ -73,6 +74,13 @@
     const sess = view?.sessions.find((s) => s.startsWith(`${protocol} —`));
     return { key, where: `${protocol} ${bind}`.trim(), change: change?.replace(/^\(|\)$/g, '') ?? '설정 변경', sess: sess?.slice(protocol.length + 2).trim() ?? '—' };
   }));
+  /**
+   * **지울 것** (#126 후속) — head 에서 지웠지만 엔진은 아직 돌리는 리소스. 목록에는 행이 없어서 여기서만 보인다.
+   * `pending-resources` 가 주는 그대로다(활성 리비전과 head 의 차이). 못 읽었으면 비어 있다.
+   */
+  const removed = $derived(desk.pendingResources.removed.map((r) => ({
+    ...r, label: Object.hasOwn(RESOURCES, r.kind) ? RESOURCES[r.kind as ResourceKind].label : r.kind,
+  })));
   const tone = $derived<Tone>(view === undefined ? 'ok' : view.bindBlockers.length > 0 ? 'danger' : view.requiresReload || view.rollbackOf !== undefined ? 'warn' : 'ok');
 
   // ---- 적용 항목 (시안 `groupsOf`) — 전역이면 지역 요약에서 지역마다 적용 대기 수를 읽는다
@@ -189,6 +197,19 @@
   </div>
 {/snippet}
 
+{#snippet removedBlock()}
+  {#if removed.length > 0}
+    <div class="sec">
+      <div class="sh" style:color="var(--danger)">− 지울 것 · {removed.length}</div>
+      <div class="tbl lst" role="table" aria-label="지울 것">
+        {#each removed as r (`${r.kind}/${r.key}`)}
+          <div class="tr gone" role="row"><span role="cell" class="muted">{r.label}</span><span role="cell"><code>{r.key}</code></span></div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet lostNote()}
   {#if lost}<span class="lost" role="status">✕ {LOST_MESSAGE}</span>{/if}
 {/snippet}
@@ -256,6 +277,7 @@
               </div>
             </div>
           {/if}
+          {@render removedBlock()}
         {/snippet}
         {#snippet footer()}
           {#if !ro}
@@ -276,6 +298,7 @@
         breaking={[{ tone: 'danger', icon: '✕', text: desk.failedApply.failure }]} quiet={[]}
         progress={desk.applying ? progressBlock : undefined} result={result !== undefined ? resultBlock : undefined}>
         {#snippet sub()}엔진은 전에 적용한 설정 그대로예요. 설정을 고쳐 저장하거나, 원인을 없앤 뒤 같은 리비전을 다시 적용해요.{/snippet}
+        {#snippet details()}{@render removedBlock()}{/snippet}
         {#snippet footer()}
           {#if !ro}
             <FieldMessage>같은 설정으로 다시 시도해요. 새 리비전은 안 만들어요.{where}</FieldMessage>
@@ -342,6 +365,7 @@
   .commits code { color: var(--accent); }
   .commits .tr > :last-child { text-align: right; }
   .lst .tr { grid-template-columns: 1fr 1fr 1.6fr; }
+  .lst .tr.gone { grid-template-columns: 140px minmax(0, 1fr); }
   .th { min-height: 28px; padding: 0 12px; background: var(--bg-hover); font: 600 12px/16px var(--font); color: var(--tx2); }
   .socks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .mono { display: flex; flex-direction: column; gap: 4px; font: 12px/16px var(--mono); }

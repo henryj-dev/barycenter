@@ -9,6 +9,7 @@
   import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import PendingMark from './PendingMark.svelte';
 
   type Row = { key: string; domains: string; acme: boolean; order?: string; days?: number; notAfter?: string; mark: 'missing' | 'expired' | 'ok'; used: number; usedText: string };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -66,7 +67,7 @@
   emptyTitle="인증서가 없어요" emptyBody="자료를 올리거나 ACME 로 발급해요. HTTPS 리스너에 필요해요."
   onopen={(r) => { void goto(resourcePath('certificate', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
-    {#if c.key === 'key'}<a href={resourcePath('certificate', r.key)}>{r.key}</a>
+    {#if c.key === 'key'}<a href={resourcePath('certificate', r.key)}>{r.key}</a><PendingMark kind="certificate" key={r.key} />
     {:else if c.key === 'domains'}{r.domains || '—'}
     {:else if c.key === 'acme'}{#if r.acme}<Badge tone="info" icon="↻">ACME{r.order ? ` · ${r.order}` : ''}</Badge>{:else}<span class="sub">업로드</span>{/if}
     {:else if c.key === 'days'}

@@ -26,6 +26,7 @@ import { routeGroupPatch, type RouteGroupInput } from '@web/route-group';
 import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 import { noteCommit } from '#lib/commit-note';
+import { EMPTY_PENDING, viewOfPendingResources, type PendingResourcesView } from '#lib/pending';
 
 export type StatusSnap = {
   head?: string;
@@ -109,6 +110,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
   let failedApply = $state<FailedApply | undefined>();
   /** 커밋했지만 적용하지 않은 plan 수 — 상단 바의 「적용 대기 N」 과 배너. */
   let pendingCount = $state(0);
+  /** 리소스별 적용 대기 (#126 후속) — 엔진이 돌리는 리비전과 head 가 다른 (kind, key). 못 읽으면 비어 있다. */
+  let pendingResources = $state<PendingResourcesView>(EMPTY_PENDING);
   let recovering = $state(false);
   let editing = $state(false);
   let stop: (() => void) | undefined;
@@ -211,6 +214,16 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     await refreshAddressSets();
     await refreshRendered();
     await refreshAudit();
+    await refreshPendingResources();
+  };
+
+  /**
+   * 리소스별 적용 대기. 스냅샷 · `revision` · `apply` 이벤트마다 다시 읽는다(head 나 활성 세대가 바뀌는 때다) — 폴링하지 않는다.
+   * **선택이다.** 못 읽으면(옛 데몬 · 중계에 없는 경로) 아무것도 안 붙이고 오류로 말하지 않는다.
+   */
+  const refreshPendingResources = async (): Promise<void> => {
+    const r = await fetch(api('/api/v1/config/pending-resources'), { headers: auth() });
+    pendingResources = r.ok ? viewOfPendingResources(await r.json()) : EMPTY_PENDING;
   };
 
   const refreshAudit = async (): Promise<void> => {
@@ -1113,6 +1126,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     get applying() { return applying; },
     get failedApply() { return failedApply; },
     get pendingCount() { return pendingCount; },
+    get pendingResources() { return pendingResources; },
     get recovering() { return recovering; },
     get editing() { return editing; },
     connect,

@@ -9,6 +9,7 @@
   import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import PendingMark from './PendingMark.svelte';
 
   type Row = { key: string; min: string; max: string; cipher: string; hsts?: number; mismatch: string; used: number };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -56,7 +57,7 @@
   emptyTitle="TLS 정책이 없어요" emptyBody="HTTPS 리스너를 열려면 하나가 필요해요."
   onopen={(r) => { void goto(resourcePath('tlsPolicy', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
-    {#if c.key === 'key'}<a href={resourcePath('tlsPolicy', r.key)}>{r.key}</a>
+    {#if c.key === 'key'}<a href={resourcePath('tlsPolicy', r.key)}>{r.key}</a><PendingMark kind="tlsPolicy" key={r.key} />
     {:else if c.key === 'min'}TLS {r.min}
     {:else if c.key === 'max'}{r.max === '—' ? '—' : `TLS ${r.max}`}
     {:else if c.key === 'hsts'}{#if r.hsts !== undefined}<Badge tone="ok" icon="●">max-age {r.hsts}s</Badge>{:else}<span class="sub">꺼짐</span>{/if}

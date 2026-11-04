@@ -55,6 +55,7 @@ import { routeActions } from '../model/route-rules.js';
 import {
   exportManifest, importPatch, parseManifest, type ImportMode, type Manifest,
 } from './manifest.js';
+import { diffResources, type PendingResources } from './pending-resources.js';
 
 /** 렌더 결과를 리비전에 결박하기 위한 표식 (§5.3 `renderer_version_changed`). */
 export const RENDERER_VERSION = 'v0.1';
@@ -1403,6 +1404,21 @@ export class ConfigStore {
         WHERE phase = 'activated' ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
     )).rows[0];
     return r === undefined ? undefined : String(r['revision']);
+  }
+
+  /**
+   * **적용 대기 리소스** (#126 후속) — 엔진이 돌리는 리비전과 head 를 (kind, key) 하나씩 비교한다.
+   * 같으면 빈 목록. 활성화된 적이 없으면 head 의 모든 리소스가 `added` 다. 비교는 `diffResources` 가 한다.
+   */
+  async pendingResources(): Promise<PendingResources> {
+    const head = (await this.head()).revision;
+    const active = await this.activeRevision();
+    if (active === head) return { activeRevision: active, headRevision: head, resources: [] };
+    const [before, after] = await Promise.all([
+      active === undefined ? Promise.resolve(undefined) : this.modelAt(active),
+      this.modelAt(head),
+    ]);
+    return { activeRevision: active ?? null, headRevision: head, resources: diffResources(before, after) };
   }
 
   /**
