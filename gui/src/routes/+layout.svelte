@@ -234,13 +234,23 @@
   };
   /** 사이드바에서 지역을 바꾼다(좁혀 보기) — 지역 화면의 「보기」 와 같다. 보던 화면은 그대로 두고, 지역 화면에 있었으면 첫 화면으로. */
   const pickRegion = (name: string): void => {
+    linkNarrowed = false;
     if (narrow(name) && place === 'regions') void goto('/');
   };
   /**
    * 「◎ 전역 · 전체 합산」 — 좁혀 보기를 풀고 합산으로 돌아온다(시안 `regionList` 첫 줄). 셸의 desk 는 끊는다.
    * 보던 화면이 합산을 못 그리면 `needsRegion` 이 그 목록 · 지역 고르기로 보낸다.
    */
+  /**
+   * 좁혀 보기가 합산 행의 링크(`?region=`)에서 왔다. 시안은 전역에서 지역으로 좁히지 않는다 — 그 상세를 떠나면
+   * 전체 합산으로 돌아간다. 사이드바에서 고른 좁혀 보기는 그대로 둔다.
+   */
+  let linkNarrowed = false;
+  $effect(() => {
+    if (!detail && linkNarrowed && untrack(() => scope.region) !== undefined) { linkNarrowed = false; widen(); }
+  });
   const widen = (): void => {
+    linkNarrowed = false;
     if (scope.mode !== 'global' || scope.region === undefined) return;
     desk.disconnect();
     scope.choose(undefined);
@@ -252,7 +262,8 @@
   $effect(() => {
     if (wanted === null || regions.length === 0) return;
     const name = wanted;
-    if (untrack(() => scope.region?.name) !== name && !narrow(name)) {
+    if (untrack(() => scope.region?.name) === name || narrow(name)) linkNarrowed = true;
+    else {
       toast.fail(`${name} 지역을 열 수 없어요`, regions.some((x) => x.name === name) ? '이 지역과 지금 연결되지 않았어요.' : '모르는 지역이에요.');
     }
     const u = new URL(page.url);

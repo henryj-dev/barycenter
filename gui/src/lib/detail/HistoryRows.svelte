@@ -55,7 +55,7 @@
       {@const diff = r.change === 'changed' ? diffFields(r.before, r.after) : []}
       <div class="ln">
         <span class="t">{when(r.createdAt)}</span>
-        <span>{r.change === 'earliest' ? VERB.earliest : `${key} ${VERB[r.change]}`}{#if r.rollbackOf !== null} (r{r.rollbackOf} 로 롤백){/if} <span class="w">· {r.createdBy}</span>{#if r.note !== null}<span class="w"> · {r.note}</span>{/if}</span>
+        <span>{r.change === 'earliest' ? VERB.earliest : `${key} ${VERB[r.change]}`}{#if r.rollbackOf !== null} (r{r.rollbackOf} 로 롤백){/if} <span class="w">· {r.createdBy.replace(/^user:/, '')}</span>{#if r.note !== null && !/^changeset [0-9a-f-]+$/.test(r.note)}<span class="w">{' · '}{r.note}</span>{/if}</span>
         <span class="r">r{r.revision}</span>
       </div>
       {#if diff.length > 0}
