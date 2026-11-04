@@ -134,9 +134,10 @@ describe('화면의 연결', () => {
     expect(s).toContain('agg.writable(r.name)');
   });
 
-  it('기록: 합산이면 지역 열 · 시각 순서 · 행 키 rid · 빠진 지역 알림', () => {
+  it('기록: 합산이면 지역은 작업 칸 title(시안에 지역 열이 없다) · 시각 순서 · 행 키 rid · 빠진 지역 알림', () => {
     const s = src('lib/ops/AuditLog.svelte');
-    expect(s).toContain('{#if agg.on}<span>지역</span>{/if}');
+    expect(s).not.toContain('<span>지역</span>');
+    expect(s).toContain('title={agg.on ? `${d.title} · ${g.region}` : d.title}');
     expect(s).toContain("mergeByTime(agg.entries.filter((e) => e.state === 'ok')");
     expect(s).toContain('{#each shown as g (g.rid)}');
     expect(s).toContain('{#if agg.on}<RegionNotices notices={agg.notices} strip={false} />{/if}');

@@ -74,7 +74,7 @@ describe('감사 기록 묶음', () => {
     const now = new Date(2026, 10, 3, 15, 0, 0);
     expect(whenText(new Date(2026, 10, 3, 14, 20, 33).toISOString(), now)).toMatch(/^오늘 /);
     expect(whenText(new Date(2026, 10, 2, 18, 20, 9).toISOString(), now)).toMatch(/^어제 /);
-    expect(whenText(new Date(2026, 9, 30, 1, 2, 3).toISOString(), now)).toMatch(/^10월 30일 /);
+    expect(whenText(new Date(2026, 9, 30, 1, 2, 3).toISOString(), now)).toMatch(/^10\/30 /);
     expect(whenText(undefined, now)).toBe('—');
     // 시각은 브라우저 지역 설정과 상관없이 숫자 HH:MM:SS 다(운영에서 「16시 9분 41초」 로 나와 칸이 두 줄이 됐다).
     expect(whenText(new Date(2026, 10, 3, 9, 5, 7).toISOString(), now)).toBe('오늘 09:05:07');

@@ -166,7 +166,8 @@ export function whenText(iso: string | undefined, now = new Date()): string {
   if (day(t) === day(now)) return `오늘 ${clock}`;
   const y = new Date(now); y.setDate(now.getDate() - 1);
   if (day(t) === day(y)) return `어제 ${clock}`;
-  return `${t.getMonth() + 1}월 ${t.getDate()}일 ${clock}`;
+  // 시각 칸(110px)에 들도록 짧게 — 「11/2 16:09:41」.
+  return `${t.getMonth() + 1}/${t.getDate()} ${clock}`;
 }
 
 /** 시각만 — 단계 줄 · 최근 변경. */
