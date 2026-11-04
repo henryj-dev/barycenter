@@ -81,3 +81,14 @@ describe('리다이렉트 소켓', () => {
     expect(row?.redirect).toBeUndefined();
   });
 });
+
+describe('HTTP/2 표시 (#126 후속)', () => {
+  it('**http2 를 안 적은 HTTPS 리스너는 켜짐이다** — 렌더러 기본(`l.http2 ?? true`)과 같은 말을 한다', async () => {
+    const { detailOfListener } = await import('../../src/web/listeners-view.js');
+    const base = { key: 'web', protocol: 'https', bind: '0.0.0.0', port: 443, enabled: true, tls: { policy: 'p', defaultCertificate: 'c' } };
+    const h2 = (m: Record<string, unknown>) => detailOfListener(m).find((l) => l.label === 'HTTP/2')?.value;
+    expect(h2(base)).toBe('켜짐');
+    expect(h2({ ...base, http2: true })).toBe('켜짐');
+    expect(h2({ ...base, http2: false })).toBe('꺼짐');
+  });
+});
