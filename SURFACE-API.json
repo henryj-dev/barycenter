@@ -49,6 +49,17 @@
         }
       }
     },
+    "/api/v1/config/pending-resources": {
+      "get": {
+        "operationId": "GET:/api/v1/config/pending-resources",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/config/rendered": {
       "get": {
         "operationId": "GET:/api/v1/config/rendered",
@@ -1165,6 +1176,17 @@
     "/api/v1/regions/{name}/health/backends": {
       "get": {
         "operationId": "GET:/api/v1/regions/:name/health/backends",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/config/pending-resources": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/config/pending-resources",
         "x-scope": "read",
         "responses": {
           "200": {

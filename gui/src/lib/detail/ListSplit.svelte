@@ -15,6 +15,7 @@
   import BackendReasons from './BackendReasons.svelte';
   import PoolBackends from './PoolBackends.svelte';
   import { statusOf } from './facts';
+  import { headerMarks, isPendingResource } from '#lib/pending';
 
   let { kind, selected = $bindable([]), table, extra, actions }: {
     kind: ResourceKind;
@@ -35,12 +36,14 @@
   const item = $derived(key === undefined ? undefined : itemOf(desk.model, kind, key));
   const lines = $derived(item === undefined ? [] : kind === 'listener' ? detailOfListener(item) : summaryOf(kind, item));
   const mark = $derived(key === undefined ? undefined : statusOf(desk, kind, key));
+  /** 상태 배지 + 「◐ 적용 대기」(시안 `selPendD`) — 엔진이 돌리는 것과 head 가 다르면. */
+  const marks = $derived(key === undefined ? [] : headerMarks(mark, isPendingResource(desk.pendingResources, kind, key)));
   const poolCount = $derived(kind === 'pool' && key !== undefined ? desk.pools.rows.find((p) => p.key === key)?.backends.length ?? 0 : 0);
 </script>
 
 <SplitView top={table} open={item !== undefined} title={key} onclose={() => { selected = []; }} height="max(520px, calc(100dvh - 220px))">
   {#snippet badges()}
-    {#if mark !== undefined}<Badge tone={mark.tone} icon={mark.icon}>{mark.text}</Badge>{/if}
+    {#each marks as m (m.text)}<Badge tone={m.tone} icon={m.icon}>{m.text}</Badge>{/each}
   {/snippet}
   {#snippet detail()}
     {#if key !== undefined}

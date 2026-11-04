@@ -14,6 +14,7 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import PendingMark from './PendingMark.svelte';
   import RouteSegments from './RouteSegments.svelte';
 
   type Row = { key: string; listener: string; snis: string[]; priority: number; action: string; ord: number };
@@ -58,7 +59,7 @@
   emptyTitle="패스스루 라우트가 없어요" emptyBody="SNI 로 TLS 연결을 복호화 없이 풀에 보내요."
   onopen={(r) => { void goto(resourcePath('passthroughRoute', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
-    {#if c.key === 'key'}<a href={resourcePath('passthroughRoute', r.key)}>{r.key}</a>
+    {#if c.key === 'key'}<a href={resourcePath('passthroughRoute', r.key)}>{r.key}</a><PendingMark kind="passthroughRoute" key={r.key} />
     {:else if c.key === 'listener'}<a class="sub" href={resourcePath('listener', r.listener)}>{r.listener}</a>
     {:else if c.key === 'snis'}
       <span title={r.snis.length > 1 ? r.snis.join('\n') : undefined}>{r.snis[0] ?? '—'}{#if r.snis.length > 1}<span class="more"><Badge tone="neutral" icon={null}>+{r.snis.length - 1}</Badge></span>{/if}</span>

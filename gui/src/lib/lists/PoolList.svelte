@@ -14,6 +14,7 @@
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import { healthCheckText, poolMark, type Mark } from '#lib/detail/facts';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import PendingMark from './PendingMark.svelte';
   import { listState } from './list-state';
 
   type Row = { key: string; cls: string; alg: string; total: number; healthy: number; unhealthy: number; mark: Mark; hc: string; tls: boolean };
@@ -64,7 +65,7 @@
   emptyTitle="풀이 없어요" emptyBody="풀과 첫 백엔드를 같이 만들어요. 빈 풀은 저장되지 않아요."
   onopen={(r) => { void goto(resourcePath('pool', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
-    {#if c.key === 'key'}<a href={resourcePath('pool', r.key)}>{r.key}</a>
+    {#if c.key === 'key'}<a href={resourcePath('pool', r.key)}>{r.key}</a><PendingMark kind="pool" key={r.key} />
     {:else if c.key === 'total'}<Badge tone={r.mark.tone} icon={r.mark.icon}>{r.mark.text}</Badge>
     {:else if c.key === 'tls'}{#if r.tls}<span>켜짐</span>{:else}<span class="muted">꺼짐</span>{/if}
     {:else}{String(r[c.key as keyof Row])}{/if}

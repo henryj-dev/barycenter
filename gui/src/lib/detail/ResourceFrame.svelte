@@ -13,6 +13,7 @@
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { relationCount, statusOf } from './facts';
+  import { headerMarks, isPendingResource } from '#lib/pending';
 
   let { kind, children }: { kind: ResourceKind; children: Snippet } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -36,6 +37,8 @@
   })));
   /** 제목 옆 상태 배지(시안) — 리스너 · 풀 · 백엔드. 모르면 안 단다. */
   const mark = $derived(statusOf(desk, kind, key));
+  /** 상태 배지 + 「◐ 적용 대기」(시안 `selPendD`) — 엔진이 돌리는 것과 head 가 다르면. 모든 리소스에 붙는다. */
+  const marks = $derived(headerMarks(mark, isPendingResource(desk.pendingResources, kind, key)));
   const listHref = $derived(spec.base);
   /**
    * 방금 만든 리소스는 모델에 조금 늦게 온다 — 커밋 뒤 스트림의 `revision` 이벤트가 와야 다시 읽는다.
@@ -62,7 +65,7 @@
       crumbs={[{ label: spec.label, href: listHref }, ...(extra !== undefined ? [{ label: key, href: base }, { label: extra }] : [{ label: key }])]}
       title={key} {tabs} currentTab={rest} tabLabel="{spec.label} 상세">
       {#snippet badges()}
-        {#if mark !== undefined}<Badge tone={mark.tone} icon={mark.icon}>{mark.text}</Badge>{/if}
+        {#each marks as m (m.text)}<Badge tone={m.tone} icon={m.icon}>{m.text}</Badge>{/each}
       {/snippet}
       {#snippet actions()}
         {#if !ro}
