@@ -17,6 +17,7 @@
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import { LISTENER_MARK, sourceAllowSummary } from '#lib/detail/facts';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import PendingMark from './PendingMark.svelte';
   import { listState } from './list-state';
 
   type Row = {
@@ -102,7 +103,7 @@
   onopen={(r) => { void goto(resourcePath('listener', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
     {#if c.key === 'key'}
-      <a href={resourcePath('listener', r.key)}>{r.key}</a>
+      <a href={resourcePath('listener', r.key)}>{r.key}</a><PendingMark kind="listener" key={r.key} hide={r.mark === 'join'} />
     {:else if c.key === 'protocol'}{r.protocol.toUpperCase().replace('TLS_PASSTHROUGH', 'TLS 패스스루')}
     {:else if c.key === 'bind'}{r.bind}{#if r.redirect !== undefined}<span class="muted" title="HTTP 로 오면 HTTPS 로 301"> · HTTP :{r.redirect} → HTTPS</span>{/if}
     {:else if c.key === 'hosts'}{#if r.hosts === '기본'}<span class="muted">기본</span>{:else}{r.hosts}{/if}

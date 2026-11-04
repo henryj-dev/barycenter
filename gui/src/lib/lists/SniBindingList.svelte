@@ -9,6 +9,7 @@
   import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import PendingMark from './PendingMark.svelte';
 
   type Row = { key: string; listener: string; hosts: string; count: number; first: string; cert: string; certMissing: boolean };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -52,7 +53,7 @@
   emptyTitle="SNI 바인딩이 없어요" emptyBody="HTTPS 호스트는 바인딩이 있어야 plan 이 돼요."
   onopen={(r) => { void goto(resourcePath('sniBinding', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
-    {#if c.key === 'key'}<a href={resourcePath('sniBinding', r.key)}>{r.key}</a>
+    {#if c.key === 'key'}<a href={resourcePath('sniBinding', r.key)}>{r.key}</a><PendingMark kind="sniBinding" key={r.key} />
     {:else if c.key === 'listener'}<a class="sub" href={resourcePath('listener', r.listener)}>{r.listener}</a>
     {:else if c.key === 'cert'}{#if r.certMissing}<Badge tone="danger">{r.cert} — 없음</Badge>{:else}<a class="sub" href={resourcePath('certificate', r.cert)}>{r.cert}</a>{/if}
     {:else if c.key === 'count'}{r.count}개

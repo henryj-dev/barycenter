@@ -19,6 +19,7 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import PendingMark from './PendingMark.svelte';
   import RouteSegments from './RouteSegments.svelte';
   import { routeOrder } from './route-order';
 
@@ -97,7 +98,7 @@
   emptyTitle="HTTP 라우트가 없어요" emptyBody="호스트와 경로로 요청을 풀이나 동작에 보내요."
   onopen={(r) => { void goto(resourcePath('httpRoute', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
-    {#if c.key === 'key'}<a href={resourcePath('httpRoute', r.key)}>{r.key}</a>
+    {#if c.key === 'key'}<a href={resourcePath('httpRoute', r.key)}>{r.key}</a><PendingMark kind="httpRoute" key={r.key} />
     {:else if c.key === 'listener'}<a class="sub" href={resourcePath('listener', r.listener)}>{r.listener}</a>
     {:else if c.key === 'paths'}
       <span title={r.paths.length > 1 ? r.paths.join('\n') : undefined}>{r.paths[0]}{#if r.paths.length > 1}<span class="more"><Badge tone="neutral" icon={null}>+{r.paths.length - 1}</Badge></span>{/if}</span>

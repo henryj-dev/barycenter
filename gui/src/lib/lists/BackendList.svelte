@@ -16,6 +16,7 @@
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import { HEALTH_MARK, ago, backendHealth, type HealthKind } from '#lib/detail/facts';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import PendingMark from './PendingMark.svelte';
   import { listState } from './list-state';
 
   type Row = { key: string; pool: string; addr: string; weight: number; health: HealthKind; receiving: boolean | undefined; draining: boolean; why: string[]; seen?: string };
@@ -85,7 +86,7 @@
   emptyTitle="등록된 백엔드가 없어요" emptyBody="백엔드를 더하면 풀이 트래픽을 받아요."
   onopen={(r) => { void goto(resourcePath('backend', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
-    {#if c.key === 'key'}<a href={resourcePath('backend', r.key)}>{r.key}</a>
+    {#if c.key === 'key'}<a href={resourcePath('backend', r.key)}>{r.key}</a><PendingMark kind="backend" key={r.key} />
     {:else if c.key === 'pool'}<a class="sub" href={resourcePath('pool', r.pool)}>{r.pool}</a>
     {:else if c.key === 'health'}
       {@const m = HEALTH_MARK[r.health]}<Badge tone={m.tone} icon={m.icon}>{m.text}</Badge>
