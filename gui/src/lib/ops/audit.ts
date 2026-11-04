@@ -140,12 +140,18 @@ export function groupAudit(rows: readonly AuditRow[], pending: readonly string[]
   }).sort((a, b) => (ms(b.at) || 0) - (ms(a.at) || 0));
 }
 
+/**
+ * `14:02:11` — 숫자로 직접 적는다. `toLocaleTimeString('ko-KR')` 는 브라우저에 따라 「16시 9분 41초」 로 나와
+ * 표의 시각 칸이 두 줄이 됐다(운영 실측).
+ */
+const hms = (t: Date): string => [t.getHours(), t.getMinutes(), t.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+
 /** 시안의 시각 — 「오늘 14:20:33」 · 「어제 18:20:09」 · 그 전은 날짜. */
 export function whenText(iso: string | undefined, now = new Date()): string {
   if (iso === undefined) return '—';
   const t = new Date(iso);
   if (Number.isNaN(t.getTime())) return iso;
-  const clock = t.toLocaleTimeString('ko-KR', { hour12: false });
+  const clock = hms(t);
   const day = (d: Date): string => d.toDateString();
   if (day(t) === day(now)) return `오늘 ${clock}`;
   const y = new Date(now); y.setDate(now.getDate() - 1);
@@ -154,5 +160,8 @@ export function whenText(iso: string | undefined, now = new Date()): string {
 }
 
 /** 시각만 — 단계 줄 · 최근 변경. */
-export const clockText = (iso: string | undefined): string =>
-  (iso === undefined ? '—' : new Date(iso).toLocaleTimeString('ko-KR', { hour12: false }));
+export const clockText = (iso: string | undefined): string => {
+  if (iso === undefined) return '—';
+  const t = new Date(iso);
+  return Number.isNaN(t.getTime()) ? iso : hms(t);
+};

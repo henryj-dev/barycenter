@@ -7,7 +7,7 @@
    * 하나로 잇고 「지역」 열을 단다(사람 / 토큰 다음). 검색은 지역 이름도 본다. 빠진 지역은 목록 위에 한 줄씩 알린다(§2.4).
    */
   import { getContext } from 'svelte';
-  import { Badge, FieldMessage, Skeleton, TextInput } from '#lib/ui';
+  import { Badge, Checkbox, FieldMessage, Skeleton, TextInput } from '#lib/ui';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { useAggregate } from '#lib/global/use-aggregate.svelte.ts';
   import RegionNotices from '#lib/global/RegionNotices.svelte';
@@ -25,7 +25,13 @@
     : groupsOf(desk).map((g) => ({ ...g, region: '', rid: g.key })));
   const match = (g: Row, needle: string): boolean => g.region.toLowerCase().includes(needle) ||
     g.steps.some((s) => [s.principal, s.action, s.subject ?? '', s.revision ?? ''].some((x) => x.toLowerCase().includes(needle)));
-  const shown = $derived(q.trim() === '' ? groups : groups.filter((g) => match(g, q.trim().toLowerCase())));
+  /**
+   * 시안의 기록은 변경만 보인다. 멤버십 슬롯 회수 · 옛 세대 정리 같은 데몬의 일은 숨겨 두고, 고르면 보인다 —
+   * 운영에서 그 줄들이 변경 사이를 빽빽이 메웠다(실측).
+   */
+  let system = $state(false);
+  const scoped = $derived(system ? groups : groups.filter((g) => g.change));
+  const shown = $derived(q.trim() === '' ? scoped : scoped.filter((g) => match(g, q.trim().toLowerCase())));
 </script>
 
 {#if agg.on ? agg.listState.loading : !desk.live}
@@ -35,8 +41,9 @@
     {#if agg.on}<RegionNotices notices={agg.notices} />{/if}
     <div class="bar">
       <TextInput bind:value={q} mono={false} width="260px" placeholder="주체 · 동작 · 대상 검색" aria-label="필터" />
+      <Checkbox bind:checked={system}>데몬 작업도 보기</Checkbox>
       <span class="grow"></span>
-      <span class="count">{q.trim() === '' ? `${groups.length}건` : `${shown.length} / ${groups.length}건`}</span>
+      <span class="count">{q.trim() === '' ? `${scoped.length}건` : `${shown.length} / ${scoped.length}건`}</span>
     </div>
     <section class="list" class:agg={agg.on} aria-label="감사 기록">
       <div class="row head" aria-hidden="true">

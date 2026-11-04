@@ -123,9 +123,18 @@
    * 실시간 연결 — 붙어 있으면 수신 중, 자격은 있는데 끊겼으면 재연결 중, 자격이 없으면 끊김.
    * 재연결 고리가 멈췄으면(401 등, `desk.retrying` 거짓) 「재연결 중」 이 아니라 끊김이다 — 사람이 다시 연결해야 한다.
    */
-  // 전체 합산에서는 셸 스트림이 없다 — 붙어 있는 지역 스트림이 하나라도 살아 있으면 「실시간 수신 중」 이다.
-  const aggLive = $derived(scope.mode === 'global' && scope.region === undefined && regionDesks.active
-    && regionDesks.entries.some((e) => e.state === 'ok'));
+  /**
+   * 전체 합산(전역에서 지역을 안 골랐다)이면 셸이 지역 스트림을 **늘** 잡는다 — 합산을 안 쓰는 화면(렌더된 설정 · 사람 · 내 계정)에서도
+   * 상단 바의 연결 표시와 적용 대기 수가 살아 있어야 한다(운영 실측: 그 화면에서 「지역을 고르면 붙어요」 가 떴다).
+   */
+  const aggregateOn = $derived(scope.mode === 'global' && scope.region === undefined && (session.me !== undefined || desk.token !== ''));
+  $effect(() => { if (aggregateOn) return regionDesks.acquire(); });
+  // 셸 스트림이 없는 합산에서는 붙어 있는 지역 스트림이 하나라도 살아 있으면 「실시간 수신 중」 이다.
+  const aggLive = $derived(aggregateOn && regionDesks.entries.some((e) => e.state === 'ok'));
+  /** 적용 대기 수 — 합산이면 붙은 지역을 더한다(시안: 상단 「◐ 적용 대기 N」 과 배너가 지역 합계를 말한다). */
+  const pendingTotal = $derived(aggregateOn
+    ? regionDesks.entries.reduce((a, e) => a + (e.state === 'ok' ? e.desk.pendingCount : 0), 0)
+    : desk.pendingCount);
   const connRaw = $derived(connStateOf({ live: desk.live || aggLive, signedIn: session.me !== undefined || desk.token !== '', hasStream: hasStream(scope) || regionDesks.active }));
   const conn = $derived(connRaw === 'reconnecting' && !desk.retrying ? 'down' as const : connRaw);
   const stalled = $derived(connRaw === 'reconnecting' && !desk.retrying);
@@ -246,7 +255,7 @@
 
   /** 적용 대기 배너 — 닫으면 건수가 바뀔 때까지 안 띄운다. 적용 대기 화면에서는 안 띄운다. */
   let dismissedAt = $state(-1);
-  const showPending = $derived(desk.pendingCount > 0 && dismissedAt !== desk.pendingCount && place !== 'impact');
+  const showPending = $derived(pendingTotal > 0 && dismissedAt !== pendingTotal && place !== 'impact');
 
   const regionLabel = $derived(scope.mode === 'global'
     ? `전역 · ${scope.region?.name ?? '전체 지역 합산'}`
@@ -272,12 +281,12 @@
 {:else}
   <div class="app" data-menu={menuOpen}>
     <div class="side">
-      <Sidebar {place} bind:collapsed pending={desk.pendingCount} global={scope.mode === 'global'} {regionLabel}
+      <Sidebar {place} bind:collapsed pending={pendingTotal} global={scope.mode === 'global'} {regionLabel}
         regionHref={scope.mode === 'global' ? '/regions' : undefined} regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} onwiden={widen} />
     </div>
     {#if menuOpen}<button type="button" class="scrim" aria-label="메뉴 닫기" onclick={() => { menuOpen = false; }}></button>{/if}
     <div class="main">
-      <TopBar {crumbs} {node} head={desk.head} {conn} pending={desk.pendingCount}
+      <TopBar {crumbs} {node} head={aggregateOn ? undefined : desk.head} {conn} pending={pendingTotal}
         user={session.me?.username} role={session.me?.role} mfa={session.me?.mfa.totp} bind:theme bind:menuOpen onlogout={() => { void logout(); }} ondisconnect={disconnect} />
       {#if scope.mode === 'global' && scope.region !== undefined}
         <div class="strip">
@@ -289,8 +298,8 @@
       {/if}
       {#if showPending}
         <div class="strip">
-          <Banner tone="pending" ondismiss={() => { dismissedAt = desk.pendingCount; }}>
-            적용 대기 중인 변경이 <b>{desk.pendingCount}건</b> 있어요.
+          <Banner tone="pending" ondismiss={() => { dismissedAt = pendingTotal; }}>
+            적용 대기 중인 변경이 <b>{pendingTotal}건</b> 있어요.
             {#snippet action()}<a class="banner-action" href="/change/pending">영향 확인</a>{/snippet}
           </Banner>
         </div>
