@@ -89,15 +89,13 @@
     {/if}
     <CodeViewer code={v?.conf ?? ''} maxHeight="calc(100vh - 240px)">
       {#snippet head()}
-        <!-- 시안 머리 줄: nginx.conf · 리비전 · (전역) 지역 · 오른쪽 검색. digest · 평면은 시안에 없는 사실이라 흐린 글로 덧붙인다. -->
+        <!-- 시안 머리 줄: nginx.conf · 리비전 · (전역) 지역 · 오른쪽 검색. 시안에 없는 digest · 평면은 그리지 않는다. -->
         <code>nginx.conf</code>
         <span class="dim" aria-hidden="true">·</span>
-        <Select label="리비전" width="140px" bind:value={rev} options={revOptions} />
+        <Select label="리비전" size="sm" width="130px" bind:value={rev} options={revOptions} />
         {#if global}
-          <Select label="지역" width="170px" value={region} options={regionOptions} placeholder="지역" onchange={(x) => { regionPick = x; rev = HEAD; }} />
+          <Select label="지역" size="sm" width="160px" value={region} options={regionOptions} placeholder="지역" onchange={(x) => { regionPick = x; rev = HEAD; }} />
         {/if}
-        {#if v?.digest !== undefined}<code class="dim" title={v.digest}>{v.digest.slice(0, 19)}…</code>{/if}
-        {#if (v?.planes.length ?? 0) > 0}<span class="dim">{v?.planes.join(' · ')}</span>{/if}
         {#if loading}<span class="dim">읽는 중…</span>{/if}
       {/snippet}
     </CodeViewer>
