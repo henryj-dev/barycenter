@@ -9,7 +9,7 @@
   import { getContext } from 'svelte';
   import { itemsOf } from '@web/resources';
   import { Badge, Banner, Button, Card, DataTable, FieldMessage, Skeleton, type Column, type Tone } from '#lib/ui';
-  import type { RegionSummary, Scope } from '#lib/global/scope.svelte.ts';
+  import { LOST_LABEL, type RegionSummary, type Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { clockText, groupAudit } from './audit';
   import { loadRegions } from './fetch';
@@ -69,7 +69,7 @@
     void loadRegions(desk.token).then((r) => { regions = r ?? []; });
   });
   const regionState = (r: RegionSummary): { tone: Tone; text: string } => {
-    if (!r.reachable) return { tone: 'neutral', text: '모름 — 닿지 않아요' };
+    if (!r.reachable) return { tone: 'neutral', text: LOST_LABEL };
     if (r.auth === 'rejected') return { tone: 'danger', text: '인증 거절' };
     if (r.status === undefined) return { tone: 'neutral', text: '모름' };
     if (r.status['unfinished'] !== undefined && r.status['unfinished'] !== null) return { tone: 'warn', text: '미완 전환' };

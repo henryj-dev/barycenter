@@ -1,11 +1,11 @@
 <script lang="ts">
   /**
    * 전역 첫 화면 — 지역마다 닿는가·판이 맞는가·head. 못 닿은 지역은 **모른다**로 보인다(지난 값을 지금처럼
-   * 보이지 않는다). 고르면 그 지역의 읽기 화면들로 간다.
+   * 보이지 않는다 — 이름은 「연락 없음」 하나다). 고르면 그 지역의 화면들로 가고, 쓰기도 그 지역으로 간다.
    */
   import { getContext, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import type { Scope, RegionSummary } from '#lib/global/scope.svelte.ts';
+  import { LOST_LABEL, type Scope, type RegionSummary } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { Badge, Banner, Button, DataTable, type Column, type Tone } from '#lib/ui';
 
@@ -33,7 +33,7 @@
     await goto('/');
   };
   const stateOf = (r: RegionSummary): { tone: Tone; text: string } => {
-    if (!r.reachable) return { tone: 'neutral', text: '모름 — 닿지 않아요' };
+    if (!r.reachable) return { tone: 'neutral', text: LOST_LABEL };
     if (r.auth === 'rejected') return { tone: 'danger', text: '인증 거절 — 전역 토큰 설정을 봐요' };
     if (r.status === undefined) return { tone: 'neutral', text: '모름 — 응답이 이상해요' };
     return { tone: 'ok', text: `head r${r.status.head ?? '?'}` };

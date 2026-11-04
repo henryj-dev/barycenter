@@ -6,13 +6,15 @@
   import { Badge, Button, DataTable, type Column, type MenuItem } from '#lib/ui';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
+  import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import DeleteConfirm from './DeleteConfirm.svelte';
 
   type Row = { key: string; listener: string; hosts: string; count: number; first: string; cert: string; certMissing: boolean };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   let del = $state<{ kind: 'sniBinding'; key: string } | undefined>();
 
   const rows = $derived<Row[]>(itemsOf(desk.model, 'sniBinding').map((b) => {
@@ -44,6 +46,7 @@
 
 {#snippet create()}<Button variant="primary" href="/tls/sni/new">＋ 생성</Button>{/snippet}
 
+<WriteNote spaced />
 <DataTable label="SNI 바인딩 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}
   search={{ placeholder: '이름·호스트로 찾기', match: (r, q) => `${r.key} ${r.hosts} ${r.cert}`.toLowerCase().includes(q) }}
   emptyTitle="SNI 바인딩이 없어요" emptyBody="HTTPS 호스트는 바인딩이 있어야 plan 이 돼요."

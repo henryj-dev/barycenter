@@ -11,6 +11,7 @@
   import { Badge, Button, DataTable, toast, type Column, type FilterChip, type MenuItem } from '#lib/ui';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
+  import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import { HEALTH_MARK, ago, backendHealth, type HealthKind } from '#lib/detail/facts';
@@ -19,7 +20,8 @@
   type Row = { key: string; pool: string; addr: string; weight: number; health: HealthKind; receiving: boolean | undefined; draining: boolean; why: string[]; seen?: string };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   let del = $state<{ kind: 'backend'; key: string } | undefined>();
   let selected = $state<string[]>([]);
 
@@ -76,6 +78,7 @@
 {#snippet create()}<Button variant="primary" href="/traffic/backend/new">＋ 생성</Button>{/snippet}
 
 {#snippet table()}
+<WriteNote spaced />
 <DataTable label="백엔드 목록" {rows} rowKey={(r) => r.key} {columns} {chips} selectable={!ro} bind:selected pageSize={50}
   loading={!desk.live} search={{ placeholder: '이름·풀·주소로 찾기', match: (r, q) => `${r.key} ${r.pool} ${r.addr}`.toLowerCase().includes(q) }}
   emptyTitle="등록된 백엔드가 없어요" emptyBody="백엔드를 더하면 풀이 트래픽을 받아요."

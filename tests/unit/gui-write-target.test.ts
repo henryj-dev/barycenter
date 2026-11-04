@@ -53,3 +53,93 @@ describe('쓸 지역 표시', () => {
     expect(s).toContain('sub={`저장하면 커밋해요. 트래픽은 적용해야 바뀌어요.${where}`}');
   });
 });
+
+/**
+ * **쓸 수 있는가는 한곳에서 판정한다** (#126 3단계 후속, 설계 재검토).
+ *
+ * 클러스터의 팔로워는 읽기를 답하지만 쓰기는 503 `not_leader` 로 막는다(`src/api/server.ts`).
+ * GUI 는 그것을 몰라 버튼을 열어 두었고, 누르면 서버의 해라체 말이 그대로 보였다.
+ * 이제 `scope.readOnly` 가 「전역에서 지역을 고르기 전」 과 「팔로워」 를 같이 보고,
+ * `scope.blocked` 가 거기에 「고른 지역과 연락 없음」 을 더한다. 목록 · 폼 · 적용 · 롤백이 이것으로 닫힌다.
+ */
+describe('쓰기 판정 — 팔로워 · 연락 없음', () => {
+  const scope = src('lib/global/scope.svelte.ts');
+
+  it('readOnly 는 지역을 고르기 전이거나 팔로워다 · blocked 는 거기에 연락 없음을 더한다', () => {
+    expect(scope).toContain("const isReadOnly = (): boolean => (mode === 'global' && region === undefined) || follower !== undefined;");
+    expect(scope).toContain('get readOnly() { return isReadOnly(); }');
+    expect(scope).toContain('get blocked() { return isReadOnly() || isLost(); }');
+    // 지역을 다시 고르면 그 지역의 리더 여부를 새로 본다.
+    expect(scope).toMatch(/choose\(r: RegionSummary \| undefined\) \{[^}]*follower = undefined;/);
+  });
+
+  it('팔로워 안내는 해요체 한 줄이고 리더 이름을 모르면 이름을 뺀다', () => {
+    expect(scope).toContain("`이 노드는 팔로워예요. 수정은 리더${leader === undefined ? '' : `(${leader})`}에서 해요.`");
+  });
+
+  it('안전망: 503 not_leader 의 말을 팔로워 안내로 바꾼다 — 지역 인스턴스에서도, 전역 중계에서도', () => {
+    expect(scope).toContain("if (body['code'] !== 'not_leader') return r;");
+    expect(scope).toContain('message: followerMessage(follower.leader)');
+    expect(scope).toContain("if (mode !== 'global' || r0 === undefined) return leaderSafe(await f(input, init));");
+    expect(scope).toContain('if (r.status === 503) return leaderSafe(r);');
+  });
+
+  it('셸은 상태 스냅샷을 받은 뒤에만 팔로워로 판정하고, 리더 이름 · 주소는 cluster/nodes 에서 읽는다', () => {
+    const layout = src('routes/+layout.svelte');
+    expect(layout).toContain('const standby = $derived(desk.live && desk.head !== undefined && !desk.status.leader.isLeader);');
+    expect(layout).toContain('desk.clusterNodes().then');
+    expect(layout).toContain('scope.follow({ ...(leader === undefined');
+  });
+
+  it('WriteNote 가 까닭을 말한다 — 지역 고르기 전 · 연락 없음 · 팔로워(리더에서 열기 ↗)', () => {
+    const n = src('lib/global/WriteNote.svelte');
+    expect(n).toContain('지역을 고르기 전에는 읽기만 해요.');
+    expect(n).toContain('{LOST_MESSAGE}');
+    expect(n).toContain('{followerMessage(scope.follower.leader)}');
+    expect(n).toContain('리더에서 열기 ↗');
+    expect(src('lib/global/Writable.svelte')).toMatch(/\{#if scope\?\.blocked === true\}\s*<div class="elsewhere"><WriteNote \/><\/div>/);
+  });
+
+  it.each(['AddressSetList', 'BackendList', 'CertificateList', 'HttpRouteList', 'ListenerList', 'PassthroughRouteList', 'PoolList', 'SniBindingList', 'TlsPolicyList'])(
+    '목록 %s 은 blocked 로 만들기 · 수정 · 삭제를 닫고 까닭을 보인다', (f) => {
+      const s = src(`lib/lists/${f}.svelte`);
+      expect(s).toContain('const ro = $derived(scope?.blocked === true);');
+      expect(s).toContain('<WriteNote spaced />');
+    });
+
+  it('상세 틀 · 목록 옆 상세도 blocked 로 닫는다', () => {
+    expect(src('lib/detail/ResourceFrame.svelte')).toContain('const ro = $derived(scope?.blocked === true);');
+    expect(src('lib/detail/ListSplit.svelte')).toContain('const ro = $derived(scope?.blocked === true);');
+  });
+
+  it('적용 · 롤백은 읽기 전용이면 까닭(WriteNote)을 보이고, 「전역 화면은 읽기만 해요」 라고 하지 않는다', () => {
+    const p = src('lib/ops/PendingImpact.svelte');
+    expect(p.match(/<WriteNote \/>/g)).toHaveLength(2);
+    expect(p).not.toContain('전역 화면은 읽기만 해요');
+    expect(src('lib/ops/RevisionRollback.svelte')).toContain('<div class="foot"><WriteNote /></div>');
+  });
+});
+
+describe('전역 문구 · 지역 상자', () => {
+  it('연락 없는 지역의 이름은 어디서나 「연락 없음」 하나다', () => {
+    expect(src('lib/global/scope.svelte.ts')).toContain("export const LOST_LABEL = '연락 없음';");
+    for (const p of ['routes/regions/+page.svelte', 'lib/ops/PendingImpact.svelte', 'lib/ops/Dashboard.svelte', 'routes/+layout.svelte']) {
+      const s = src(p);
+      expect(s, p).toContain('LOST_LABEL');
+      expect(s, p).not.toContain('연결 안 됨');
+      expect(s, p).not.toContain('모름 — 닿지 않아요');
+    }
+  });
+
+  it('사이드바는 지역을 고르기 전에만 읽기 전용이라고 하고, 지역마다 한 줄을 그린다 · 접으면 작은 상자', () => {
+    const sb = src('lib/shell/Sidebar.svelte');
+    expect(sb).not.toContain('전역 화면은 읽기만 해요');
+    expect(sb).toContain("{chosen === undefined ? '지역을 고르기 전에는 읽기만 해요.' : '고른 지역에 바로 써요.'}");
+    expect(sb).toContain('지역 · {regions.length}곳');
+    expect(sb).toContain('{#each regions as r (r.name)}');
+    expect(sb).toMatch(/\{:else if global && regionHref\}\s*<div class="regions mini">/);
+    const layout = src('routes/+layout.svelte');
+    expect(layout).toContain('regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion}');
+    expect(layout).toContain("text: pending > 0 ? `대기 ${pending}` : ''");
+  });
+});

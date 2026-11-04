@@ -15,8 +15,18 @@ import { toast } from '#lib/ui';
 
 /** 연락이 없는 지역에 쓰려 할 때의 한 줄 (시안 `roMsg`). */
 export const LOST_MESSAGE = '이 지역과 연결되지 않아 지금은 쓸 수 없어요.';
+/** 연락 없는 지역의 이름 — 어디서나 이 말 하나다(시안 「○ 연락 없음」, 톤 neutral). */
+export const LOST_LABEL = '연락 없음';
 /** 지역이 403 으로 쓰기를 거절했을 때 (시안). 권한은 지역이 판정한다. */
 export const deniedMessage = (region: string): string => `${region}에서 쓰기 권한이 없어요. 그 지역의 관리자에게 역할을 요청해요.`;
+/**
+ * 이 노드가 팔로워다(클러스터의 리더가 아니다) — 서버는 쓰기를 503 `not_leader` 로 막는다(`src/api/server.ts`).
+ * `leader` 는 지금 리더의 이름, `gui` 는 그 노드의 주소(`/api/v1/cluster/nodes` 의 `url`). 모르면 비운다.
+ */
+export type Follower = { leader?: string; gui?: string };
+/** 팔로워에서 쓰려 할 때의 한 줄. 리더 이름을 모르면 이름을 빼고 말한다. */
+export const followerMessage = (leader?: string): string =>
+  `이 노드는 팔로워예요. 수정은 리더${leader === undefined ? '' : `(${leader})`}에서 해요.`;
 
 const WRITE = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 const pathOf = (input: string | URL | Request): string => {
@@ -40,9 +50,25 @@ export function createScope() {
   let unreachable = $state(false);
   /** 쓰기를 막거나 거절당해 토스트로 알린 횟수 — 화면이 같은 실패를 두 번 알리지 않게 본다. */
   let refusals = $state(0);
+  /** 이 화면이 보는 노드가 팔로워다 — 셸이 상태(`leader.isLeader`)로 알려 준다. 리더면 undefined. */
+  let follower = $state<Follower | undefined>();
 
   const isLost = (): boolean => mode === 'global' && region !== undefined && (!region.reachable || unreachable);
   const refuse = (title: string, body: string): void => { refusals += 1; toast.fail(title, body); };
+  const isReadOnly = (): boolean => (mode === 'global' && region === undefined) || follower !== undefined;
+
+  /**
+   * **안전망:** 서버가 503 `not_leader` 로 쓰기를 막으면 그 말(해라체 · 이 노드 이름)을 팔로워 안내로 바꾼다.
+   * 그리고 이 노드를 팔로워로 본다 — 서버가 방금 그렇다고 답했다. 상태가 알려 주기 전에 누른 경우다.
+   */
+  const leaderSafe = async (r: Response): Promise<Response> => {
+    if (r.status !== 503) return r;
+    const body = await r.clone().json().catch(() => ({})) as Record<string, unknown>;
+    if (body['code'] !== 'not_leader') return r;
+    follower ??= {};
+    return new Response(JSON.stringify({ ...body, message: followerMessage(follower.leader) }),
+      { status: 503, statusText: r.statusText, headers: r.headers });
+  };
 
   const detect = async (): Promise<void> => {
     try {
@@ -62,13 +88,19 @@ export function createScope() {
     /**
      * 전역에서 지역을 고르기 전에만 읽기 전용이다. 고른 뒤에는 쓰기도 그 지역으로 넘긴다 — 보는 사람의 세션 그대로
      * (2026-11-01 사용자 결정, docs/design-global-mode.md §1.1). 권한은 지역이 판정한다.
+     * **팔로워 노드도 읽기 전용이다** — 서버가 쓰기를 503 `not_leader` 로 막는다. 쓰기 판정은 이 둘을 한곳에서 본다.
      */
-    get readOnly() { return mode === 'global' && region === undefined; },
+    get readOnly() { return isReadOnly(); },
+    /** 지금 쓸 수 없다 — 읽기 전용이거나(지역을 안 골랐다 · 팔로워) 고른 지역과 연락이 없다. 목록 · 버튼이 이것 하나로 닫힌다. */
+    get blocked() { return isReadOnly() || isLost(); },
+    get follower() { return follower; },
+    /** 셸이 상태를 보고 부른다 — 팔로워면 리더 정보를, 리더면 undefined. */
+    follow(f: Follower | undefined) { follower = f; },
     /** 전역에서 고른 지역과 지금 연락이 없다 — 지역 요약의 `reachable` 이 거짓이거나, 중계가 못 닿았다고 답했다. */
     get lost() { return isLost(); },
     get refusals() { return refusals; },
     detect,
-    choose(r: RegionSummary | undefined) { region = r; unreachable = false; },
+    choose(r: RegionSummary | undefined) { region = r; unreachable = false; follower = undefined; },
     /** 새로 받은 지역 요약(`GET /regions`)으로 고른 지역의 연락 여부를 고친다. */
     sync(list: readonly RegionSummary[]) {
       const now = region === undefined ? undefined : list.find((r) => r.name === region?.name);
@@ -85,7 +117,7 @@ export function createScope() {
     wrap(f: typeof fetch): typeof fetch {
       return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const r0 = region;
-        if (mode !== 'global' || r0 === undefined) return f(input, init);
+        if (mode !== 'global' || r0 === undefined) return leaderSafe(await f(input, init));
         const prefix = `/api/v1/regions/${encodeURIComponent(r0.name)}/`;
         if (!pathOf(input).startsWith(prefix)) return f(input, init);
         const method = (init?.method ?? (typeof input === 'object' && 'method' in input ? input.method : 'GET')).toUpperCase();
@@ -97,6 +129,7 @@ export function createScope() {
         }
         const r = await f(input, init);
         if (r.ok) { unreachable = false; return r; }
+        if (r.status === 503) return leaderSafe(r);
         if (r.status !== 502 && r.status !== 403) return r;
         const body = await r.clone().json().catch(() => ({})) as { code?: unknown };
         if (r.status === 502 && body.code === 'region_unreachable') {

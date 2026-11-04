@@ -24,7 +24,8 @@
   const extraLabel: Record<string, string> = { rebuild: 'URL로 다시 만들기' };
   const extra = $derived(extraLabel[rest]);
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   /** 전역이면 삭제가 갈 지역을 확인 문구에 단다 — 적용 · 롤백 확인과 같은 꼴. 지역 인스턴스면 빈 말. */
   const where = $derived(scope?.mode === 'global' && scope.region !== undefined ? ` 지역: ${scope.region.name}` : '');
   let asking = $state(false);
