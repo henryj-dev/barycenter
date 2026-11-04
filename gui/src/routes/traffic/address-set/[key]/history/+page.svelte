@@ -1,5 +1,5 @@
 <script lang="ts">
-  import History from '#lib/detail/History.svelte';
+  import HistoryRows from '#lib/detail/HistoryRows.svelte';
 </script>
 
-<History kind="addressSet" />
+<HistoryRows kind="addressSet" />

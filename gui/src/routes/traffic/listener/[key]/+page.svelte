@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Overview from '#lib/detail/Overview.svelte';
+  import CellOverview from '#lib/detail/CellOverview.svelte';
 </script>
 
-<Overview kind="listener" />
+<CellOverview kind="listener" />

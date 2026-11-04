@@ -38,7 +38,7 @@
   };
 </script>
 
-<FormRow label="바인드 주소" for={id} required {error} help={error === undefined ? bindHelp(bind) : undefined}>
+<FormRow label="바인드 주소" for={id} {error} help={error === undefined ? bindHelp(bind) : undefined}>
   {#if facts === null}
     <TextInput {id} value={bind} disabled />
   {:else if facts === undefined}

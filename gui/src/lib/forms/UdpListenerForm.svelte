@@ -1,7 +1,8 @@
 <script lang="ts">
   /** UDP 리스너 만들기 — 프리셋(DNS · WireGuard · 게임 · 직접)이 타임아웃과 응답 수를 정한다. */
   import { getContext } from 'svelte';
-  import type { UdpPreset } from '@web/edit';
+  import { parseSourceAllow, putUdpListenerPatch, type UdpPreset } from '@web/edit';
+  import { plainSwitches, switchedBody } from './listener-create';
   import { FormRow, FormSection, Select } from '#lib/ui';
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
@@ -26,23 +27,30 @@
   let pool = $state<string | undefined>();
   let preset = $state<UdpPreset>('dns');
   let allow = $state('');
+  let allowBad = $state(false);
+  let enabled = $state(true);
 
-  const ready = $derived(filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined);
+  const ready = $derived(filled(key, keyError) && filled(bind) && filled(port, portError) && pool !== undefined && !allowBad);
   const submit = (): void => {
     if (pool === undefined) return;
-    void desk.insertUdpListener(key.trim(), { bind: bind.trim(), port: Number(port), pool, preset }, allow).then(after(resourcePath('listener', key.trim())));
+    const body = { bind: bind.trim(), port: Number(port), pool, preset };
+    const done = after(resourcePath('listener', key.trim()));
+    if (plainSwitches({ enabled })) { void desk.insertUdpListener(key.trim(), body, allow).then(done); return; }
+    const sa = parseSourceAllow(allow);
+    const op = switchedBody(putUdpListenerPatch(key.trim(), { ...body, ...(sa === undefined ? {} : { sourceAllow: sa }) }), { enabled });
+    void desk.putResource('listener', op.key, op.body).then(done);
   };
 </script>
 
 <CreateForm {ready} onsubmit={submit} cancelHref="/traffic/listener">
-  <ListenerBasics protocol="UDP" bind:key bind:bind bind:port />
+  <ListenerBasics protocol="UDP" bind:key bind:bind bind:port bind:enabled />
   <FormSection title="동작">
-    <FormRow label="기본 풀" required help={pools.length === 0 ? 'UDP 풀이 없어요. 풀을 먼저 만들어요.' : undefined}>
+    <FormRow label="기본 풀" help={pools.length === 0 ? 'UDP 풀이 없어요. 풀을 먼저 만들어요.' : undefined}>
       <Select label="기본 풀" bind:value={pool} options={pools} placeholder="풀을 골라요" width="100%" disabled={pools.length === 0} />
     </FormRow>
-    <FormRow label="프리셋" required>
-      <Select label="프리셋" bind:value={preset} options={PRESETS} />
+    <FormRow label="프리셋">
+      <Select label="프리셋" bind:value={preset} options={PRESETS} mono={false} />
     </FormRow>
   </FormSection>
-  <SourceAllowSection bind:value={allow} {port} />
+  <SourceAllowSection bind:value={allow} bind:invalid={allowBad} {port} />
 </CreateForm>

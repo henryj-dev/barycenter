@@ -21,10 +21,9 @@ describe('쓸 지역 표시', () => {
 
   it.each([
     'lib/forms/CreateForm.svelte',
-    'lib/listener/ListenerForm.svelte',
+    // 리스너 · 풀 · 백엔드 · 주소 집합의 설정 탭은 시안 `tSet` 틀(SettingsFrame) 하나가 「쓸 지역」 을 단다.
+    'lib/detail/SettingsFrame.svelte',
     'lib/pool/PoolHealthForm.svelte',
-    'lib/detail/BackendSettings.svelte',
-    'lib/detail/AddressSetSettings.svelte',
     'lib/detail/Rebuild.svelte',
     'lib/detail/BackendHealth.svelte',
     'lib/detail/Acme.svelte',
@@ -36,6 +35,12 @@ describe('쓸 지역 표시', () => {
     for (const f of ['QuickProxyForm', 'RouteGroupForm', 'HttpListenerForm', 'TcpListenerForm', 'UdpListenerForm', 'PassthroughListenerForm',
       'PoolForm', 'BackendForm', 'AddressSetForm', 'HttpRouteForm', 'PassthroughRouteForm', 'CertificateForm', 'TlsPolicyForm', 'SniBindingForm']) {
       expect(src(`lib/forms/${f}.svelte`), f).toContain('<CreateForm');
+    }
+  });
+
+  it('리스너 · 풀 · 백엔드 · 주소 집합의 설정 폼은 SettingsFrame 위에 있다', () => {
+    for (const p of ['lib/listener/ListenerForm.svelte', 'lib/pool/PoolSettings.svelte', 'lib/detail/BackendSettings.svelte', 'lib/detail/AddressSetSettings.svelte']) {
+      expect(src(p), p).toMatch(/<SettingsFrame kind="/);
     }
   });
 

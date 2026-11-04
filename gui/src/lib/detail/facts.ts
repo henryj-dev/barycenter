@@ -8,6 +8,7 @@ import { itemOf, relationsOf, type ModelLike, type ResourceKind } from '@web/res
 import type { ListenerMark } from '@web/listeners-view';
 import type { Tone } from '#lib/ui';
 import type { createDesk } from '#lib/desk.svelte.ts';
+import { isPendingResource } from '#lib/pending';
 
 type Desk = ReturnType<typeof createDesk>;
 export type Mark = { tone: Tone; icon: string; text: string };
@@ -30,22 +31,26 @@ export const LISTENER_MARK: Record<ListenerMark, Mark> = {
 };
 
 /**
- * 출발지 제한 한 줄 — 시안 `srcSummary`. 주소 집합은 이름으로, 대역 수는 **펼친 실제 수**로 말한다.
- * `@cloudflare` 하나만 있으면 「Cloudflare만 (대역 15개) · @cloudflare」 다. 항목 수를 세면 집합 하나가 「1개 대역만」 으로 읽힌다.
+ * 출발지 제한 한 줄 — 시안 `srcSummary(rows)` 그대로.
+ *   · 없으면 「제한 없음」
+ *   · 집합 하나뿐이면 「Cloudflare만 (대역 15개) · @cloudflare」 — 대역 수는 그 집합을 **펼친 실제 수**다
+ *   · 집합만 여럿이면 「Cloudflare + office · @cloudflare @office」
+ *   · 대역이 섞이면 「Cloudflare + 대역 2개 · @cloudflare」, 대역만이면 「대역 2개」
+ * 집합의 이름은 시안 `label || name` — 모델에 label 이 없어서 Cloudflare 출처는 「Cloudflare」, 나머지는 이름 그대로다.
  * head 에 없는 집합은 대역 0 개로 센다(검증기가 막는다 — 여기서 지어내지 않는다).
  */
 export function sourceAllowSummary(model: ModelLike, allow: readonly string[]): { text: string; ranges: number; on: boolean } {
   if (allow.length === 0) return { text: '제한 없음', ranges: 0, on: false };
   const sets = [...new Set(allow.filter((s) => s.startsWith('@')).map((s) => s.slice(1)))];
-  const direct = allow.filter((s) => !s.startsWith('@')).length;
+  const direct = allow.filter((s) => !s.startsWith('@') && s.trim() !== '').length;
   const info = (n: string): Record<string, unknown> | undefined => itemOf(model, 'addressSet', n);
-  const label = (n: string): string => (info(n)?.['source'] === 'cloudflare' ? 'Cloudflare' : `@${n}`);
+  const label = (n: string): string => (info(n)?.['source'] === 'cloudflare' ? 'Cloudflare' : n);
   const count = (n: string): number => { const c = info(n)?.['cidrs']; return Array.isArray(c) ? c.length : 0; };
   const ranges = direct + sets.reduce((a, n) => a + count(n), 0);
-  const refs = sets.length === 0 ? '' : ` · ${sets.map((n) => `@${n}`).join(' ')}`;
-  if (sets.length === 0) return { text: `대역 ${direct}개만`, ranges, on: true };
-  const parts = [...sets.map(label), ...(direct > 0 ? [`대역 ${direct}개`] : [])];
-  return { text: `${parts.join(' + ')}만 (대역 ${ranges}개)${refs}`, ranges, on: true };
+  const t = direct === 0 && sets.length === 1 ? `${label(sets[0]!)}만 (대역 ${count(sets[0]!)}개)`
+    : direct === 0 ? sets.map(label).join(' + ')
+      : [...sets.map(label), `대역 ${direct}개`].join(' + ');
+  return { text: t + (sets.length > 0 ? ` · ${sets.map((n) => `@${n}`).join(' ')}` : ''), ranges, on: true };
 }
 
 const obj = (v: unknown): Record<string, unknown> | undefined =>
@@ -73,6 +78,24 @@ export function healthCheckText(pool: Readonly<Record<string, unknown>> | undefi
   const what = proto === 'http' ? `HTTP ${typeof h?.['path'] === 'string' ? h['path'] : '/'}` : 'TCP 연결';
   const every = typeof h?.['intervalS'] === 'number' ? ` · ${h['intervalS']}s` : '';
   return h === undefined ? `${what} (기본)` : `${what}${every}`;
+}
+
+/**
+ * 헬스체크 한 줄 — 시안 `hcStr(v)`: 「http /healthz 5s」 · 「tcp 5s」 · 「검사 안 함」.
+ * 주기를 안 적었으면 데몬 기본값이라 GUI 는 모른다 — 「http /healthz」 · 「tcp 연결」 처럼 주기를 빼고 말한다(지어내지 않는다).
+ * 안 적었을 때의 방식은 `probePlanOf` 와 같다(http 풀은 http, 인증서를 검증하지 않는 TLS 풀과 나머지는 TCP 연결).
+ */
+export function hcText(pool: Readonly<Record<string, unknown>> | undefined): string {
+  if (pool === undefined) return '—';
+  if (pool['protocolClass'] === 'udp') return '검사 안 함';
+  const h = obj(pool['healthCheck']);
+  if (h?.['mode'] === 'none') return '검사 안 함';
+  const ut = obj(pool['upstreamTls']);
+  const unverified = ut?.['enabled'] === true && ut['verify'] !== true;
+  const proto = h?.['protocol'] ?? (pool['protocolClass'] === 'http' && !unverified ? 'http' : 'tcp_connect');
+  const iv = typeof h?.['intervalS'] === 'number' ? `${h['intervalS']}s` : undefined;
+  if (proto === 'http') return `http ${typeof h?.['path'] === 'string' ? h['path'] : '/'}${iv === undefined ? '' : ` ${iv}`}`;
+  return iv === undefined ? 'tcp 연결' : `tcp ${iv}`;
 }
 
 /** 백엔드의 헬스 판정. `unknown` 은 찌르는 풀이면 「확인 중」, 아니면 「관측 없음」 이다. */
@@ -135,7 +158,8 @@ export function poolMark(desk: Desk, key: string): Mark {
   const pool = itemOf(desk.model, 'pool', key);
   const total = row?.backends.length ?? 0;
   if (!poolProbed(pool)) return { ...HEALTH_MARK.none, text: `관측 없음 · ${total}개` };
-  if (total === 0) return { tone: 'warn', icon: '▲', text: '백엔드 없음' };
+  // 시안 공식(`ok === bs.length`)은 빈 풀을 「● 0 / 0」 으로 그린다. 빈 풀로 가는 요청은 실패하므로 경고 톤으로 둔다.
+  if (total === 0) return { tone: 'warn', icon: '▲', text: '0 / 0' };
   const ok = row?.backends.filter((b) => b.state === 'healthy' && !backendDraining(desk, b.key)).length ?? 0;
   return { tone: ok === total ? 'ok' : ok === 0 ? 'danger' : 'warn', icon: ok === total ? '●' : ok === 0 ? '✕' : '▲', text: `${ok} / ${total}` };
 }
@@ -143,9 +167,11 @@ export function poolMark(desk: Desk, key: string): Mark {
 /** 상세 머리 · 분할 상세의 상태 배지 하나. 모르면 undefined. */
 export function statusOf(desk: Desk, kind: ResourceKind, key: string): Mark | undefined {
   if (kind === 'listener') {
+    // 시안 `cells('listeners')` 의 상태 칸 — 목록과 같은 말(`lists/traffic-cells.ts` 의 listenerState).
     const row = desk.listeners.rows.find((r) => r.key === key);
     if (row === undefined) return undefined;
-    return LISTENER_MARK[row.mark];
+    if (row.mark === 'join') return { tone: 'pending', icon: '◐', text: '반영대기' };
+    return isPendingResource(desk.pendingResources, 'listener', key) ? { tone: 'pending', icon: '◐', text: '적용 대기' } : { tone: 'ok', icon: '●', text: '정상' };
   }
   if (kind === 'backend') {
     if (backendDraining(desk, key)) return DRAIN_MARK;
