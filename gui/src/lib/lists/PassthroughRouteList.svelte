@@ -70,8 +70,8 @@
   ];
   // 시안 「＋ 만들기」 메뉴는 라우트 화면 하나에 둘이다 — 패스스루에서도 같다.
   const createItems: MenuItem[] = [
-    { label: '라우트 만들기', href: '/traffic/route/passthrough/new' },
-    { label: '경로별 묶음으로 만들기', href: '/traffic/route/http/new/group' },
+    { label: '라우트 만들기', description: '호스트 하나, 경로 하나로 만들어요.', href: '/traffic/route/passthrough/new' },
+    { label: '경로별 묶음으로 만들기', description: '규칙을 줄로 적어 라우트 여러 개를 만들어요.', href: '/traffic/route/http/new/group' },
   ];
   // 합산이면 만들기는 지역을 먼저 고른다(RegionCreate). 쓸 지역이 하나도 없으면 안 보인다.
   usePageActions(() => (agg.on ? (agg.entries.some((e) => e.writable) ? createIn : undefined) : ro ? undefined : create));
@@ -80,7 +80,7 @@
 
 {#snippet create()}
   <Menu items={createItems} label="만들기">
-    {#snippet trigger({ open, toggle })}<Button variant="primary" aria-haspopup="menu" aria-expanded={open} onclick={toggle}>＋ 만들기</Button>{/snippet}
+    {#snippet trigger({ open, toggle })}<Button variant="primary" aria-haspopup="menu" aria-expanded={open} onclick={toggle}>＋ 만들기 ▾</Button>{/snippet}
   </Menu>
 {/snippet}
 {#snippet createIn()}<RegionCreate {agg} href="/traffic/route/passthrough/new" />{/snippet}

@@ -7,27 +7,14 @@
   import { page } from '$app/state';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { ROUTE_COLS, routeCells } from '#lib/lists/route-cells';
+  import OverviewGrid from '#lib/detail/OverviewGrid.svelte';
   import { routeFactsOf } from './route-facts';
 
   let { kind }: { kind: 'httpRoute' | 'passthroughRoute' } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const key = $derived(page.params['key'] ?? '');
   const facts = $derived(routeFactsOf(desk, kind, key));
-  const rows = $derived(facts === undefined ? [] : routeCells(facts).map((c, i) => ({ l: ROUTE_COLS[i] ?? '', c })));
+  const rows = $derived(facts === undefined ? [] : routeCells(facts).map((c, i) => ({ l: ROUTE_COLS[i] ?? '', v: c.t, mono: c.kind === 'mono', title: c.title })));
 </script>
 
-{#if facts !== undefined}
-  <div class="ov">
-    {#each rows as r (r.l)}
-      <div><div class="l">{r.l}</div><div class="v" class:mono={r.c.kind === 'mono'} title={r.c.title}>{r.c.t}</div></div>
-    {/each}
-  </div>
-{/if}
-
-<style>
-  /* 시안 `tOv` 인라인 style 그대로. */
-  .ov { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 24px; font-size: 13px; align-content: start; }
-  .l { font-size: 12px; color: var(--tx3); }
-  .v { font-family: var(--font); overflow-wrap: anywhere; }
-  .v.mono { font-family: var(--mono); }
-</style>
+{#if facts !== undefined}<OverviewGrid {rows} />{/if}

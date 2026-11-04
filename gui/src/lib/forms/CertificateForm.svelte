@@ -123,11 +123,9 @@
       <FormRow label="자동 갱신">
         <Switch checked disabled>켜짐</Switch>
       </FormRow>
-      <FormRow label="검증 방식">
+      <FormRow label="검증 방식" warn={clusterWarn}
+        help={clusterWarn ? '▲ 클러스터에서는 http-01이 실패할 수 있어요. CA가 리더가 아닌 노드로 올 수 있어요. dns-01이나 업로드 인증서를 써요.' : undefined}>
         <Select label="검증 방식" value={challenge} options={[{ value: 'HTTP-01' }, { value: 'DNS-01' }]} width="100%" disabled />
-        {#if clusterWarn}
-          <div class="warn">▲ 클러스터에서는 http-01이 실패할 수 있어요. CA가 리더가 아닌 노드로 올 수 있어요. dns-01이나 업로드 인증서를 써요.</div>
-        {/if}
       </FormRow>
       {#if challenge === 'DNS-01'}
         <FormRow label="DNS 공급자">
@@ -151,8 +149,3 @@
     {/if}
   </FormSection>
 </CreateForm>
-
-<style>
-  /* 시안 `f.hc` 가 warn 이면 도움말이 경고 색이다. */
-  .warn { font-size: 12px; color: var(--warn); margin-top: 4px; }
-</style>

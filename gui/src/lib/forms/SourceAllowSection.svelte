@@ -32,12 +32,8 @@
 </script>
 
 <FormSection {title}>
-  <FormRow label="출발지 제한" {error} help={noSrc && !conflict ? 'PROXY protocol을 쓰면 출발지 제한을 쓸 수 없어요.' : srcHelp(http)}>
-    <span class:warn><SourceRows label="출발지 제한" bind:value bind:invalid={bad} disabled={noSrc && !conflict} /></span>
+  <!-- 시안: :80 리스너에 출발지 제한을 걸면 도움말이 경고 색(`f.hc = var(--warn)`). -->
+  <FormRow label="출발지 제한" {error} {warn} help={noSrc && !conflict ? 'PROXY protocol을 쓰면 출발지 제한을 쓸 수 없어요.' : srcHelp(http)}>
+    <SourceRows label="출발지 제한" bind:value bind:invalid={bad} disabled={noSrc && !conflict} />
   </FormRow>
 </FormSection>
-
-<style>
-  /* 시안: :80 리스너에 출발지 제한을 걸면 도움말이 경고 색(`f.hc = var(--warn)`). */
-  .warn + :global(.msg) { color: var(--warn); }
-</style>

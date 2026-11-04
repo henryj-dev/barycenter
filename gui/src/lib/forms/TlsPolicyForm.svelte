@@ -63,9 +63,9 @@
   </FormSection>
 
   <FormSection title="HSTS">
-    <FormRow label="HSTS">
+    <FormRow label="HSTS" warn={hsts}
+      help={hsts ? '▲ HSTS 는 브라우저에서 되돌릴 수 없어요. 설정을 꺼도 max-age 동안 https 로만 와요. 인증서가 깨지면 사용자가 우회하지 못해요.' : undefined}>
       <Switch bind:checked={hsts}>{hsts ? '켜짐' : '꺼짐'}</Switch>
-      {#if hsts}<div class="warn">▲ HSTS 는 브라우저에서 되돌릴 수 없어요. 설정을 꺼도 max-age 동안 https 로만 와요. 인증서가 깨지면 사용자가 우회하지 못해요.</div>{/if}
     </FormRow>
     {#if hsts}
       <FormRow label="max-age" error={age}>
@@ -83,8 +83,3 @@
     </FormRow>
   </FormSection>
 </CreateForm>
-
-<style>
-  /* 시안 `f.hc` 가 warn 이면 도움말이 경고 색이다. */
-  .warn { font-size: 12px; color: var(--warn); margin-top: 4px; }
-</style>

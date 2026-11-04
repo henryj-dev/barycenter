@@ -269,7 +269,7 @@
         <FormRow label="SNI 매칭 없음 폴백"><Select label="SNI 매칭 없음 폴백" bind:value={sniPool} options={keep(fallbacks, sniPool, '목록에 없어요')} mono={false} width="100%" /></FormRow>
         <FormRow label="SNI 없음 폴백"><Select label="SNI 없음 폴백" bind:value={noSniPool} options={keep(fallbacks, noSniPool, '목록에 없어요')} mono={false} width="100%" /></FormRow>
         <FormRow label="preread 타임아웃" for="le-preread" error={prereadError(preread)} help="ClientHello 를 기다리는 시간(초)이에요. 비우면 nginx 기본값이에요.">
-          <TextInput id="le-preread" bind:value={preread} invalid={prereadError(preread) !== undefined} inputmode="numeric" placeholder="30" />
+          <TextInput id="le-preread" bind:value={preread} invalid={prereadError(preread) !== undefined} inputmode="numeric" placeholder="30" unit="s" />
         </FormRow>
       {/if}
     </FormSection>

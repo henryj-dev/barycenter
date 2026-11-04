@@ -11,7 +11,7 @@
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { isPendingResource } from '#lib/pending';
-  import SettingsFrame from './SettingsFrame.svelte';
+  import SettingsFrame from '#lib/detail/SettingsFrame.svelte';
   import { CIPHERS, HSTS_MAX, MAX_VERSIONS, MISMATCH, VERSIONS, ageError, policyBody, policyForm, rangeError, type PolicyForm } from './policy-edit.ts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -52,9 +52,9 @@
     </FormRow>
   </FormSection>
   <FormSection title="HSTS">
-    <FormRow label="HSTS">
+    <FormRow label="HSTS" warn={f.hsts && !initial.hsts}
+      help={f.hsts && !initial.hsts ? '▲ HSTS 는 브라우저에서 되돌릴 수 없어요. 설정을 꺼도 max-age 동안 https 로만 와요. 인증서가 깨지면 사용자가 우회하지 못해요.' : undefined}>
       <Switch bind:checked={f.hsts}>{f.hsts ? '켜짐' : '꺼짐'}</Switch>
-      {#if f.hsts && !initial.hsts}<div class="warn">▲ HSTS 는 브라우저에서 되돌릴 수 없어요. 설정을 꺼도 max-age 동안 https 로만 와요. 인증서가 깨지면 사용자가 우회하지 못해요.</div>{/if}
     </FormRow>
     {#if f.hsts}
       <FormRow label="max-age" error={age}>
@@ -71,7 +71,3 @@
     </FormRow>
   </FormSection>
 </SettingsFrame>
-
-<style>
-  .warn { font-size: 12px; color: var(--warn); margin-top: 4px; }
-</style>

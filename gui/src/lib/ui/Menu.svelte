@@ -7,6 +7,8 @@
     disabled?: boolean;
     /** 체크 항목(컬럼 보이기 등). undefined 면 일반 항목. */
     checked?: boolean;
+    /** 이름 아래 설명 줄(시안 만들기 메뉴 `createItems` 의 `d` — 12px · --tx3). */
+    description?: string;
   };
 </script>
 
@@ -26,6 +28,8 @@
   } = $props();
 
   let open = $state(false);
+  /** 설명 줄이 있는 메뉴는 시안 만들기 메뉴 모양이다 — 너비 260px, 항목은 이름 · 설명 두 줄(6px 10px). */
+  const described = $derived(items.some((it) => it.description !== undefined));
   let root: HTMLSpanElement | undefined = $state();
   const toggle = (e?: Event): void => { e?.stopPropagation(); open = !open; };
   const outside = (e: MouseEvent): void => { if (open && root && !root.contains(e.target as Node)) open = false; };
@@ -39,20 +43,24 @@
 
 <svelte:window onclick={outside} onkeydown={(e) => { if (open && e.key === 'Escape') open = false; }} />
 
+{#snippet body(it: MenuItem)}
+  {#if it.description !== undefined}<span class="l">{it.label}</span><span class="d">{it.description}</span>{:else}{it.label}{/if}
+{/snippet}
+
 <span class="menu" bind:this={root}>
   {@render trigger({ open, toggle })}
   {#if open}
-    <div class="pop" role="menu" aria-label={label} data-align={align}>
+    <div class="pop" role="menu" aria-label={label} data-align={align} data-described={described}>
       {#if header !== undefined}
         <div class="hd" role="presentation"><b>{header.title}</b>{#if header.sub}<span>{header.sub}</span>{/if}</div>
       {/if}
       {#each items as it (it.label)}
         {#if it.href !== undefined && !it.disabled}
-          <a role="menuitem" class="item" href={it.href} data-danger={it.danger} onclick={() => { open = false; }}>{it.label}</a>
+          <a role="menuitem" class="item" href={it.href} data-danger={it.danger} onclick={() => { open = false; }}>{@render body(it)}</a>
         {:else}
           <button type="button" class="item" role={it.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
             aria-checked={it.checked} data-danger={it.danger} disabled={it.disabled} onclick={(e) => choose(it, e)}>
-            {#if it.checked !== undefined}<span class="mark">{it.checked ? '✓' : ''}</span>{/if}{it.label}
+            {#if it.checked !== undefined}<span class="mark">{it.checked ? '✓' : ''}</span>{/if}{@render body(it)}
           </button>
         {/if}
       {/each}
@@ -80,5 +88,9 @@
   .hd { display: grid; gap: 2px; padding: 6px 8px 8px; margin-bottom: 4px; border-bottom: 1px solid var(--bd); white-space: nowrap; }
   .hd b { font: 600 13px/18px var(--font); color: var(--tx); }
   .hd span { font: 400 12px/16px var(--font); color: var(--tx2); }
+  .pop[data-described='true'] { width: 260px; }
+  .pop[data-described='true'] .item { flex-direction: column; align-items: flex-start; gap: 0; padding: 6px 10px; white-space: normal; }
+  .l { font-weight: 500; }
+  .d { font-size: 12px; line-height: 16px; color: var(--tx3); }
   .mark { width: 14px; color: var(--accent); font-weight: 700; }
 </style>

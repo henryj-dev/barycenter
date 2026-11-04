@@ -114,8 +114,9 @@ describe('상세 — 시안 상세 페이지', () => {
       expect(src(`routes/tls/${d}/[key]/+layout.svelte`)).toContain('<TlsFrame kind=');
       expect(src(`routes/tls/${d}/[key]/+page.svelte`)).toContain('<TlsOverview kind=');
       expect(src(`routes/tls/${d}/[key]/settings/+page.svelte`)).toContain('<TlsSettings kind=');
-      expect(src(`routes/tls/${d}/[key]/resources/+page.svelte`)).toContain('<TlsRelations kind=');
-      expect(src(`routes/tls/${d}/[key]/history/+page.svelte`)).toContain('<TlsHistory kind=');
+      // 연결 · 기록은 모든 리소스가 같은 시안 블록(`RelationRows` · `HistoryRows`)을 쓴다.
+      expect(src(`routes/tls/${d}/[key]/resources/+page.svelte`)).toContain('<RelationRows kind=');
+      expect(src(`routes/tls/${d}/[key]/history/+page.svelte`)).toContain('<HistoryRows kind=');
     }
   });
 
@@ -132,27 +133,33 @@ describe('상세 — 시안 상세 페이지', () => {
   it('개요: 열 이름 + 칸(ovRows) · 인증서는 주체 · SAN · 지문 · ACME 주문', () => {
     const o = src('lib/tls/TlsOverview.svelte');
     expect(o).toContain("{ l: '주체', v: subject, mono: true }, { l: 'SAN', v: san, mono: true }, { l: '지문', v: '—', mono: true }");
-    expect(o).toContain('grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 24px;');
+    expect(o).toContain('<OverviewGrid {rows}><Acme /></OverviewGrid>');
+    expect(src('lib/detail/OverviewGrid.svelte')).toContain('grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 24px;');
     const a = src('lib/detail/Acme.svelte');
     expect(a).toContain('<div class="t">ACME 주문</div>');
     expect(a).toContain('마지막 갱신 {notBefore} · {challenge} · 다음 시도 —');
   });
 
   it('설정 탭: 저장 줄(안내 · 되돌리기 · 저장) · 읽기 전용이면 보기 구획', () => {
-    const s = src('lib/tls/SettingsFrame.svelte');
+    // 설정 틀은 트래픽과 같은 하나다(`lib/detail/SettingsFrame`) — 쓸 수 없으면 시안 `tSetView`(`ReadView`).
+    const s = src('lib/detail/SettingsFrame.svelte');
     expect(s).toContain("'저장하면 커밋하고 적용 대기에 새 리비전이 생겨요.'");
-    expect(s).toContain('{#if scope?.blocked === true}');
-    expect(s).toContain('<WriteNote />');
+    expect(s).toContain('{#if scope?.blocked === true && view !== undefined}');
+    expect(s).toContain('<ReadView sections={view} />');
+    for (const f of ['CertificateSettings', 'TlsPolicySettings', 'SniBindingSettings']) {
+      expect(src(`lib/tls/${f}.svelte`), f).toContain("import SettingsFrame from '#lib/detail/SettingsFrame.svelte';");
+    }
   });
 
   it('연결 · 기록: 시안 격자(100px 1fr 1fr · 110px 1fr 40px)와 문구', () => {
-    const r = src('lib/tls/TlsRelations.svelte');
-    expect(r).toContain('grid-template-columns: 100px 1fr 1fr;');
+    expect(src('lib/detail/RelationRows.svelte')).toContain('grid-template-columns: 100px 1fr 1fr;');
+    const r = src('lib/detail/relation-rows.ts');
     expect(r).toContain("'TLS 정책으로 사용'");
     expect(r).toContain("'이 바인딩이 속한 리스너'");
     expect(r).toContain("'호스트에 연결한 인증서'");
-    const h = src('lib/tls/TlsHistory.svelte');
+    const h = src('lib/detail/HistoryRows.svelte');
     expect(h).toContain('grid-template-columns: 110px 1fr 40px;');
-    expect(h).toContain('`${key} 만듦`');
+    expect(h).toContain("created: '만듦'");
+    expect(h).toContain('`${key} ${VERB[r.change]}`');
   });
 });

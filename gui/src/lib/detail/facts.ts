@@ -4,7 +4,7 @@
  * 모두 이미 받은 값(head 모델 · 헬스 · 상태 API)에서 읽는다. 새로 묻지 않는다.
  * 모르는 것은 지어내지 않는다 — 상태 API 를 못 읽었으면 「모름」 이다.
  */
-import { itemOf, relationsOf, type ModelLike, type ResourceKind } from '@web/resources';
+import { itemOf, type ModelLike, type ResourceKind } from '@web/resources';
 import type { ListenerMark } from '@web/listeners-view';
 import type { Tone } from '#lib/ui';
 import type { createDesk } from '#lib/desk.svelte.ts';
@@ -189,8 +189,4 @@ export function statusOf(desk: Desk, kind: ResourceKind, key: string): Mark | un
   return undefined;
 }
 
-/** 연결된 리소스 탭의 수 — 쓰는 것 + 쓰이는 것. */
-export function relationCount(desk: Desk, kind: ResourceKind, key: string): number {
-  const r = relationsOf(desk.model, { kind, key });
-  return r.uses.length + r.usedBy.length;
-}
+/* 「연결된 리소스」 탭의 수는 `relation-rows.ts` 의 `relationRows(…).length` 다 — 탭이 그리는 줄과 같다. */

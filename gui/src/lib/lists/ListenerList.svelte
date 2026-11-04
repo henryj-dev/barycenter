@@ -70,8 +70,8 @@
   const delEntry = $derived(del === undefined || !agg.on ? undefined : agg.entry(del.region));
   /** 시안 `createItems`(리스너 화면) — 빠른 프록시 만들기 · 리스너 만들기. */
   const createItems: MenuItem[] = [
-    { label: '빠른 프록시 만들기', href: '/traffic/listener/new/quick' },
-    { label: '리스너 만들기', href: '/traffic/listener/new' },
+    { label: '빠른 프록시 만들기', description: '리스너, 풀, 백엔드를 한 번에 만들어요.', href: '/traffic/listener/new/quick' },
+    { label: '리스너 만들기', description: '프로토콜을 먼저 선택해요.', href: '/traffic/listener/new' },
   ];
 </script>
 

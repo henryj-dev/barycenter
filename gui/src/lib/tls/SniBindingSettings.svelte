@@ -10,7 +10,7 @@
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { isPendingResource } from '#lib/pending';
-  import SettingsFrame from './SettingsFrame.svelte';
+  import SettingsFrame from '#lib/detail/SettingsFrame.svelte';
   import { boundCerts, hostsError, hostsHelp, httpsListeners, listRows, parseHosts } from './sni-edit.ts';
   import { sniHosts } from './tls-view.ts';
 

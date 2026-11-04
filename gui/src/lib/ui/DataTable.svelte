@@ -54,7 +54,7 @@
   let {
     rows, rowKey, columns, label, cell,
     search, chips = [], selectable = false, selected = $bindable([]), bulk, rowMenu, onopen,
-    loading = false, error, onretry, emptyTitle = '항목이 없어요', emptyBody, emptyAction, toolbar,
+    loading = false, error, onretry, emptyTitle = '항목이 없어요', emptyBody, emptyAction, toolbar, actions,
     pageSize = 0, minHeight = '240px', fill = false,
   }: {
     rows: readonly T[];
@@ -77,8 +77,10 @@
     emptyTitle?: string;
     emptyBody?: string;
     emptyAction?: Snippet;
-    /** 「N개」 와 「컬럼 ▾」 사이에 둘 것(시안 라우트 목록의 HTTP / 패스스루 탭 같은 것). */
+    /** 찾기 칸 · 칩 바로 뒤(빈 칸 앞)에 둘 것 — 시안 라우트 목록의 HTTP / 패스스루 분할 컨트롤 자리. */
     toolbar?: Snippet;
+    /** 빈 칸 뒤 · 「N개」 앞(도구 줄 오른쪽)에 둘 단추 — 시안 밖 화면(소속 백엔드 넣기 · 지역 다시 묻기)용. */
+    actions?: Snippet;
     pageSize?: number;
     minHeight?: string;
     /** 부모 높이를 채운다 — 도구 줄은 그대로, 표만 스크롤한다(분할 뷰 위쪽). */
@@ -163,7 +165,7 @@
 {/snippet}
 
 <div class="dt" class:fill>
-  {#if search !== undefined || chips.length > 0 || toolbar || colItems.length > 0}
+  {#if search !== undefined || chips.length > 0 || toolbar || actions || colItems.length > 0}
     <div class="bar">
       {#if search !== undefined}
         <SearchInput bind:value={q} placeholder={search.placeholder ?? '이름·주소로 찾기'} oninput={() => { page = 0; }} />
@@ -172,8 +174,9 @@
         <Chip tone={c.tone} icon={c.icon} pressed={activeChips.includes(c.key)}
           onclick={() => { activeChips = activeChips.includes(c.key) ? activeChips.filter((k) => k !== c.key) : [...activeChips, c.key]; page = 0; }}>{c.label}</Chip>
       {/each}
-      <div class="grow"></div>
       {#if toolbar}{@render toolbar()}{/if}
+      <div class="grow"></div>
+      {#if actions}{@render actions()}{/if}
       <span class="count">{filtered.length}개</span>
       {#if colItems.length > 0}
         <Menu items={colItems} label="컬럼">

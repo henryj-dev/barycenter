@@ -1,70 +1,22 @@
 <script lang="ts">
   /**
-   * 연결된 리소스 탭(리스너 · 풀 · 백엔드 · 주소 집합) — 콘솔 시안 `tRel` · `relRows` 그대로.
-   * 한 줄에 종류(100px, 흐린색) · 이름(고정폭) · 설명(흐린색). 풀은 아래에 「소속 백엔드 · N」 표(시안 `subTabD`)를 더 둔다.
+   * 연결된 리소스 탭 — 모든 리소스가 같다. 콘솔 시안 `tRel` · `relRows` 그대로:
+   * 테두리 상자 안에 줄마다 종류(100px, 흐린색) · 이름(고정폭) · 설명(흐린색). 풀은 아래에 「소속 백엔드 · N」 표(시안 `subTabD`)를 더 둔다.
    *
-   * 줄은 head 모델의 참조(`relationsOf`)에서 만든다 — 이것이 쓰는 것과 이것을 쓰는 것을 한 목록으로, 설명은 시안 말
-   * (「기본 풀」 · 「이 리스너에 연결」 · 「기본 풀로 사용」 · 「출발지 제한에 사용」 …). 풀 · 백엔드는 시안처럼 「헬스체크 · 풀 설정」 줄을 단다.
-   * 시안의 「라우트 · N개」 는 라우트를 한 줄씩 늘어놓는다 — 이름을 누르면 그 상세로 간다(있던 동작). 없는 대상은 그렇게 말한다.
+   * 줄은 `relationRows` 가 만든다(탭 이름 옆의 수도 같은 함수 — 수가 줄 수와 같다). 문구는 리소스마다 시안 말이다.
+   * 시안에 없는 기존 동작: 이름을 누르면 그 상세로 간다(같은 글 모양) · head 에 없는 대상은 이름 뒤에 위험 색 「— head 에 없어요」.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { itemOf, itemsOf, relationsOf, resourcePath, type ResourceKind } from '@web/resources';
+  import { itemsOf, resourcePath, type ResourceKind } from '@web/resources';
   import type { createDesk } from '#lib/desk.svelte.ts';
-  import { DRAIN_MARK, HEALTH_MARK, backendDraining, backendHealth, hcText } from './facts';
+  import { DRAIN_MARK, HEALTH_MARK, backendDraining, backendHealth } from './facts';
+  import { relationRows } from './relation-rows';
 
-  type Row = { k: string; n: string; note: string; href?: string; missing?: boolean };
-  let { kind }: { kind: 'listener' | 'pool' | 'backend' | 'addressSet' } = $props();
+  let { kind }: { kind: ResourceKind } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const key = $derived(page.params['key'] ?? '');
-
-  /** 시안의 종류 이름 — 라우트는 HTTP · 패스스루를 가리지 않고 「라우트」 다. */
-  const KIND: Record<ResourceKind, string> = {
-    listener: '리스너', httpRoute: '라우트', passthroughRoute: '라우트', pool: '풀', backend: '백엔드', addressSet: '주소 집합',
-    certificate: '인증서', tlsPolicy: 'TLS 정책', sniBinding: 'SNI 바인딩',
-  };
-  /** 이것이 쓰는 것의 설명 — 참조한 자리(시안: 「기본 풀」 · 「기본 인증서」 · 「소속 풀」). */
-  const usesNote = (via: string): string => ({
-    '기본 동작': '기본 풀', '기본 풀': '기본 풀', 'SNI 매칭 없음': 'SNI 매칭 없음 폴백', 'SNI 없음': 'SNI 없음 폴백',
-    'PROXY 수신': '신뢰 대역', '원본 IP 헤더': '신뢰 대역', '풀': '소속 풀',
-  }[via] ?? via);
-  /** 이것을 쓰는 것의 설명 — 시안: 「이 리스너에 연결」 · 「기본 풀로 사용」 · 「이 풀로 전달」 · 「출발지 제한에 사용」. */
-  const usedNote = (via: string, from: ResourceKind): string => {
-    if (kind === 'listener') return from === 'sniBinding' ? '이 리스너의 SNI 바인딩' : '이 리스너에 연결';
-    if (kind === 'pool') {
-      return ({ '기본 동작': '기본 풀로 사용', '기본 풀': '기본 풀로 사용', 'SNI 매칭 없음': 'SNI 폴백으로 사용', 'SNI 없음': 'SNI 폴백으로 사용',
-        '프록시': '이 풀로 전달', '출발지 규칙': '출발지 규칙으로 전달' } as Record<string, string>)[via] ?? via;
-    }
-    if (kind === 'addressSet') return via === '출발지 제한' ? '출발지 제한에 사용' : via === '출발지 규칙' ? '출발지 규칙에 사용' : '신뢰 대역에 사용';
-    return via;
-  };
-
-  const rows = $derived.by((): Row[] => {
-    const rel = relationsOf(desk.model, { kind, key });
-    const out: Row[] = [];
-    const seen = new Set<string>();
-    const push = (r: Row): void => { const id = `${r.k}/${r.n}/${r.note}`; if (!seen.has(id)) { seen.add(id); out.push(r); } };
-    for (const e of rel.uses) {
-      push({ k: KIND[e.to.kind], n: e.to.key, note: usesNote(e.via), ...(e.missing ? { missing: true } : { href: resourcePath(e.to.kind, e.to.key) }) });
-    }
-    for (const e of rel.usedBy) {
-      if (kind === 'pool' && e.from.kind === 'backend') continue; // 아래 「소속 백엔드」 표가 말한다(시안).
-      push({ k: KIND[e.from.kind], n: e.from.key, note: usedNote(e.via, e.from.kind), href: resourcePath(e.from.kind, e.from.key) });
-    }
-    if (kind === 'backend') {
-      const pool = String(itemOf(desk.model, 'backend', key)?.['pool'] ?? '');
-      for (const e of relationsOf(desk.model, { kind: 'pool', key: pool }).usedBy.filter((x) => x.from.kind === 'listener')) {
-        push({ k: '리스너', n: e.from.key, note: '이 풀을 쓰는 리스너', href: resourcePath('listener', e.from.key) });
-      }
-      const p = itemOf(desk.model, 'pool', pool);
-      if (p !== undefined) push({ k: '헬스체크', n: hcText(p), note: '풀 설정' });
-    }
-    if (kind === 'pool') {
-      const p = itemOf(desk.model, 'pool', key);
-      if (p !== undefined) push({ k: '헬스체크', n: hcText(p), note: '풀 설정' });
-    }
-    return out;
-  });
+  const rows = $derived(relationRows(desk, kind, key));
   const members = $derived(kind !== 'pool' ? [] : itemsOf(desk.model, 'backend').filter((b) => b['pool'] === key).map((b) => {
     const k = String(b['key']);
     return { n: k, hp: `${String(b['host'])}:${String(b['port'])}`, w: String(b['weight'] ?? 1), m: backendDraining(desk, k) ? DRAIN_MARK : HEALTH_MARK[backendHealth(desk, k)] };
@@ -72,7 +24,7 @@
 </script>
 
 <div class="rel">
-  {#each rows as r (`${r.k}/${r.n}/${r.note}`)}
+  {#each rows as r, i (i)}
     <div class="row">
       <span class="k">{r.k}</span>
       {#if r.href !== undefined}<a class="n" href={r.href}>{r.n}</a>{:else}<span class="n">{r.n}{#if r.missing} <span class="miss">— head 에 없어요</span>{/if}</span>{/if}

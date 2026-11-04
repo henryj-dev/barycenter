@@ -123,10 +123,10 @@
     {#if rateOn}
       <FormRow label="초당 요청" for="lo-rate" help="초당 요청이나 동시 연결 중 하나는 넣어요."><TextInput id="lo-rate" bind:value={f.rate} placeholder="10r/s" width="160px" /></FormRow>
       <FormRow label="burst" for="lo-burst" help="초당 요청 없이 burst 만 넣으면 저장하지 못해요.">
-        <TextInput id="lo-burst" bind:value={f.burst} placeholder="20" width="160px" />
+        <TextInput id="lo-burst" bind:value={f.burst} placeholder="20" width="160px" unit="req" />
       </FormRow>
       <FormRow label="nodelay" help="켜면 burst 요청을 지연 없이 처리해요."><Switch bind:checked={nodelay}>켜요</Switch></FormRow>
-      <FormRow label="동시 연결" for="lo-mc"><TextInput id="lo-mc" bind:value={f.maxConn} placeholder="100" width="160px" /></FormRow>
+      <FormRow label="동시 연결" for="lo-mc"><TextInput id="lo-mc" bind:value={f.maxConn} placeholder="100" width="160px" unit="개" /></FormRow>
     {/if}
   </FormSection>
 

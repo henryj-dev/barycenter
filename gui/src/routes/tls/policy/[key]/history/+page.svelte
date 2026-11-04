@@ -1,5 +1,5 @@
 <script lang="ts">
-  import TlsHistory from '#lib/tls/TlsHistory.svelte';
+  import HistoryRows from '#lib/detail/HistoryRows.svelte';
 </script>
 
-<TlsHistory kind="tlsPolicy" />
+<HistoryRows kind="tlsPolicy" />

@@ -65,17 +65,19 @@ describe('ACME 인증서 화면', () => {
       const src = read(`lists/${l}List.svelte`);
       expect(src, l).toMatch(/variant="primary" href="[^"]+\/new">＋ 만들기<\/Button>/);
     }
-    // 라우트는 시안 `createItems` — 「＋ 만들기」 가 메뉴(라우트 만들기 · 경로별 묶음으로 만들기)를 연다.
+    // 라우트 · 리스너는 시안 `createItems` 메뉴다 — 버튼 글은 시안 그대로 「＋ 만들기 ▾」, 항목마다 설명 줄(`ci.d`).
     for (const l of ['HttpRoute', 'PassthroughRoute']) {
       const src = read(`lists/${l}List.svelte`);
-      expect(src, l).toMatch(/<Button variant="primary" aria-haspopup="menu"[^>]*>＋ 만들기<\/Button>/);
-      expect(src, l).toContain("{ label: '경로별 묶음으로 만들기', href: '/traffic/route/http/new/group' }");
+      expect(src, l).toMatch(/<Button variant="primary" aria-haspopup="menu"[^>]*>＋ 만들기 ▾<\/Button>/);
+      expect(src, l).toContain("{ label: '라우트 만들기', description: '호스트 하나, 경로 하나로 만들어요.',");
+      expect(src, l).toContain("{ label: '경로별 묶음으로 만들기', description: '규칙을 줄로 적어 라우트 여러 개를 만들어요.', href: '/traffic/route/http/new/group' }");
     }
-    // 리스너는 시안 `createItems` 메뉴다 — 「＋ 만들기 ▾」 아래 빠른 프록시 만들기 · 리스너 만들기.
     const ls = read('lists/ListenerList.svelte');
-    expect(ls).toContain('＋ 만들기 ▾</Button>');
-    expect(ls).toContain("{ label: '빠른 프록시 만들기', href: '/traffic/listener/new/quick' }");
-    expect(ls).toContain("{ label: '리스너 만들기', href: '/traffic/listener/new' }");
+    expect(ls).toMatch(/<Button variant="primary" aria-haspopup="menu"[^>]*>＋ 만들기 ▾<\/Button>/);
+    expect(ls).toContain("{ label: '빠른 프록시 만들기', description: '리스너, 풀, 백엔드를 한 번에 만들어요.', href: '/traffic/listener/new/quick' }");
+    expect(ls).toContain("{ label: '리스너 만들기', description: '프로토콜을 먼저 선택해요.', href: '/traffic/listener/new' }");
+    // 메뉴는 설명 줄을 그린다(12px · --tx3).
+    expect(read('ui/Menu.svelte')).toContain('<span class="d">{it.description}</span>');
   });
 
   /**

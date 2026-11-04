@@ -22,7 +22,8 @@
    *   · `inline` 스니펫을 주면 **인라인 수정**(시안 `isecs` — 그 리소스의 `INL` 필드, 저장 / 되돌리기). 스니펫 안에서
    *     `InlineEdit`(틀 · 문구)에 그 리소스의 `FormRow` 들을 넣는다. 쓸 수 없으면(팔로워 · 연락 없음 · 합산에서 못 쓰는 지역)
    *     인라인 대신 아래 요약을 그린다.
-   *   · 없으면 **읽기 요약**(시안 보기 모드) — 이름 · 값 목록. 백엔드는 「트래픽을 받지 않는 이유」, 풀은 「소속 백엔드」 를 더 보인다.
+   *   · 없으면 **읽기 요약**(시안 보기 모드 `viewSecs` — `ViewSections` 의 「기본」 구획). 백엔드는 「트래픽을 받지 않는 이유」,
+   *     풀은 「소속 백엔드」 를 더 보인다. 쓸 수 없을 때(인라인 대신)도 이것이다.
    *
    * **전체 합산**(전역에서 지역을 안 골랐다, §2.5)이면 선택은 합산 행 키(`rid`)다. 그 행의 지역 desk 로 그리고,
    * 아래 컴포넌트는 `InRegion` 으로 그 지역을 본다. 「상세 페이지 ↗」 는 그 지역으로 좁혀 연다(`?region=`).
@@ -30,13 +31,14 @@
   import { getContext, type Snippet } from 'svelte';
   import { detailOfListener } from '@web/listeners-view';
   import { RESOURCES, itemOf, resourcePath, summaryOf, type ResourceKind } from '@web/resources';
-  import { Badge, Button, DescriptionList, SplitView } from '#lib/ui';
+  import { Badge, Button, SplitView } from '#lib/ui';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import { useAggregate } from '#lib/global/use-aggregate.svelte.ts';
   import InRegion from '#lib/global/InRegion.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import BackendReasons from './BackendReasons.svelte';
   import PoolBackends from './PoolBackends.svelte';
+  import ViewSections from './ViewSections.svelte';
   import { PENDING_MARK, isPendingResource } from '#lib/pending';
 
   let { kind, selected = $bindable([]), table, extra, actions, inline }: {
@@ -78,7 +80,7 @@
 {#snippet summary(key: string)}
   <div class="sd">
     {#if kind === 'backend'}<BackendReasons backend={key} />{/if}
-    <DescriptionList labelWidth="160px" items={lines.map((l) => ({ label: l.label, value: l.value, mono: true }))} />
+    {#if lines.length > 0}<ViewSections sections={[{ t: '기본', f: lines.map((l) => ({ l: l.label, v: l.value, mono: true })) }]} />{/if}
     {#if kind === 'pool'}
       <section class="sub">
         <h3>소속 백엔드 · {poolCount}</h3>

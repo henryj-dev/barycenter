@@ -13,7 +13,7 @@
   type Variant = 'primary' | 'secondary' | 'danger' | 'text' | 'icon';
   let {
     variant = 'secondary', size = 'md', loading = false, error = false, disabled = false,
-    type = 'button', href, label, outline, dim = false, expanded, children, ...rest
+    type = 'button', href, target, rel, label, outline, dim = false, expanded, children, ...rest
   }: {
     variant?: Variant;
     /**
@@ -35,6 +35,9 @@
     disabled?: boolean;
     type?: 'button' | 'submit' | 'reset';
     href?: string;
+    /** 링크(`href`)일 때만 — 다른 창으로 여는 「이 지역에서 열기 ↗」 · 「지역 GUI ↗」. */
+    target?: string;
+    rel?: string;
     /** 아이콘 버튼의 이름(스크린 리더). 다른 변형에서는 `title` 로 쓴다. */
     label?: string;
     children?: Snippet;
@@ -42,7 +45,7 @@
 </script>
 
 {#if href !== undefined && !disabled}
-  <a class="btn" data-variant={variant} data-size={size} data-error={error} data-outline={outline} {href} aria-label={variant === 'icon' ? label : undefined} title={label}>
+  <a class="btn" data-variant={variant} data-size={size} data-error={error} data-outline={outline} {href} {target} {rel} aria-label={variant === 'icon' ? label : undefined} title={label}>
     {@render children?.()}
   </a>
 {:else}

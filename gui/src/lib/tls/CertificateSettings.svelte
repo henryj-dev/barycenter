@@ -20,7 +20,7 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { isPendingResource } from '#lib/pending';
   import Resolved from './Resolved.svelte';
-  import SettingsFrame from './SettingsFrame.svelte';
+  import SettingsFrame from '#lib/detail/SettingsFrame.svelte';
   import { certBody, challengeOf, domainsError, parseDomains } from './cert-edit.ts';
   import { certIssuer } from './tls-view.ts';
 

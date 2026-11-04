@@ -30,9 +30,9 @@
 
 {#snippet certEdit()}
   {#if cert !== undefined && !cert.acme}
-    <Button href={`/tls/certificate/new?key=${encodeURIComponent(key)}&issuer=upload`}>자료를 교체해요</Button>
+    <Button size="sm" href={`/tls/certificate/new?key=${encodeURIComponent(key)}&issuer=upload`}>자료를 교체해요</Button>
   {:else if !onSettings}
-    <Button href={resourcePath('certificate', key, 'settings')}>수정</Button>
+    <Button size="sm" href={resourcePath('certificate', key, 'settings')}>수정</Button>
   {/if}
 {/snippet}
 

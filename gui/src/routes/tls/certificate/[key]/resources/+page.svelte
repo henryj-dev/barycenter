@@ -1,5 +1,5 @@
 <script lang="ts">
-  import TlsRelations from '#lib/tls/TlsRelations.svelte';
+  import RelationRows from '#lib/detail/RelationRows.svelte';
 </script>
 
-<TlsRelations kind="certificate" />
+<RelationRows kind="certificate" />

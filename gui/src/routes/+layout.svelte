@@ -52,7 +52,7 @@
 
   const place = $derived(pageOf(page.url.pathname));
   const standalone = $derived(STANDALONE.includes(place));
-  /** 상세(key 가 든 주소)는 자기 머리(DetailHeader)를 그린다 — 페이지 머리를 겹쳐 그리지 않는다. */
+  /** 상세(key 가 든 주소)는 자기 머리(DetailHeader)를 그린다 — 페이지 머리는 제목 · 설명만 두고 만들기 버튼을 숨긴다(콘솔). */
   const detail = $derived(isDynamicGuiPath(page.url.pathname));
   const meta = $derived(PAGE_META[place]);
 
@@ -329,7 +329,8 @@
       {/if}
       <main class="content">
         {#if desk.error}<Banner tone="danger">{desk.error}</Banner>{/if}
-        {#if !detail}<PageHeader title={meta.title} {desc} actions={pageActions.snippet} />{/if}
+        <!-- 콘솔: 상세에서도 페이지 머리(제목 · 설명)는 그대로 있고 만들기 버튼만 숨는다(`headActDisp: isList && !detail`). -->
+        <PageHeader title={meta.title} {desc} actions={detail ? undefined : pageActions.snippet} />
         {@render children()}
       </main>
     </div>

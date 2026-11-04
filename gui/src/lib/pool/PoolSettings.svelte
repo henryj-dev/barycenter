@@ -126,8 +126,8 @@
           <FormRow label="기대 본문" for="hc-body" help="본문이 이것과 같아야 살았다고 봐요. 비우면 본문을 안 봐요."><TextInput id="hc-body" bind:value={f.expectBody} autocomplete="off" /></FormRow>
         {/if}
         {#if probes}
-          <FormRow label="주기" for="hc-int" help="초 단위예요. 비우면 데몬 기본값이에요."><TextInput id="hc-int" bind:value={f.intervalS} autocomplete="off" inputmode="numeric" /></FormRow>
-          <FormRow label="타임아웃" for="hc-to" help="주기보다 길 수 없어요."><TextInput id="hc-to" bind:value={f.timeoutS} autocomplete="off" inputmode="numeric" /></FormRow>
+          <FormRow label="주기" for="hc-int" help="비우면 데몬 기본값이에요."><TextInput id="hc-int" bind:value={f.intervalS} autocomplete="off" inputmode="numeric" unit="s" /></FormRow>
+          <FormRow label="타임아웃" for="hc-to" help="주기보다 길 수 없어요."><TextInput id="hc-to" bind:value={f.timeoutS} autocomplete="off" inputmode="numeric" unit="s" /></FormRow>
           <FormRow label="rise" for="hc-rise" help="몇 번 연속 성공하면 살았다고 보나."><TextInput id="hc-rise" bind:value={f.rise} autocomplete="off" inputmode="numeric" /></FormRow>
           <FormRow label="fall" for="hc-fall" help="몇 번 연속 실패하면 죽었다고 보나."><TextInput id="hc-fall" bind:value={f.fall} autocomplete="off" inputmode="numeric" /></FormRow>
         {/if}
