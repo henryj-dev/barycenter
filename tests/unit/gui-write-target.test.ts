@@ -47,10 +47,11 @@ describe('쓸 지역 표시', () => {
     expect(src('lib/pool/PoolTlsForm.svelte')).not.toMatch(/<Writable target>/);
   });
 
-  it.each(['lib/lists/DeleteConfirm.svelte', 'lib/detail/ResourceFrame.svelte'])('%s 의 삭제 확인이 전역에서 지역을 단다', (p) => {
-    const s = src(p);
+  it('삭제 확인이 전역에서 지역을 단다 — 목록과 상세 머리가 같은 DeleteConfirm 을 쓴다', () => {
+    const s = src('lib/lists/DeleteConfirm.svelte');
     expect(s).toMatch(/scope\?\.mode === 'global' && scope\.region !== undefined \? ` 지역: \$\{scope\.region\.name\}` : ''/);
     expect(s).toContain('sub={`저장하면 커밋해요. 트래픽은 적용해야 바뀌어요.${where}`}');
+    expect(src('lib/detail/ResourceFrame.svelte')).toMatch(/<DeleteConfirm\b/);
   });
 });
 

@@ -28,7 +28,6 @@
   const scope = getContext<Scope | undefined>('scope');
   // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
   const ro = $derived(scope?.blocked === true);
-  /** 전역이면 삭제가 갈 지역을 확인 문구에 단다 — 적용 · 롤백 확인과 같은 꼴. 지역 인스턴스면 빈 말. */
   let asking = $state(false);
   // 시안: 「연결된 리소스」 탭에 수를 단다.
   const relCount = $derived(relationCount(desk, kind, key));
