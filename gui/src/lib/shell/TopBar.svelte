@@ -6,9 +6,11 @@
    */
   import { ConnectionStatus, Menu, type MenuItem } from '#lib/ui';
   import type { ConnState } from '@web/reconnect';
+  import { ROLE_LABEL } from '#lib/account/text';
+  import type { Role } from '#lib/account/api';
 
   type Theme = 'system' | 'dark' | 'light';
-  let { crumbs, node, head, conn, pending = 0, user, role, theme = $bindable('system'), onlogout, ondisconnect, menuOpen = $bindable(false) }: {
+  let { crumbs, node, head, conn, pending = 0, user, role, mfa, theme = $bindable('system'), onlogout, ondisconnect, menuOpen = $bindable(false) }: {
     crumbs: readonly { label: string; href?: string }[];
     /** 클러스터면 이 노드 이름. */
     node?: string;
@@ -17,7 +19,9 @@
     pending?: number;
     /** 사람 계정이면 이름. 토큰으로 붙었으면 undefined. */
     user?: string;
-    role?: string;
+    role?: Role;
+    /** 사람 계정의 인증 앱 등록 여부 — 메뉴 머리 「역할 · MFA 켜짐」. */
+    mfa?: boolean;
     theme?: Theme;
     onlogout: () => void;
     ondisconnect: () => void;
@@ -25,6 +29,9 @@
     menuOpen?: boolean;
   } = $props();
 
+  const roleLabel = $derived(role === undefined ? undefined : ROLE_LABEL[role] ?? role);
+  const header = $derived(user === undefined ? undefined
+    : { title: user, ...(roleLabel === undefined ? {} : { sub: `${roleLabel} · MFA ${mfa === true ? '켜짐' : '꺼짐'}` }) });
   const themeLabel: Record<Theme, string> = { system: '시스템', dark: '다크', light: '라이트' };
   const items = $derived<MenuItem[]>([
     ...(user !== undefined ? [{ label: '내 계정', href: '/account' }] : []),
@@ -47,11 +54,11 @@
   {#if pending > 0}
     <a class="pending" href="/change/pending" aria-label="적용 대기 {pending}건, 영향 화면으로">◐ 적용 대기<span class="n">{pending}</span></a>
   {/if}
-  <Menu {items} label="사용자 메뉴">
+  <Menu {items} {header} label="사용자 메뉴">
     {#snippet trigger({ open, toggle })}
       <button type="button" class="user" aria-haspopup="menu" aria-expanded={open} onclick={toggle}>
         <span class="av" aria-hidden="true">{(user ?? '토').slice(0, 1).toUpperCase()}</span>
-        <span class="un">{user ?? '토큰'}</span>{#if role}<span class="role">{role}</span>{/if}<span class="caret" aria-hidden="true">▼</span>
+        <span class="un">{user ?? '토큰'}</span>{#if roleLabel}<span class="role">{roleLabel}</span>{/if}<span class="caret" aria-hidden="true">▼</span>
       </button>
     {/snippet}
   </Menu>

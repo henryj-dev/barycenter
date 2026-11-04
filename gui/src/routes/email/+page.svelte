@@ -16,6 +16,10 @@
 </script>
 
 <div class="std">
+  <div class="head">
+    <h1>이메일 확인</h1>
+    <p>새 주소로 간 링크를 열면 바뀌어요.</p>
+  </div>
   {#if note === undefined}
     <p class="wait"><Spinner /> 확인하는 중이에요.</p>
   {:else}
@@ -26,5 +30,8 @@
 
 <style>
   .std { display: grid; gap: 12px; }
+  .head { display: grid; gap: 4px; }
+  h1 { font: var(--t-title); margin: 0; }
+  .head p { margin: 0; color: var(--tx2); font: var(--t-small); }
   .wait { margin: 0; display: flex; gap: 8px; align-items: center; font: var(--t-small); color: var(--tx2); }
 </style>

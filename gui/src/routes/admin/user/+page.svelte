@@ -13,13 +13,13 @@
   import { ago } from '#lib/detail/facts';
   import { accountApi, linkFor, type InvitationRow, type Role, type UserRow } from '#lib/account/api';
   import type { Session } from '#lib/account/session.svelte.ts';
+  import { ROLE_LABEL } from '#lib/account/text';
   import SsoJit from '#lib/account/SsoJit.svelte';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import { Badge, Banner, Button, Card, ConfirmDialog, DataTable, FieldMessage, Form, FormRow, FormSection, Select, TextInput, toast, type Column, type FilterChip, type MenuItem } from '#lib/ui';
 
   const session = getContext<Session>('session');
-  /** 시안의 역할 이름(관리자 · 운영자 · 보기). 서버 값은 옆에 흐리게 둔다. */
-  const ROLE_LABEL: Record<Role, string> = { admin: '관리자', operator: '운영자', auditor: '보기' };
+  /** 시안의 역할 이름은 `ROLE_LABEL`(계정 화면 공통). 서버 값은 옆에 흐리게 둔다. */
   const ROLES: { value: Role; label: string; hint: string }[] = (['auditor', 'operator', 'admin'] as const)
     .map((r) => ({ value: r, label: ROLE_LABEL[r], hint: r }));
 
