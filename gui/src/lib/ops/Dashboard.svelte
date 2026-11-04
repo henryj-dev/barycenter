@@ -100,7 +100,7 @@
   const regionPending = $derived(regionViews.reduce((a, x) => a + (x.v?.pending.length ?? 0), 0));
   const regionUnfinished = $derived(regionViews.filter((x) => x.v?.unfinished === true).length);
   const regionEngines = $derived([...new Set(regionViews.map((x) => x.v?.engine.label).filter((e): e is string => e !== undefined))].join(', '));
-  const regionsWithLeader = $derived(regionViews.filter((x) => x.v !== undefined && x.v.leader.holder !== '—').length);
+  const regionsWithLeader = $derived(regionViews.filter((x) => x.v !== undefined).length);
   const regionColumns: Column<RegionSummary>[] = [
     { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '100px', text: (r) => (r.status?.head === undefined ? '—' : `r${r.status.head}`) },
@@ -142,7 +142,7 @@
     { label: '미완 전환', value: `${regionUnfinished}건` },
     { label: '리더', value: regions !== undefined && regionsWithLeader === regions.length ? '지역마다 1개' : `${regionsWithLeader}곳에 있어요` },
   ] : [
-    { label: '리더', value: st.leader.isLeader ? '★ 이 인스턴스' : `☆ ${st.leader.holder}` },
+    { label: '리더', value: st.leader.isLeader ? '★ 이 인스턴스' : `☆ ${cluster?.leader?.name ?? '다른 인스턴스'}` },
     { label: '게시 세대', value: st.published.generation ?? '—' },
     { label: '미완 전환', value: st.unfinished ? '1건' : '0건' },
     { label: '엔진', value: st.engine.label },

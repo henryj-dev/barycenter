@@ -48,7 +48,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/route/passthrough/new">＋ 생성</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/traffic/route/passthrough/new">＋ 만들기</Button>{/snippet}
 
 <RouteSegments current="passthrough" />
 {#snippet table()}

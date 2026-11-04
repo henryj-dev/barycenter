@@ -80,7 +80,7 @@
 
 {#snippet create()}
   <Button href="/traffic/route/http/new/group">＋ 경로별 묶음</Button>
-  <Button variant="primary" href="/traffic/route/http/new">＋ 생성</Button>
+  <Button variant="primary" href="/traffic/route/http/new">＋ 만들기</Button>
 {/snippet}
 
 <RouteSegments current="http" />

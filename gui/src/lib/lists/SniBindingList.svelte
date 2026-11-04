@@ -44,7 +44,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/tls/sni/new">＋ 생성</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/tls/sni/new">＋ 만들기</Button>{/snippet}
 
 <WriteNote spaced />
 <DataTable label="SNI 바인딩 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}

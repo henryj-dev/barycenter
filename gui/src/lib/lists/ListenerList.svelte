@@ -91,7 +91,7 @@
 
 {#snippet create()}
   <Button href="/traffic/listener/new/quick">빠른 프록시 만들기</Button>
-  <Button variant="primary" href="/traffic/listener/new">＋ 생성</Button>
+  <Button variant="primary" href="/traffic/listener/new">＋ 만들기</Button>
 {/snippet}
 
 {#snippet table()}

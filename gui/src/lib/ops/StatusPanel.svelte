@@ -33,7 +33,8 @@
    * 말은 클러스터 화면과 같다(★ 리더 · 팔로워 · 맞음). 「맞음」 은 `nodeState` 가 판정한다 — 연락 없음도 맞지 않은 쪽이다.
    */
   const leaderCard = $derived.by<StatCard>(() => {
-    const value = v.leader.isLeader ? '★ 이 인스턴스' : `☆ ${v.leader.holder}`;
+    // `leader.holder` 는 **이 인스턴스 자신의 이름**이다(src/control/leader.ts) — 팔로워에서 리더 이름으로 쓰면 자기를 리더라고 말한다.
+    const value = v.leader.isLeader ? '★ 이 인스턴스' : '☆ 다른 인스턴스';
     if (global) {
       const name = scope?.region?.name;
       return {
@@ -57,7 +58,7 @@
       };
     }
     return {
-      label: '리더', value: `☆ ${cluster.leader?.name ?? v.leader.holder}`,
+      label: '리더', value: `☆ ${cluster.leader?.name ?? '다른 인스턴스'}`,
       sub: `이 노드${cluster.self === undefined ? '' : `(${cluster.self})`}는 팔로워예요. 쓰기는 리더가 해요. ${counted}`,
       badge: followers.length > ok ? { tone: 'warn', text: '팔로워 확인' } : { tone: 'info', text: '팔로워' },
     };
@@ -102,7 +103,7 @@
   const regColumns: Column<RegRow>[] = [
     { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '90px', text: (r) => (r.v?.head === undefined ? unknown : `r${r.v.head}`) },
-    { key: 'leader', label: '리더', mono: true, text: (r) => r.v?.leader.holder ?? unknown },
+    { key: 'leader', label: '리더', mono: true, text: (r) => (r.v === undefined ? unknown : r.v.leader.isLeader ? r.v.leader.holder : '팔로워가 답했어요') },
     { key: 'gen', label: '게시 세대', mono: true, text: (r) => (r.v === undefined ? unknown : r.v.published.generation ?? '—') },
     { key: 'unf', label: '미완 전환', mono: true, width: '100px', text: (r) => (r.v === undefined ? unknown : r.v.unfinished ? '1' : '0') },
     { key: 'engine', label: '엔진', mono: true, text: (r) => (r.v === undefined ? (r.error ?? '닿지 않아요') : r.v.engine.label) },

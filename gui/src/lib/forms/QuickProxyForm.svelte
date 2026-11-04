@@ -5,6 +5,7 @@
    */
   import { getContext } from 'svelte';
   import { parseSourceAllow, proxyFromUrlPatch, type ProxyFromUrlInput } from '@web/edit';
+  import { urlCheck } from '#lib/forms/url-check';
   import { Card, FieldMessage, FormRow, FormSection, RadioGroup, Select, TextInput } from '#lib/ui';
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
@@ -33,6 +34,8 @@
   let certificate = $state<string | undefined>();
   let allow = $state('');
   let problem = $state<string | undefined>();
+  /** URL 칸은 `urlCheck`(해요체)로 먼저 본다 — 빌더의 해라체 오류를 화면 문구로 쓰지 않는다. */
+  const urlErr = $derived(url.trim() === '' ? undefined : urlCheck(url));
 
   const input = $derived.by((): ProxyFromUrlInput => {
     const hostList = words(hosts);
@@ -53,11 +56,12 @@
   /** 무엇이 만들어지나 — 저장 전에 보인다. 틀린 입력이면 그 말을 보인다. */
   const preview = $derived.by((): { ops: { kind: string; key: string }[]; error?: string } => {
     if (name.trim() === '' || url.trim() === '') return { ops: [], error: '이름과 대상 URL 을 넣으면 만들 리소스가 여기 보여요.' };
+    if (urlErr !== undefined) return { ops: [], error: '대상 URL 을 고치면 만들 리소스가 여기 보여요.' };
     try {
       const sa = target === 'new' ? parseSourceAllow(allow) : undefined;
       return { ops: proxyFromUrlPatch({ ...input, ...(sa === undefined ? {} : { sourceAllow: sa }) }).map((o) => ({ kind: o.kind, key: o.key })) };
-    } catch (e) {
-      return { ops: [], error: e instanceof Error ? e.message : String(e) };
+    } catch {
+      return { ops: [], error: '이 입력으로는 만들 수 없어요. 대상 URL · 호스트 · 경로 · 출발지 칸을 확인해요.' };
     }
   });
   const ready = $derived(preview.error === undefined && keyError(name) === undefined && (target === 'existing' || portError(port) === undefined));
@@ -66,8 +70,8 @@
     try {
       const sa = target === 'new' ? parseSourceAllow(allow) : undefined;
       void desk.proxyFromUrl({ ...input, ...(sa === undefined ? {} : { sourceAllow: sa }) }).then(after(target === 'new' ? resourcePath('listener', name.trim()) : resourcePath('httpRoute', name.trim())));
-    } catch (e) {
-      problem = e instanceof Error ? e.message : String(e);
+    } catch {
+      problem = '이 입력으로는 만들 수 없어요. 대상 URL · 호스트 · 경로 · 출발지 칸을 확인해요.';
     }
   };
   $effect(() => { port = protocol === 'https' ? '443' : '80'; });
@@ -78,7 +82,7 @@
     <FormRow label="이름" for="qp-name" required error={keyError(name)} help="풀 · 리스너 · 라우트의 이름이 돼요.">
       <TextInput id="qp-name" bind:value={name} invalid={keyError(name) !== undefined} autocomplete="off" placeholder="app" />
     </FormRow>
-    <FormRow label="대상 URL" for="qp-url" required help="이 주소로 보내요. 예: http://10.0.0.5:8080/">
+    <FormRow label="대상 URL" for="qp-url" required error={urlErr} help="이 주소로 보내요. 예: http://10.0.0.5:8080/">
       <TextInput id="qp-url" bind:value={url} autocomplete="off" placeholder="http://10.0.0.5:8080/" />
     </FormRow>
   </FormSection>

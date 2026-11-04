@@ -55,7 +55,7 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/pool/new">＋ 생성</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/traffic/pool/new">＋ 만들기</Button>{/snippet}
 
 {#snippet table()}
 <WriteNote spaced />
