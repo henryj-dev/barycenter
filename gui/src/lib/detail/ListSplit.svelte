@@ -19,7 +19,7 @@
    * 흐린 고정폭) · `actions`(「URL로 다시 만들기」 · 「목록 다시 받기」 …) · 「상세 페이지 ↗」 · 「닫기」.
    *
    * 아래 내용은 둘 중 하나다.
-   *   · `inline` 스니펫을 주면 **인라인 수정**(시안 `isecs` — 그 리소스의 `INL` 필드, 저장 / 되돌리기). 스니펫 안에서
+   *   · 처음은 늘 **보기 모드**(아래 요약). `inline` 스니펫이 있고 쓸 수 있으면 머리의 「수정」 이 **인라인 수정**(시안 `isecs` — 그 리소스의 `INL` 필드, 저장 / 되돌리기). 스니펫 안에서
    *     `InlineEdit`(틀 · 문구)에 그 리소스의 `FormRow` 들을 넣는다. 쓸 수 없으면(팔로워 · 연락 없음 · 합산에서 못 쓰는 지역)
    *     인라인 대신 아래 요약을 그린다.
    *   · 없으면 **읽기 요약**(시안 보기 모드 `viewSecs` — `ViewSections` 의 「기본」 구획). 백엔드는 「트래픽을 받지 않는 이유」,
@@ -28,7 +28,7 @@
    * **전체 합산**(전역에서 지역을 안 골랐다, §2.5)이면 선택은 합산 행 키(`rid`)다. 그 행의 지역 desk 로 그리고,
    * 아래 컴포넌트는 `InRegion` 으로 그 지역을 본다. 「상세 페이지 ↗」 는 그 지역으로 좁혀 연다(`?region=`).
    */
-  import { getContext, type Snippet } from 'svelte';
+  import { getContext, setContext, type Snippet } from 'svelte';
   import { detailOfListener } from '@web/listeners-view';
   import { RESOURCES, itemOf, resourcePath, summaryOf, type ResourceKind } from '@web/resources';
   import { Badge, Button, SplitView } from '#lib/ui';
@@ -74,7 +74,12 @@
   /** 「◐ 적용 대기」(시안 `selPendD`) — 엔진이 돌리는 것과 head 가 다르면. 분할 머리에는 이것만 붙는다(시안). */
   const pending = $derived(key !== undefined && desk !== undefined && isPendingResource(desk.pendingResources, kind, key));
   const poolCount = $derived(kind === 'pool' && key !== undefined && desk !== undefined ? desk.pools.rows.find((p) => p.key === key)?.backends.length ?? 0 : 0);
-  const editing = $derived(inline !== undefined && !ro);
+  /** 시안 `s.inl` — 행을 고르면 보기 모드(`viewSecs`)로 열고, 「수정」 을 눌러야 인라인 수정(`isecs`)이 된다. 행을 바꾸면 보기로. */
+  let inl = $state(false);
+  $effect(() => { void picked; inl = false; });
+  setContext('inline-close', () => { inl = false; });
+  const canInline = $derived(inline !== undefined && !ro);
+  const editing = $derived(canInline && inl);
 </script>
 
 {#snippet summary(key: string)}
@@ -125,8 +130,9 @@
 
 {#snippet headActions(key: string)}
   {#if actions}{@render actions(key)}{/if}
-  <!-- 인라인 수정이 없는 리소스는 설정 탭으로 가는 「수정」 을 둔다(시안 보기 모드에는 없다 — 이미 있는 길이라 남긴다). -->
-  {#if !editing && !ro && RESOURCES[kind].editable}<Button size="xs" href={link(resourcePath(kind, key, 'settings'))}>수정</Button>{/if}
+  <!-- 시안 `inlStartD` · `startInl`: 보기 모드에서 「수정」 이 인라인 수정을 연다. 인라인이 없는 리소스는 설정 탭으로 간다. -->
+  {#if canInline && !inl}<Button size="xs" onclick={() => { inl = true; }}>수정</Button>
+  {:else if !canInline && !ro && RESOURCES[kind].editable}<Button size="xs" href={link(resourcePath(kind, key, 'settings'))}>수정</Button>{/if}
   <a class="det" href={link(resourcePath(kind, key))}>상세 페이지 ↗</a>
 {/snippet}
 

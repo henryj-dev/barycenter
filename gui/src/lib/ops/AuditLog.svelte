@@ -37,7 +37,7 @@
 {#if agg.on ? agg.listState.loading : !desk.live}
   <Skeleton height="240px" label="기록을 읽는 중" />
 {:else}
-  {#if agg.on}<RegionNotices notices={agg.notices} />{/if}
+  {#if agg.on}<RegionNotices notices={agg.notices} strip={false} />{/if}
   <!-- 시안 「기록」: 패널 하나 · 고정 머리 줄 · 변경 하나가 한 묶음(접기 · 펼치기). 찾기 · 데몬 작업 보기는 목록 화면의 도구 줄 자리다. -->
   <section class="list" class:agg={agg.on} aria-label="감사 기록">
     <div class="bar">

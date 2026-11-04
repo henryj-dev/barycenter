@@ -300,7 +300,7 @@
 {:else}
   <div class="dash">
     {#if agg.on}
-      <RegionNotices {notices} />
+      <RegionNotices {notices} strip={false} />
       {#each total.unfinishedIn as name (name)}
         <Banner tone="warn">
           {name} 에 끝나지 않은 전환이 있어요. 복구가 이어받아야 그 지역에서 다음 적용을 할 수 있어요.

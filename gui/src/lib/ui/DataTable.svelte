@@ -186,7 +186,8 @@
     </div>
   {/if}
 
-  {#if selectable && selected.length > 0 && bulk}
+  <!-- 한 행만 고르면 분할 상세(시안 행 고르기)다. 일괄 줄은 둘 이상 골랐을 때만. -->
+  {#if selectable && selected.length > 1 && bulk}
     <div class="bulk">
       <strong>{selected.length}개를 골랐어요</strong>
       {@render bulk(selected)}

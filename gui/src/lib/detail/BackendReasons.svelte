@@ -16,8 +16,8 @@
 </script>
 
 {#if lines.length > 0}
-  <div class="why" role="group" aria-label={blocked ? '트래픽을 받지 않는 이유' : '트래픽 수신'}>
-    <div class="t">{blocked ? '트래픽을 받지 않는 이유' : '트래픽 수신'}</div>
+  <div class="why" role="group" aria-label="트래픽을 받지 않는 이유">
+    <div class="t">트래픽을 받지 않는 이유</div>
     {#each lines as l, i (i)}
       <div class="l"><span class="i" style:color="var(--{l.tone})" aria-hidden="true">{l.icon}</span><span>{l.text}</span></div>
     {/each}
