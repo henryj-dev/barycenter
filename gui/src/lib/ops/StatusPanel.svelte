@@ -132,13 +132,14 @@
     });
   });
   type StatusLike = { head: string | undefined; leader: { isLeader: boolean; holder: string }; published: { generation: string | undefined }; unfinished: boolean; engine: { label: string } };
+  /** 시안 지역 표는 도구 줄(「N개」 · 「컬럼 ▾」)이 없다 — 숨길 수 있는 열을 두지 않는다. */
   const cols = <R extends { name: string; v: StatusLike | undefined }>(): Column<R>[] => [
     { key: 'name', label: '지역', mono: true, text: (r) => r.name },
-    { key: 'head', label: 'head', mono: true, text: (r) => (r.v?.head === undefined ? dash : `r${r.v.head}`) },
-    { key: 'leader', label: '리더', mono: true, text: (r) => (r.v === undefined ? dash : r.v.leader.isLeader ? r.v.leader.holder : '팔로워가 답했어요') },
-    { key: 'gen', label: '게시 세대', mono: true, text: (r) => (r.v === undefined ? dash : r.v.published.generation ?? dash) },
-    { key: 'unf', label: '미완 전환', mono: true, text: (r) => (r.v === undefined ? dash : r.v.unfinished ? '1' : '0') },
-    { key: 'engine', label: '엔진', mono: true, text: (r) => (r.v === undefined ? dash : r.v.engine.label) },
+    { key: 'head', label: 'head', mono: true, hideable: false, text: (r) => (r.v?.head === undefined ? dash : `r${r.v.head}`) },
+    { key: 'leader', label: '리더', mono: true, hideable: false, text: (r) => (r.v === undefined ? dash : r.v.leader.isLeader ? r.v.leader.holder : '팔로워가 답했어요') },
+    { key: 'gen', label: '게시 세대', mono: true, hideable: false, text: (r) => (r.v === undefined ? dash : r.v.published.generation ?? dash) },
+    { key: 'unf', label: '미완 전환', mono: true, hideable: false, text: (r) => (r.v === undefined ? dash : r.v.unfinished ? '1' : '0') },
+    { key: 'engine', label: '엔진', mono: true, hideable: false, text: (r) => (r.v === undefined ? dash : r.v.engine.label) },
   ];
   const regColumns = cols<RegRow>();
 
@@ -157,6 +158,8 @@
     const gens = [...new Set(live.map((e) => e.desk.status.published.generation).filter((g): g is string => g !== undefined))];
     const drivers = [...new Set(live.filter((e) => e.desk.status.driver.loaded).map((e) => e.desk.status.driver.name ?? '실었어요'))];
     const lost = n - live.length;
+    // 시안 「기능: …」 — 붙은 지역이 모두 지원하는 것만.
+    const feats = live.length === 0 ? [] : live[0]!.desk.status.engine.features.filter((f) => live.every((e) => e.desk.status.engine.features.includes(f)));
     return [
       { label: 'head 리비전', value: '지역마다', sub: '지역마다 따로 커밋해요. 아래 표에서 지역별로 봐요.',
         badge: aggPending > 0 ? { tone: 'pending', text: `적용 대기 ${aggPending}건` } : { tone: 'ok', text: '적용 대기 없음' } },
@@ -164,7 +167,7 @@
         badge: leaders === n ? { tone: 'ok', text: '정상' } : { tone: 'warn', text: '확인 필요' } },
       { label: '게시 세대', value: gens.length === 1 ? gens[0]! : gens.length === 0 ? '—' : '지역마다', sub: '세대는 지역의 엔진마다 따로 올라가요.' },
       unfinishedCard(aggUnfinished.length, aggUnfinished.map((r) => r.name).join(', ')),
-      { label: '엔진', value: engines.length === 1 ? engines[0]! : engines.length === 0 ? '—' : `${engines.length}가지`, sub: engines.length > 1 ? engines.join(', ') : `지역 ${live.length}곳` },
+      { label: '엔진', value: engines.length === 1 ? engines[0]! : engines.length === 0 ? '—' : `${engines.length}가지`, sub: engines.length > 1 ? engines.join(', ') : feats.length === 0 ? '—' : `기능: ${feats.join(', ')}` },
       { label: '드라이버', value: drivers.length === 0 ? '안 실었어요' : drivers.join(', '), sub: DRIVER_SUB },
     ];
   });
