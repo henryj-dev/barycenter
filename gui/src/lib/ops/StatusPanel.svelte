@@ -50,7 +50,8 @@
     const last = [...d.audit.rows]
       .filter((r) => (r.action === 'apply' || r.action === 'apply.membership') && r.revision !== undefined)
       .sort((a, b) => Number(b.id) - Number(a.id))[0];
-    return last?.revision;
+    // 감사 창에 적용이 없으면 게시된 세대(`r<리비전>-e<epoch>`)에서 읽는다 — 적용 대기 화면과 같다.
+    return last?.revision ?? /^r(\d+)-e/.exec(s.published.generation ?? '')?.[1];
   };
   const activeSub = (rev: string | undefined): string => (rev === undefined ? '—' : `활성 리비전은 r${rev}이에요.`);
 
@@ -102,9 +103,9 @@
       badge: v.pending.length > 0 ? { tone: 'pending', text: `적용 대기 ${v.pending.length}건` } : { tone: 'ok', text: '적용 대기 없음' },
     },
     leaderCard,
-    { label: '게시 세대', value: v.published.generation ?? '—', sub: `게시: ${v.published.kind}` },
+    { label: '게시 세대', value: v.published.generation ?? '—', sub: '—' },
     unfinishedCard(v.unfinished ? 1 : 0, '끝나지 않은 전환이 있어요. 복구 대상이에요.'),
-    { label: '엔진', value: v.engine.label, sub: v.engine.probed ? '엔진에 물어 확인했어요.' : '엔진을 못 물었어요.' },
+    { label: '엔진', value: v.engine.label, sub: v.engine.probed ? `기능: ${v.engine.features.join(', ')}` : '엔진을 못 물었어요.' },
     { label: '드라이버', value: v.driver.loaded ? (v.driver.name ?? '실었어요') : '안 실었어요', sub: DRIVER_SUB },
   ]);
 
