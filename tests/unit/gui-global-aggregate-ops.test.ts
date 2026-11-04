@@ -121,7 +121,7 @@ describe('화면의 연결', () => {
     expect(s).toContain('const t = $derived<Tally>(agg.on ? total : local);');
     const cols = s.slice(s.indexOf('const aggColumns'), s.indexOf('];', s.indexOf('const aggColumns')));
     expect([...cols.matchAll(/label: '([^']+)'/g)].map((m) => m[1])).toEqual(['지역', 'head', '적용 대기', '백엔드 정상', '상태']);
-    expect(s).toContain('mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter((g) => g.change) }))');
+    expect(s).toContain('mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter(committed) }))');
     expect(s).toContain('<RegionNotices {notices} strip={false} />');
     // 붙지 않은 지역은 숫자 없이 상태 배지 — 0 이 아니다.
     expect(cols).toContain("r.tally === undefined ? '—'");

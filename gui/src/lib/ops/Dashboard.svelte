@@ -185,9 +185,11 @@
   // ── 패널 ──
   const groups = $derived(groupAudit(desk.audit.rows, st.pending.map((p) => p.revision)));
   type Recent = ChangeGroup & { region: string; rid: string };
+  /** 최근 변경은 리비전이 생긴 변경만(시안: 줄마다 rN). 커밋 안 한 · 버린 changeset 은 기록 화면에만 있다. */
+  const committed = (g: ChangeGroup): boolean => g.change && g.revision !== undefined;
   const recent = $derived<Recent[]>(agg.on
-    ? mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter((g) => g.change) })), (g) => g.key, (g) => g.at).slice(0, 4)
-    : groups.filter((g) => g.change).slice(0, 4).map((g) => ({ ...g, region: '', rid: g.key })));
+    ? mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter(committed) })), (g) => g.key, (g) => g.at).slice(0, 4)
+    : groups.filter(committed).slice(0, 4).map((g) => ({ ...g, region: '', rid: g.key })));
   /** 최근 변경의 설명(시안 `백엔드 demo-2 추가`) — 보이는 넷만 읽는다. 못 읽으면 「설정 변경」 그대로다. 합산이면 그 지역 desk 로. */
   const recentSrc = (g: Recent): Desk | undefined => (agg.on ? parts.find((p) => p.name === g.region)?.desk : desk);
   $effect(() => {
