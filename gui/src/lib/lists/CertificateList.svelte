@@ -5,6 +5,7 @@
    * **전체 합산**(전역에서 지역을 안 골랐다, §2.5)이면 지역마다 행을 만들어 잇고, 셋째 열 뒤에 「지역」 열을 둔다.
    * 만료 · 사용처는 그 행의 지역 것이다. 상세 · 「자료를 교체해요」 는 그 지역으로 좁혀 열고, 삭제는 그 지역의 desk 로 쓴다(`useAggregate`).
    */
+  import ListSplit from '#lib/detail/ListSplit.svelte';
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
   import { relationsOf, resourcePath } from '@web/resources';
@@ -28,6 +29,8 @@
   const desk = getContext<Desk>('desk');
   const scope = getContext<Scope | undefined>('scope');
   const agg = useAggregate();
+  /** 시안: 인증서 목록도 행을 고르면 아래에 분할 상세가 열린다(다른 목록과 같다). */
+  let selected = $state<string[]>([]);
   // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
   const ro = $derived(scope?.blocked === true);
   /** 이 행에 쓸 수 있나 — 합산이면 그 행의 지역에, 아니면 셸의 판정(`ro`) 그대로. */
@@ -86,7 +89,8 @@
 {#snippet createIn()}<RegionCreate {agg} href="/tls/certificate/new" />{/snippet}
 
 {#if agg.on}<RegionNotices notices={agg.notices} />{:else}<WriteNote spaced />{/if}
-<DataTable label="인증서 목록" {rows} rowKey={(r) => r.rid} columns={shownColumns} {chips} {...(agg.on ? agg.listState : { loading: !desk.live })}
+{#snippet table()}
+<DataTable label="인증서 목록" {rows} rowKey={(r) => r.rid} columns={shownColumns} {chips} {...(agg.on ? agg.listState : { loading: !desk.live })} bind:selected
   search={{ placeholder: '이름·도메인으로 찾기', match: (r, q) => `${r.key} ${r.domains}${agg.on ? ` ${r.region}` : ''}`.toLowerCase().includes(q) }}
   emptyTitle="인증서가 없어요" emptyBody="자료를 올리거나 ACME 로 발급해요. HTTPS 리스너에 필요해요."
   onopen={(r) => { void goto(at(r, resourcePath('certificate', r.key))); }} rowMenu={menu}>
@@ -97,13 +101,18 @@
     {:else if c.key === 'acme'}{#if r.acme}<Badge tone="info" icon="↻">ACME{r.order ? ` · ${r.order}` : ''}</Badge>{:else}<span class="sub">업로드</span>{/if}
     {:else if c.key === 'days'}
       {#if r.mark === 'missing' && r.acme}<Badge tone="pending">발급 대기</Badge>{:else if r.mark === 'missing'}<Badge tone="neutral">자료 없음</Badge>
-      {:else if r.mark === 'expired'}<Badge tone="danger">{r.notAfter !== undefined ? `${r.notAfter.slice(0, 10)} (만료됨)` : '만료됨'}</Badge>
-      {:else if r.days !== undefined && r.days < SOON}<Badge tone="warn">{r.notAfter !== undefined ? `${r.notAfter.slice(0, 10)} (${r.days}일 남음)` : `${r.days}일 남음`}</Badge>
-      {:else}<span class="mono">{r.notAfter?.slice(0, 10) ?? '—'}</span>{#if r.days !== undefined}<span class="sub"> · {r.days}일</span>{/if}{/if}
+      <!-- 시안: 날짜 + 남은 날 배지(「● 96일 남음」 · 「▲ 12일 남음」 · 「✕ 만료됨」). -->
+      {:else}<span class="exp"><span class="mono">{r.notAfter?.slice(0, 10) ?? '—'}</span>
+        {#if r.mark === 'expired'}<Badge tone="danger">만료됨</Badge>
+        {:else if r.days !== undefined && r.days < SOON}<Badge tone="warn">{r.days}일 남음</Badge>
+        {:else if r.days !== undefined}<Badge tone="ok">{r.days}일 남음</Badge>{/if}</span>{/if}
     {:else if c.key === 'used'}<span class:sub={r.used === 0}>{r.usedText}</span>
     {/if}
   {/snippet}
 </DataTable>
+{/snippet}
+
+<ListSplit kind="certificate" bind:selected {table} />
 {#if delEntry !== undefined}
   <!-- 합산: 삭제 확인(사용처)과 쓰기가 그 행의 지역을 본다. -->
   {#key delEntry.name}<InRegion entry={delEntry}><DeleteConfirm bind:target={del} /></InRegion>{/key}
@@ -113,5 +122,6 @@
 
 <style>
   .sub { color: var(--tx2); }
+  .exp { display: inline-flex; align-items: center; gap: 8px; }
   .mono { font-family: var(--mono); }
 </style>

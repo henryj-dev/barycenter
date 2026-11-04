@@ -158,8 +158,7 @@
     { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '100px', text: (r) => (r.head === undefined ? '—' : `r${r.head}`) },
     { key: 'pend', label: '적용 대기', width: '110px', text: (r) => (r.tally === undefined ? '—' : `${r.tally.pending}건`) },
-    { key: 'lst', label: '리스너', mono: true, width: '110px', text: (r) => (r.tally === undefined ? '—' : `${r.tally.serving} / ${r.tally.listeners}`) },
-    { key: 'be', label: '백엔드', mono: true, width: '110px', text: (r) => (r.tally === undefined ? '—' : `${r.tally.healthy} / ${r.tally.backends}`) },
+    { key: 'be', label: '백엔드 정상', mono: true, width: '130px', text: (r) => (r.tally === undefined ? '—' : `${r.tally.healthy} / ${r.tally.backends}`) },
     { key: 'state', label: '상태', sort: (r) => aggState(r).text },
   ];
 
@@ -381,7 +380,7 @@
         {:else}
           {#each pools as p (p.rid)}
             <svelte:element this={p.href === undefined ? 'div' : 'a'} class="line pool" href={p.href}>
-              <span class="mono">{p.key}</span>
+              <span class="mono name" title={p.key}>{p.key}</span>
               <span class="hb">
                 <span class="bar" aria-hidden="true">{#each p.segs as [tone, n] (tone)}{#if n > 0}<span data-tone={tone} style:width="{(n / p.total) * 100}%"></span>{/if}{/each}</span>
                 <span class="cap">{p.text}</span>
@@ -399,8 +398,7 @@
           {#each certs as { c, region, rid, href } (rid)}
             {@const tc = certTone(c)}
             <a class="line" {href}>
-              <span class="grow mono">{c.key}</span>
-              {#if region !== ''}<span class="cap mono">{region}</span>{/if}
+              <span class="grow mono" title={c.key}>{c.key}{#if region !== ''} <span class="cap">· {region}</span>{/if}</span>
               <span class="cap mono">{c.notAfter?.slice(0, 10) ?? '—'}</span>
               <Badge tone={tc.tone}>{tc.text}</Badge>
             </a>
@@ -416,9 +414,7 @@
           {#each recent as g (g.rid)}
             <div class="line act">
               <span class="cap mono">{clockText(g.at)}</span>
-              <span class="grow"><b>{g.title}</b> <span class="cap">· {g.who}</span></span>
-              {#if g.region !== ''}<span class="cap mono">{g.region}</span>{/if}
-              {#if g.result}<Badge tone={g.result.tone}>{g.result.text}</Badge>{/if}
+              <span class="grow"><b>{g.title}</b> <span class="cap">· {g.who}{g.region !== '' ? ` · ${g.region}` : ''}</span></span>
               <span class="rev">{g.revision === undefined ? '' : `r${g.revision}`}</span>
             </div>
           {/each}
@@ -444,8 +440,9 @@
   .stat:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
   .l { font: var(--t-cap); color: var(--tx3); }
   .n { font: 600 26px/32px var(--mono); }
-  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; align-items: start; }
-  @media (max-width: 520px) { .panels { grid-template-columns: minmax(0, 1fr); } }
+  /* 시안: 두 열 — 적용 대기 | 풀별 헬스, 인증서 만료 | 최근 변경. 셋이 한 줄에 끼면 이름이 겹친다. */
+  .panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+  @media (max-width: 1000px) { .panels { grid-template-columns: minmax(0, 1fr); } }
   .pad { padding: 12px 16px; }
   .line {
     display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--bd);
@@ -456,6 +453,7 @@
   a.line:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
   .plan { align-items: flex-start; }
   .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .line > span.grow, .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .rev { flex: none; font-family: var(--mono); color: var(--accent); }
   .plan .rev { width: 40px; }
   .act .rev { width: 40px; text-align: right; }

@@ -133,6 +133,24 @@
   ];
   const aggUnfinished = $derived(aggRows.filter((r) => r.v?.unfinished === true));
   const aggPending = $derived(aggRows.reduce((a, r) => a + (r.v?.pending.length ?? 0), 0));
+  /** 전체 합산의 카드 — 시안의 전역 상태 화면도 카드 줄 위에 지역 표를 둔다. 붙지 않은 지역은 세지 않는다(모름). */
+  const aggCards = $derived.by<StatCard[]>(() => {
+    const live = aggRows.filter((r) => r.v !== undefined);
+    const n = aggRows.length;
+    const leaders = live.filter((r) => r.v?.leader.isLeader === true).length;
+    const engines = [...new Set(live.map((r) => r.v!.engine.label))];
+    const lost = n - live.length;
+    return [
+      { label: 'head 리비전', value: '지역마다', sub: '지역마다 따로 커밋해요. 아래 표에서 지역별로 봐요.',
+        badge: aggPending > 0 ? { tone: 'pending', text: `적용 대기 ${aggPending}건` } : { tone: 'ok', text: '적용 대기 없음' } },
+      { label: '리더', value: '지역마다 1개', sub: lost > 0 ? `${live.length}곳은 리더가 답했어요. ${lost}곳은 연락이 없어요.` : `${n}곳 모두 리더가 있어요.`,
+        badge: leaders === n ? { tone: 'ok', text: '정상' } : { tone: 'warn', text: '확인 필요' } },
+      { label: '게시 세대', value: '지역마다', sub: '세대는 지역의 엔진마다 따로 올라가요.' },
+      { label: '미완 전환', value: `${aggUnfinished.length}건`, sub: aggUnfinished.length === 0 ? '진행 중인 전환이 없어요.' : aggUnfinished.map((r) => r.name).join(', '),
+        badge: aggUnfinished.length === 0 ? { tone: 'ok', text: '없음' } : { tone: 'warn', text: '이어받기 필요' } },
+      { label: '엔진', value: engines.length === 1 ? engines[0]! : engines.length === 0 ? '—' : `${engines.length}가지`, sub: engines.length > 1 ? engines.join(', ') : `지역 ${live.length}곳` },
+    ];
+  });
 </script>
 
 {#snippet aggCell(r: AggRow, c: Column<AggRow>)}
@@ -162,6 +180,16 @@
           {/snippet}
         </Banner>
       {/each}
+      <div class="cards">
+        {#each aggCards as c (c.label)}
+          <section class="card" aria-label={c.label}>
+            <span class="l">{c.label}</span>
+            <span class="v">{c.value}</span>
+            <span class="sub">{c.sub}</span>
+            {#if c.badge}<span><Badge tone={c.badge.tone}>{c.badge.text}</Badge></span>{/if}
+          </section>
+        {/each}
+      </div>
       <Card title="지역별 상태" padded={false}>
         <DataTable rows={aggRows} rowKey={(r) => r.name} columns={aggColumns} cell={aggCell}
           label="지역별 상태" emptyTitle="지역이 없어요" minHeight="0" />

@@ -276,7 +276,8 @@
   .sort { border: 0; background: transparent; padding: 0; color: var(--tx2); font: inherit; }
   .sort[data-on='true'] { color: var(--tx); }
   .arrow { color: var(--accent); }
-  td { height: var(--row-h); padding: 0 12px; border-bottom: 1px solid var(--bd); }
+  /* 시안의 표는 한 줄이다 — 긴 값은 줄을 바꾸지 않고 표가 옆으로 흐른다(.scroll). 줄이 바뀌면 행이 들쭉날쭉하고 오른쪽 열이 밀려난다. */
+  td { height: var(--row-h); padding: 0 12px; border-bottom: 1px solid var(--bd); white-space: nowrap; }
   tbody tr:last-child td { border-bottom: 0; }
   td.mono { font-family: var(--mono); }
   td.first { font-weight: 500; }

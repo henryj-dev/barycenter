@@ -115,12 +115,12 @@ describe('화면의 연결', () => {
       expect(s).toMatch(/agg\.entries/);
     });
 
-  it('대시보드: 카드는 붙은 지역의 합 · 지역별 표(지역 · head · 적용 대기 · 리스너 · 백엔드 · 상태) · 최근 변경은 시각 순서 · 빠진 지역 알림', () => {
+  it('대시보드: 카드는 붙은 지역의 합 · 지역별 표(지역 · head · 적용 대기 · 백엔드 정상 · 상태 — 시안) · 최근 변경은 시각 순서 · 빠진 지역 알림', () => {
     const s = src('lib/ops/Dashboard.svelte');
     expect(s).toContain('const total = $derived(sumTally(');
     expect(s).toContain('const t = $derived<Tally>(agg.on ? total : local);');
     const cols = s.slice(s.indexOf('const aggColumns'), s.indexOf('];', s.indexOf('const aggColumns')));
-    expect([...cols.matchAll(/label: '([^']+)'/g)].map((m) => m[1])).toEqual(['지역', 'head', '적용 대기', '리스너', '백엔드', '상태']);
+    expect([...cols.matchAll(/label: '([^']+)'/g)].map((m) => m[1])).toEqual(['지역', 'head', '적용 대기', '백엔드 정상', '상태']);
     expect(s).toContain('mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter((g) => g.change) }))');
     expect(s).toContain('<RegionNotices {notices} />');
     // 붙지 않은 지역은 숫자 없이 상태 배지 — 0 이 아니다.
