@@ -6,10 +6,13 @@
    * 깎인다. 만료는 반드시 있다(기본 90일, 최대 365일). 값은 만든 순간 **한 번만** 보인다 — 서버에는 해시만 있다.
    * 정지 · 복구 링크 사용은 토큰을 전부 거둔다(다시 활성해도 안 돌아온다). 비밀번호 변경은 그대로 둔다.
    * 만들기 · 폐기는 민감 작업이라 인증 앱 확인을 다시 묻는다(`StepUpDialog`). 인증 앱이 없으면 만들 수 없다.
+   *
+   * 시안(사람 화면의 「토큰 · N」 카드)의 배치를 그대로 쓴다: 머리 줄(제목 · 설명 · 「＋ 토큰 만들기」) · 인라인 폼 ·
+   * 한 번만 보이는 값(--warn-bg 줄) · 머리 행(--bg-hover 32px)과 행(--row-h). 시안에 없는 「만료」 열과 만료 일수 칸을 더했다.
    */
   import { onMount } from 'svelte';
   import { ago } from '#lib/detail/facts';
-  import { Badge, Button, Card, DataTable, FieldMessage, NumberInput, Select, TextInput, toast, type Column } from '#lib/ui';
+  import { Badge, Button, Card, FieldMessage, NumberInput, Select, Skeleton, TextInput, toast } from '#lib/ui';
   import { accountApi, type ApiToken, type Me, type Role } from './api';
   import { ROLE_LABEL, ROLE_SCOPES, TOKEN_NAME, TOKEN_NAME_HELP } from './text';
 
@@ -67,42 +70,20 @@
   };
 
   const expired = (t: ApiToken): boolean => new Date(t.expiresAt).getTime() <= Date.now();
-  const columns: Column<ApiToken>[] = [
-    { key: 'name', label: '이름', mono: true, sort: (r) => r.name },
-    { key: 'role', label: '역할', mono: true, width: '200px', sort: (r) => RANK[r.role] },
-    { key: 'exp', label: '만료', muted: true, width: '150px', sort: (r) => r.expiresAt },
-    { key: 'last', label: '마지막 사용', muted: true, width: '130px',
-      text: (r) => (r.lastUsedAt === null ? '아직 안 썼어요' : ago(r.lastUsedAt) ?? '—'), sort: (r) => r.lastUsedAt ?? '' },
-    { key: 'act', label: '', align: 'right', width: '80px' },
-  ];
 </script>
 
-{#snippet cell(t: ApiToken, c: Column<ApiToken>)}
-  {#if c.key === 'name'}
-    <span title={`${t.prefix}…`}>{t.name}</span>
-  {:else if c.key === 'role'}
-    <span title={ROLE_LABEL[t.role]}>{ROLE_SCOPES[t.role]}</span>
-  {:else if c.key === 'exp'}
-    {#if expired(t)}<Badge tone="neutral" icon="○">만료</Badge>{:else}<span title={new Date(t.expiresAt).toLocaleString()}>{new Date(t.expiresAt).toLocaleDateString()}</span>{/if}
-  {:else if c.key === 'last'}
-    <span title={t.lastUsedAt === null ? undefined : new Date(t.lastUsedAt).toLocaleString()}>{c.text?.(t) ?? ''}</span>
-  {:else if c.key === 'act'}
-    <Button size="sm" variant="danger" onclick={() => { void revoke(t); }}>폐기</Button>
-  {:else}{c.text?.(t) ?? ''}{/if}
-{/snippet}
-
-<Card title="API 토큰 · {tokens.length}" sub="자동화용 API 토큰이에요. 사람 계정이 아니에요." padded={false}>
+<Card title="토큰 · {tokens.length}" sub="자동화용 API 토큰이에요. 사람 계정이 아니에요." padded={false}>
   {#snippet actions()}
     {#if me.mfa.totp}<Button size="sm" onclick={toggle}>＋ 토큰 만들기</Button>{/if}
   {/snippet}
   {#if !me.mfa.totp}
-    <div class="note"><FieldMessage>토큰을 만들고 폐기하려면 인증 앱을 먼저 등록해요. 민감한 작업이라 인증 코드를 다시 물어요.</FieldMessage></div>
+    <div class="band"><FieldMessage>토큰을 만들고 폐기하려면 인증 앱을 먼저 등록해요. 민감한 작업이라 인증 코드를 다시 물어요.</FieldMessage></div>
   {/if}
   {#if formOpen}
-    <div class="form">
+    <div class="band">
       <div class="line">
         <TextInput aria-label="토큰 이름" placeholder="토큰 이름" bind:value={name} width="220px" invalid={nameError !== undefined} autocomplete="off" />
-        <Select label="역할" bind:value={role} options={roles} width="220px" />
+        <Select label="범위" bind:value={role} options={roles} width="220px" />
         <NumberInput label="만료 일수" bind:value={days} unit="일" min="1" max="365" step="1" invalid={daysError !== undefined} />
         <Button variant="primary" loading={creating} onclick={() => { void create(); }}>만들기</Button>
         <Button onclick={toggle}>취소</Button>
@@ -113,24 +94,52 @@
     </div>
   {/if}
   {#if created !== undefined}
-    <div class="once">
-      <b>토큰 값은 지금 한 번만 보여요. 따로 저장해요.</b>
+    <div class="band once">
+      <div class="ot">토큰 값은 지금 한 번만 보여요. 따로 저장해요.</div>
       <div class="line">
-        <TextInput value={created.token} readonly aria-label={`${created.name} 토큰 값`} onfocus={(e) => (e.currentTarget as HTMLInputElement).select()} />
+        <code class="val" aria-label={`${created.name} 토큰 값`}>{created.token}</code>
         <Button size="sm" onclick={() => { void copy(); }}>복사</Button>
         <Button size="sm" onclick={() => { created = undefined; }}>닫기</Button>
       </div>
     </div>
   {/if}
-  {#if error !== undefined}<div class="note"><FieldMessage tone="error">{error}</FieldMessage></div>{/if}
-  <DataTable rows={tokens} rowKey={(r) => r.id} {columns} {cell} {loading} label="API 토큰"
-    emptyTitle="토큰이 없어요" emptyBody="「＋ 토큰 만들기」 로 자동화용 토큰을 만들어요." minHeight="0" />
+  {#if error !== undefined}<div class="band"><FieldMessage tone="error">{error}</FieldMessage></div>{/if}
+  <div class="th"><span>이름</span><span>범위</span><span>만료</span><span>마지막 사용</span><span></span></div>
+  {#if loading}
+    <div class="tr"><span class="all"><Skeleton height="16px" label="토큰을 읽는 중" /></span></div>
+  {:else}
+    {#each tokens as t (t.id)}
+      <div class="tr">
+        <span class="n" title={`${t.prefix}…`}>{t.name}</span>
+        <span class="sc" title={ROLE_LABEL[t.role]}>{ROLE_SCOPES[t.role]}</span>
+        <span class="mu">{#if expired(t)}<Badge tone="neutral" icon="○">만료</Badge>{:else}<span title={new Date(t.expiresAt).toLocaleString()}>{new Date(t.expiresAt).toLocaleDateString()}</span>{/if}</span>
+        <span class="mu" title={t.lastUsedAt === null ? undefined : new Date(t.lastUsedAt).toLocaleString()}>{t.lastUsedAt === null ? '아직 안 썼어요' : ago(t.lastUsedAt) ?? '—'}</span>
+        <span><Button size="sm" style="height: 24px; border-color: var(--danger); color: var(--danger)" onclick={() => { void revoke(t); }}>폐기</Button></span>
+      </div>
+    {:else}
+      <div class="empty">토큰이 없어요. 「＋ 토큰 만들기」 로 자동화용 토큰을 만들어요.</div>
+    {/each}
+  {/if}
 </Card>
 
 <style>
-  .form, .once { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--bd); }
-  .once { background: var(--warn-bg); font-size: 13px; }
+  .band { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--bd); }
+  .band :global(.msg) { margin-top: 0; }
+  .once { background: var(--warn-bg); }
+  .ot { font-size: 13px; font-weight: 600; }
   .line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .once .line > :global(input) { flex: 1; min-width: 0; }
-  .note { padding: 10px 16px 0; }
+  .val {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; word-break: break-all; padding: 6px 8px;
+    background: var(--bg-input); border: 1px solid var(--bd); border-radius: var(--r-sm); user-select: all;
+  }
+  /* 시안: 1.2fr 1.4fr 1fr 80px — 「만료」 열(1fr)을 범위 다음에 더했다 */
+  .th, .tr { display: grid; grid-template-columns: 1.2fr 1.4fr 1fr 1fr 80px; gap: 12px; padding: 0 16px; align-items: center; }
+  .th { height: 32px; background: var(--bg-hover); font-size: 12px; font-weight: 600; color: var(--tx2); }
+  .tr { height: var(--row-h); border-top: 1px solid var(--bd); font-size: 13px; }
+  .tr:hover { background-image: linear-gradient(var(--hov), var(--hov)); }
+  .n { font-family: var(--mono); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc { font-family: var(--mono); font-size: 12px; }
+  .mu { font-size: 12px; color: var(--tx3); }
+  .all { grid-column: 1 / -1; }
+  .empty { padding: 20px; text-align: center; color: var(--tx3); font-size: 13px; border-top: 1px solid var(--bd); }
 </style>
