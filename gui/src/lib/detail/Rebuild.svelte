@@ -8,12 +8,12 @@
    *
    * 시안처럼 **예시 요청이 어디로 가나**를 미리 보인다 — 맞은 경로 접두사를 URL 경로로 갈아 새 대상에 붙인다(`rewritePrefix`).
    * 끝의 `/` 가 경로 접두사와 URL 경로에서 다르면 경로가 붙거나 겹친다 — patch 빌더가 거절하는 것을 칸 아래에서 먼저 말한다.
-   * 다시 만들면 라우트 몸통을 새로 짓는다(`proxyFromUrlPatch`) — 출발지 규칙 · 우선순위 · WebSocket · 요청 헤더가 있으면
-   * 사라진다는 것을 미리 말한다.
+   * URL 은 대상만 정한다 — 풀 · 경로 바꾸기 · `Host` 헤더. 출발지 규칙 · 우선순위 · WebSocket · 다른 요청 헤더는
+   * `keep` 으로 넘겨 그대로 둔다 (2026-11-04). 바뀌는 지금 값(Host 헤더 · 경로 바꾸기 · 풀이 아닌 동작)만 미리 말한다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { proxyFromUrlPatch } from '@web/edit';
+  import { proxyFromUrlPatch, type HeaderRuleInput, type SourceRuleInput } from '@web/edit';
   import { itemOf, resourcePath } from '@web/resources';
   import { Badge, Banner, Button, Card, Checkbox, DescriptionList, FieldMessage, Form, FormRow, FormSection, TextInput } from '#lib/ui';
   import { exampleRequest, matchPrefix, rewritePath, slashMismatch } from '#lib/forms/rewrite';
@@ -27,6 +27,7 @@
   let url = $state('');
   let confirmed = $state(false);
   let exPath = $state('');
+  const act = $derived((typeof route?.['action'] === 'object' && route['action'] !== null ? route['action'] : {}) as Record<string, unknown>);
   const input = $derived(route === undefined ? undefined : {
     name: key,
     url: url.trim(),
@@ -35,6 +36,13 @@
     ...(typeof route['pathPrefix'] === 'string' ? { pathPrefix: route['pathPrefix'] } : {}),
     // 경로가 여럿인 라우트도 그대로 둔다 (2026-11-02) — 빠뜨리면 다시 만들 때 `/` 하나가 된다.
     ...(Array.isArray(route['pathPrefixes']) ? { pathPrefixes: route['pathPrefixes'] as string[] } : {}),
+    // 대상이 아닌 설정은 그대로 둔다 — 빠뜨리면 다시 만들 때 사라진다 (2026-11-04).
+    keep: {
+      ...(typeof route['priority'] === 'number' ? { priority: route['priority'] } : {}),
+      ...(Array.isArray(route['sourceRules']) ? { sourceRules: route['sourceRules'] as SourceRuleInput[] } : {}),
+      ...(act['kind'] === 'proxy' && typeof act['websocket'] === 'boolean' ? { websocket: act['websocket'] } : {}),
+      ...(Array.isArray(act['requestHeaders']) ? { requestHeaders: act['requestHeaders'] as HeaderRuleInput[] } : {}),
+    },
   });
   const preview = $derived.by((): { ops: { kind: string; key: string }[]; error?: string } => {
     if (input === undefined || input.url === '') return { ops: [], error: '새 URL 을 넣으면 만들 리소스가 여기 보여요.' };
@@ -59,17 +67,15 @@
   // `/` → `/` 는 바꾸지 않는다(patch 빌더와 같다).
   const outUrl = $derived(target === undefined || hit === undefined ? undefined
     : target.origin + (rewritePath(hit, target.path === '/' && paths.every((p) => p === '/') ? '' : target.path, req) ?? ''));
-  /** 다시 만들면 사라지는 것 — 라우트 몸통을 새로 짓는다. */
-  const lost = $derived.by((): string[] => {
+  /** 다시 만들면 URL 값으로 바뀌는 지금 설정 — 대상에 딸린 것뿐이다. 다른 설정은 `keep` 으로 그대로 간다. */
+  const replaced = $derived.by((): string[] => {
     if (route === undefined) return [];
-    const a = (typeof route['action'] === 'object' && route['action'] !== null ? route['action'] : {}) as Record<string, unknown>;
-    const rules = Array.isArray(route['sourceRules']) ? route['sourceRules'].length : 0;
-    const heads = Array.isArray(a['requestHeaders']) ? a['requestHeaders'].length : 0;
+    const host = Array.isArray(act['requestHeaders'])
+      ? (act['requestHeaders'] as HeaderRuleInput[]).find((h) => h.name.trim().toLowerCase() === 'host') : undefined;
     return [
-      ...(rules > 0 ? [`출발지 규칙 ${rules}개`] : []),
-      ...(Number(route['priority'] ?? 0) !== 0 ? [`우선순위 ${String(route['priority'])}`] : []),
-      ...(a['websocket'] === true ? ['WebSocket'] : []),
-      ...(heads > 0 ? [`요청 헤더 ${heads}개(Host 하나로 바뀌어요)`] : []),
+      ...(act['kind'] !== undefined && act['kind'] !== 'proxy' ? [`지금 동작(${String(act['kind'])})`] : []),
+      ...(host !== undefined ? [`Host 헤더 ${host.value}`] : []),
+      ...(typeof act['rewritePrefix'] === 'string' ? [`경로 바꾸기 ${act['rewritePrefix']}`] : []),
     ];
   });
 
@@ -104,8 +110,8 @@
           </div>
         </FormRow>
       </FormSection>
-      {#if lost.length > 0}
-        <Banner tone="warn">다시 만들면 라우트를 새로 지어서 이것이 사라져요: {lost.join(' · ')}. 필요하면 만든 뒤 설정에서 다시 넣어요.</Banner>
+      {#if replaced.length > 0}
+        <Banner tone="warn">다시 만들면 URL 값으로 바뀌어요: {replaced.join(' · ')}. 출발지 규칙 · 우선순위 · WebSocket · 다른 요청 헤더는 그대로 둬요.</Banner>
       {/if}
       <Card title="만들거나 덮을 리소스">
         {#if preview.error !== undefined}
