@@ -10,8 +10,8 @@
  *   const cols = $derived(agg.on ? withRegionColumn(columns, REGION_COLUMN) : columns);
  *
  * 쓰기는 **행의 지역**으로 간다(§1.1, 한 번에 한 지역): 그 자리에서 쓰는 것(켜고 끄기 · 드레인 · 삭제 확인)은 그 지역의 desk 로,
- * 주소가 있는 것(상세 · 수정 · 만들기)은 그 지역으로 좁혀 연다(`href` → `?region=`). 상세 화면은 셸의 desk 하나로 그리므로
- * 좁혀야 그 지역의 상세다.
+ * 주소가 있는 것(상세 · 수정)은 그 지역으로 좁혀 연다(`href` → `?region=`). 상세 화면은 셸의 desk 하나로 그리므로
+ * 좁혀야 그 지역의 상세다. 만들기는 좁히지 않는다 — 합산 목록 위 드로어에서 「쓸 지역」 을 고른다(`FormDrawer`).
  */
 import { getContext } from 'svelte';
 import type { createDesk } from '#lib/desk.svelte.ts';
@@ -41,7 +41,7 @@ export type Aggregate = {
   entry(regionOrRid: string): RegionEntry | undefined;
   /** 그 지역에 지금 쓸 수 있다 — 행 메뉴의 수정 · 삭제 · 드레인을 이것으로 연다. */
   writable(region: string): boolean;
-  /** 이 주소를 그 지역으로 좁혀 연다(`?region=<이름>`). 상세 · 수정 · 만들기 링크에 쓴다. */
+  /** 이 주소를 그 지역으로 좁혀 연다(`?region=<이름>`). 상세 · 수정 링크에 쓴다. */
   href(region: string, path: string): string;
   /** 합산 행 키를 지역과 원래 키로 가른다. */
   split: typeof splitRowId;

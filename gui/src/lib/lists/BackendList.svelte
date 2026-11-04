@@ -20,7 +20,6 @@
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import WriteNote from '#lib/global/WriteNote.svelte';
   import InRegion from '#lib/global/InRegion.svelte';
-  import RegionCreate from '#lib/global/RegionCreate.svelte';
   import RegionNotices from '#lib/global/RegionNotices.svelte';
   import { regionColumn, useAggregate } from '#lib/global/use-aggregate.svelte.ts';
   import { withRegionColumn, type RegionRow } from '#lib/global/aggregate.ts';
@@ -74,15 +73,14 @@
       { label: r.draining ? '드레인 해제' : '드레인', onselect: () => { void drainAll([r.rid], !r.draining); } },
       { label: '풀에서 빼기…', danger: true, onselect: () => { del = { kind: 'backend', key: r.key, region: r.region }; } },
     ]);
-  // 합산이면 만들기는 지역을 먼저 고른다(RegionCreate). 쓸 지역이 하나도 없으면 안 보인다.
-  usePageActions(() => (agg.on ? (agg.entries.some((e) => e.writable) ? createIn : undefined) : ro ? undefined : create));
+  // 합산이면 만들기는 지역 모드와 같은 버튼이다 — 드로어 머리에서 「쓸 지역」 을 고른다(`FormDrawer`). 쓸 지역이 하나도 없으면 안 보인다.
+  usePageActions(() => (agg.on ? (agg.entries.some((e) => e.writable) ? create : undefined) : ro ? undefined : create));
   /** 합산에서 고를 수 있나 — 쓸 수 있는 지역이 하나라도 있으면. 아니면 셸의 판정 그대로. */
   const selectable = $derived(agg.on ? agg.entries.some((e) => e.writable) : !ro);
   const delEntry = $derived(del === undefined || !agg.on ? undefined : agg.entry(del.region));
 </script>
 
 {#snippet create()}<Button variant="primary" href="/traffic/backend/new">＋ 만들기</Button>{/snippet}
-{#snippet createIn()}<RegionCreate {agg} href="/traffic/backend/new" />{/snippet}
 
 {#snippet table()}
 {#if agg.on}<RegionNotices notices={agg.notices} />{:else}<WriteNote spaced />{/if}

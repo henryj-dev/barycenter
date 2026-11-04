@@ -5,7 +5,7 @@
  * 쓰기는 그대로 한 번에 한 지역(§1.1) — 행의 수정 · 삭제 · 드레인은 그 행의 지역으로 간다. 연락 없는 지역의 행은 빠지고 알린다(§2.4).
  * 순수 함수(`gui/src/lib/global/aggregate.ts`)는 바로 부르고, 화면의 연결은 소스를 읽어 본다.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -80,7 +80,7 @@ describe('행의 지역으로 좁혀 연다', () => {
     expect(inRegion('/traffic/listener/web/settings?tab=1#x', 'a b')).toBe('/traffic/listener/web/settings?tab=1&region=a+b#x');
   });
 
-  it('합산으로 그리는 화면은 목록 주소뿐이다 · 상세 · 만들기는 그 목록으로, 나머지는 지역 고르기로', () => {
+  it('합산으로 그리는 화면은 목록과 그 만들기 주소다 · 상세는 그 목록으로, 나머지는 지역 고르기로', () => {
     expect(AGGREGATE_PATHS).toEqual(['/traffic/listener', '/traffic/backend',
       '/traffic/pool', '/traffic/address-set', '/traffic/route/http', '/traffic/route/passthrough',
       '/tls/certificate', '/tls/policy', '/tls/sni',
@@ -88,6 +88,10 @@ describe('행의 지역으로 좁혀 연다', () => {
     ]);
     expect(isAggregatePath('/traffic/listener/')).toBe(true);
     expect(isAggregatePath('/traffic/listener/web')).toBe(false);
+    // 만들기는 좁히지 않는다 — 합산 목록 위 드로어(시안 wreg). 단계 주소도 같다.
+    for (const p of ['/traffic/listener/new', '/traffic/listener/new/', '/traffic/listener/new/http', '/traffic/listener/new/quick',
+      '/traffic/route/http/new/group', '/tls/sni/new', '/traffic/backend/new']) expect(isAggregatePath(p), p).toBe(true);
+    for (const p of ['/new', '/traffic/listener/web/settings', '/traffic/listener/new/http/x', '/tls/snix/new']) expect(isAggregatePath(p), p).toBe(false);
     expect(aggregateFallback('/traffic/backend/b1/settings')).toBe('/traffic/backend');
     expect(aggregateFallback('/')).toBe('/regions');
     expect(aggregateFallback('/traffic/route/http/new/group')).toBe('/traffic/route/http');
@@ -120,7 +124,7 @@ describe('화면의 연결', () => {
 
   it.each(['ListenerList', 'BackendList',
     'PoolList', 'AddressSetList', 'HttpRouteList', 'PassthroughRouteList',
-    'CertificateList', 'TlsPolicyList', 'SniBindingList'])('%s: 합산이면 지역 열 · 빠진 지역 알림 · 행 키 rid · 행의 지역으로 쓰기 · 만들 지역 고르기', (f) => {
+    'CertificateList', 'TlsPolicyList', 'SniBindingList'])('%s: 합산이면 지역 열 · 빠진 지역 알림 · 행 키 rid · 행의 지역으로 쓰기 · 만들기는 지역 모드와 같은 버튼', (f) => {
     const s = src(`lib/lists/${f}.svelte`);
     expect(s).toContain('const agg = useAggregate();');
     expect(s).toContain('withRegionColumn(columns, regionColumn<AggRow>())');
@@ -128,14 +132,15 @@ describe('화면의 연결', () => {
     expect(s).toContain('rowKey={(r) => r.rid}');
     expect(s).toContain('const rowRo = (r: AggRow): boolean => (agg.on ? !agg.writable(r.region) : ro);');
     expect(s).toMatch(/<InRegion entry=\{delEntry\}><DeleteConfirm bind:target=\{del\}/);
-    expect(s).toContain('<RegionCreate {agg}');
+    // 만들기 버튼은 지역 모드와 같은 것이다(시안) — 지역은 드로어 머리의 「쓸 지역」 에서 고른다.
+    expect(s).toContain('usePageActions(() => (agg.on ? (agg.entries.some((e) => e.writable) ? create : undefined) : ro ? undefined : create));');
+    expect(s).not.toContain('RegionCreate');
   });
 
-  it('라우트 평가 순서는 지역마다 센다 · 경로별 묶음도 지역을 먼저 고른다', () => {
+  it('라우트 평가 순서는 지역마다 센다', () => {
     const h = src('lib/lists/HttpRouteList.svelte');
     // routeOrder 는 rowsOf(desk) 안에서 그 지역 desk 로만 부른다 — 지역을 넘어 #n · 가려짐을 세지 않는다.
     expect(h).toMatch(/const rowsOf = \(desk: Desk\): Row\[\] => \{\s*const meta = routeOrder\(desk\.routes\);/);
-    expect(h).toContain('<RegionCreate {agg} href="/traffic/route/http/new/group"');
     expect(src('lib/lists/PassthroughRouteList.svelte')).toMatch(/const rowsOf = \(desk: Desk\): Row\[\] => desk\.routes\.passthrough\.map\(\(r, i\)/);
   });
 
@@ -144,6 +149,22 @@ describe('화면의 연결', () => {
     expect(p).toContain("const desk = getContext<ReturnType<typeof createDesk>>('desk');");
     expect(p).toContain('scope?.fixed === true && scope.region !== undefined ? inRegion(path, scope.region.name) : path');
     expect(p).toContain("href={link(resourcePath('backend', r.key))}");
+  });
+
+  it('합산의 만들기 드로어: 머리에 「쓸 지역」 고르기 · 연결 안 된 지역은 못 고름 · 폼은 고른 지역 desk · 만든 뒤 합산 목록', () => {
+    const d = src('lib/forms/FormDrawer.svelte');
+    expect(d).toContain('region={agg.on ? regionPick : region !== undefined ? regionLine : undefined}');
+    expect(d).toMatch(/<span>쓸 지역<\/span>\s*<span class="wreg"><Select size="sm"/);
+    expect(d).toContain('.wreg :global(.trigger) { height: 26px;');
+    // 시안 wregOpts — 「<이름> · 연결 안 됨」 · disabled. 기본은 첫 쓸 수 있는 지역.
+    expect(d).toContain("label: e.writable ? e.name : `${e.name} · 연결 안 됨`, disabled: !e.writable");
+    expect(d).toContain('?? agg.entries.find((e) => e.writable) ?? agg.entries[0]');
+    // 지역을 바꾸면 폼을 그 지역으로 다시 그린다. 쓰기는 그 지역 desk 로 간다(InRegion).
+    expect(d).toContain('{#key chosen.name}<InRegion entry={chosen}>{@render children()}</InRegion>{/key}');
+    expect(d).toContain('$effect(() => { if (agg.on) return redirectAfter(() => back); });');
+    const a = src('lib/after.ts');
+    expect(a).toContain('void goto(redirect?.(href) ?? href);');
+    expect(existsSync(new URL('../../gui/src/lib/global/RegionCreate.svelte', import.meta.url))).toBe(false);
   });
 
   it('목록 옆 상세는 합산이면 그 행의 지역 desk 로 그리고 링크를 그 지역으로 좁힌다', () => {
