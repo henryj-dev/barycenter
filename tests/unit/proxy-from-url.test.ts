@@ -188,3 +188,60 @@ describe('HTTPS 리스너 (#116)', () => {
       .toThrow(/새 리스너/);
   });
 });
+
+describe('URL로 다시 만들기 — 라우트의 다른 설정은 그대로 둔다', () => {
+  // 사용자가 정한 라우트 설정. 다시 만들어도 대상(풀 · Host · 경로 바꾸기)만 바뀌어야 한다.
+  const keep = {
+    priority: 7,
+    websocket: true,
+    sourceRules: [{ from: ['10.0.0.0/8'], action: { kind: 'proxy' as const, pool: 'office', websocket: false } }],
+    requestHeaders: [
+      { name: 'X-Team', value: 'a' },
+      { name: 'host', value: 'old.example.com' },
+      { name: 'X-Trace', value: 'on' },
+    ],
+  };
+  const ops = proxyFromUrlPatch({
+    name: 'api', url: 'https://new.example.com/v2/', listener: 'web',
+    hosts: ['a.test', 'b.test'], pathPrefixes: ['/api/', '/x/'], keep,
+  });
+  const route = ops.find((o) => o.kind === 'httpRoute')!;
+
+  it('출발지 규칙 · 우선순위 · WebSocket · 호스트 · 경로가 남는다', () => {
+    expect(route.body).toMatchObject({
+      listener: 'web', hosts: ['a.test', 'b.test'], pathPrefixes: ['/api/', '/x/'],
+      priority: 7, sourceRules: keep.sourceRules,
+    });
+    expect((route.body as { action: { websocket: boolean } }).action.websocket).toBe(true);
+  });
+
+  it('URL 이 정하는 것만 바뀐다 — 풀 · 경로 바꾸기 · Host 헤더(이름은 대소문자를 가리지 않는다)', () => {
+    expect((route.body as { action: object }).action).toMatchObject({
+      kind: 'proxy', pool: 'api', rewritePrefix: '/v2/',
+      requestHeaders: [
+        { name: 'X-Team', value: 'a' },
+        { name: 'Host', value: 'new.example.com' },
+        { name: 'X-Trace', value: 'on' },
+      ],
+    });
+  });
+
+  it('Host 헤더가 없던 라우트에는 Host 를 덧붙인다', () => {
+    const r = proxyFromUrlPatch({
+      name: 'api', url: 'https://new.example.com/', listener: 'web', hosts: ['a.test'],
+      keep: { requestHeaders: [{ name: 'X-Team', value: 'a' }] },
+    }).find((o) => o.kind === 'httpRoute')!;
+    expect((r.body as { action: { requestHeaders: unknown } }).action.requestHeaders)
+      .toEqual([{ name: 'X-Team', value: 'a' }, { name: 'Host', value: 'new.example.com' }]);
+  });
+
+  it('해독기 · 검증기를 지난다', () => {
+    const web = { key: 'web', protocol: 'http', bind: '0.0.0.0', port: 80, enabled: true, http: { defaultAction: 'reject' } };
+    const m = modelOf(ops, [web]) as Record<string, unknown[]>;
+    m['pools']!.push({ key: 'office', protocolClass: 'http', algorithm: 'round_robin' });
+    m['backends']!.push({ key: 'office-1', pool: 'office', host: '10.0.0.9', port: 80, weight: 1 });
+    const r = decodeModel(m);
+    if (!r.ok) throw new Error(JSON.stringify(r.issues));
+    expect(validateModel(r.model)).toEqual([]);
+  });
+});
