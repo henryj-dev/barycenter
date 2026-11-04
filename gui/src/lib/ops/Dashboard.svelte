@@ -439,7 +439,8 @@
           {#each certs as { c, region, rid, href } (rid)}
             {@const tc = certTone(c)}
             <a class="cert" {href}>
-              <span class="cn mono" title={c.key}>{c.key}{#if region !== ''} <span class="cap">· {region}</span>{/if}</span>
+              <!-- 시안: 전역에서도 이름만 — 지역은 title 로. -->
+              <span class="cn mono" title={region === '' ? c.key : `${c.key} · ${region}`}>{c.key}</span>
               <span class="cd">{c.notAfter?.slice(0, 10) ?? '—'}</span>
               <Badge tone={tc.tone}>{tc.text}</Badge>
             </a>
@@ -455,7 +456,7 @@
           {#each recent as g (g.rid)}
             <div class="act">
               <span class="at">{clockText(g.at)}</span>
-              <span class="an"><b>{recentTitle(g)}</b> <span class="cap">· {g.who}{g.region !== '' ? ` · ${g.region}` : ''}</span></span>
+              <span class="an"><b>{recentTitle(g)}</b> <span class="cap" title={g.region === '' ? undefined : g.region}>· {g.who}</span></span>
               <span class="ar">{g.revision === undefined ? '' : `r${g.revision}`}</span>
             </div>
           {/each}

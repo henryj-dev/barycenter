@@ -24,7 +24,14 @@ describe('변경 설명', () => {
   it('칸 하나만 바뀌었으면 「<칸> <전> → <후>」 를 붙인다', () => {
     const before = { key: 'web-https', port: 443, readTimeoutS: 60 };
     expect(describeChange([put('listener', 'web-https', { port: 443, readTimeoutS: 90 })], { existed: true, before }))
-      .toEqual({ title: '리스너 web-https readTimeoutS 60 → 90', target: 'listener web-https' });
+      .toEqual({ title: '리스너 web-https 타임아웃 60s → 90s', target: 'listener web-https' });
+  });
+
+  it('이름표에 없는 칸은 내부 이름을 보이지 않고 「수정」 — 출발지 규칙 안이면 그 말을 붙인다', async () => {
+    const { fieldLabel } = await import('../../gui/src/lib/ops/change-title.js');
+    expect(fieldLabel('sourceRules[0].action.status')).toEqual({ l: '출발지 규칙 응답 코드' });
+    expect(fieldLabel('somethingNew')).toBeUndefined();
+    expect(describeChange([put('listener', 'l', { zzz: 2 })], { existed: true, before: { key: 'l', zzz: 1 } })?.title).toBe('리스너 l 수정');
   });
 
   it('여러 칸이 바뀌었으면 「수정」 만', () => {
@@ -45,7 +52,7 @@ describe('변경 설명', () => {
 
   it('서버가 준 바뀐 뒤 모습(after)이 있으면 patch 몸보다 먼저 쓴다 — 기본값 차이로 「수정」 이 되지 않게', () => {
     expect(describeChange([put('listener', 'l', { port: 81 })],
-      { existed: true, before: { key: 'l', port: 80, http2: false }, after: { key: 'l', port: 81, http2: false } })?.title).toBe('리스너 l port 80 → 81');
+      { existed: true, before: { key: 'l', port: 80, http2: false }, after: { key: 'l', port: 81, http2: false } })?.title).toBe('리스너 l 포트 80 → 81');
   });
 
   it('삭제는 있었는지 몰라도 「삭제」', () => {

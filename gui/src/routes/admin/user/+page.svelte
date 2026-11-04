@@ -21,7 +21,7 @@
   import SsoJit from '#lib/account/SsoJit.svelte';
   import UserTokens from '#lib/account/UserTokens.svelte';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
-  import { Badge, Banner, Button, Card, ConfirmDialog, DataTable, FieldMessage, Select, TextInput, toast, type Column, type FilterChip, type MenuItem } from '#lib/ui';
+  import { Badge, Banner, Button, Card, ConfirmDialog, DataTable, FieldMessage, Select, TextInput, toast, type Column, type MenuItem } from '#lib/ui';
 
   const session = getContext<Session>('session');
   /** 시안의 역할 이름은 `ROLE_LABEL`(계정 화면 공통). 서버 값은 옆에 흐리게 둔다. */
@@ -120,21 +120,12 @@
 
   const userCols: Column<UserRow>[] = [
     { key: 'username', label: '이름', mono: true, sort: (r) => r.username },
-    { key: 'role', label: '역할', width: '170px', sort: (r) => r.role },
-    { key: 'status', label: '상태', width: '130px', sort: (r) => r.status },
-    { key: 'totp', label: 'MFA', width: '110px', sort: (r) => (r.totp ? 1 : 0) },
-    { key: 'login', label: '마지막 로그인', mono: true, muted: true, width: '140px', hideable: true,
+    { key: 'role', label: '역할', width: '170px', hideable: false, sort: (r) => r.role },
+    { key: 'status', label: '상태', width: '130px', hideable: false, sort: (r) => r.status },
+    { key: 'totp', label: 'MFA', width: '110px', hideable: false, sort: (r) => (r.totp ? 1 : 0) },
+    { key: 'login', label: '마지막 로그인', mono: true, muted: true, width: '140px', hideable: false,
       text: (r) => (r.lastLoginAt === null ? '아직 없어요' : ago(r.lastLoginAt) ?? '—'), sort: (r) => r.lastLoginAt ?? '' },
-    { key: 'authority', label: '역할 정본', width: '110px', hideable: true, hidden: true, text: (r) => (r.roleAuthority === 'idp' ? 'IdP' : '로컬'), sort: (r) => r.roleAuthority },
-    { key: 'email', label: '이메일', mono: true, muted: true, hideable: true, hidden: true, text: (r) => r.email ?? '—' },
-    { key: 'tokens', label: '토큰', width: '80px', hideable: true, hidden: true, sort: (r) => r.tokens },
-    { key: 'act', label: '', align: 'right', width: '130px' },
-  ];
-  const chips: FilterChip<UserRow>[] = [
-    { key: 'admin', label: '관리자', tone: 'accent', icon: '★', match: (r) => r.role === 'admin' },
-    { key: 'suspended', label: '비활성', tone: 'neutral', match: (r) => r.status === 'suspended' },
-    { key: 'locked', label: '잠김', tone: 'warn', match: (r) => r.lockedUntil !== null },
-    { key: 'nomfa', label: 'MFA 꺼짐', tone: 'warn', match: (r) => !r.totp },
+    { key: 'act', label: '', align: 'right', width: '130px', hideable: false },
   ];
   const userMenu = (u: UserRow): MenuItem[] => [
     { label: u.roleAuthority === 'idp' ? '역할 정본을 로컬로' : '역할 정본을 IdP 로', onselect: () => { void accountApi.updateUser(u.id, { roleAuthority: u.roleAuthority === 'idp' ? 'local' : 'idp' }).then(act); } },
@@ -146,11 +137,10 @@
   ];
   const inviteCols: Column<InvitationRow>[] = [
     { key: 'email', label: '이메일', mono: true, text: (r) => r.email ?? '이메일 없음' },
-    { key: 'role', label: '역할', width: '110px', text: (r) => ROLE_LABEL[r.role] ?? r.role },
-    { key: 'sent', label: '보낸 때', mono: true, muted: true, width: '130px', text: (r) => ago(r.createdAt) ?? '—', sort: (r) => r.createdAt },
-    { key: 'state', label: '상태', width: '110px' },
-    { key: 'exp', label: '만료', muted: true, hideable: true, hidden: true, text: (r) => new Date(r.expiresAt).toLocaleString(), sort: (r) => r.expiresAt },
-    { key: 'act', label: '', align: 'right', width: '180px' },
+    { key: 'role', label: '역할', width: '110px', hideable: false, text: (r) => ROLE_LABEL[r.role] ?? r.role },
+    { key: 'sent', label: '보낸 때', hideable: false, mono: true, muted: true, width: '130px', text: (r) => ago(r.createdAt) ?? '—', sort: (r) => r.createdAt },
+    { key: 'state', label: '상태', width: '110px', hideable: false },
+    { key: 'act', label: '', align: 'right', width: '180px', hideable: false },
   ];
   usePageActions(() => (session.isAdmin ? head : undefined));
 </script>
@@ -162,7 +152,7 @@
     <code>{u.username}</code>{#if u.lockedUntil !== null} <Badge tone="warn">잠김</Badge>{/if}
   {:else if c.key === 'role'}
     <!-- IdP 가 정본이면 역할은 SSO 로그인이 맞춘다 — 손으로 못 바꾼다 -->
-    <Select label={`${u.username} 역할`} value={u.role} options={ROLES} width="140px" mono={false} disabled={u.roleAuthority === 'idp'}
+    <Select label={`${u.username} 역할`} size="sm" value={u.role} options={ROLES} width="140px" mono={false} disabled={u.roleAuthority === 'idp'}
       onchange={(v) => { setRole(u, v); }} />
   {:else if c.key === 'status'}
     {#if u.status === 'active'}<Badge tone="ok" icon="●">활성</Badge>{:else}<Badge tone="neutral" icon="○">비활성</Badge>{/if}
@@ -222,8 +212,8 @@
     {/if}
 
     <Card title="사용자 · {users.length}" padded={false}>
-      <DataTable rows={users} rowKey={(r) => r.id} columns={userCols} cell={userCell} {chips} {loading} label="사용자"
-        search={{ placeholder: '아이디 · 이메일 검색', match: (r, q) => r.username.includes(q.toLowerCase()) || (r.email ?? '').toLowerCase().includes(q.toLowerCase()) }}
+      <!-- 시안 사람 화면의 표는 도구 줄(찾기 · 칩 · 컬럼)이 없다. -->
+      <DataTable rows={users} rowKey={(r) => r.id} columns={userCols} cell={userCell} {loading} label="사용자"
         rowMenu={userMenu} emptyTitle="사람이 없어요" minHeight="0" />
     </Card>
 

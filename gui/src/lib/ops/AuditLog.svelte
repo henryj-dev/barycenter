@@ -50,7 +50,7 @@
 {:else}
   {#if agg.on}<RegionNotices notices={agg.notices} strip={false} />{/if}
   <!-- 시안 「기록」: 패널 하나 · 고정 머리 줄 · 변경 하나가 한 묶음(접기 · 펼치기). 찾기 · 데몬 작업 보기는 목록 화면의 도구 줄 자리다. -->
-  <section class="list" class:agg={agg.on} aria-label="감사 기록">
+  <section class="list" aria-label="감사 기록">
     <div class="bar">
       <TextInput bind:value={q} mono={false} width="240px" placeholder="주체 · 동작 · 대상 검색" aria-label="필터" />
       <Checkbox bind:checked={system}>데몬 작업도 보기</Checkbox>
@@ -58,7 +58,7 @@
       <span class="count">{q.trim() === '' ? `${scoped.length}건` : `${shown.length} / ${scoped.length}건`}</span>
     </div>
     <div class="row head" aria-hidden="true">
-      <span></span><span>시각</span><span>사람 / 토큰</span>{#if agg.on}<span>지역</span>{/if}<span>작업</span><span>대상</span><span>리비전</span><span>결과</span>
+      <span></span><span>시각</span><span>사람 / 토큰</span><span>작업</span><span>대상</span><span>리비전</span><span>결과</span>
     </div>
     {#if groups.length === 0 && agg.on && agg.listState.error !== undefined}
       <div class="empty"><FieldMessage tone="error">{agg.listState.error}</FieldMessage></div>
@@ -75,8 +75,8 @@
           <span class="mk" aria-hidden="true"></span>
           <span class="time" title={g.at === undefined ? undefined : new Date(g.at).toLocaleString()}>{whenText(g.at)}</span>
           <span class="who">{g.who}</span>
-          {#if agg.on}<span class="reg">{g.region}</span>{/if}
-          <span class="tt" title={d.title}>{d.title}</span>
+          <!-- 시안 전역 기록에는 지역 열이 없다 — 합산이면 지역은 작업 칸의 title 이다. -->
+          <span class="tt" title={agg.on ? `${d.title} · ${g.region}` : d.title}>{d.title}</span>
           <span class="tg" title={d.target}>{d.target}</span>
           <span class="rev">{g.revision === undefined ? '' : `r${g.revision}`}</span>
           <span>{#if g.result}<Badge tone={g.result.tone}>{g.result.text}</Badge>{/if}</span>
@@ -86,7 +86,7 @@
             <li>
               <span class="st">{clockText(s.at)}</span>
               <span class="nm">{s.name}</span>
-              <span class="ok">● 성공{#if s.note} · {s.note}{/if}{#if s.principal !== g.who}<span class="by"> · {s.principal}</span>{/if}{#if s.subject}<span class="by"> · <code>{s.subject}</code></span>{/if}</span>
+              <span class="ok">● 성공{#if s.note} · {s.note}{/if}{#if s.principal.replace(/^user:/, '') !== g.who}<span class="by"> · {s.principal.replace(/^user:/, '')}</span>{/if}{#if s.subject}<span class="by"> · <code>{s.subject}</code></span>{/if}</span>
             </li>
           {/each}
           {#if g.waiting}
@@ -127,8 +127,6 @@
   .tg { font-family: var(--mono); font-size: 12px; color: var(--tx2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rev { font-family: var(--mono); color: var(--accent); }
   /* 전체 합산 — 「지역」 열이 사람 / 토큰 다음에 든다. */
-  .agg .row { grid-template-columns: 20px 110px 130px 120px minmax(0, 1fr) 150px 56px 140px; }
-  .reg { font-family: var(--mono); font-size: 12px; color: var(--tx2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .steps { list-style: none; margin: 0; display: flex; flex-direction: column; padding: 6px 16px 10px 56px; background: var(--bg-page); }
   .steps li { display: grid; grid-template-columns: 110px 160px 1fr; gap: 12px; height: 26px; align-items: center; font-size: 12px; }
   .st { font-family: var(--mono); color: var(--tx3); }
@@ -144,9 +142,6 @@
   @media (max-width: 900px) {
     .row { grid-template-columns: 20px 110px minmax(0, 1fr) 140px; }
     .row > :nth-child(3), .row > :nth-child(5), .row > :nth-child(6) { display: none; }
-    .agg .row { grid-template-columns: 20px 110px 90px minmax(0, 1fr) 140px; }
-    .agg .row > :nth-child(5) { display: block; }
-    .agg .row > :nth-child(6), .agg .row > :nth-child(7) { display: none; }
     .steps { padding-left: 16px; }
     .steps li { grid-template-columns: 80px 120px minmax(0, 1fr); }
   }

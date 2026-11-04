@@ -117,7 +117,8 @@ export function groupAudit(rows: readonly AuditRow[], pending: readonly string[]
       ...r, name: STEP[r.action] ?? r.action, ...(auto && r === apply ? { note: '자동 적용' } : {}),
     }));
     const revision = commit?.revision ?? last.revision;
-    const who = [...new Set(d.rows.map((r) => r.principal))].join(', ');
+    // 사람 계정은 이름만(시안 「alice」) — 감사의 주체는 `user:<이름>` 이다. 토큰은 이름 그대로.
+    const who = [...new Set(d.rows.map((r) => r.principal.replace(/^user:/, '')))].join(', ');
     const change = d.kind === 'changeset' || d.kind === 'rollback';
 
     let result: ChangeGroup['result'];
@@ -165,7 +166,8 @@ export function whenText(iso: string | undefined, now = new Date()): string {
   if (day(t) === day(now)) return `오늘 ${clock}`;
   const y = new Date(now); y.setDate(now.getDate() - 1);
   if (day(t) === day(y)) return `어제 ${clock}`;
-  return `${t.getMonth() + 1}월 ${t.getDate()}일 ${clock}`;
+  // 시각 칸(110px)에 들도록 짧게 — 「11/2 16:09:41」.
+  return `${t.getMonth() + 1}/${t.getDate()} ${clock}`;
 }
 
 /** 시각만 — 단계 줄 · 최근 변경. */

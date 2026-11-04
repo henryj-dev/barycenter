@@ -101,6 +101,26 @@ function targetOf(op: ChangeOp & { kind: ResourceKind }, first: FirstState | und
  *   - 여러 리소스면 「<첫째> 외 N건」.
  * 첫 리소스를 고쳤는데 있었는지 모르면 undefined — 「추가」 인지 「수정」 인지 지어내지 않는다.
  */
+/**
+ * 칸 경로 → 사람 말 이름 · 단위(시안 「리스너 web-https 타임아웃 60s → 90s」). 마지막 이름으로 고르고, 출발지 규칙 안이면
+ * 「출발지 규칙 」 을 앞에 붙인다. 표에 없는 칸은 undefined — 내부 이름을 보이지 않고 「수정」 이라 쓴다.
+ */
+const FIELD: Record<string, { l: string; u?: string }> = {
+  connectTimeoutS: { l: '연결 타임아웃', u: 's' }, readTimeoutS: { l: '타임아웃', u: 's' }, sendTimeoutS: { l: '쓰기 타임아웃', u: 's' },
+  connectTimeoutMs: { l: '연결 타임아웃', u: 'ms' }, readTimeoutMs: { l: '타임아웃', u: 'ms' }, sendTimeoutMs: { l: '쓰기 타임아웃', u: 'ms' },
+  weight: { l: '가중치' }, port: { l: '포트' }, host: { l: '호스트' }, bind: { l: '바인드 주소' }, algorithm: { l: '알고리즘' },
+  priority: { l: '우선순위' }, pool: { l: '풀' }, status: { l: '응답 코드' }, minVersion: { l: '최소 버전' }, maxVersion: { l: '최대 버전' },
+  policy: { l: 'TLS 정책' }, certificate: { l: '인증서' }, listener: { l: '리스너' }, to: { l: 'URL' }, websocket: { l: 'WebSocket' },
+  interval: { l: '헬스체크 주기' }, path: { l: '경로' },
+};
+export const fieldLabel = (path: string): { l: string; u?: string } | undefined => {
+  const last = path.replace(/\[\d+\]/g, '').split('.').pop() ?? '';
+  const f = FIELD[last];
+  if (f === undefined) return undefined;
+  return path.startsWith('sourceRules') ? { ...f, l: `출발지 규칙 ${f.l}` } : f;
+};
+const unitOf = (v: string | undefined, u: string | undefined): string => (v === undefined ? '없음' : u === undefined ? v : `${v}${u}`);
+
 export function describeChange(patch: readonly ChangeOp[], first: FirstState | undefined): ChangeTitle | undefined {
   const all = resourcesOf(patch);
   const op = all[0];
@@ -117,7 +137,10 @@ export function describeChange(patch: readonly ChangeOp[], first: FirstState | u
     const one = diff.length === 1 ? diff[0]! : undefined;
     if (kind === 'certificate' && diff.some((d) => MATERIAL.test(d.path))) title = `${name} 갱신`;
     else if (one?.path === 'enabled' && (one.after === 'false' || one.after === 'true')) title = `${name} ${one.after === 'false' ? '비활성화' : '활성화'}`;
-    else if (one !== undefined) title = `${name} ${one.path} ${one.before ?? '없음'} → ${one.after ?? '없음'}`;
+    else if (one !== undefined) {
+      const f = fieldLabel(one.path);
+      title = f === undefined ? `${name} 수정` : `${name} ${f.l} ${unitOf(one.before, f.u)} → ${unitOf(one.after, f.u)}`;
+    }
     else title = `${name} 수정`;
   }
   const more = all.length - 1;
