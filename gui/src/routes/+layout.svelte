@@ -269,8 +269,13 @@
    * 좁혀 보면 「전역 · <지역>」 이다 — 그 지역 인스턴스가 아니라 전역이 그 지역으로 중계한다(시안은 지역으로 옮겨 간다).
    * 노드 이름은 상단 바의 노드 칩이 말한다.
    */
+  /**
+   * 합산 목록에서 연 상세(`?region=`)는 시안처럼 전역 그대로 보인다 — 배너 · 사이드바 지역 고름 · 브랜드 줄을 바꾸지 않고,
+   * 지역은 상세 제목 옆 꼬리표(`ResourceFrame`)가 말한다(시안 `selReg`).
+   */
+  const narrowShown = $derived(scope.mode === 'global' && scope.region !== undefined && !detail);
   const regionLabel = $derived(scope.mode === 'global'
-    ? `전역 · ${scope.region?.name ?? '전체 지역 합산'}`
+    ? `전역 · ${narrowShown ? scope.region?.name : '전체 지역 합산'}`
     : scope.self === undefined ? '이 인스턴스' : `${scope.self} · 이 인스턴스`);
   /** 브레드크럼 첫 칸은 보는 범위다 — 전역이면 「전역」, 아니면 「지역」(시안). 그 뒤는 `crumbsOf` 그대로다. */
   const crumbs = $derived([
@@ -294,13 +299,13 @@
   <div class="app">
     <div class="side">
       <Sidebar {place} bind:collapsed pending={pendingTotal} global={scope.mode === 'global'} {regionLabel}
-        regionHref={scope.mode === 'global' ? '/regions' : undefined} regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} onwiden={widen} />
+        regionHref={scope.mode === 'global' ? '/regions' : undefined} regions={narrowShown ? sideRegions : sideRegions.map((r) => ({ ...r, current: false }))} chosen={narrowShown ? scope.region?.name : undefined} onpick={pickRegion} onwiden={widen} />
     </div>
     <div class="main">
       <TopBar {crumbs} monoLast={detail} {node} {standby} head={aggregateOn ? undefined : desk.head} {conn} pending={pendingTotal}
         user={session.me?.username} role={session.me?.role} mfa={session.me?.mfa.totp} bind:theme onlogout={() => { void logout(); }} ondisconnect={disconnect} />
       <!-- 배너 줄 — 시안 Pending banner 의 모양(상단 바 바로 아래 한 줄, 아래 테두리). 좁혀 보기 · 연결 끊김 줄은 시안에 없는 기능이라 같은 모양으로 둔다. -->
-      {#if scope.mode === 'global' && scope.region !== undefined}
+      {#if narrowShown}
         <div class="bn" data-tone="info" role="status">
           <span class="bi" aria-hidden="true">◎</span>
           <span class="bt">전역 화면에서 <b>{scope.region.name}</b> 만 좁혀 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.</span>

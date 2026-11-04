@@ -86,6 +86,8 @@
       title={key} {meta} {tabs} currentTab={rest} tabLabel="{spec.label} 상세">
       {#snippet badges()}
         {#each marks as m (m.text)}<Badge tone={m.tone} icon={m.icon}>{m.text}</Badge>{/each}
+        <!-- 전역에서 연 상세는 지역 꼬리표(시안 상세 머리의 지역 · 고정폭 12px · --tx3). -->
+        {#if scope?.mode === 'global' && scope.region !== undefined}<span class="rtag">{scope.region.name}</span>{/if}
       {/snippet}
       {#snippet actions()}
         {#if !ro && spec.extras.includes('rebuild') && rebuildable && rest !== 'rebuild'}<Button size="xs" href={resourcePath(kind, key, 'rebuild')}>URL로 다시 만들기</Button>{/if}
@@ -103,6 +105,7 @@
 {/if}
 
 <style>
+  .rtag { font: 12px var(--mono); color: var(--tx3); }
   .empty { color: var(--tx2); }
   .mono { font-family: var(--mono); }
   .frame { border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; background: var(--bg-page); }

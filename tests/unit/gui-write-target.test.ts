@@ -154,7 +154,7 @@ describe('전역 문구 · 지역 상자', () => {
     expect(sb).toContain('{#each regions as r (r.name)}');
     expect(sb).toMatch(/\{:else if global && regionHref\}\s*<div class="regions mini">/);
     const layout = src('routes/+layout.svelte');
-    expect(layout).toContain('regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} onwiden={widen}');
+    expect(layout).toContain('regions={narrowShown ? sideRegions : sideRegions.map((r) => ({ ...r, current: false }))} chosen={narrowShown ? scope.region?.name : undefined} onpick={pickRegion} onwiden={widen}');
     expect(layout).toContain("text: pending > 0 ? `대기 ${pending}` : ''");
   });
 });
