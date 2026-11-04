@@ -19,14 +19,11 @@ describe('쓸 지역 표시', () => {
     expect(w).toContain('쓸 지역 <code>{region.name}</code> <a href="/regions">다른 지역 고르기</a>');
   });
 
-  it.each([
-    'lib/forms/CreateForm.svelte',
-    // 리스너 · 풀 · 백엔드 · 주소 집합의 설정 탭은 시안 `tSet` 틀(SettingsFrame) 하나가 「쓸 지역」 을 단다.
-    'lib/detail/SettingsFrame.svelte',
-    'lib/pool/PoolHealthForm.svelte',
-    'lib/detail/BackendHealth.svelte',
-  ])('%s 의 쓰는 폼이 target 을 켠다', (p) => {
-    expect(src(p)).toMatch(/<Writable target>/);
+  it('만들기 폼만 「쓸 지역」 을 단다 — 상세 설정 탭은 머리의 지역 꼬리표가 말한다(시안 tSet 에 줄이 없다)', () => {
+    expect(src('lib/forms/CreateForm.svelte')).toMatch(/<Writable target>/);
+    for (const p of ['lib/detail/SettingsFrame.svelte', 'lib/pool/PoolHealthForm.svelte', 'lib/detail/BackendHealth.svelte']) {
+      expect(src(p), p).not.toMatch(/<Writable target>/);
+    }
   });
 
   it('만들기 화면은 모두 CreateForm 을 거친다 — 빠른 프록시 · 라우트 그룹 포함', () => {
