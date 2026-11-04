@@ -27,7 +27,7 @@ describe('쓸 지역 표시', () => {
     'lib/detail/AddressSetSettings.svelte',
     'lib/detail/Rebuild.svelte',
     'lib/detail/BackendHealth.svelte',
-    'lib/detail/Acme.svelte',
+    'lib/tls/SettingsFrame.svelte',
   ])('%s 의 쓰는 폼이 target 을 켠다', (p) => {
     expect(src(p)).toMatch(/<Writable target>/);
   });

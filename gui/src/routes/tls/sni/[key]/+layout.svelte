@@ -1,8 +1,8 @@
 <script lang="ts">
-  // sniBinding 상세의 틀 — 탭·경로·수정 버튼. 표는 src/web/resources.ts 의 RESOURCES.
-  import ResourceFrame from '#lib/detail/ResourceFrame.svelte';
+  // sniBinding 상세의 틀 — 탭·경로·버튼(`ResourceFrame`)에 시안 값을 넘긴다(`TlsFrame`).
+  import TlsFrame from '#lib/tls/TlsFrame.svelte';
 
   let { children } = $props();
 </script>
 
-<ResourceFrame kind="sniBinding">{@render children()}</ResourceFrame>
+<TlsFrame kind="sniBinding">{@render children()}</TlsFrame>

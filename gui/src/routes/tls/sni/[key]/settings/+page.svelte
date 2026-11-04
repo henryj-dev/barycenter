@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Settings from '#lib/detail/Settings.svelte';
+  import TlsSettings from '#lib/tls/TlsSettings.svelte';
 </script>
 
-<Settings kind="sniBinding" />
+<TlsSettings kind="sniBinding" />

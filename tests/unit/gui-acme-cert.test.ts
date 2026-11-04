@@ -20,11 +20,11 @@ const LIB = join(dirname(fileURLToPath(import.meta.url)), '../../gui/src/lib');
 const read = (p: string): string => readFileSync(join(LIB, p), 'utf8');
 
 describe('ACME 인증서 화면', () => {
-  it('발급자를 ACME · 업로드 중에서 고른다', () => {
+  it('발급자를 ACME · 업로드 중에서 고른다 (시안: 「발급자」 셀렉트)', () => {
     const src = read('forms/CertificateForm.svelte');
-    expect(src).toMatch(/value: 'acme'/);
-    expect(src).toMatch(/value: 'upload'/);
-    expect(src).toContain('<RadioGroup');
+    expect(src).toMatch(/value: 'acme', label: 'ACME'/);
+    expect(src).toMatch(/value: 'upload', label: '업로드'/);
+    expect(src).toContain('<Select label="발급자"');
   });
 
   it('ACME 는 의도만 커밋한다', () => {
@@ -46,11 +46,18 @@ describe('ACME 인증서 화면', () => {
     expect(src).toContain('attempts');
   });
 
-  it('만들기 칸은 계정이 없거나 「＋ 계정 생성」 을 눌렀을 때만 펼친다', () => {
+  it('새 계정 칸은 셀렉트에서 「＋ 새 계정」 을 골랐을 때만 붙는다 (시안 `acct === \'__new\'`)', () => {
     const src = read('forms/AcmeAccountField.svelte');
-    expect(src).toContain('{#if noAccount || adding}');
-    expect(src).toContain('＋ 계정 생성');
-    expect(read('forms/CertificateForm.svelte'), '늘 보이는 계정 만들기 카드가 남았다').not.toContain('<Card title="ACME 계정 만들기"');
+    expect(src).toContain("export const NEW_ACCOUNT = '__new';");
+    expect(src).toContain("{ value: NEW_ACCOUNT, label: '＋ 새 계정' }");
+    expect(src).toContain('const adding = $derived(account === NEW_ACCOUNT);');
+    expect(src).toContain('{#if adding}');
+    // 계정이 없으면 「＋ 새 계정」 이 골라져 있다.
+    expect(src).toContain('account = (want ?? list[0])?.key ?? NEW_ACCOUNT;');
+    // 계정은 저장할 때 만든다 — 만들지 못하면 인증서를 커밋하지 않는다.
+    const form = read('forms/CertificateForm.svelte');
+    expect(form).toMatch(/const account = await field\?\.ensure\(\);\s*if \(account === undefined\) return;/);
+    expect(form, '늘 보이는 계정 만들기 카드가 남았다').not.toContain('<Card title="ACME 계정 만들기"');
   });
 
   it('목록의 만들기 버튼은 모두 「＋ 만들기」 다 (시안)', () => {
@@ -64,12 +71,14 @@ describe('ACME 인증서 화면', () => {
    * **CA 바꾸기** (2026-10-31) — 스테이징으로 받은 인증서를 새로 만들지 않고 운영 CA 로 다시 받는다.
    * 계정만 바꾸고 나머지 칸(자료 · 도메인)은 head 값 그대로 다시 싣는다 — PUT 은 통째로 덮는다.
    */
-  it('상세에서 계정만 바꿔 다시 발급한다', () => {
-    const src = read('detail/Acme.svelte');
-    expect(src).toContain('<AcmeAccountField bind:account={next}');
-    expect(src).toContain("desk.putResource('certificate', key, { ...body, acme: { account: next, domains: acme.domains ?? [] } })");
+  it('상세의 설정 탭에서 계정을 바꿔 다시 발급한다 (시안 「ACME 계정」)', () => {
+    const src = read('tls/CertificateSettings.svelte');
+    expect(src).toContain('<AcmeAccountField bind:this={field} bind:account');
+    expect(src).toContain("desk.putResource('certificate', key, certBody(item, { account: next, domains: parseDomains(domains) }))");
     // 화면용 칸(만료 · 사실)을 섞어 보내면 해독기가 거절한다 — 모델의 칸만 싣는다.
-    expect(src).toContain("const MODEL_FIELDS = ['materialRef', 'chainDigest', 'keyDigest'] as const;");
-    expect(src, '스테이징이면 운영으로 바꾸라고 먼저 말한다').toMatch(/staging && hasMaterial/);
+    const edit = read('tls/cert-edit.ts');
+    expect(edit).toContain("export const MODEL_FIELDS = ['materialRef', 'chainDigest', 'keyDigest'] as const;");
+    expect(edit).toContain('for (const f of MODEL_FIELDS) if (item[f] !== undefined) body[f] = item[f];');
+    expect(read('detail/Acme.svelte'), '스테이징이면 운영으로 바꾸라고 먼저 말한다').toMatch(/staging && hasMaterial/);
   });
 });

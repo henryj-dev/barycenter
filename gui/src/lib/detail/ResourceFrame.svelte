@@ -8,15 +8,19 @@
   import { getContext, type Snippet } from 'svelte';
   import { page } from '$app/state';
   import { RESOURCES, itemOf, resourcePath, type ResourceKind } from '@web/resources';
-  import { Badge, Button, DetailHeader, Skeleton } from '#lib/ui';
+  import { Badge, Button, DetailHeader, Skeleton, type Tone } from '#lib/ui';
   import DeleteConfirm from '#lib/lists/DeleteConfirm.svelte';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { relationCount, statusOf } from './facts';
   import { headerMarks, isPendingResource } from '#lib/pending';
 
-  let { kind, meta = [], children }: {
+  let { kind, meta = [], mark: markOverride, edit, children }: {
     kind: ResourceKind;
+    /** 제목 옆 상태 배지를 화면이 정한다(시안 `dpBadge` — 그 행의 첫 배지 칸). 주면 `statusOf` 대신 쓴다. */
+    mark?: { tone: Tone; icon: string; text: string };
+    /** 「수정」 자리를 화면이 정한다(인증서: 업로드는 「자료를 교체해요」). 주면 기본 「수정」 대신 그린다. 쓸 수 있을 때만 보인다. */
+    edit?: Snippet;
     /**
      * 제목 아래 메타 줄 — 디자인 시스템 §5 「발급자 ACME  만료 2026-11-10  사용처 리스너 2 · SNI 3」.
      * 화면(라우트 레이아웃)이 그 리소스에서 아는 값만 채운다. 비우면 줄을 안 그린다.
@@ -44,7 +48,7 @@
     key: t.slug, label: t.label, href: resourcePath(kind, key, t.slug), ...(t.slug === 'resources' ? { count: relCount } : {}),
   })));
   /** 제목 옆 상태 배지(시안) — 리스너 · 풀 · 백엔드. 모르면 안 단다. */
-  const mark = $derived(statusOf(desk, kind, key));
+  const mark = $derived(markOverride ?? statusOf(desk, kind, key));
   /** 상태 배지 + 「◐ 적용 대기」(시안 `selPendD`) — 엔진이 돌리는 것과 head 가 다르면. 모든 리소스에 붙는다. */
   const marks = $derived(headerMarks(mark, isPendingResource(desk.pendingResources, kind, key)));
   const listHref = $derived(spec.base);
@@ -77,7 +81,7 @@
       {/snippet}
       {#snippet actions()}
         {#if !ro}
-          {#if spec.editable && rest !== 'settings'}<Button href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}
+          {#if edit}{@render edit()}{:else if spec.editable && rest !== 'settings'}<Button href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}
           {#if spec.extras.includes('rebuild') && rebuildable && rest !== 'rebuild'}<Button href={resourcePath(kind, key, 'rebuild')}>URL로 다시 만들기</Button>{/if}
           <Button error disabled={desk.editing} onclick={() => { asking = true; }}>삭제…</Button>
         {/if}
