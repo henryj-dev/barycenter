@@ -78,3 +78,14 @@ describe('감사 기록 묶음', () => {
     expect(whenText(undefined, now)).toBe('—');
   });
 });
+
+describe('멤버십만의 적용 (전역 합산 로컬 실측)', () => {
+  it('**apply.membership 도 그 리비전의 「적용됨」 이다** — 백엔드만 더한 리비전이 「적용 기록 없음」 으로 나왔다', () => {
+    const g = groupAudit(asRows([
+      row(1, 0, 'dev', 'changeset.create', 'cs9'), row(2, 1, 'dev', 'changeset.commit', 'cs9', '3'),
+      row(3, 30, 'dev', 'apply.membership', 'plan-9', '3'),
+    ]));
+    expect(g[0]!.result).toEqual({ tone: 'ok', text: '적용됨' });
+    expect(g[0]!.steps.at(-1)?.name).toBe('apply · 멤버십');
+  });
+});
