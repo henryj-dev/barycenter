@@ -850,6 +850,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     pathPrefix?: string;
     pathPrefixes?: string[];
     sourceRules?: SourceRuleInput[];
+    /** 큰 값을 먼저 평가한다. 안 적으면 0 (`putHttpRoutePatch`). 라우트 insert 다섯이 같다. */
+    priority?: number;
     websocket?: boolean;
     rewritePrefix?: string;
     /** `이름: 값` 줄들. 끊기는 `parseHeaderLines` 한 자리다 (#109). */
@@ -878,6 +880,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     pathPrefix?: string;
     pathPrefixes?: string[];
     sourceRules?: SourceRuleInput[];
+    priority?: number;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -913,6 +916,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     pathPrefix?: string;
     pathPrefixes?: string[];
     sourceRules?: SourceRuleInput[];
+    priority?: number;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -931,6 +935,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     listener: string;
     snis: string[];
     pool: string;
+    priority?: number;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -948,6 +953,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     key: string;
     listener: string;
     snis: string[];
+    priority?: number;
   }): Promise<boolean> => {
     editing = true;
     error = undefined;

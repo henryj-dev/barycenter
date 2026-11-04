@@ -11,7 +11,8 @@
    *
    * 줄 오류는 입력 즉시 그 줄 아래에 보인다(시안 `ruleErrs(lines, true)`) — 가려진 대역은 같은 라우트가 될 줄끼리만 비교하고
    * 「n번째 줄」 로 말한다(`sourceRuleErrors`). 경로가 다른 묶음과 섞이거나 기본 동작이 두 번이면 `routeGroupPatch` 가
-   * 거절하는 것을 그 줄에서 먼저 말한다.
+   * 거절하는 것을 그 줄에서 먼저 말한다. 호스트 · 줄마다의 경로 모양과 「기본 동작을 정할 수 없는 묶음」 도 서버와 같은 판정으로
+   * 먼저 본다(`route-edit.ts`) — `routeGroupPatch` 의 해라체 오류는 사람에게 보이지 않는다.
    */
   import { getContext } from 'svelte';
   import { parsePathList, type RedirectStatus, type RejectStatus } from '@web/edit';
@@ -23,6 +24,7 @@
   import CreateForm from './CreateForm.svelte';
   import { KEY_HELP, filled, keyError, words } from './checks';
   import { fromTokens, groupKeyOf, setCidrsOf, sourceRuleErrors } from './source-rules';
+  import { routeHostsError, routePathsError } from './route-edit';
 
   /** 줄 수 상한 — 시안과 같다. 라우트 하나의 규칙은 해독기가 20개로 막는다. */
   const MAX_LINES = 40;
@@ -51,6 +53,10 @@
   let listener = $state<string | undefined>();
   let hosts = $state('');
   let rows = $state<Row[]>([blank()]);
+  let hostTouched = $state(false);
+  $effect(() => { if (hosts.trim() !== '') hostTouched = true; });
+  // 호스트는 필수다. 처음 빈 칸은 「만들기」 만 잠그고, 적었다 지우면 그때 말한다.
+  const hostErr = $derived(hosts.trim() === '' && !hostTouched ? undefined : routeHostsError(hosts));
 
   const fallback = $derived.by(() => {
     if (listener === undefined) return undefined;
@@ -73,7 +79,7 @@
 
   /** 펼친 결과 — 저장 전에 보인다. 못 펼치면 그 이유다. */
   const preview = $derived.by((): { routes: { key: string; paths: string; rules: number; action: string }[]; error?: string } => {
-    if (key.trim() === '' || listener === undefined || words(hosts).length === 0) return { routes: [], error: '이름 · 리스너 · 호스트를 넣으면 만들 라우트가 보여요.' };
+    if (key.trim() === '' || listener === undefined || routeHostsError(hosts) !== undefined) return { routes: [], error: '이름 · 리스너 · 호스트를 넣으면 만들 라우트가 보여요.' };
     try {
       const ops = routeGroupPatch({
         key: key.trim(), listener, hosts: words(hosts), lines: rows.map(lineOf),
@@ -90,8 +96,9 @@
           };
         }),
       };
-    } catch (e) {
-      return { routes: [], error: e instanceof Error ? e.message : String(e) };
+    } catch {
+      // 줄 오류가 먼저 잡는다. 그래도 빌더가 거절하면 그 해라체 문구 대신 해요체로 말한다.
+      return { routes: [], error: '만들 라우트를 펼치지 못했어요. 표시된 칸을 고쳐요.' };
     }
   });
 
@@ -101,10 +108,18 @@
     const shadow = sourceRuleErrors(rows.map((r) => ({ from: r.from, address: r.address, paths: r.paths })), sets, { lines: true });
     const owner = new Map<string, string>();
     const defaults = new Set<string>();
+    // 기본 동작을 정할 수 없는 묶음 — 출발지 없는 줄이 없고 리스너의 기본 동작도 모른다. 그 묶음의 첫 줄에서 말한다.
+    const noDefault = new Set(listener === undefined || fallback !== undefined ? [] : rows.map((r) => groupKeyOf(r.paths))
+      .filter((gk) => !rows.some((r) => groupKeyOf(r.paths) === gk && fromTokens(r.from).length === 0)));
+    const told = new Set<string>();
     return rows.map((r, i) => {
       const gk = groupKeyOf(r.paths);
       const ps = [...new Set(fromTokens(r.paths))];
-      let err: string | undefined;
+      let err: string | undefined = routePathsError(r.paths);
+      if (noDefault.has(gk) && !told.has(gk)) {
+        told.add(gk);
+        err ??= '이 경로의 기본 동작이 없어요. 출발지를 비운 줄을 하나 더하거나 리스너의 기본 동작을 정해요.';
+      }
       for (const p of ps.length === 0 ? ['/'] : ps) {
         const o = owner.get(p);
         if (o !== undefined && o !== gk) err ??= `경로 ${p}가 다른 줄 묶음에도 있어요. 경로를 똑같이 적어요.`;
@@ -122,7 +137,7 @@
   });
   const linesBad = $derived(rows.length > MAX_LINES || lineErrs.some((e) => e !== undefined));
 
-  const ready = $derived(filled(key, keyError) && listener !== undefined && !linesBad && preview.error === undefined && preview.routes.length > 0);
+  const ready = $derived(filled(key, keyError) && listener !== undefined && routeHostsError(hosts) === undefined && !linesBad && preview.error === undefined && preview.routes.length > 0);
 
   const move = (i: number, d: -1 | 1): void => {
     const j = i + d;
@@ -149,8 +164,8 @@
     <FormRow label="리스너" required help={listener === undefined ? undefined : `기본 동작을 안 적은 경로는 리스너의 기본 동작을 따라요 — 지금: ${fallbackText}.`}>
       <Select label="리스너" bind:value={listener} options={listeners} placeholder="리스너를 골라요" width="100%" disabled={listeners.length === 0} />
     </FormRow>
-    <FormRow label="호스트" for="rg-hosts" help="쉼표나 공백으로 여러 개를 넣어요.">
-      <TextInput id="rg-hosts" bind:value={hosts} autocomplete="off" placeholder="counter.example.com" />
+    <FormRow label="호스트" for="rg-hosts" required error={hostErr} help="정확한 이름이나 *.example.com 형태로 넣어요. 쉼표나 공백으로 여러 개를 넣어요.">
+      <TextInput id="rg-hosts" bind:value={hosts} invalid={hostErr !== undefined} autocomplete="off" placeholder="counter.example.com" />
     </FormRow>
   </FormSection>
 
@@ -201,7 +216,7 @@
     {#if linesBad}
       <Banner tone="danger">잘못된 줄이 있어요. 표시된 줄을 고쳐요.</Banner>
     {:else if preview.error !== undefined}
-      <Banner tone={preview.routes.length === 0 && key.trim() !== '' && listener !== undefined && words(hosts).length > 0 ? 'danger' : 'info'}>{preview.error}</Banner>
+      <Banner tone={preview.routes.length === 0 && key.trim() !== '' && listener !== undefined && routeHostsError(hosts) === undefined ? 'danger' : 'info'}>{preview.error}</Banner>
     {:else}
       <ul class="plan">
         {#each preview.routes as r (r.key)}
