@@ -20,6 +20,7 @@
   import { rowId, type RegionState } from '#lib/global/aggregate.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { clockText, groupAudit, type ChangeGroup } from './audit';
+  import { titleOf, want } from './change-titles.svelte';
   import { loadRegions } from './fetch';
   import { nodeState, type ClusterBody } from './cluster';
   import { certOrder, mergeByTime, regionBadge, sumTally, tallyNotices, type Tally } from './aggregate-view';
@@ -187,6 +188,18 @@
   const recent = $derived<Recent[]>(agg.on
     ? mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter((g) => g.change) })), (g) => g.key, (g) => g.at).slice(0, 4)
     : groups.filter((g) => g.change).slice(0, 4).map((g) => ({ ...g, region: '', rid: g.key })));
+  /** 최근 변경의 설명(시안 `백엔드 demo-2 추가`) — 보이는 넷만 읽는다. 못 읽으면 「설정 변경」 그대로다. 합산이면 그 지역 desk 로. */
+  const recentSrc = (g: Recent): Desk | undefined => (agg.on ? parts.find((p) => p.name === g.region)?.desk : desk);
+  $effect(() => {
+    for (const g of recent) {
+      const src = recentSrc(g);
+      if (src !== undefined && g.changeset !== undefined) want(src, g.changeset.id, g.changeset.ver);
+    }
+  });
+  const recentTitle = (g: Recent): string => {
+    const src = recentSrc(g);
+    return (src === undefined ? undefined : titleOf(src, g.changeset?.id))?.title ?? g.title;
+  };
   const whoIn = (gs: readonly ChangeGroup[], rev: string): string | undefined => gs.find((g) => g.change && g.revision === rev)?.who;
   const revsOf = (d: Desk): string[] => d.status.pending.map((p) => p.revision).sort((a, b) => Number(a) - Number(b));
   const whoOfRevs = (gs: readonly ChangeGroup[], revs: readonly string[]): string =>
@@ -440,7 +453,7 @@
           {#each recent as g (g.rid)}
             <div class="act">
               <span class="at">{clockText(g.at)}</span>
-              <span class="an"><b>{g.title}</b> <span class="cap">· {g.who}{g.region !== '' ? ` · ${g.region}` : ''}</span></span>
+              <span class="an"><b>{recentTitle(g)}</b> <span class="cap">· {g.who}{g.region !== '' ? ` · ${g.region}` : ''}</span></span>
               <span class="ar">{g.revision === undefined ? '' : `r${g.revision}`}</span>
             </div>
           {/each}

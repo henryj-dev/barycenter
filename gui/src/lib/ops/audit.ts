@@ -34,6 +34,11 @@ export type ChangeGroup = {
   title: string;
   target: string;
   revision: string | undefined;
+  /**
+   * changeset 묶음의 changeset id — 화면이 이것으로 「무엇을 바꿨는지」 를 읽어 `title` · `target` 을 덮는다
+   * (`change-titles.svelte.ts`). `ver` 는 마지막 단계의 감사 id 다(단계가 늘면 다시 읽는다).
+   */
+  changeset?: { id: string; ver: string };
   /** 변경(changeset · 롤백)인가. 대시보드 「최근 변경」 은 이것만 보인다. */
   change: boolean;
   steps: AuditStep[];
@@ -136,7 +141,11 @@ export function groupAudit(rows: readonly AuditRow[], pending: readonly string[]
       : TITLE[first.action] ?? first.action;
     const target = d.kind === 'changeset' ? `changeset ${first.subject ?? ''}`
       : d.kind === 'rollback' ? '' : first.subject ?? '';
-    return { key: d.key, at: last.at, who, title, target, revision, change, steps, ...(waiting === undefined ? {} : { waiting }), result, auto };
+    const changeset = d.kind === 'changeset' && first.subject !== undefined ? { id: first.subject, ver: last.id } : undefined;
+    return {
+      key: d.key, at: last.at, who, title, target, ...(changeset === undefined ? {} : { changeset }), revision, change, steps,
+      ...(waiting === undefined ? {} : { waiting }), result, auto,
+    };
   }).sort((a, b) => (ms(b.at) || 0) - (ms(a.at) || 0));
 }
 

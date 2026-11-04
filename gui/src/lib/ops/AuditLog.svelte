@@ -13,6 +13,7 @@
   import RegionNotices from '#lib/global/RegionNotices.svelte';
   import { clockText, groupAudit, whenText, type ChangeGroup } from './audit';
   import { mergeByTime } from './aggregate-view';
+  import { titleOf, wantWhenVisible } from './change-titles.svelte';
 
   type Desk = ReturnType<typeof createDesk>;
   type Row = ChangeGroup & { region: string; rid: string };
@@ -23,7 +24,17 @@
   const groups = $derived<Row[]>(agg.on
     ? mergeByTime(agg.entries.filter((e) => e.state === 'ok').map((e) => ({ region: e.name, rows: groupsOf(e.desk) })), (g) => g.key, (g) => g.at)
     : groupsOf(desk).map((g) => ({ ...g, region: '', rid: g.key })));
+  /**
+   * 「작업」 · 「대상」 — changeset 이면 무엇을 바꿨는지(시안 `백엔드 demo-2 추가` · `pool web-pool`). 보이는 줄만 읽고,
+   * 못 읽으면 「설정 변경」 그대로다. 합산이면 그 줄의 지역 desk 로 읽는다.
+   */
+  const srcOf = (g: Row): Desk | undefined => (agg.on ? agg.entries.find((e) => e.name === g.region)?.desk : desk);
+  const described = (g: Row): { title: string; target: string } => {
+    const src = srcOf(g);
+    return (src === undefined ? undefined : titleOf(src, g.changeset?.id)) ?? { title: g.title, target: g.target };
+  };
   const match = (g: Row, needle: string): boolean => g.region.toLowerCase().includes(needle) ||
+    Object.values(described(g)).some((x) => x.toLowerCase().includes(needle)) ||
     g.steps.some((s) => [s.principal, s.action, s.subject ?? '', s.revision ?? ''].some((x) => x.toLowerCase().includes(needle)));
   /**
    * 시안의 기록은 변경만 보인다. 멤버십 슬롯 회수 · 옛 세대 정리 같은 데몬의 일은 숨겨 두고, 고르면 보인다 —
@@ -57,18 +68,20 @@
       <div class="empty">일치하는 기록이 없어요. 검색어를 바꿔요.</div>
     {/if}
     {#each shown as g (g.rid)}
+      {@const src = srcOf(g)}
+      {@const d = described(g)}
       <details class="g">
-        <summary class="row">
+        <summary class="row" use:wantWhenVisible={{ src: src ?? desk, id: src === undefined ? undefined : g.changeset?.id, ver: g.changeset?.ver ?? '' }}>
           <span class="mk" aria-hidden="true"></span>
           <span class="time" title={g.at === undefined ? undefined : new Date(g.at).toLocaleString()}>{whenText(g.at)}</span>
           <span class="who">{g.who}</span>
           {#if agg.on}<span class="reg">{g.region}</span>{/if}
-          <span class="tt">{g.title}</span>
-          <span class="tg" title={g.target}>{g.target}</span>
+          <span class="tt" title={d.title}>{d.title}</span>
+          <span class="tg" title={d.target}>{d.target}</span>
           <span class="rev">{g.revision === undefined ? '' : `r${g.revision}`}</span>
           <span>{#if g.result}<Badge tone={g.result.tone}>{g.result.text}</Badge>{/if}</span>
         </summary>
-        <ol class="steps" aria-label="{g.title} 단계">
+        <ol class="steps" aria-label="{d.title} 단계">
           {#each g.steps as s (s.id)}
             <li>
               <span class="st">{clockText(s.at)}</span>
