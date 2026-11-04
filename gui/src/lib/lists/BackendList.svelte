@@ -16,6 +16,7 @@
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import { HEALTH_MARK, ago, backendHealth, type HealthKind } from '#lib/detail/facts';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import { listState } from './list-state';
 
   type Row = { key: string; pool: string; addr: string; weight: number; health: HealthKind; receiving: boolean | undefined; draining: boolean; why: string[]; seen?: string };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -80,7 +81,7 @@
 {#snippet table()}
 <WriteNote spaced />
 <DataTable label="백엔드 목록" {rows} rowKey={(r) => r.key} {columns} {chips} selectable={!ro} bind:selected pageSize={50}
-  loading={!desk.live} search={{ placeholder: '이름·풀·주소로 찾기', match: (r, q) => `${r.key} ${r.pool} ${r.addr}`.toLowerCase().includes(q) }}
+  {...listState(desk)} search={{ placeholder: '이름·풀·주소로 찾기', match: (r, q) => `${r.key} ${r.pool} ${r.addr}`.toLowerCase().includes(q) }}
   emptyTitle="등록된 백엔드가 없어요" emptyBody="백엔드를 더하면 풀이 트래픽을 받아요."
   onopen={(r) => { void goto(resourcePath('backend', r.key)); }} rowMenu={menu}>
   {#snippet cell(r, c)}
@@ -105,7 +106,7 @@
 {/snippet}
 
 <ListSplit kind="backend" bind:selected {table} />
-<DeleteConfirm bind:target={del} />
+<DeleteConfirm bind:target={del} remove />
 
 <style>
   .sub { color: var(--tx2); }

@@ -14,6 +14,7 @@
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import { healthCheckText, poolMark, type Mark } from '#lib/detail/facts';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import { listState } from './list-state';
 
   type Row = { key: string; cls: string; alg: string; total: number; healthy: number; unhealthy: number; mark: Mark; hc: string; tls: boolean };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -58,7 +59,7 @@
 
 {#snippet table()}
 <WriteNote spaced />
-<DataTable label="풀 목록" {rows} rowKey={(r) => r.key} {columns} {chips} loading={!desk.live} bind:selected
+<DataTable label="풀 목록" {rows} rowKey={(r) => r.key} {columns} {chips} {...listState(desk)} bind:selected
   search={{ placeholder: '이름·알고리즘으로 찾기', match: (r, q) => `${r.key} ${r.alg} ${r.cls}`.toLowerCase().includes(q) }}
   emptyTitle="풀이 없어요" emptyBody="풀과 첫 백엔드를 같이 만들어요. 빈 풀은 저장되지 않아요."
   onopen={(r) => { void goto(resourcePath('pool', r.key)); }} rowMenu={menu}>

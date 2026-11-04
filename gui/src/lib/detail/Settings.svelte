@@ -14,6 +14,7 @@
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import ListenerForm from '#lib/listener/ListenerForm.svelte';
   import PoolTlsForm from '#lib/pool/PoolTlsForm.svelte';
+  import PoolBasicsForm from '#lib/pool/PoolBasicsForm.svelte';
   import PoolHealthForm from '#lib/pool/PoolHealthForm.svelte';
   import JsonEdit from './JsonEdit.svelte';
   import BackendSettings from './BackendSettings.svelte';
@@ -35,10 +36,13 @@
   <div class="set">
     {#if writable && kind === 'listener'}
       <ListenerForm />
-      <Disclosure title="모든 칸 보기" hint="폼에 없는 칸은 저장해도 그대로 남아요">
-        <DescriptionList labelWidth="220px" items={fields} />
+      <!-- 폼이 모델의 칸을 다 고친다(#126 후속). 폼에 없는 칸은 다른 리소스처럼 접힌 JSON 수정이 맡는다. -->
+      <Disclosure title="JSON 으로 고치기" hint="폼에 없는 칸까지 통째로">
+        <JsonEdit {kind} />
       </Disclosure>
     {:else if writable && kind === 'pool'}
+      <!-- 기본 · 전송(알고리즘 · hash 키 · PROXY 송신) → 헬스체크 → 업스트림 TLS → JSON -->
+      <PoolBasicsForm />
       <PoolHealthForm />
       <PoolTlsForm />
       <JsonEdit {kind} />

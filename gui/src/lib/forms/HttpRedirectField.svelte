@@ -7,7 +7,9 @@
   import { FormRow, FormSection, Switch, TextInput } from '#lib/ui';
   import { portError } from './checks';
 
-  let { on = $bindable(), port = $bindable(), httpsPort }: {
+  let { on = $bindable(), port = $bindable(), httpsPort, bare = false }: {
+    /** 구획 없이 칸만 — 설정 탭은 「동작」 구획 안에 둔다(시안). */
+    bare?: boolean;
     on: boolean;
     port: string;
     /** 같은 포트로는 못 연다 — 한 포트에 평문과 TLS 를 함께 못 연다. */
@@ -20,8 +22,8 @@
   );
 </script>
 
-<FormSection title="HTTP 리다이렉트">
-  <FormRow label="HTTP → HTTPS" help="켜면 평문 HTTP 로 온 요청을 이 HTTPS 리스너로 301 리다이렉트해요. 호스트와 출발지 제한은 이 리스너를 따라요.">
+{#snippet rows()}
+  <FormRow label={bare ? 'HTTP로 온 요청을 HTTPS로 보내기' : 'HTTP → HTTPS'} help="켜면 평문 HTTP 로 온 요청을 이 HTTPS 리스너로 301 리다이렉트해요. 호스트와 출발지 제한은 이 리스너를 따라요.">
     <Switch bind:checked={on}>켜짐</Switch>
   </FormRow>
   {#if on}
@@ -29,4 +31,6 @@
       <TextInput id="ln-redirect-port" bind:value={port} invalid={error !== undefined} inputmode="numeric" width="120px" />
     </FormRow>
   {/if}
-</FormSection>
+{/snippet}
+
+{#if bare}{@render rows()}{:else}<FormSection title="HTTP 리다이렉트">{@render rows()}</FormSection>{/if}

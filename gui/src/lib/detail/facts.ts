@@ -4,7 +4,8 @@
  * 모두 이미 받은 값(head 모델 · 헬스 · 상태 API)에서 읽는다. 새로 묻지 않는다.
  * 모르는 것은 지어내지 않는다 — 상태 API 를 못 읽었으면 「모름」 이다.
  */
-import { itemOf, relationsOf, type ResourceKind } from '@web/resources';
+import { itemOf, relationsOf, type ModelLike, type ResourceKind } from '@web/resources';
+import type { ListenerMark } from '@web/listeners-view';
 import type { Tone } from '#lib/ui';
 import type { createDesk } from '#lib/desk.svelte.ts';
 
@@ -20,6 +21,32 @@ export const HEALTH_MARK: Record<HealthKind, Mark> = {
   none: { tone: 'neutral', icon: '○', text: '관측 없음' },
 };
 export const DRAIN_MARK: Mark = { tone: 'drain', icon: '⇣', text: '드레인 중' };
+
+/** 리스너 상태 — 목록의 「상태」 칸과 상세 머리가 같은 말을 한다(시안: ◐ 적용하면 열림 · ○ 꺼짐). */
+export const LISTENER_MARK: Record<ListenerMark, Mark> = {
+  stay: { tone: 'ok', icon: '●', text: '서빙 중' },
+  join: { tone: 'pending', icon: '◐', text: '적용하면 열림' },
+  off: { tone: 'neutral', icon: '○', text: '꺼짐' },
+};
+
+/**
+ * 출발지 제한 한 줄 — 시안 `srcSummary`. 주소 집합은 이름으로, 대역 수는 **펼친 실제 수**로 말한다.
+ * `@cloudflare` 하나만 있으면 「Cloudflare만 (대역 15개) · @cloudflare」 다. 항목 수를 세면 집합 하나가 「1개 대역만」 으로 읽힌다.
+ * head 에 없는 집합은 대역 0 개로 센다(검증기가 막는다 — 여기서 지어내지 않는다).
+ */
+export function sourceAllowSummary(model: ModelLike, allow: readonly string[]): { text: string; ranges: number; on: boolean } {
+  if (allow.length === 0) return { text: '제한 없음', ranges: 0, on: false };
+  const sets = [...new Set(allow.filter((s) => s.startsWith('@')).map((s) => s.slice(1)))];
+  const direct = allow.filter((s) => !s.startsWith('@')).length;
+  const info = (n: string): Record<string, unknown> | undefined => itemOf(model, 'addressSet', n);
+  const label = (n: string): string => (info(n)?.['source'] === 'cloudflare' ? 'Cloudflare' : `@${n}`);
+  const count = (n: string): number => { const c = info(n)?.['cidrs']; return Array.isArray(c) ? c.length : 0; };
+  const ranges = direct + sets.reduce((a, n) => a + count(n), 0);
+  const refs = sets.length === 0 ? '' : ` · ${sets.map((n) => `@${n}`).join(' ')}`;
+  if (sets.length === 0) return { text: `대역 ${direct}개만`, ranges, on: true };
+  const parts = [...sets.map(label), ...(direct > 0 ? [`대역 ${direct}개`] : [])];
+  return { text: `${parts.join(' + ')}만 (대역 ${ranges}개)${refs}`, ranges, on: true };
+}
 
 const obj = (v: unknown): Record<string, unknown> | undefined =>
   (typeof v === 'object' && v !== null ? v as Record<string, unknown> : undefined);
@@ -118,8 +145,7 @@ export function statusOf(desk: Desk, kind: ResourceKind, key: string): Mark | un
   if (kind === 'listener') {
     const row = desk.listeners.rows.find((r) => r.key === key);
     if (row === undefined) return undefined;
-    if (row.mark === 'off') return { tone: 'neutral', icon: '○', text: '꺼져 있어 열지 않아요' };
-    return row.mark === 'join' ? { tone: 'pending', icon: '◐', text: '적용하면 열려요' } : { tone: 'ok', icon: '●', text: '서빙 중' };
+    return LISTENER_MARK[row.mark];
   }
   if (kind === 'backend') {
     if (backendDraining(desk, key)) return DRAIN_MARK;
