@@ -18,7 +18,6 @@
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import WriteNote from '#lib/global/WriteNote.svelte';
   import InRegion from '#lib/global/InRegion.svelte';
-  import RegionCreate from '#lib/global/RegionCreate.svelte';
   import RegionNotices from '#lib/global/RegionNotices.svelte';
   import { regionColumn, useAggregate } from '#lib/global/use-aggregate.svelte.ts';
   import { withRegionColumn, type RegionRow } from '#lib/global/aggregate.ts';
@@ -65,8 +64,8 @@
       { label: '삭제…', danger: true, onselect: () => { del = { kind: 'listener', key: r.key, region: r.region }; } },
     ]),
   ];
-  // 합산이면 만들기는 지역을 먼저 고른다(RegionCreate). 쓸 지역이 하나도 없으면 안 보인다.
-  usePageActions(() => (agg.on ? (agg.entries.some((e) => e.writable) ? createIn : undefined) : ro ? undefined : create));
+  // 합산이면 만들기는 지역 모드와 같은 버튼이다 — 드로어 머리에서 「쓸 지역」 을 고른다(`FormDrawer`). 쓸 지역이 하나도 없으면 안 보인다.
+  usePageActions(() => (agg.on ? (agg.entries.some((e) => e.writable) ? create : undefined) : ro ? undefined : create));
   const delEntry = $derived(del === undefined || !agg.on ? undefined : agg.entry(del.region));
   /** 시안 `createItems`(리스너 화면) — 빠른 프록시 만들기 · 리스너 만들기. */
   const createItems: MenuItem[] = [
@@ -79,11 +78,6 @@
   <Menu items={createItems} label="만들기">
     {#snippet trigger({ open, toggle: t })}<Button variant="primary" aria-haspopup="menu" aria-expanded={open} onclick={t}>＋ 만들기 ▾</Button>{/snippet}
   </Menu>
-{/snippet}
-
-{#snippet createIn()}
-  <RegionCreate {agg} href="/traffic/listener/new/quick" label="빠른 프록시 만들기" variant="secondary" />
-  <RegionCreate {agg} href="/traffic/listener/new" />
 {/snippet}
 
 {#snippet table()}

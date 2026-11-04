@@ -9,7 +9,8 @@
  *   - 합치기: 지역마다 받은 행에 `region` 을 달아 지역 순서대로 잇는다 → `mergeRegionRows`.
  *   - 열: 「지역」 열은 맨 끝이다(시안 `lcols = colsOf(page).concat(glob ? ['지역'] : [])`) → `withRegionColumn`.
  *   - 알림: 행이 빠진 지역은 목록 위에 한 줄씩 → `regionNotices`. 연락 없는 지역의 행은 **지어내지 않는다**(§2.4).
- *   - 주소: 행의 상세 · 수정 · 만들기는 그 지역으로 좁혀 연다 → `inRegion` (셸이 `?region=` 을 읽어 좁힌다).
+ *   - 주소: 행의 상세 · 수정은 그 지역으로 좁혀 연다 → `inRegion` (셸이 `?region=` 을 읽어 좁힌다).
+ *     만들기(`/new`)는 좁히지 않는다 — 합산 목록 위 드로어에서 「쓸 지역」 을 고른다(`FormDrawer`, 시안 `wreg`).
  */
 
 /** 연락 없는 지역의 이름 — 어디서나 이 말 하나다(시안 「○ 연락 없음」, 톤 neutral). `scope.svelte.ts` 가 다시 내보낸다. */
@@ -29,12 +30,21 @@ export const AGGREGATE_PATHS: readonly string[] = ['/traffic/listener', '/traffi
   '/', '/ops/status', '/change/pending', '/ops/audit', '/ops/rendered',
 ];
 
-/** 이 주소가 합산 화면인가. 끝의 `/` 는 무시한다. 상세(`/traffic/listener/<key>`) · 만들기(`/new`)는 아니다. */
-export const isAggregatePath = (pathname: string): boolean =>
-  AGGREGATE_PATHS.includes(pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname);
+/**
+ * 이 주소가 합산 화면인가. 끝의 `/` 는 무시한다. 목록과 그 목록의 만들기(`<목록>/new`, `<목록>/new/<단계>`)다 —
+ * 만들기는 합산 목록 위에 드로어를 연다(`FormDrawer` 의 「쓸 지역」). 상세(`/traffic/listener/<key>`)는 아니다.
+ */
+export const isAggregatePath = (pathname: string): boolean => {
+  const p = pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname;
+  return AGGREGATE_PATHS.includes(p) || isAggregateCreatePath(p);
+};
+
+/** 합산 목록의 만들기 주소인가 — `<목록>/new` 또는 `<목록>/new/<단계>`(리스너 프로토콜 · 빠른 프록시 · 경로별 묶음). */
+export const isAggregateCreatePath = (pathname: string): boolean =>
+  AGGREGATE_PATHS.some((p) => p !== '/' && /^\/new(\/[^/]+)?\/?$/.test(pathname.startsWith(p) ? pathname.slice(p.length) : '-'));
 
 /**
- * 합산인데 이 주소를 못 그린다 — 어디로 보낼까. 합산 목록의 상세 · 만들기 주소면 그 목록으로(「◎ 전역」 을 눌러 돌아올 때),
+ * 합산인데 이 주소를 못 그린다 — 어디로 보낼까. 합산 목록의 상세 주소면 그 목록으로(「◎ 전역」 을 눌러 돌아올 때),
  * 아니면 지역 고르기.
  */
 export const aggregateFallback = (pathname: string): string =>

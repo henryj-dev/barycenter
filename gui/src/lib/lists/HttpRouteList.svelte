@@ -15,7 +15,7 @@
    * **전체 합산**(전역에서 지역을 안 골랐다, §2.5)이면 지역마다 행을 만들어 잇고 「지역」 열을 둔다(`withRegionColumn`).
    * 평가 순서 `#n` · 가려짐은 **지역마다 따로** 센다 — 엔진은 지역마다 하나이고, 다른 지역의 라우트는 서로 가리지 않는다.
    * 줄도 지역 순서대로, 지역 안에서는 그 지역의 평가 순서대로다. 배너는 지역 이름을 달고 지역마다 말한다.
-   * 행의 상세 · 다시 만들기는 그 지역으로 좁혀 열고, 인라인 수정 · 삭제는 그 지역의 desk 로 쓴다. 만들기 · 경로별 묶음은 지역을 먼저 고른다.
+   * 행의 상세 · 다시 만들기는 그 지역으로 좁혀 열고, 인라인 수정 · 삭제는 그 지역의 desk 로 쓴다. 만들기는 지역 모드와 같은 메뉴이고 드로어에서 「쓸 지역」 을 고른다.
    */
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
@@ -25,7 +25,6 @@
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import WriteNote from '#lib/global/WriteNote.svelte';
   import InRegion from '#lib/global/InRegion.svelte';
-  import RegionCreate from '#lib/global/RegionCreate.svelte';
   import RegionNotices from '#lib/global/RegionNotices.svelte';
   import { regionColumn, useAggregate } from '#lib/global/use-aggregate.svelte.ts';
   import { withRegionColumn, type RegionRow } from '#lib/global/aggregate.ts';
@@ -94,8 +93,8 @@
     { label: '라우트 만들기', description: '호스트 하나, 경로 하나로 만들어요.', href: '/traffic/route/http/new' },
     { label: '경로별 묶음으로 만들기', description: '규칙을 줄로 적어 라우트 여러 개를 만들어요.', href: '/traffic/route/http/new/group' },
   ];
-  // 합산이면 만들기 · 경로별 묶음은 지역을 먼저 고른다(RegionCreate). 쓸 지역이 하나도 없으면 안 보인다.
-  usePageActions(() => (agg.on ? (agg.entries.some((e) => e.writable) ? createIn : undefined) : ro ? undefined : create));
+  // 합산이면 만들기는 지역 모드와 같은 버튼이다 — 드로어 머리에서 「쓸 지역」 을 고른다(`FormDrawer`). 쓸 지역이 하나도 없으면 안 보인다.
+  usePageActions(() => (agg.on ? (agg.entries.some((e) => e.writable) ? create : undefined) : ro ? undefined : create));
   const delEntry = $derived(del === undefined || !agg.on ? undefined : agg.entry(del.region));
 </script>
 
@@ -103,11 +102,6 @@
   <Menu items={createItems} label="만들기">
     {#snippet trigger({ open, toggle })}<Button variant="primary" aria-haspopup="menu" aria-expanded={open} onclick={toggle}>＋ 만들기 ▾</Button>{/snippet}
   </Menu>
-{/snippet}
-
-{#snippet createIn()}
-  <RegionCreate {agg} href="/traffic/route/http/new/group" label="＋ 경로별 묶음" variant="secondary" />
-  <RegionCreate {agg} href="/traffic/route/http/new" />
 {/snippet}
 
 {#each bannerDesks as bd (bd.name)}

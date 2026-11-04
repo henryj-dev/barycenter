@@ -11,9 +11,19 @@ import { takeCommitNote } from '#lib/commit-note';
  * `href` 가 없으면 지금 화면에 머문다(목록에서 켜고 끄기 · 목록에서 삭제 · 롤백).
  * 실패하면 아무 데도 가지 않는다 — 오류는 셸 배너가 보인다.
  */
+/**
+ * 만든 뒤 갈 곳을 바꾼다 — 전체 합산의 만들기 드로어(`FormDrawer`)가 「만든 것」 대신 합산 목록으로 돌아가게 건다.
+ * 상세는 셸의 desk 하나로 그리므로 합산에서는 열 수 없다. 돌려준 함수로 푼다.
+ */
+let redirect: ((href: string) => string) | undefined;
+export const redirectAfter = (f: (href: string) => string): (() => void) => {
+  redirect = f;
+  return () => { if (redirect === f) redirect = undefined; };
+};
+
 export const after = (href?: string, title = '커밋했어요') => (ok: boolean): void => {
   if (!ok) return;
   if (takeCommitNote()) toast.ok(title, '트래픽이 안 바뀌는 변경이라 바로 반영했어요. 적용할 것은 없어요.');
   else toast.ok(title, '적용 대기에 들어갔어요. 적용해야 트래픽이 바뀌어요.');
-  if (href !== undefined) void goto(href);
+  if (href !== undefined) void goto(redirect?.(href) ?? href);
 };
