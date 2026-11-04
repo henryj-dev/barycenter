@@ -49,7 +49,7 @@
 </script>
 
 {#if item !== undefined}
-  <Writable>
+  <Writable target>
     <Form note="저장하면 커밋해요. 이 집합을 쓰는 리스너가 적용 대기에 올라요." onsubmit={save}>
       <FormSection title="기본">
         <FormRow label="이름" help="이름은 바꿀 수 없어요. 리스너에서는 @이름 으로 써요."><TextInput value={`@${key}`} disabled /></FormRow>

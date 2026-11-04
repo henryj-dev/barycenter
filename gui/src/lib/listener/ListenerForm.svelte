@@ -124,7 +124,7 @@
 </script>
 
 {#if model !== undefined}
-  <Writable>
+  <Writable target>
     <Form note="저장하면 커밋해요. 트래픽은 적용 대기에서 적용해야 바뀌어요." onsubmit={save}>
       <FormSection title="기본">
         <FormRow label="프로토콜" help="프로토콜은 바꿀 수 없어요."><TextInput value={protocol} disabled /></FormRow>

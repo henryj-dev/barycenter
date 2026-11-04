@@ -81,7 +81,7 @@
 </script>
 
 {#if route !== undefined && input !== undefined}
-  <Writable>
+  <Writable target>
     <Form note="저장하면 커밋해요. 트래픽은 적용 대기에서 적용해야 바뀌어요." onsubmit={() => { if (ready) void desk.proxyFromUrl(input).then(after(resourcePath('httpRoute', key))); }}>
       <Card title="그대로 두는 것">
         <DescriptionList items={[

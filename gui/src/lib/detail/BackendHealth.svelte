@@ -31,7 +31,7 @@
 <div class="bh">
   <DescriptionList {items} />
   <BackendReasons backend={key} />
-  <Writable>
+  <Writable target>
     <div class="act">
       {#if traffic === undefined || !draining}<Button size="sm" disabled={desk.editing} onclick={() => { void desk.drain(key); }}>드레인</Button>{/if}
       {#if traffic === undefined || draining}<Button size="sm" disabled={desk.editing} onclick={() => { void desk.undrain(key); }}>드레인 해제</Button>{/if}
