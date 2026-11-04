@@ -38,7 +38,8 @@ describe('openEventStream alive', () => {
     const res = fakeRes();
     const req = new EventEmitter();
     void openEventStream({ req, res, hub: new EventHub(), snapshot: async () => ({}), heartbeatMs: 10, alive: async () => true });
-    await new Promise((r) => setTimeout(r, 40));
+    // 고정 대기(40ms)는 전체 unit 을 병렬로 돌릴 때 타이머가 밀려 흔들렸다 — 올 때까지 기다린다(최대 2초).
+    for (let i = 0; i < 200 && !res.chunks.join('').includes(': hb'); i++) await new Promise((r) => setTimeout(r, 10));
     req.emit('close');
     expect(res.chunks.join('')).toContain(': hb');
   });
