@@ -80,12 +80,13 @@ describe('행의 지역으로 좁혀 연다', () => {
   });
 
   it('합산으로 그리는 화면은 목록 주소뿐이다 · 상세 · 만들기는 그 목록으로, 나머지는 지역 고르기로', () => {
-    expect(AGGREGATE_PATHS).toEqual(['/traffic/listener', '/traffic/backend']);
+    expect(AGGREGATE_PATHS).toEqual(['/traffic/listener', '/traffic/backend',
+      '/traffic/pool', '/traffic/address-set', '/traffic/route/http', '/traffic/route/passthrough']);
     expect(isAggregatePath('/traffic/listener/')).toBe(true);
     expect(isAggregatePath('/traffic/listener/web')).toBe(false);
     expect(aggregateFallback('/traffic/backend/b1/settings')).toBe('/traffic/backend');
     expect(aggregateFallback('/')).toBe('/regions');
-    expect(aggregateFallback('/traffic/pool')).toBe('/regions');
+    expect(aggregateFallback('/traffic/route/http/new/group')).toBe('/traffic/route/http');
   });
 });
 
@@ -113,7 +114,8 @@ describe('화면의 연결', () => {
     expect(src('lib/global/scope.svelte.ts')).toContain("get aggregate() { return mode === 'global' && region === undefined; }");
   });
 
-  it.each(['ListenerList', 'BackendList'])('%s: 합산이면 지역 열 · 빠진 지역 알림 · 행 키 rid · 행의 지역으로 쓰기 · 만들 지역 고르기', (f) => {
+  it.each(['ListenerList', 'BackendList',
+    'PoolList', 'AddressSetList', 'HttpRouteList', 'PassthroughRouteList'])('%s: 합산이면 지역 열 · 빠진 지역 알림 · 행 키 rid · 행의 지역으로 쓰기 · 만들 지역 고르기', (f) => {
     const s = src(`lib/lists/${f}.svelte`);
     expect(s).toContain('const agg = useAggregate();');
     expect(s).toContain('withRegionColumn(columns, regionColumn<AggRow>())');
@@ -122,6 +124,21 @@ describe('화면의 연결', () => {
     expect(s).toContain('const rowRo = (r: AggRow): boolean => (agg.on ? !agg.writable(r.region) : ro);');
     expect(s).toMatch(/<InRegion entry=\{delEntry\}><DeleteConfirm bind:target=\{del\}/);
     expect(s).toContain('<RegionCreate {agg}');
+  });
+
+  it('라우트 평가 순서는 지역마다 센다 · 경로별 묶음도 지역을 먼저 고른다', () => {
+    const h = src('lib/lists/HttpRouteList.svelte');
+    // routeOrder 는 rowsOf(desk) 안에서 그 지역 desk 로만 부른다 — 지역을 넘어 #n · 가려짐을 세지 않는다.
+    expect(h).toMatch(/const rowsOf = \(desk: Desk\): Row\[\] => \{\s*const meta = routeOrder\(desk\.routes\);/);
+    expect(h).toContain('<RegionCreate {agg} href="/traffic/route/http/new/group"');
+    expect(src('lib/lists/PassthroughRouteList.svelte')).toMatch(/const rowsOf = \(desk: Desk\): Row\[\] => desk\.routes\.passthrough\.map\(\(r, i\)/);
+  });
+
+  it('풀 분할 상세의 소속 백엔드는 그 행의 지역 desk 를 읽고 링크를 그 지역으로 좁힌다', () => {
+    const p = src('lib/detail/PoolBackends.svelte');
+    expect(p).toContain("const desk = getContext<ReturnType<typeof createDesk>>('desk');");
+    expect(p).toContain('scope?.fixed === true && scope.region !== undefined ? inRegion(path, scope.region.name) : path');
+    expect(p).toContain("href={link(resourcePath('backend', r.key))}");
   });
 
   it('목록 옆 상세는 합산이면 그 행의 지역 desk 로 그리고 링크를 그 지역으로 좁힌다', () => {
