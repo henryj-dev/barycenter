@@ -112,6 +112,11 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
   let recovering = $state(false);
   let editing = $state(false);
   let stop: (() => void) | undefined;
+  /**
+   * 다시 붙는 고리가 도는 중인가 (2026-11-04, 시안 「끊김」). 401 이나 `disconnect` 로 고리가 멈추면 undefined 다 —
+   * 그때 화면은 「재연결 중」 이 아니라 「끊김」 을 보이고 「다시 연결해요」 를 둔다.
+   */
+  let looping = $state<AbortController | undefined>();
 
   const auth = (): Record<string, string> =>
     token === '' ? {} : { authorization: `Bearer ${token}` };
@@ -398,16 +403,22 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
       ac.abort();
     };
 
+    looping = ac;
     let attempt = 0;
-    while (!ac.signal.aborted) {
-      const outcome = await streamOnce(ac);
-      if (outcome === 'stop' || ac.signal.aborted) return;
-      // **붙었다 끊긴 것과 못 붙은 것을 가른다.** 붙었었다면 다음 재시도는 처음부터다 —
-      // 안 그러면 잠깐씩 자주 끊기는 망에서 대기가 끝없이 길어진다.
-      if (outcome === 'served') attempt = 0;
-      const wait = backoffMs(attempt);
-      if (outcome === 'refused') attempt += 1;
-      await new Promise<void>((r) => { timer = setTimeout(r, wait); });
+    try {
+      while (!ac.signal.aborted) {
+        const outcome = await streamOnce(ac);
+        if (outcome === 'stop' || ac.signal.aborted) return;
+        // **붙었다 끊긴 것과 못 붙은 것을 가른다.** 붙었었다면 다음 재시도는 처음부터다 —
+        // 안 그러면 잠깐씩 자주 끊기는 망에서 대기가 끝없이 길어진다.
+        if (outcome === 'served') attempt = 0;
+        const wait = backoffMs(attempt);
+        if (outcome === 'refused') attempt += 1;
+        await new Promise<void>((r) => { timer = setTimeout(r, wait); });
+      }
+    } finally {
+      // 뒤이은 `connect` 가 이미 새 고리를 열었으면 그것을 지우지 않는다.
+      if (looping === ac) looping = undefined;
     }
   };
 
@@ -1075,6 +1086,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
      * 만들기 폼은 이것이 거짓이면 폼을 지우고 「연결하면」 으로 바꾼다 — 배포 1.5 초에 입력하던 것이 사라졌다.
      */
     get live() { return live || !graceOver; },
+    /** 끊겼을 때 스스로 다시 붙는 중인가. 거짓이면 사람이 `connect` 를 불러야 다시 붙는다. */
+    get retrying() { return looping !== undefined; },
     get error() { return error; },
     get head() { return head; },
     get view() { return view; },

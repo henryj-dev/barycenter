@@ -57,7 +57,7 @@
   };
 </script>
 
-<Card title="리비전 롤백" sub="되돌릴 리비전을 골라요. 롤백하면 새 리비전이 만들어져요." padded={false}>
+<Card title="리비전 롤백" sub="되돌릴 리비전을 선택해요. 롤백하면 새 리비전이 만들어져요." padded={false}>
   {#if failed}
     <div class="pad"><FieldMessage>리비전 목록을 못 읽었어요. 잠시 뒤 다시 열어 봐요.</FieldMessage></div>
   {:else if rows === undefined}

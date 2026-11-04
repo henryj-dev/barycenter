@@ -15,21 +15,45 @@
    * (전에는 계정이 있어도 만들기 구획이 늘 보였다.) 계정 만들기는 설정이 아니라 바로 걸리는 일이다(계정 키를 만든다).
    */
   import { getContext } from 'svelte';
+  import { page } from '$app/state';
   import { resourcePath } from '@web/resources';
   import {
     Badge, Banner, Button, FieldMessage, FormRow, FormSection, ListInput, RadioGroup, TextArea, TextInput,
   } from '#lib/ui';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import type { Scope } from '#lib/global/scope.svelte.ts';
   import AcmeAccountField from './AcmeAccountField.svelte';
   import CreateForm from './CreateForm.svelte';
   import { KEY_HELP, filled, keyError } from './checks';
 
   type Issuer = 'acme' | 'upload';
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
+  const scope = getContext<Scope | undefined>('scope');
 
-  let key = $state('');
-  let issuer = $state<Issuer>('acme');
+  /**
+   * **자료 교체** — 목록의 「자료를 교체해요」 가 `?key=<이름>&issuer=upload` 로 연다. 같은 이름에 새 자료를 올려
+   * 커밋한다(`put`). 이름과 발급자는 고정이다 — 다른 이름이면 교체가 아니라 새 인증서다.
+   */
+  const replaceKey = page.url.searchParams.get('key') ?? undefined;
+  const replacing = replaceKey !== undefined && replaceKey !== '' && page.url.searchParams.get('issuer') === 'upload';
+
+  let key = $state(replacing ? replaceKey ?? '' : '');
+  let issuer = $state<Issuer>(replacing ? 'upload' : 'acme');
+
+  /**
+   * **클러스터에서 HTTP-01 은 실패할 수 있다.** ACME 실행기는 리더에서만 돌고, 확인 토큰도 리더의 데이터 평면에만
+   * 둔다(`src/control/acme-runner.ts`). CA 가 리더가 아닌 노드로 오면 토큰이 없다. 노드가 둘 이상이면 미리 말한다.
+   * 전역은 지역마다 다르므로 묻지 않는다(시안도 지역 모드에서만 띄운다).
+   */
+  let nodeCount = $state(0);
+  $effect(() => {
+    if (!desk.live || scope?.mode === 'global') return;
+    void desk.clusterNodes().then((r) => {
+      const b = r as { enabled?: boolean; nodes?: unknown[] } | undefined;
+      nodeCount = b?.enabled === true && Array.isArray(b.nodes) ? b.nodes.length : 0;
+    });
+  });
 
   // ── ACME ──
   let account = $state<string | undefined>();
@@ -77,14 +101,18 @@
   };
 </script>
 
-<CreateForm {ready} onsubmit={submit} cancelHref="/tls/certificate" submitLabel={issuer === 'acme' ? '만들기' : '자료를 넣어요'}
+<CreateForm {ready} onsubmit={submit} cancelHref={replacing ? resourcePath('certificate', key) : '/tls/certificate'} submitLabel={issuer === 'acme' ? '만들기' : replacing ? '자료를 교체해요' : '자료를 넣어요'}
   note={issuer === 'acme' && !waiting ? '만들면 바로 적용해요. 발급은 이어서 진행해요.' : undefined}>
   <FormSection title="기본">
     <FormRow label="이름" for="ct-key" required error={keyError(key)} help={KEY_HELP}>
-      <TextInput id="ct-key" bind:value={key} invalid={keyError(key) !== undefined} autocomplete="off" placeholder="example-com" />
+      <TextInput id="ct-key" bind:value={key} invalid={keyError(key) !== undefined} autocomplete="off" placeholder="example-com" readonly={replacing} />
     </FormRow>
-    <FormRow label="발급자" required>
-      <RadioGroup label="발급자" bind:value={issuer} options={[{ value: 'acme', label: 'ACME 자동 발급' }, { value: 'upload', label: '파일 업로드 (PEM)' }]} />
+    <FormRow label="발급자" required help={replacing ? '이 이름에 새 PEM 자료를 올려요. 적용해야 트래픽에 걸려요.' : undefined}>
+      {#if replacing}
+        <Badge tone="neutral" icon={null}>파일 업로드 (PEM)</Badge>
+      {:else}
+        <RadioGroup label="발급자" bind:value={issuer} options={[{ value: 'acme', label: 'ACME 자동 발급' }, { value: 'upload', label: '파일 업로드 (PEM)' }]} />
+      {/if}
     </FormRow>
   </FormSection>
 
@@ -102,6 +130,9 @@
         ? '와일드카드는 DNS-01 로만 받아요. DNS 프로바이더 연결이 필요해요.'
         : 'HTTP-01 이에요. CA 가 공개 DNS 로 이 이름을 찾아 :80 의 /.well-known/acme-challenge/ 로 확인해요. :80 HTTP 리스너가 있어야 해요. 리스너의 기본 동작이 거절이어도 확인 경로는 응답해요.'}>
         {#if wildcard}<Badge tone="info" icon={null}>DNS-01</Badge>{:else}<Badge tone="info" icon={null}>HTTP-01</Badge>{/if}
+        {#if !wildcard && nodeCount >= 2}
+          <Banner tone="warn">클러스터에서는 HTTP-01 이 실패할 수 있어요. CA 가 리더가 아닌 노드로 올 수 있어요. DNS-01 이나 업로드 인증서를 써요.</Banner>
+        {/if}
       </FormRow>
       {#if wildcard}
         <FormRow label="DNS 공급자" help="DNS-01 공급자 설정은 아직 화면에 없어요. 준비 중이에요.">

@@ -8,11 +8,13 @@
    */
   import { getContext } from 'svelte';
   import { itemsOf } from '@web/resources';
+  import { viewOfStatus, type StatusFact } from '@web/status-view';
   import { Badge, Banner, Button, Card, DataTable, FieldMessage, Skeleton, type Column, type Tone } from '#lib/ui';
   import type { RegionSummary, Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { clockText, groupAudit } from './audit';
   import { loadRegions } from './fetch';
+  import { nodeState, type ClusterBody } from './cluster';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
@@ -32,12 +34,28 @@
   const certSoon = $derived(desk.certs.rows.filter((c) => !c.hasMaterial || (c.expiresInDays !== undefined && c.expiresInDays < 30)));
   const nearest = $derived([...certSoon].sort((a, b) => (a.hasMaterial ? a.expiresInDays ?? 0 : -Infinity) - (b.hasMaterial ? b.expiresInDays ?? 0 : -Infinity))[0]);
 
+  /** 클러스터면 head 카드에 「N대 중 M대 맞음」 을 붙인다(시안). 전역은 지역마다 다르므로 묻지 않는다. */
+  let cluster = $state<ClusterBody | undefined>();
+  $effect(() => {
+    void desk.status;
+    if (!desk.live || global) return;
+    void desk.clusterNodes().then((r) => { cluster = r as ClusterBody | undefined; });
+  });
+  const clusterText = $derived(cluster?.enabled === true && cluster.nodes.length > 1
+    ? ` · ${cluster.nodes.length}대 중 ${cluster.nodes.filter((n) => nodeState(n).tone === 'ok').length}대 맞음` : '');
+
   type Stat = { href: string; label: string; value: string; tone: Tone; text: string };
   const stats = $derived<Stat[]>([
-    {
-      href: '/change/pending', label: 'head 리비전', value: desk.head === undefined ? '—' : `r${desk.head}`,
-      ...(st.pending.length > 0 ? { tone: 'pending' as const, text: `적용 대기 ${st.pending.length}건` } : { tone: 'ok' as const, text: '트래픽에 걸려 있어요' }),
-    },
+    global
+      ? {
+        // 전역 — head 는 지역마다 다르다(시안 「지역마다」). 적용 대기는 지역을 합쳐 센다.
+        href: '/change/pending', label: 'head 리비전', value: '지역마다',
+        ...(regionPending > 0 ? { tone: 'pending' as const, text: `적용 대기 ${regionPending}건` } : { tone: 'ok' as const, text: '적용 대기 없음' }),
+      }
+      : {
+        href: '/change/pending', label: 'head 리비전', value: desk.head === undefined ? '—' : `r${desk.head}`,
+        ...(st.pending.length > 0 ? { tone: 'pending' as const, text: `적용 대기 ${st.pending.length}건${clusterText}` } : { tone: 'ok' as const, text: `트래픽에 걸려 있어요${clusterText}` }),
+      },
     {
       href: '/traffic/listener', label: '리스너 상태', value: `${serving} / ${desk.listeners.rows.length}`,
       ...(joining > 0 ? { tone: 'pending' as const, text: `${joining}개 적용하면 열림` } : { tone: 'ok' as const, text: '모두 서빙 중' }),
@@ -77,6 +95,12 @@
   };
   const pendingOf = (r: RegionSummary): number | undefined =>
     (Array.isArray(r.status?.['pendingApply']) ? (r.status['pendingApply'] as unknown[]).length : undefined);
+  /** 전역 합산 — 지역 요약의 `status` 로 센다. 닿지 않는 지역은 세지 않는다(모름). */
+  const regionViews = $derived((regions ?? []).map((r) => ({ r, v: r.status === undefined ? undefined : viewOfStatus(r.status as StatusFact) })));
+  const regionPending = $derived(regionViews.reduce((a, x) => a + (x.v?.pending.length ?? 0), 0));
+  const regionUnfinished = $derived(regionViews.filter((x) => x.v?.unfinished === true).length);
+  const regionEngines = $derived([...new Set(regionViews.map((x) => x.v?.engine.label).filter((e): e is string => e !== undefined))].join(', '));
+  const regionsWithLeader = $derived(regionViews.filter((x) => x.v !== undefined && x.v.leader.holder !== '—').length);
   const regionColumns: Column<RegionSummary>[] = [
     { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '100px', text: (r) => (r.status?.head === undefined ? '—' : `r${r.status.head}`) },
@@ -112,7 +136,12 @@
     .sort((a, b) => (a.hasMaterial ? a.expiresInDays ?? 0 : -Infinity) - (b.hasMaterial ? b.expiresInDays ?? 0 : -Infinity))
     .slice(0, 5));
 
-  const engine = $derived([
+  const engine = $derived(global ? [
+    { label: '지역', value: regions === undefined ? '—' : `${regions.length}곳` },
+    { label: '엔진', value: regionEngines === '' ? '—' : regionEngines },
+    { label: '미완 전환', value: `${regionUnfinished}건` },
+    { label: '리더', value: regions !== undefined && regionsWithLeader === regions.length ? '지역마다 1개' : `${regionsWithLeader}곳에 있어요` },
+  ] : [
     { label: '리더', value: st.leader.isLeader ? '★ 이 인스턴스' : `☆ ${st.leader.holder}` },
     { label: '게시 세대', value: st.published.generation ?? '—' },
     { label: '미완 전환', value: st.unfinished ? '1건' : '0건' },
@@ -158,8 +187,26 @@
 
     <div class="panels">
       <Card title="적용 대기" padded={false}>
-        {#snippet actions()}{#if desk.view !== undefined}<Button size="sm" variant="primary" href="/change/pending">영향 확인</Button>{/if}{/snippet}
-        {#if desk.view === undefined}
+        {#snippet actions()}{#if global ? regionPending > 0 : desk.view !== undefined}<Button size="sm" variant="primary" href="/change/pending">영향 확인</Button>{/if}{/snippet}
+        {#if global}
+          <!-- 전역 — 지역마다 한 줄(시안). 고른 지역의 plan 상세는 적용 대기 화면에서 본다. -->
+          {#if regions === undefined}
+            <div class="pad"><Skeleton height="40px" label="지역 요약을 읽는 중" /></div>
+          {:else if regions.length === 0}
+            <div class="pad"><FieldMessage>지역이 없어요.</FieldMessage></div>
+          {:else}
+            {#each regionViews as { r, v } (r.name)}
+              {@const n = v?.pending.length}
+              <div class="line">
+                <span class="grow mono">{r.name}</span>
+                <span class="rev">{v?.head === undefined ? '—' : `r${v.head}`}</span>
+                {#if n === undefined}<Badge tone="neutral">{regionState(r).text}</Badge>
+                {:else if n > 0}<Badge tone="pending">적용 대기 {n}건</Badge>
+                {:else}<Badge tone="ok">없음</Badge>{/if}
+              </div>
+            {/each}
+          {/if}
+        {:else if desk.view === undefined}
           <div class="pad"><FieldMessage tone="ok">적용 대기가 없어요. head{desk.head === undefined ? '' : ` r${desk.head}`} 가 트래픽에 걸려 있어요.</FieldMessage></div>
         {:else}
           <div class="line plan">
@@ -174,6 +221,8 @@
       </Card>
 
       <Card title="풀별 백엔드 헬스" padded={false}>
+        <!-- 헬스는 실시간 스트림으로 온다 — 그 연결 상태를 머리에 둔다(시안). 끊기면 이 화면은 뼈대로 바뀐다. -->
+        {#snippet actions()}<span class="conn" data-live={desk.live}><span class="dot" aria-hidden="true"></span>{desk.live ? '실시간 수신 중' : '끊김'}</span>{/snippet}
         {#if pools.length === 0}
           <div class="pad"><FieldMessage>풀이 없어요.</FieldMessage></div>
         {:else}
@@ -266,6 +315,9 @@
   .bar [data-tone='danger'] { background: var(--danger); }
   .bar [data-tone='neutral'] { background: var(--neutral); }
   .pend { color: var(--pending); }
+  .conn { display: inline-flex; align-items: center; gap: 6px; font: var(--t-cap); color: var(--danger); }
+  .conn[data-live='true'] { color: var(--ok); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
   .engine {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 24px; margin: 0; padding: 12px 16px;
     background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg); font: var(--t-small);
