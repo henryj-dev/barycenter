@@ -1,36 +1,19 @@
 <script lang="ts" module>
-  import type { RedirectStatus, RejectStatus, SourceRuleInput } from '@web/edit';
   import { fromTokens, sourceRuleErrors, type SetCidrs } from './source-rules';
+  import { ruleInputsOf, type RuleRow } from './route-edit';
 
   /** 라우트 하나의 규칙 수 상한 — 해독기와 같다(`decodeSourceRules`, 렌더가 규칙마다 `error_page` 코드 하나). */
   export const MAX_RULES = 20;
 
-  /** 폼의 규칙 한 줄. 저장할 때 `toSourceRules` 가 `SourceRuleInput` 으로 바꾼다. */
-  export type SourceRuleRow = {
-    from: string;
-    /** 방문자 주소(realip 뒤) 또는 연결 주소(realip 전) — 2026-11-02. */
-    address: 'visitor' | 'connection';
-    kind: 'proxy' | 'redirect' | 'reject';
-    pool: string | undefined;
-    websocket: boolean;
-    to: string;
-    redirectStatus: string;
-    rejectStatus: string;
-  };
+  /** 폼의 규칙 한 줄. 저장할 때 `toSourceRules` 가 `SourceRuleInput` 으로 바꾼다. 모양은 `route-edit.ts` 한 자리다. */
+  export type SourceRuleRow = RuleRow;
 
   export const emptyRule = (): SourceRuleRow => ({
     from: '', address: 'visitor', kind: 'reject', pool: undefined, websocket: false, to: '', redirectStatus: '302', rejectStatus: '403',
   });
 
-  /** 폼 줄 → 저장할 규칙. 대역이 빈 줄은 버린다(`sourceRulesOf` 가 한 번 더 거른다). */
-  export const toSourceRules = (rows: readonly SourceRuleRow[]): SourceRuleInput[] => rows.flatMap((r): SourceRuleInput[] => {
-    const from = r.from.split(/[\s,]+/).map((x) => x.trim()).filter((x) => x !== '');
-    if (from.length === 0) return [];
-    const addr = r.address === 'connection' ? { address: 'connection' as const } : {};
-    if (r.kind === 'proxy') return [{ from, ...addr, action: { kind: 'proxy', pool: r.pool ?? '', websocket: r.websocket } }];
-    if (r.kind === 'redirect') return [{ from, ...addr, action: { kind: 'redirect', to: r.to.trim(), status: Number(r.redirectStatus) as RedirectStatus } }];
-    return [{ from, ...addr, action: { kind: 'reject', status: Number(r.rejectStatus) as RejectStatus } }];
-  });
+  /** 폼 줄 → 저장할 규칙. 대역이 빈 줄은 버린다(`sourceRulesOf` 가 한 번 더 거른다). 수정 폼의 head ↔ 폼과 같은 함수다. */
+  export const toSourceRules = ruleInputsOf;
 
   /**
    * 행마다 오류 — 출발지 칸(대역 · 가려짐)과 동작 칸(풀 · 대상). 출발지가 빈 행은 저장할 때 버리므로 묻지 않는다.

@@ -17,6 +17,8 @@
   import JsonEdit from './JsonEdit.svelte';
   import BackendSettings from './BackendSettings.svelte';
   import AddressSetSettings from './AddressSetSettings.svelte';
+  import HttpRouteForm from '#lib/forms/HttpRouteForm.svelte';
+  import PassthroughRouteForm from '#lib/forms/PassthroughRouteForm.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   let { kind }: { kind: ResourceKind } = $props();
@@ -41,6 +43,12 @@
       <JsonEdit {kind} />
     {:else if writable && (kind === 'backend' || kind === 'addressSet')}
       {#if kind === 'backend'}<BackendSettings />{:else}<AddressSetSettings />{/if}
+      <Disclosure title="JSON 으로 고치기" hint="폼에 없는 칸까지 통째로">
+        <JsonEdit {kind} />
+      </Disclosure>
+    {:else if writable && (kind === 'httpRoute' || kind === 'passthroughRoute')}
+      <!-- 라우트는 만들기 폼의 수정 모드(시안 `fieldsFor('routes')`) + 접은 JSON 수정. -->
+      {#if kind === 'httpRoute'}<HttpRouteForm edit />{:else}<PassthroughRouteForm edit />{/if}
       <Disclosure title="JSON 으로 고치기" hint="폼에 없는 칸까지 통째로">
         <JsonEdit {kind} />
       </Disclosure>

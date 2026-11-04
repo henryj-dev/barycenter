@@ -7,6 +7,7 @@
    * 경로가 여럿인 라우트는 엔진이 여러 번 보므로 가장 먼저 보는 자리를 적는다. 줄도 그 순서로 늘어놓는다.
    * 더 높은 클래스의 라우트가 먼저 잡는 라우트(`priority_inversion`)는 「#n · 가려짐」 경고 배지이고, 마우스를 올리면 이유다.
    * 가림 · 오류는 위에 배너로도 먼저 말한다.
+   * 행을 누르면 아래에 분할 상세가 열린다(`ListSplit`) — 풀로 보내는 라우트는 「URL로 다시 만들기」 도 있다(시안).
    */
   import { getContext } from 'svelte';
   import { goto } from '$app/navigation';
@@ -15,6 +16,7 @@
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
   import RouteSegments from './RouteSegments.svelte';
   import { routeOrder } from './route-order';
@@ -28,6 +30,7 @@
   const scope = getContext<Scope | undefined>('scope');
   const ro = $derived(scope?.readOnly === true);
   let del = $state<{ kind: 'httpRoute'; key: string } | undefined>();
+  let selected = $state<string[]>([]);
 
   const meta = $derived(routeOrder(desk.routes));
 
@@ -46,8 +49,10 @@
     };
   }).sort((a, b) => (a.ord ?? Infinity) - (b.ord ?? Infinity) || a.key.localeCompare(b.key)));
 
+  // 시안: 프록시 · redirect 는 글자, reject 만 ✕ 배지다.
   const actText = (a: Act): string => (a.kind === 'proxy' ? `프록시 → ${a.pool ?? ''}${a.websocket === true ? ' · WebSocket' : ''}`
-    : a.kind === 'redirect' ? `redirect ${a.status ?? ''} → ${a.to ?? ''}` : `reject ${a.status ?? ''}`.trim());
+    : a.kind === 'redirect' ? `redirect → ${a.to ?? ''} · ${a.status ?? ''}` : `reject ${a.status ?? ''}`.trim());
+  const isProxy = (key: string): boolean => rows.find((r) => r.key === key)?.act.kind === 'proxy';
 
   const columns: Column<Row>[] = [
     { key: 'key', label: '이름', mono: true, sort: (r) => r.key },
@@ -61,10 +66,10 @@
     { key: 'ord', label: '평가 순서', mono: true, align: 'right', sort: (r) => r.ord ?? Infinity },
   ];
   const menu = (r: Row): MenuItem[] => [
-    { label: '상세를 봐요', href: resourcePath('httpRoute', r.key) },
+    { label: '상세 페이지 열기', href: resourcePath('httpRoute', r.key) },
     ...(ro ? [] : [
-      { label: '수정해요', href: resourcePath('httpRoute', r.key, 'settings') },
-      ...(r.act.kind === 'proxy' ? [{ label: 'URL로 다시 만들어요', href: resourcePath('httpRoute', r.key, 'rebuild') }] : []),
+      { label: '수정', href: resourcePath('httpRoute', r.key, 'settings') },
+      ...(r.act.kind === 'proxy' ? [{ label: 'URL로 다시 만들기', href: resourcePath('httpRoute', r.key, 'rebuild') }] : []),
       { label: '삭제…', danger: true, onselect: () => { del = { kind: 'httpRoute', key: r.key }; } },
     ]),
   ];
@@ -79,7 +84,12 @@
 <RouteSegments current="http" />
 {#each desk.routes.errors as e (e.kind + e.message)}<Banner tone="danger">{e.message}</Banner>{/each}
 {#each desk.routes.warnings as w (w.kind + w.message)}<Banner tone="warn">{w.message}</Banner>{/each}
-<DataTable label="HTTP 라우트 — 엔진이 보는 순서" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}
+{#snippet rebuild(key: string)}
+  {#if !ro && isProxy(key)}<Button size="sm" href={resourcePath('httpRoute', key, 'rebuild')}>URL로 다시 만들기</Button>{/if}
+{/snippet}
+
+{#snippet table()}
+<DataTable label="HTTP 라우트 — 엔진이 보는 순서" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live} bind:selected
   search={{ placeholder: '이름·호스트·경로·리스너로 찾기', match: (r, q) => `${r.key} ${r.hosts} ${r.paths.join(' ')} ${r.listener}`.toLowerCase().includes(q) }}
   emptyTitle="HTTP 라우트가 없어요" emptyBody="호스트와 경로로 요청을 풀이나 동작에 보내요."
   onopen={(r) => { void goto(resourcePath('httpRoute', r.key)); }} rowMenu={menu}>
@@ -89,8 +99,8 @@
     {:else if c.key === 'paths'}
       <span title={r.paths.length > 1 ? r.paths.join('\n') : undefined}>{r.paths[0]}{#if r.paths.length > 1}<span class="more"><Badge tone="neutral" icon={null}>+{r.paths.length - 1}</Badge></span>{/if}</span>
     {:else if c.key === 'action'}
-      {#if r.act.kind === 'reject'}<Badge tone="danger" icon="⊘">{actText(r.act)}</Badge>
-      {:else if r.act.kind === 'redirect'}<Badge tone="info" icon="↪">{actText(r.act)}</Badge>
+      {#if r.act.kind === 'reject'}<Badge tone="danger" icon="✕">{actText(r.act)}</Badge>
+      {:else if r.act.kind === 'redirect'}{actText(r.act)}
       {:else}{actText(r.act)}{#if r.act.rewritePrefix !== undefined}<span class="sub"> · 경로 → {r.act.rewritePrefix}</span>{/if}{/if}
     {:else if c.key === 'rules'}
       {#if r.rules > 0}<Badge tone="info" icon="↳">출발지 규칙 {r.rules}</Badge>{:else}<span class="none">—</span>{/if}
@@ -102,6 +112,9 @@
     {:else}{String(r[c.key as keyof Row])}{/if}
   {/snippet}
 </DataTable>
+{/snippet}
+
+<ListSplit kind="httpRoute" bind:selected {table} actions={rebuild} />
 <p class="note">평가 순서는 엔진이 맞춰 보는 순서예요. 정확 일치 → 와일드카드 → 정규식 순서이고, 같은 클래스 안에서만 우선순위가 뜻이 있어요.</p>
 <DeleteConfirm bind:target={del} />
 
