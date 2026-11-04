@@ -15,7 +15,15 @@
   import { relationCount, statusOf } from './facts';
   import { headerMarks, isPendingResource } from '#lib/pending';
 
-  let { kind, children }: { kind: ResourceKind; children: Snippet } = $props();
+  let { kind, meta = [], children }: {
+    kind: ResourceKind;
+    /**
+     * 제목 아래 메타 줄 — 디자인 시스템 §5 「발급자 ACME  만료 2026-11-10  사용처 리스너 2 · SNI 3」.
+     * 화면(라우트 레이아웃)이 그 리소스에서 아는 값만 채운다. 비우면 줄을 안 그린다.
+     */
+    meta?: readonly { label: string; value: string; mono?: boolean }[];
+    children: Snippet;
+  } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const spec = $derived(RESOURCES[kind]);
   const key = $derived(page.params['key'] ?? '');
@@ -63,7 +71,7 @@
   <div class="frame">
     <DetailHeader
       crumbs={[{ label: spec.label, href: listHref }, ...(extra !== undefined ? [{ label: key, href: base }, { label: extra }] : [{ label: key }])]}
-      title={key} {tabs} currentTab={rest} tabLabel="{spec.label} 상세">
+      title={key} {meta} {tabs} currentTab={rest} tabLabel="{spec.label} 상세">
       {#snippet badges()}
         {#each marks as m (m.text)}<Badge tone={m.tone} icon={m.icon}>{m.text}</Badge>{/each}
       {/snippet}

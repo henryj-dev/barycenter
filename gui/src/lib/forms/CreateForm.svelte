@@ -1,16 +1,21 @@
 <script lang="ts">
   /**
-   * 만들기 폼의 틀 (#126) — 시안의 만들기 드로어 아래 줄과 같다: 「만들기」 · 「취소」 ·
-   * 「만들면 커밋하고 적용 대기로 보내요.」
+   * 만들기 폼의 틀 (#126) — 시안의 만들기 드로어 아래 줄과 같다: 「만들면 커밋하고 적용 대기로 보내요.」 ·
+   * 「취소」 · 「만들기」.
+   *
+   * **드로어 안**(`Drawer` · `FormDrawer`)이면 폼은 드로어 본문에, 아래 줄은 드로어 바닥에 고정한다(시안 `drS2` 줄 —
+   * 문구 · 취소 · 만들기 순서). 「취소」 는 드로어를 닫는다. 「쓸 지역」 은 드로어 머리가 보인다.
+   * **드로어 밖**이면 전처럼 폼 아래에 버튼 줄을 두고, 전역에서 지역을 골랐으면 폼 위에 「쓸 지역」 한 줄을 단다.
    *
    * 연결 전이면 폼을 그리지 않는다. 전역 모드면 `Writable` 이 지역 GUI 링크로 바꾼다.
-   * 전역에서 지역을 골랐으면 폼 위에 「쓸 지역」 한 줄을 단다(`Writable target`) — 만들기가 어느 지역으로 가는지.
    * 저장 중(`desk.editing`)이면 버튼이 스피너다. 서버가 거절한 말은 셸의 오류 배너가 보인다.
    * 여기 `problem` 은 폼이 보내기 전에 잡은 것만이다.
    */
   import { getContext, type Snippet } from 'svelte';
   import { Banner, Button, Form } from '#lib/ui';
+  import { DRAWER, type DrawerContext } from '#lib/ui/Drawer.svelte';
   import Writable from '#lib/global/Writable.svelte';
+  import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   let { ready, problem, submitLabel = '만들기', cancelHref, note = '만들면 커밋하고 적용 대기로 보내요.', onsubmit, children }: {
@@ -18,7 +23,7 @@
     ready: boolean;
     problem?: string;
     submitLabel?: string;
-    /** 「취소」 가 가는 곳 — 대개 목록. */
+    /** 「취소」 가 가는 곳 — 대개 목록. 드로어 안에서는 쓰지 않는다(드로어를 닫는다). */
     cancelHref?: string;
     /** 폼 아래 한 줄. 트래픽이 안 바뀌는 만들기(ACME 인증서)는 적용 대기로 안 가므로 바꿔 말한다. */
     note?: string;
@@ -27,13 +32,38 @@
   } = $props();
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
+  const scope = getContext<Scope | undefined>('scope');
+  const drawer = getContext<DrawerContext | undefined>(DRAWER);
+  const fid = `cf-${Math.random().toString(36).slice(2, 10)}`;
+  const send = (): void => { if (ready && !desk.editing) onsubmit(); };
+  /** 드로어 바닥에 버튼 줄을 둘 수 있나 — 연결됐고 쓸 수 있을 때만. */
+  const writable = $derived(desk.live && scope?.blocked !== true);
+
+  $effect(() => {
+    if (drawer === undefined) return;
+    drawer.footer = writable ? foot : undefined;
+    return () => { drawer.footer = undefined; };
+  });
 </script>
+
+{#snippet foot()}
+  <span class="dnote">{note}</span>
+  <Button onclick={() => drawer?.close()}>취소</Button>
+  <Button variant="primary" type="submit" form={fid} loading={desk.editing} disabled={!ready}>{desk.editing ? '만드는 중' : submitLabel}</Button>
+{/snippet}
 
 {#if !desk.live}
   <p class="wait">연결하면 여기서 만들어요.</p>
+{:else if drawer !== undefined}
+  <Writable>
+    <Form id={fid} onsubmit={send}>
+      {@render children()}
+      {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}
+    </Form>
+  </Writable>
 {:else}
   <Writable target>
-    <Form {note} onsubmit={() => { if (ready && !desk.editing) onsubmit(); }}>
+    <Form {note} onsubmit={send}>
       {@render children()}
       {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}
       {#snippet actions()}
@@ -46,4 +76,5 @@
 
 <style>
   .wait { color: var(--tx2); font: var(--t-body); }
+  .dnote { flex: 1; font-size: 12px; color: var(--tx3); }
 </style>

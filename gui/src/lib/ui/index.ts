@@ -1,8 +1,11 @@
 /**
- * barycenter 디자인 시스템 — 공통 컴포넌트 (Claude Design 「Barycenter Design System」 §1–§8).
- * 화면은 여기서 가져다 쓴다. 토큰은 `tokens.css`.
+ * barycenter 디자인 시스템 — 공통 컴포넌트 (Claude Design 「Barycenter Design System」 §1–§8 · 콘솔 시안의 목록 · 분할 · 드로어).
+ * 화면은 여기서 가져다 쓴다. 토큰은 `tokens.css`. 견본은 `/design`.
+ * 목록 칸은 `m` · `x` · `b`(`cells.ts`), 드로어는 `Drawer`(주소로 여는 만들기는 `#lib/forms/FormDrawer.svelte`),
+ * 분할 인라인 수정은 `#lib/detail/ListSplit.svelte` 의 `inline` + `#lib/detail/InlineEdit.svelte`.
  */
 export { default as Badge, TONE_ICON, type Tone } from './Badge.svelte';
+export { b, cellStyle, cellText, dash, m, x, type Cell } from './cells.ts';
 export { default as Banner } from './Banner.svelte';
 export { default as Button } from './Button.svelte';
 export { default as Card } from './Card.svelte';
@@ -16,16 +19,20 @@ export { default as DataTable, type Column, type FilterChip } from './DataTable.
 export { default as DescriptionList } from './DescriptionList.svelte';
 export { default as DetailHeader } from './DetailHeader.svelte';
 export { default as Disclosure } from './Disclosure.svelte';
+export { default as Drawer, DRAWER, type DrawerContext } from './Drawer.svelte';
+export { default as Expander } from './Expander.svelte';
 export { default as FieldMessage } from './FieldMessage.svelte';
 export { default as Form } from './Form.svelte';
 export { default as FormRow } from './FormRow.svelte';
 export { default as FormSection } from './FormSection.svelte';
+export { formLayout, setFormLayout, type FormLayout } from './form-layout.ts';
 export { default as ImpactCard, type ImpactLine } from './ImpactCard.svelte';
 export { default as KeyValueEditor, type KvRow } from './KeyValueEditor.svelte';
 export { default as ListInput } from './ListInput.svelte';
 export { default as Menu, type MenuItem } from './Menu.svelte';
 export { default as NumberInput } from './NumberInput.svelte';
 export { default as RadioGroup } from './RadioGroup.svelte';
+export { default as SearchInput } from './SearchInput.svelte';
 export { default as Select } from './Select.svelte';
 export { default as Skeleton } from './Skeleton.svelte';
 export { default as Spinner } from './Spinner.svelte';

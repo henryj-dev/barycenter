@@ -1,14 +1,17 @@
 <script lang="ts">
   /**
-   * 디자인 시스템 — 컴포넌트를 상태별로 늘어놓은 스타일 가이드 (Claude Design 「Barycenter Design System」 §1–§8).
+   * 디자인 시스템 — 컴포넌트를 상태별로 늘어놓은 스타일 가이드 (Claude Design 「Barycenter Design System」 §1–§15).
+   * §1–§8 은 공통 컴포넌트(`#lib/ui`), §9–§15 는 `Sections9to15.svelte`. 콘솔 시안의 드로어 · 분할 인라인 수정도 §5 에 둔다.
    * 화면을 만들기 전에 여기서 컴포넌트를 눌러 본다. 데이터는 예시다 — API 를 부르지 않는다.
    */
   import {
     Badge, Banner, Button, Card, Checkbox, Chip, CodeViewer, Combobox, ConfirmDialog, ConnectionStatus, DataTable,
-    DescriptionList, DetailHeader, Disclosure, Form, FormRow, FormSection, ImpactCard, KeyValueEditor, ListInput,
+    DescriptionList, DetailHeader, Disclosure, Drawer, Expander, Form, SearchInput, FormRow, FormSection, ImpactCard, KeyValueEditor, ListInput,
     NumberInput, RadioGroup, Select, Skeleton, SplitView, StepList, Switch, Tabs, TextInput, Timeline, toast,
-    type Column, type FilterChip, type KvRow, type StepState, type Tone,
+    b, m, x, type Column, type FilterChip, type KvRow, type StepState, type Tone,
   } from '#lib/ui';
+  import InlineEdit from '#lib/detail/InlineEdit.svelte';
+  import Sections9to15 from './Sections9to15.svelte';
   import { parseSourceAllow } from '@web/edit';
 
   // ── 토큰 ──
@@ -55,13 +58,15 @@
     { name: 'dns-1', pool: 'dns-pool', addr: '10.0.0.53:53', w: 1, state: 'neutral', seen: '—' },
     { name: 'db-1', pool: 'db-pool', addr: '10.0.0.9:5432', w: 3, state: 'ok', seen: '4초 전' },
   ];
+  const HEALTH: Record<Be['state'], [Tone, string]> = { ok: ['ok', '●'], danger: ['danger', '✕'], drain: ['drain', '⇣'], info: ['info', '↻'], neutral: ['neutral', '○'] };
+  // 칸은 시안 `cells()` 방식(`m` 고정폭 · `x` 흐린 글 · `b` 배지). 「마지막 관측」 은 처음에 숨겨 두고 「컬럼 ▾」 로 켠다.
   const cols: Column<Be>[] = [
-    { key: 'name', label: '이름', mono: true, sort: (r) => r.name },
-    { key: 'pool', label: '풀', mono: true, muted: true, sort: (r) => r.pool },
-    { key: 'addr', label: '호스트:포트', mono: true, sort: (r) => r.addr },
-    { key: 'w', label: '가중치', mono: true, align: 'right', sort: (r) => r.w },
-    { key: 'state', label: '헬스', sort: (r) => r.state },
-    { key: 'seen', label: '마지막 관측', muted: true, hidden: true },
+    { key: 'name', label: '이름', value: (r) => m(r.name), sort: true },
+    { key: 'pool', label: '풀', value: (r) => m(r.pool), sort: true },
+    { key: 'addr', label: '호스트:포트', value: (r) => m(r.addr), sort: true },
+    { key: 'w', label: '가중치', align: 'right', value: (r) => m(r.w), sort: (r) => r.w },
+    { key: 'state', label: '헬스', value: (r) => b(HEALTH[r.state][0], HEALTH[r.state][1], health[r.state]), sort: true },
+    { key: 'seen', label: '마지막 관측', value: (r) => x(r.seen === '—' ? '' : r.seen), hidden: true },
   ];
   const chips: FilterChip<Be>[] = (['ok', 'danger', 'drain', 'info', 'neutral'] as const)
     .map((k) => ({ key: k, label: health[k], tone: k, match: (r: Be) => r.state === k }));
@@ -71,6 +76,12 @@
   // ── 분할 · 상세 ──
   let tab = $state('ov');
   let splitSel = $state<string[]>([]);
+  let edPort = $state('443');
+  let edPool = $state('web-pool');
+  const edDirty = $derived(edPort !== '443' || edPool !== 'web-pool');
+  const edBad = $derived(!/^\d+$/.test(edPort) || Number(edPort) < 1 || Number(edPort) > 65535);
+  let drawerOpen = $state(false);
+  let drName = $state('');
   const listeners = [
     { name: 'web-http', proto: 'http', bind: '0.0.0.0:80', status: '서빙 중' },
     { name: 'web-https', proto: 'https', bind: '0.0.0.0:443', status: '적용하면 열림' },
@@ -152,7 +163,15 @@ server {
         <Button variant="text">자세히 봐요</Button>
         <Button variant="icon" label="행 메뉴">⋯</Button>
         <Button variant="primary" disabled>비활성</Button>
-        <Button size="sm">작은 버튼</Button>
+        <Button size="sm">28px 버튼</Button>
+        <Button size="xs" variant="primary">작게 24px</Button>
+        <Button outline="accent">이 지역에서 열기 ↗</Button>
+        <Button outline="danger">롤백해요…</Button>
+        <Button variant="danger" dim disabled>잠긴 확인(흐림)</Button>
+        <Expander>포함된 커밋 · 3</Expander>
+        <SearchInput />
+        <Select size="sm" label="리비전" options={[{ value: 'r9', label: 'r9 (head)' }, { value: 'r8', label: 'r8 (활성)' }]} value="r9" width="120px" />
+        <TextInput size="sm" value="sm 28px" width="120px" />
         <Button href="/design">링크 버튼</Button>
       </div>
     </Card>
@@ -228,15 +247,10 @@ server {
         { label: r.state === 'drain' ? '드레인 해제' : '드레인', onselect: () => toast.ok(r.state === 'drain' ? '드레인을 풀었어요' : '드레인했어요', r.name) },
         { label: '풀에서 빼기…', danger: true, onselect: () => { dlg = 'delete'; } },
       ]}>
-      {#snippet cell(r, c)}
-        {#if c.key === 'state'}<Badge tone={r.state}>{health[r.state]}</Badge>
-        {:else if c.key === 'w'}{r.w}
-        {:else}{String(r[c.key as keyof Be])}{/if}
-      {/snippet}
       {#snippet bulk()}
-        <Button size="sm" onclick={() => toast.ok('드레인했어요', `${sel.length}개`)}>드레인</Button>
-        <Button size="sm">드레인 해제</Button>
-        <Button size="sm" error onclick={() => { dlg = 'delete'; }}>풀에서 빼기</Button>
+        <Button size="xs" onclick={() => toast.ok('드레인했어요', `${sel.length}개`)}>드레인</Button>
+        <Button size="xs">드레인 해제</Button>
+        <Button size="xs" error onclick={() => { dlg = 'delete'; }}>풀에서 빼기</Button>
       {/snippet}
       {#snippet emptyAction()}<Button variant="primary">백엔드를 더해요</Button>{/snippet}
     </DataTable>
@@ -246,24 +260,32 @@ server {
   <section>
     <h2>5. 분할 뷰 · 상세 페이지 골격</h2>
     <div class="grid2">
-      <SplitView open={splitSel.length > 0} title={splitSel[0]} onclose={() => { splitSel = []; }} height="440px" initialTop={200}>
-        {#snippet top()}
-          <DataTable label="리스너" rows={listeners} rowKey={(r) => r.name} bind:selected={splitSel}
-            columns={[{ key: 'name', label: '이름', mono: true }, { key: 'proto', label: '프로토콜', mono: true }, { key: 'bind', label: '바인드:포트', mono: true }, { key: 'status', label: '상태' }]}
-            minHeight="0">
-            {#snippet cell(r, c)}
-              {#if c.key === 'status'}<Badge tone={r.status === '서빙 중' ? 'ok' : 'pending'}>{r.status}</Badge>{:else}{String(r[c.key as keyof typeof r])}{/if}
-            {/snippet}
-          </DataTable>
-        {/snippet}
-        {#snippet badges()}{#if splitSel[0] === 'web-https'}<Badge tone="pending">적용 대기</Badge>{/if}{/snippet}
-        {#snippet detail()}
-          <FormSection>
-            <FormRow label="바인드 주소"><code>{listeners.find((l) => l.name === splitSel[0])?.bind}</code></FormRow>
-            <FormRow label="기본 풀"><Select label="기본 풀" options={[{ value: 'web-pool' }, { value: 'api-pool' }]} value="web-pool" /></FormRow>
-          </FormSection>
-        {/snippet}
-      </SplitView>
+      <div class="col">
+        <p class="note"><b>분할 패턴 (기본)</b> — 목록을 보며 빠르게 고칠 때 써요. 필드는 12개 이하예요. 막대를 끌거나 ↑↓로 높이를 조절해요.</p>
+        <SplitView open={splitSel.length > 0} title={splitSel[0]} onclose={() => { splitSel = []; }} height="440px" initialTop={200}>
+          {#snippet top()}
+            <DataTable label="리스너" rows={listeners} rowKey={(r) => r.name} bind:selected={splitSel} fill
+              columns={[{ key: 'name', label: '이름', value: (r) => m(r.name) }, { key: 'proto', label: '프로토콜', value: (r) => m(r.proto) },
+                { key: 'bind', label: '바인드:포트', value: (r) => m(r.bind) },
+                { key: 'status', label: '상태', value: (r) => (r.status === '서빙 중' ? b('ok', '●', r.status) : b('pending', '◐', r.status)) }]} />
+          {/snippet}
+          {#snippet badges()}{#if splitSel[0] === 'web-https'}<Badge tone="pending">적용 대기</Badge>{/if}{/snippet}
+          {#snippet detail()}
+            <!-- 인라인 수정(시안 `isecs`) — 목록 화면은 ListSplit 의 `inline` 스니펫에 이것을 넣는다. -->
+            <InlineEdit dirty={edDirty} invalid={edBad} pending={splitSel[0] === 'web-https'} detailHref="/design"
+              onsave={() => { toast.ok('저장했어요', '커밋했어요. 적용 대기 중이에요.'); edPort = '443'; edPool = 'web-pool'; }}
+              onrevert={() => { edPort = '443'; edPool = 'web-pool'; }}>
+              <FormSection title="기본">
+                <FormRow label="바인드 주소"><code>{listeners.find((l) => l.name === splitSel[0])?.bind}</code></FormRow>
+                <FormRow label="포트" for="sp-port" error={edBad ? '포트는 1–65535 사이여야 해요.' : undefined}><TextInput id="sp-port" bind:value={edPort} invalid={edBad} width="100px" /></FormRow>
+                <FormRow label="기본 풀"><Select label="기본 풀" options={[{ value: 'web-pool' }, { value: 'api-pool' }, { value: 'dns-pool' }]} bind:value={edPool} /></FormRow>
+              </FormSection>
+            </InlineEdit>
+          {/snippet}
+        </SplitView>
+        <p class="note"><b>드로어</b>(콘솔) — 만들기는 목록 위 오른쪽 드로어예요. Esc · ✕ · 바깥을 누르면 닫혀요.</p>
+        <div class="row"><Button variant="primary" onclick={() => { drawerOpen = true; }}>＋ 만들기</Button></div>
+      </div>
       <div class="detail">
         <DetailHeader crumbs={[{ label: '인증서', href: '/design' }, { label: 'api.example.com' }]} title="api.example.com"
           meta={[{ label: '발급자', value: 'ACME' }, { label: '만료', value: '2026-11-10', mono: true }, { label: '사용처', value: '리스너 2 · SNI 3' }]}
@@ -368,7 +390,25 @@ server {
       </div>
     </div>
   </section>
+
+  <Sections9to15 />
 </div>
+
+{#if drawerOpen}
+  <Drawer title="새 백엔드" sub="설정" onclose={() => { drawerOpen = false; }}>
+    <Form id="ds-drawer" onsubmit={() => { drawerOpen = false; toast.ok('만들었어요', drName); }}>
+      <FormSection title="기본">
+        <FormRow label="이름" for="dr-name" required><TextInput id="dr-name" bind:value={drName} /></FormRow>
+        <FormRow label="호스트"><TextInput value="10.20.0.14" /></FormRow>
+      </FormSection>
+    </Form>
+    {#snippet footer()}
+      <span class="dnote">만들면 커밋하고 적용 대기로 보내요.</span>
+      <Button onclick={() => { drawerOpen = false; }}>취소</Button>
+      <Button variant="primary" type="submit" form="ds-drawer" disabled={drName === ''}>만들기</Button>
+    {/snippet}
+  </Drawer>
+{/if}
 
 <ConfirmDialog open={dlg === 'apply'} title="적용: r9 를 트래픽에 걸어요" sub="reload 가 한 번 일어나요." confirmLabel="적용해요" requireCheck
   lines={[{ tone: 'danger', icon: '✕', text: '소켓 0.0.0.0:8080 을 닫아요' }, { tone: 'warn', icon: '▲', text: '인증서 1개를 교체해요' }]}
@@ -399,5 +439,6 @@ server {
   code { font-family: var(--mono); }
   .detail { border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; background: var(--bg-page); }
   .panel { padding: 0 20px 16px; }
+  .dnote { flex: 1; font-size: 12px; color: var(--tx3); }
   .tp { padding-top: 16px; }
 </style>

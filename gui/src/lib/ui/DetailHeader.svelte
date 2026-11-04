@@ -1,7 +1,9 @@
 <script lang="ts">
   /**
    * 상세 페이지 머리 — 디자인 시스템 §5 「상세 페이지 패턴」.
-   * 경로(목록 / 이름) · 제목(고정폭) · 상태 배지 · 오른쪽 버튼 · 메타 줄(발급자 · 만료 · 사용처 …) · 탭.
+   * 경로(목록 / 이름) · 제목(고정폭 22px) · 상태 배지 · 오른쪽 버튼 · 메타 줄(발급자 · 만료 · 사용처 …) · 탭(수 배지).
+   * 메타 줄은 시안 「발급자 <b>ACME</b>  만료 <b>2026-11-10</b>  사용처 <b>리스너 2 · SNI 3</b>」 — 라벨은 흐린 12px,
+   * 값은 기본색 500(날짜 · 주소 · 수는 `mono`). 모르는 값은 넣지 않는다(가짜 값을 짓지 않는다).
    */
   import type { Snippet } from 'svelte';
   import Tabs, { type TabItem } from './Tabs.svelte';
@@ -47,9 +49,11 @@
   h1 { margin: 0; font: 700 22px/30px var(--mono); overflow-wrap: anywhere; }
   .grow { flex: 1; }
   .act { display: flex; gap: 8px; flex-wrap: wrap; }
-  .meta { display: flex; gap: 24px; margin: 12px 0 0; font: var(--t-cap); color: var(--tx3); flex-wrap: wrap; }
+  .meta { display: flex; gap: 24px; margin: 12px 0; font: var(--t-cap); color: var(--tx3); flex-wrap: wrap; }
   .meta b { color: var(--tx); font-weight: 500; }
   .mono { font-family: var(--mono); }
   .tabs { margin-top: 8px; }
+  .meta + .tabs { margin-top: 4px; }
   .dh:not(:has(.tabs)) { padding-bottom: 14px; }
+  .dh:not(:has(.tabs)) .meta { margin-bottom: 0; }
 </style>

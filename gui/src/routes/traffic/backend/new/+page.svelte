@@ -1,7 +1,13 @@
 <script lang="ts">
-  /** 백엔드 넣기. `?pool=` 이 있으면 그 풀로 시작한다(풀 상세에서 온다). */
+  /**
+   * 만들기 — 목록 위에 드로어로 연다(콘솔 시안 `drawer`). 주소(`/traffic/backend/new…`)는 그대로라 새로고침 · 링크가 같다.
+   * 닫으면 목록으로 간다(`FormDrawer`).
+   */
   import { page } from '$app/state';
+  import BackendList from '#lib/lists/BackendList.svelte';
   import BackendForm from '#lib/forms/BackendForm.svelte';
+  import FormDrawer from '#lib/forms/FormDrawer.svelte';
 </script>
 
-<BackendForm pool={page.url.searchParams.get('pool') ?? undefined} />
+<BackendList />
+<FormDrawer kind="backend" back="/traffic/backend"><BackendForm pool={page.url.searchParams.get('pool') ?? undefined} /></FormDrawer>

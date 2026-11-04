@@ -5,16 +5,18 @@
    */
   import type { HTMLInputAttributes } from 'svelte/elements';
 
-  let { value = $bindable(''), invalid = false, mono = true, width, ...rest }: {
+  let { value = $bindable(''), invalid = false, mono = true, width, size = 'md', ...rest }: {
     value?: string | number;
     invalid?: boolean;
     /** 사람 말(설명·이름)을 받는 칸이면 false. */
     mono?: boolean;
     width?: string;
+    /** md 32px(기본) · sm 28px · 12px(콘솔 목록 도구 줄 · 작은 칸). */
+    size?: 'md' | 'sm';
   } & Omit<HTMLInputAttributes, 'value'> = $props();
 </script>
 
-<input class="in" class:mono aria-invalid={invalid || undefined} style:width bind:value {...rest} />
+<input class="in" class:mono data-size={size} aria-invalid={invalid || undefined} style:width bind:value {...rest} />
 
 <style>
   .in {
@@ -30,6 +32,7 @@
     transition: border-color var(--dur-fast) var(--ease);
   }
   .in.mono { font-family: var(--mono); }
+  .in[data-size='sm'] { height: 28px; font-size: 12px; }
   .in::placeholder { color: var(--tx3); }
   .in:not(:disabled):hover { border-color: var(--tx3); }
   .in:focus { outline: 2px solid var(--focus); outline-offset: 0; }

@@ -5,12 +5,15 @@
    */
   import type { Snippet } from 'svelte';
   import FieldMessage from './FieldMessage.svelte';
+  import { formLayout } from './form-layout.ts';
   let { label, for: htmlFor, required = false, error, help, children }: {
     label: string; for?: string; required?: boolean; error?: string; help?: string; children: Snippet;
   } = $props();
+  /** 드로어 · 인라인 수정 안이면 라벨이 흐린색(`--tx2`)이다 — 콘솔 `fieldsFor` 마크업. */
+  const compact = formLayout() === 'compact';
 </script>
 
-<label class="lbl" for={htmlFor}>{label}{#if required}<span class="req" aria-hidden="true"> *</span>{/if}</label>
+<label class="lbl" class:compact for={htmlFor}>{label}{#if required}<span class="req" aria-hidden="true"> *</span>{/if}</label>
 <div class="ctl">
   {@render children()}
   {#if error}<FieldMessage tone="error">{error}</FieldMessage>{:else if help}<FieldMessage>{help}</FieldMessage>{/if}
@@ -18,6 +21,7 @@
 
 <style>
   .lbl { padding-top: 6px; font: var(--t-small); color: var(--tx); }
+  .lbl.compact { color: var(--tx2); }
   .req { color: var(--danger); }
   .ctl { min-width: 0; }
   @media (max-width: 720px) { .lbl { padding-top: 8px; } }

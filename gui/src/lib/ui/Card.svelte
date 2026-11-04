@@ -18,8 +18,9 @@
 
 <style>
   .card { background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; min-width: 0; }
-  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--bd); }
-  h3 { margin: 0; font: 600 15px/22px var(--font); }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--bd); }
+  /* 콘솔 카드 머리: padding 10px 16px · 600 14px. */
+  h3 { margin: 0; font: 600 14px/20px var(--font); }
   p { margin: 2px 0 0; color: var(--tx3); font: var(--t-cap); }
   .act { display: flex; gap: 8px; align-items: center; }
   .pad { padding: 16px 20px; }
