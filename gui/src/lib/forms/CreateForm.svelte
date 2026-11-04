@@ -4,6 +4,7 @@
    * 「만들면 커밋하고 적용 대기로 보내요.」
    *
    * 연결 전이면 폼을 그리지 않는다. 전역 모드면 `Writable` 이 지역 GUI 링크로 바꾼다.
+   * 전역에서 지역을 골랐으면 폼 위에 「쓸 지역」 한 줄을 단다(`Writable target`) — 만들기가 어느 지역으로 가는지.
    * 저장 중(`desk.editing`)이면 버튼이 스피너다. 서버가 거절한 말은 셸의 오류 배너가 보인다.
    * 여기 `problem` 은 폼이 보내기 전에 잡은 것만이다.
    */
@@ -31,7 +32,7 @@
 {#if !desk.live}
   <p class="wait">연결하면 여기서 만들어요.</p>
 {:else}
-  <Writable>
+  <Writable target>
     <Form {note} onsubmit={() => { if (ready && !desk.editing) onsubmit(); }}>
       {@render children()}
       {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}

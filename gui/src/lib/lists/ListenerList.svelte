@@ -12,6 +12,7 @@
   import { Badge, Button, DataTable, type Column, type FilterChip, type MenuItem } from '#lib/ui';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
+  import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
@@ -26,7 +27,8 @@
   };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   let del = $state<{ kind: 'listener'; key: string } | undefined>();
   let selected = $state<string[]>([]);
 
@@ -91,6 +93,7 @@
 {/snippet}
 
 {#snippet table()}
+<WriteNote spaced />
 <DataTable label="리스너 목록" {rows} rowKey={(r) => r.id} {columns} {chips} loading={!desk.live} bind:selected
   search={{ placeholder: '이름·주소로 찾기', match: (r, q) => `${r.key} ${r.bind} ${r.protocol} ${r.action} ${r.hosts} ${r.redirect ?? ''}`.toLowerCase().includes(q) }}
   emptyTitle="리스너가 없어요" emptyBody="포트를 열면 트래픽을 받아요. 패스스루는 인증서를 제시하지 않아요."

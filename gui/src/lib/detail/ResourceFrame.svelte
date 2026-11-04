@@ -26,7 +26,10 @@
   /** 「URL로 다시 만들기」 는 풀로 보내는 라우트에만 있다(시안 `action === 'proxy'`). 리다이렉트 · 거절에는 대상 풀이 없다. */
   const rebuildable = $derived((item?.['action'] as { kind?: unknown } | undefined)?.kind === 'proxy');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
+  /** 전역이면 삭제가 갈 지역을 확인 문구에 단다 — 적용 · 롤백 확인과 같은 꼴. 지역 인스턴스면 빈 말. */
+  const where = $derived(scope?.mode === 'global' && scope.region !== undefined ? ` 지역: ${scope.region.name}` : '');
   let asking = $state(false);
   // 시안: 「연결된 리소스」 탭에 수를 단다.
   const relCount = $derived(relationCount(desk, kind, key));
@@ -74,7 +77,7 @@
     <div class="body">{@render children()}</div>
   </div>
   <ConfirmDialog bind:open={asking} title="삭제: {spec.label} {key} 를 설정에서 빼요" requireName={key} confirmLabel="삭제해요"
-    sub="저장하면 커밋해요. 트래픽은 적용해야 바뀌어요."
+    sub={`저장하면 커밋해요. 트래픽은 적용해야 바뀌어요.${where}`}
     lines={[{ tone: 'danger', icon: '✕', text: '이것을 쓰는 리소스가 있으면 plan 이 막혀요. 연결된 리소스 탭에서 먼저 봐요.' }]}
     busy={desk.editing}
     onconfirm={() => { void desk.withdraw(kind, key).then((ok) => { asking = false; after(listHref, '삭제를 커밋했어요')(ok); }); }} />

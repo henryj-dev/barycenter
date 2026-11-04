@@ -126,7 +126,7 @@
 {#if route !== undefined && !isProxy}
   <p class="empty">이 라우트는 풀로 보내지 않아요. URL로 다시 만들기는 풀로 보내는 라우트에만 있어요. <a href={resourcePath('httpRoute', key)}>라우트로 돌아가요</a>.</p>
 {:else if route !== undefined && input !== undefined}
-  <Writable>
+  <Writable target>
     <Form note="저장하면 커밋해요. 트래픽은 적용 대기에서 적용해야 바뀌어요." onsubmit={() => { if (ready) void desk.proxyFromUrl(input).then(after(resourcePath('httpRoute', key))); }}>
       <Card title="그대로 두는 것">
         <DescriptionList items={[

@@ -1,12 +1,22 @@
+<script lang="ts" module>
+  import type { Tone } from '#lib/ui';
+  /** 지역 상자의 한 줄 — 셸이 지역 요약(`/api/v1/regions`)으로 만든다. */
+  export type SideRegion = { name: string; current: boolean; tone: Tone; icon: string; text: string; pickable: boolean };
+</script>
+
 <script lang="ts">
   /**
    * 사이드바 — 디자인 시안 「App Shell」. 제품명과 지금 지역, 그 아래 메뉴 그룹. 접으면 아이콘만(56px).
    * 적용 대기 항목에 건수 배지. 전역 모드면 클러스터를 숨기고, 아래에 지역 상자를 둔다.
+   *
+   * 지역 상자(시안 `regionList`): 「지역 · N곳」 머리와 지역마다 한 줄 — 상태 표시(● 대기 N · ○ 연락 없음 · ✕ 인증 거절),
+   * 누르면 그 지역으로 바꾼다. 연락 없거나 인증이 거절된 지역은 못 고른다. 접으면 작은 상자 하나(지금 지역 → 지역 화면).
+   * 아래 한 줄은 쓰기 여부다: 지역을 고르기 전에만 읽기 전용이고, 고른 뒤에는 그 지역에 바로 쓴다.
    */
   import { NAV_GROUPS } from '@web/nav';
   import type { Place } from '@web/page';
 
-  let { place, collapsed = $bindable(false), pending = 0, global = false, regionLabel, regionHref }: {
+  let { place, collapsed = $bindable(false), pending = 0, global = false, regionLabel, regionHref, regions = [], chosen, onpick }: {
     place: Place;
     collapsed?: boolean;
     pending?: number;
@@ -14,6 +24,10 @@
     regionLabel: string;
     /** 전역 모드면 지역 고르기 화면. */
     regionHref?: string;
+    regions?: readonly SideRegion[];
+    /** 전역에서 고른 지역. 없으면 아직 안 골랐다(읽기 전용). */
+    chosen?: string;
+    onpick?: (name: string) => void;
   } = $props();
 
   const groups = $derived(NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => !(global && i.place === 'cluster')) })));
@@ -40,10 +54,23 @@
     {/each}
   </nav>
   {#if global && regionHref && !collapsed}
-    <div class="regions">
-      <div class="gt">지역</div>
-      <a class="item" href={regionHref} aria-current={place === 'regions' ? 'page' : undefined}><span class="ic" aria-hidden="true">◎</span><span class="lb">지역 고르기</span></a>
-      <div class="ro">전역 화면은 읽기만 해요.</div>
+    <div class="regions" role="group" aria-label="지역">
+      <a class="rh" href={regionHref} aria-current={place === 'regions' ? 'page' : undefined}>지역 · {regions.length}곳</a>
+      <div class="rl">
+        {#each regions as r (r.name)}
+          <button type="button" class="rg" aria-current={r.current ? 'true' : undefined} disabled={!r.pickable && !r.current}
+            title={r.pickable || r.current ? `${r.name} 지역으로 이동` : `${r.name} — ${r.text}`}
+            onclick={() => { if (!r.current && r.pickable) onpick?.(r.name); }}>
+            <span style:color="var(--{r.tone})" aria-hidden="true">{r.icon}</span><span class="rn">{r.name}</span><span class="rv">{r.text}</span>
+          </button>
+        {/each}
+      </div>
+      <div class="ro">{chosen === undefined ? '지역을 고르기 전에는 읽기만 해요.' : '고른 지역에 바로 써요.'}</div>
+    </div>
+  {:else if global && regionHref}
+    <div class="regions mini">
+      <a class="item" href={regionHref} title={chosen === undefined ? '지역 고르기' : `지역: ${chosen} — 다른 지역 고르기`} aria-label={chosen === undefined ? '지역 고르기' : `지역 ${chosen}`}
+        aria-current={place === 'regions' ? 'page' : undefined}><span class="ic" aria-hidden="true">◎</span></a>
     </div>
   {/if}
   <div class="foot">
@@ -83,7 +110,20 @@
   /* 접으면 아이콘 오른쪽 위 모서리에 작게 — 아이콘을 덮지 않는다 */
   .sb[data-collapsed='true'] .badge { position: absolute; right: 0; top: 0; min-width: 14px; height: 14px; padding: 0 3px; font-size: 9px; line-height: 14px; }
   .regions { flex: none; padding: 8px; border-top: 1px solid var(--bd); }
-  .ro { padding: 4px 10px 0; font: var(--t-cap); color: var(--tx3); }
+  .regions:not(.mini) { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .rh { font: 400 11px/14px var(--font); color: var(--tx3); text-decoration: none; }
+  .rh:hover, .rh[aria-current='page'] { color: var(--tx); }
+  .rl { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; }
+  .rg {
+    width: 100%; display: flex; align-items: center; gap: 8px; font: 400 12px/16px var(--mono); color: var(--tx2);
+    border: 0; background: transparent; padding: 5px 6px; border-radius: var(--r-sm); text-align: left; cursor: pointer;
+  }
+  .rg:hover:not(:disabled) { background: var(--bg-hover); color: var(--tx); }
+  .rg[aria-current='true'] { color: var(--tx); font-weight: 700; background: var(--bg-sel); box-shadow: inset 3px 0 0 var(--accent); cursor: default; }
+  .rg:disabled { cursor: not-allowed; }
+  .rn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rv { font: 400 11px/14px var(--font); color: var(--tx3); white-space: nowrap; }
+  .ro { font: var(--t-cap); color: var(--tx3); }
   .foot { flex: none; border-top: 1px solid var(--bd); padding: 8px; display: flex; align-items: center; gap: 8px; }
   .sb[data-collapsed='true'] .foot { justify-content: center; }
   .foot button { width: 32px; height: 32px; border: 1px solid var(--bd-strong); background: transparent; color: var(--tx2); border-radius: var(--r-md); font-size: 13px; }

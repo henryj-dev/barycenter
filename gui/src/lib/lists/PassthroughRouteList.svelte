@@ -10,6 +10,7 @@
   import { Badge, Button, DataTable, type Column, type MenuItem } from '#lib/ui';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
+  import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
@@ -18,7 +19,8 @@
   type Row = { key: string; listener: string; snis: string[]; priority: number; action: string; ord: number };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   let del = $state<{ kind: 'passthroughRoute'; key: string } | undefined>();
   let selected = $state<string[]>([]);
 
@@ -50,6 +52,7 @@
 
 <RouteSegments current="passthrough" />
 {#snippet table()}
+<WriteNote spaced />
 <DataTable label="패스스루 라우트" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live} bind:selected
   search={{ placeholder: '이름·SNI·리스너로 찾기', match: (r, q) => `${r.key} ${r.snis.join(' ')} ${r.listener}`.toLowerCase().includes(q) }}
   emptyTitle="패스스루 라우트가 없어요" emptyBody="SNI 로 TLS 연결을 복호화 없이 풀에 보내요."

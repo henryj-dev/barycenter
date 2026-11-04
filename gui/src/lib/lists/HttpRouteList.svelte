@@ -15,6 +15,7 @@
   import { Badge, Banner, Button, DataTable, type Column, type MenuItem } from '#lib/ui';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
+  import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
@@ -28,7 +29,8 @@
   };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   let del = $state<{ kind: 'httpRoute'; key: string } | undefined>();
   let selected = $state<string[]>([]);
 
@@ -89,6 +91,7 @@
 {/snippet}
 
 {#snippet table()}
+<WriteNote spaced />
 <DataTable label="HTTP 라우트 — 엔진이 보는 순서" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live} bind:selected
   search={{ placeholder: '이름·호스트·경로·리스너로 찾기', match: (r, q) => `${r.key} ${r.hosts} ${r.paths.join(' ')} ${r.listener}`.toLowerCase().includes(q) }}
   emptyTitle="HTTP 라우트가 없어요" emptyBody="호스트와 경로로 요청을 풀이나 동작에 보내요."

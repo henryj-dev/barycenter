@@ -14,7 +14,8 @@
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
-  let { kind }: { kind: ResourceKind } = $props();
+  /** `target`: 전역에서 「쓸 지역」 한 줄을 단다. 설정 탭에서 이것이 첫 폼일 때만 켠다 — 폼마다 되풀이하지 않는다. */
+  let { kind, target = false }: { kind: ResourceKind; target?: boolean } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const key = $derived(page.params['key'] ?? '');
   const item = $derived(itemOf(desk.model, kind, key));
@@ -46,7 +47,7 @@
   const reset = (): void => { loaded = undefined; };
 </script>
 
-<Writable>
+<Writable {target}>
   <Form note="저장하면 커밋해요. 트래픽은 적용 대기에서 적용해야 바뀌어요." onsubmit={save}>
     <FormSection title="정의" hint="key 를 뺀 JSON">
       <FormRow label={RESOURCES[kind].label} for="je-text" error={problem} help="모양이 틀리면 저장소가 거절하고 그 이유를 위에 띄워요.">

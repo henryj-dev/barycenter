@@ -5,6 +5,7 @@
    * 리스너는 폼, 풀은 헬스체크 폼(2026-11-02) + 업스트림 TLS 폼 + JSON 수정, 백엔드 · 주소 집합은 폼(시안 「기본」) + JSON 수정,
    * 인증서는 보기만(자료를 다시 넣는 것이 수정이다), 나머지는 JSON 수정이다.
    * 쓰기가 막혀 있으면(전역 모드) 모든 칸을 보기로 편다.
+   * 전역에서 지역을 골랐으면 **첫 폼만** 「쓸 지역」 한 줄을 단다(`Writable target`) — 풀처럼 폼이 여럿이어도 한 번만 보인다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
@@ -53,7 +54,7 @@
         <JsonEdit {kind} />
       </Disclosure>
     {:else if writable}
-      <JsonEdit {kind} />
+      <JsonEdit {kind} target />
     {:else}
       {#if kind === 'certificate' && scope?.readOnly !== true}
         <Banner tone="info">

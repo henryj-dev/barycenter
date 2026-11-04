@@ -70,7 +70,7 @@ export const PAGE_META: Readonly<Record<Place, { title: string; desc: string }>>
   audit: { title: '기록', desc: '변경 기록을 묶음 단위로 확인해요.' },
   users: { title: '사람', desc: '사용자와 초대를 관리해요.' },
   account: { title: '내 계정', desc: '비밀번호, 인증 앱, 복구 코드, SSO를 관리해요.' },
-  regions: { title: '지역', desc: '전역 화면은 읽기만 해요. 설정은 그 지역의 GUI에서 바꿔요.' },
+  regions: { title: '지역', desc: '지역마다 상태를 확인해요. 지역을 고르면 고른 지역에 바로 써요.' },
   design: { title: '디자인 시스템', desc: '공통 컴포넌트를 상태별로 늘어놓았어요. 데이터는 예시예요.' },
   login: { title: '로그인', desc: '계정이나 IdP로 들어오거나, 토큰으로 연결해요.' },
   invite: { title: '초대 수락', desc: '초대·첫 관리자·복구 링크는 한 번만 써요.' },

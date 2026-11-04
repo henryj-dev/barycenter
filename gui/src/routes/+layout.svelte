@@ -6,7 +6,7 @@
    * 않았으면 로그인 화면으로 보낸다 — 화면마다 「연결하면 …」 을 띄우는 대신 한 자리에서 막는다.
    * **로그인 상태에서는 토큰 칸을 어디에도 안 보인다.** 토큰 연결은 로그인 화면에 있다.
    */
-  import { onMount, setContext, type Snippet } from 'svelte';
+  import { onMount, setContext, untrack, type Snippet } from 'svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { isDynamicGuiPath, pageOf } from '@web/page';
@@ -15,9 +15,9 @@
   import { createDesk } from '#lib/desk.svelte.ts';
   import { createSession } from '#lib/account/session.svelte.ts';
   import StepUpDialog from '#lib/account/StepUpDialog.svelte';
-  import { createScope } from '#lib/global/scope.svelte.ts';
+  import { LOST_LABEL, createScope, type RegionSummary } from '#lib/global/scope.svelte.ts';
   import { Banner, Toaster } from '#lib/ui';
-  import Sidebar from '#lib/shell/Sidebar.svelte';
+  import Sidebar, { type SideRegion } from '#lib/shell/Sidebar.svelte';
   import TopBar from '#lib/shell/TopBar.svelte';
   import PageHeader from '#lib/shell/PageHeader.svelte';
   // 글꼴은 빌드가 자기 자산으로 들인다 — 외부 출처를 열지 않는다(serve-gui 의 CSP).
@@ -121,6 +121,78 @@
     });
   });
 
+  /**
+   * **팔로워면 읽기 전용이다** — 서버가 쓰기를 503 `not_leader` 로 막는다. 상태 스냅샷(`leader.isLeader`)을 받은 뒤에만 판정한다
+   * (받기 전의 기본값은 거짓이라 모두 팔로워로 보인다). 리더의 이름 · 주소는 `/cluster/nodes` 에서 읽는다 — 상태의 `holder` 는
+   * 이 노드 자신의 이름이라 리더가 아니다. 전역이면 고른 지역의 노드를 본다(같은 경로가 그 지역으로 간다).
+   */
+  const standby = $derived(desk.live && desk.head !== undefined && !desk.status.leader.isLeader);
+  /** 리더 정보를 물은 곳(지역 이름, 지역 인스턴스면 ''). 같은 곳에서 팔로워인 동안 다시 묻지 않는다. 반응형이 아니다. */
+  let askedLeader: string | undefined;
+  $effect(() => {
+    // 스냅샷마다 다시 본다 — 503 안전망이 팔로워로 본 뒤 상태가 리더라고 하면 풀어야 한다.
+    void desk.status;
+    const where = scope.region?.name ?? '';
+    if (!standby) {
+      askedLeader = undefined;
+      if (untrack(() => scope.follower) !== undefined) scope.follow(undefined);
+      return;
+    }
+    if (untrack(() => scope.follower) === undefined) scope.follow({});
+    if (askedLeader === where) return;
+    askedLeader = where;
+    void desk.clusterNodes().then((r) => {
+      if (!standby || askedLeader !== where) return;
+      const b = r as { leader?: { name?: unknown }; nodes?: { name?: unknown; url?: unknown; role?: unknown }[] } | undefined;
+      const name = typeof b?.leader?.name === 'string' ? b.leader.name : undefined;
+      const lead = (b?.nodes ?? []).find((n) => (name !== undefined ? n.name === name : n.role === 'leader'));
+      const leader = name ?? (typeof lead?.name === 'string' ? lead.name : undefined);
+      const gui = typeof lead?.url === 'string' && lead.url !== '' ? lead.url : undefined;
+      scope.follow({ ...(leader === undefined ? {} : { leader }), ...(gui === undefined ? {} : { gui }) });
+    }).catch(() => undefined);
+  });
+
+  /**
+   * 전역이면 사이드바 지역 상자가 지역 요약(`/api/v1/regions`)을 본다 — 지역 화면 · 적용 대기 화면이 읽는 것과 같다.
+   * 적용 대기 수나 head 가 바뀌면 다시 묻는다(셸은 폴링하지 않는다 — `tests/unit/v10-open.test.ts`). 받으면 고른 지역의 연락 여부도 고친다(`scope.sync`).
+   */
+  let regions = $state<RegionSummary[]>([]);
+  const signedIn = $derived(session.me !== undefined || desk.token !== '');
+  const loadRegions = async (): Promise<void> => {
+    const r = await fetch('/api/v1/regions', { credentials: 'same-origin', headers: desk.token === '' ? {} : { authorization: `Bearer ${desk.token}` } }).catch(() => undefined);
+    if (r === undefined || !r.ok) return;
+    regions = ((await r.json()) as { regions: RegionSummary[] }).regions;
+    scope.sync(regions);
+  };
+  $effect(() => {
+    if (scope.mode !== 'global' || !signedIn) return;
+    void desk.pendingCount; void desk.head;
+    void loadRegions();
+  });
+  const pendingOf = (r: RegionSummary): number => {
+    const p = (r.status as { pendingApply?: unknown } | undefined)?.pendingApply;
+    return Array.isArray(p) ? p.length : 0;
+  };
+  const sideRegions = $derived<SideRegion[]>(regions.map((r) => {
+    const current = r.name === scope.region?.name;
+    const lost = current ? scope.lost : !r.reachable;
+    const pending = current ? desk.pendingCount : pendingOf(r);
+    const pickable = r.reachable && r.auth === undefined;
+    if (lost) return { name: r.name, current, pickable, tone: 'neutral', icon: '○', text: LOST_LABEL };
+    if (r.auth === 'rejected') return { name: r.name, current, pickable, tone: 'danger', icon: '✕', text: '인증 거절' };
+    return { name: r.name, current, pickable, tone: pending > 0 ? 'pending' : 'ok', icon: '●', text: pending > 0 ? `대기 ${pending}` : '' };
+  }));
+  /** 사이드바에서 지역을 바꾼다 — 지역 화면의 「보기」 와 같다. 보던 화면은 그대로 두고, 지역 화면에 있었으면 첫 화면으로. */
+  const pickRegion = (name: string): void => {
+    const r = regions.find((x) => x.name === name);
+    if (r === undefined || !r.reachable || r.auth !== undefined) return;
+    desk.disconnect();
+    scope.choose(r);
+    // **기다리지 않는다.** `connect` 는 스트림이 끊길 때까지 끝나지 않는다.
+    void desk.connect();
+    if (place === 'regions') void goto('/');
+  };
+
   /** 적용 대기 배너 — 닫으면 건수가 바뀔 때까지 안 띄운다. 적용 대기 화면에서는 안 띄운다. */
   let dismissedAt = $state(-1);
   const showPending = $derived(desk.pendingCount > 0 && dismissedAt !== desk.pendingCount && place !== 'impact');
@@ -150,7 +222,7 @@
   <div class="app" data-menu={menuOpen}>
     <div class="side">
       <Sidebar {place} bind:collapsed pending={desk.pendingCount} global={scope.mode === 'global'} {regionLabel}
-        regionHref={scope.mode === 'global' ? '/regions' : undefined} />
+        regionHref={scope.mode === 'global' ? '/regions' : undefined} regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} />
     </div>
     {#if menuOpen}<button type="button" class="scrim" aria-label="메뉴 닫기" onclick={() => { menuOpen = false; }}></button>{/if}
     <div class="main">

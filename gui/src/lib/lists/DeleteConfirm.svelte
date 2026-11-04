@@ -7,10 +7,14 @@
   import { RESOURCES, relationsOf, type ResourceKind } from '@web/resources';
   import { after } from '#lib/after';
   import { ConfirmDialog, type ConfirmLine } from '#lib/ui';
+  import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   let { target = $bindable() }: { target?: { kind: ResourceKind; key: string } } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
+  const scope = getContext<Scope | undefined>('scope');
+  /** 전역이면 삭제가 갈 지역을 확인 문구에 단다 — 적용 · 롤백 확인과 같은 꼴. 지역 인스턴스면 빈 말. */
+  const where = $derived(scope?.mode === 'global' && scope.region !== undefined ? ` 지역: ${scope.region.name}` : '');
   const usedBy = $derived(target === undefined ? [] : relationsOf(desk.model, target).usedBy);
   const lines = $derived<ConfirmLine[]>(usedBy.length === 0
     ? [{ tone: 'ok', icon: '●', text: '이것을 쓰는 리소스가 없어요.' }]
@@ -19,7 +23,7 @@
 
 {#if target !== undefined}
   <ConfirmDialog open title="삭제: {RESOURCES[target.kind].label} {target.key} 를 설정에서 빼요"
-    sub="저장하면 커밋해요. 트래픽은 적용해야 바뀌어요." {lines} requireName={target.key} confirmLabel="삭제해요" busy={desk.editing}
+    sub={`저장하면 커밋해요. 트래픽은 적용해야 바뀌어요.${where}`} {lines} requireName={target.key} confirmLabel="삭제해요" busy={desk.editing}
     oncancel={() => { target = undefined; }}
     onconfirm={() => { const t = target!; void desk.withdraw(t.kind, t.key).then((ok) => { target = undefined; after(undefined, '삭제를 커밋했어요')(ok); }); }} />
 {/if}
