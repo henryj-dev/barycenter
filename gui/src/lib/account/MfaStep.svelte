@@ -1,9 +1,12 @@
 <script lang="ts">
   /**
    * 로그인 둘째 단계 — 인증 앱 6자리 코드 또는 복구 코드(xxxx-xxxx). 5분 안에 넣어야 한다.
-   * 시안: 오류는 코드 칸 아래에, 「← 처음으로」 로 첫 단계로 돌아간다.
+   * 시안(Login · lMode login, 2단계): 「인증 코드 6자리」 큰 칸(44 · 고정폭 22 · 자간 8 · 가운데), 도움말, 오류 한 줄,
+   * 「로그인」, 「← 처음으로」. 복구 코드도 받으므로 칸 길이를 6자로 막지 않는다.
    */
-  import { Button, FormRow, FormSection, TextInput } from '#lib/ui';
+  import { Button, TextInput } from '#lib/ui';
+  import AuthField from '#lib/shell/AuthField.svelte';
+  import AuthError from '#lib/shell/AuthError.svelte';
   import { accountApi } from './api';
 
   let { onDone, onRestart }: { onDone: () => void; onRestart: () => void } = $props();
@@ -13,7 +16,7 @@
   let error = $state<string | undefined>();
 
   const submit = async (): Promise<void> => {
-    if (code.trim() === '') { error = '코드를 입력해요.'; return; }
+    if (code.trim() === '') { error = '숫자 6자리를 입력해요.'; return; }
     busy = true;
     error = undefined;
     const r = await accountApi.mfa(code.trim());
@@ -28,16 +31,15 @@
 </script>
 
 <form class="step" novalidate onsubmit={(e) => { e.preventDefault(); void submit(); }}>
-  <FormSection stack>
-    <FormRow label="인증 코드" for="lg-code" error={error} help="인증 앱의 6자리 코드를 넣어요. 앱이 없으면 복구 코드를 넣어요.">
-      <TextInput id="lg-code" inputmode="numeric" autocomplete="one-time-code" bind:value={code} width="200px"
-        invalid={error !== undefined} oninput={() => { error = undefined; }} required />
-    </FormRow>
-  </FormSection>
-  <Button variant="primary" type="submit" loading={busy} style="width: 100%">로그인</Button>
-  <div><Button variant="text" onclick={onRestart}>← 처음으로</Button></div>
+  <AuthField label="인증 코드 6자리" for="lg-code" code help="인증 앱의 코드를 입력해요. 앱이 없으면 복구 코드를 넣어요.">
+    <TextInput id="lg-code" inputmode="numeric" autocomplete="one-time-code" bind:value={code}
+      invalid={error !== undefined} oninput={() => { error = undefined; }} />
+  </AuthField>
+  {#if error !== undefined}<AuthError>{error}</AuthError>{/if}
+  <Button variant="primary" type="submit" loading={busy} style="width: 100%; height: 36px; font-size: 14px">로그인</Button>
+  <Button variant="text" onclick={onRestart} style="width: 100%; height: 28px; color: var(--tx2); font-size: 13px; font-weight: 400">← 처음으로</Button>
 </form>
 
 <style>
-  .step { display: grid; gap: 12px; }
+  .step { display: flex; flex-direction: column; gap: 14px; }
 </style>
