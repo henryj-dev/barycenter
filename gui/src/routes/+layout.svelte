@@ -103,8 +103,13 @@
   // 좁은 화면에서 메뉴를 눌러 옮기면 사이드바를 닫는다.
   $effect(() => { void page.url.pathname; menuOpen = false; });
 
-  /** 실시간 연결 — 붙어 있으면 수신 중, 자격은 있는데 끊겼으면 재연결 중, 자격이 없으면 끊김. */
-  const conn = $derived(connStateOf({ live: desk.live, signedIn: session.me !== undefined || desk.token !== '', hasStream: hasStream(scope) }));
+  /**
+   * 실시간 연결 — 붙어 있으면 수신 중, 자격은 있는데 끊겼으면 재연결 중, 자격이 없으면 끊김.
+   * 재연결 고리가 멈췄으면(401 등, `desk.retrying` 거짓) 「재연결 중」 이 아니라 끊김이다 — 사람이 다시 연결해야 한다.
+   */
+  const connRaw = $derived(connStateOf({ live: desk.live, signedIn: session.me !== undefined || desk.token !== '', hasStream: hasStream(scope) }));
+  const conn = $derived(connRaw === 'reconnecting' && !desk.retrying ? 'down' as const : connRaw);
+  const stalled = $derived(connRaw === 'reconnecting' && !desk.retrying);
 
   /** 클러스터면 이 노드 이름을 상단 바에 보인다. 붙을 때 한 번 묻는다. */
   let node = $state<string | undefined>();
@@ -121,9 +126,15 @@
   const showPending = $derived(desk.pendingCount > 0 && dismissedAt !== desk.pendingCount && place !== 'impact');
 
   const regionLabel = $derived(scope.mode === 'global'
-    ? `전역 · ${scope.region?.name ?? '지역을 고른다'}`
+    ? `전역 · ${scope.region?.name ?? '전체 지역 합산'}`
     : [scope.self, node].filter((x) => x !== undefined).join(' · ') || '이 인스턴스');
-  const crumbs = $derived(crumbsOf(place, detail ? decodeURIComponent(page.params['key'] ?? page.params['node'] ?? '') : undefined));
+  /** 브레드크럼 첫 칸은 보는 범위다 — 전역이면 「전역」, 아니면 「지역」(시안). 그 뒤는 `crumbsOf` 그대로다. */
+  const crumbs = $derived([
+    scope.mode === 'global' ? { label: '전역', href: '/regions' } : { label: '지역' },
+    ...crumbsOf(place, detail ? decodeURIComponent(page.params['key'] ?? page.params['node'] ?? '') : undefined),
+  ]);
+  /** 대시보드는 전역이면 모든 지역을 합쳐 보인다 — 설명도 그렇게 말한다(시안). 나머지는 `PAGE_META` 그대로다. */
+  const desc = $derived(place === 'dashboard' && scope.mode === 'global' ? '모든 지역의 상태를 확인해요.' : meta.desc);
 </script>
 
 {#if standalone}
@@ -158,10 +169,17 @@
       {/if}
       {#if conn === 'reconnecting' && ready}
         <div class="strip"><Banner tone="danger">실시간 연결이 끊겼어요. 헬스가 최신이 아닐 수 있어요. 다시 연결하는 중이에요.</Banner></div>
+      {:else if stalled && ready}
+        <div class="strip">
+          <Banner tone="danger">
+            실시간 연결이 끊겼어요. 헬스가 최신이 아닐 수 있어요.
+            {#snippet action()}<button type="button" class="banner-action" onclick={() => { void desk.connect(); }}>다시 연결해요</button>{/snippet}
+          </Banner>
+        </div>
       {/if}
       <main class="content">
         {#if desk.error}<Banner tone="danger">{desk.error}</Banner>{/if}
-        {#if !detail}<PageHeader title={meta.title} desc={meta.desc} actions={pageActions.snippet} />{/if}
+        {#if !detail}<PageHeader title={meta.title} {desc} actions={pageActions.snippet} />{/if}
         {@render children()}
       </main>
     </div>

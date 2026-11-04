@@ -13,10 +13,11 @@
   import { Button, ConfirmDialog, Disclosure, FieldMessage, ImpactCard, RadioGroup, StepList, toast, type ConfirmLine, type ImpactLine, type StepState, type Tone } from '#lib/ui';
   import { LOST_MESSAGE, type RegionSummary, type Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
+  import ClusterConvergence from './ClusterConvergence.svelte';
 
   type Rev = { revision: string; createdBy: string; note: string | null; rollbackOf: string | null };
   type Group = { name: string; head?: string; pending: number; lost: boolean; current: boolean; region?: RegionSummary };
-  type Result = { tone: 'ok' | 'danger'; planId?: string; title: string; body: string; done: boolean };
+  type Result = { tone: 'ok' | 'danger'; planId?: string; revision?: string; title: string; body: string; done: boolean };
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
@@ -134,10 +135,12 @@
     try { await run(); } catch (e) { thrown = e instanceof Error ? e.message : String(e); }
     const error = thrown ?? desk.error;
     if (error === undefined) {
+      const revision = /r(\d+)$/.exec(title)?.[1];
       result = {
         tone: 'ok', title: `● ${title.replace(/^적용: /, '적용했어요: ')}`, done: true,
         body: `${n > 1 ? `커밋 ${n}건(${list})이 함께 들어갔어요. ` : ''}활성화를 확인했어요.${where}`,
         ...(planId === undefined ? {} : { planId }),
+        ...(revision === undefined ? {} : { revision }),
       };
       toast.done(id, { tone: 'ok', title: title.replace(/^적용: /, '적용했어요: '), body: `활성화를 확인했어요.${where}` });
     } else {
@@ -171,6 +174,8 @@
       <div class="rt">{result.title}</div>
       <div class="rb">{result.body}</div>
       {#if result.done}<StepList steps={steps('done')} label="적용 단계" />{/if}
+      <!-- 클러스터면 노드마다 따라왔는지를 몇 번 다시 읽어 보인다(시안 `convRows`). -->
+      {#if result.done}<ClusterConvergence revision={result.revision} />{/if}
       <div><Button size="sm" onclick={() => { result = undefined; }}>닫기</Button></div>
     </div>
   {/if}
@@ -256,7 +261,7 @@
             {#if view.bindBlockers.length > 0}
               <FieldMessage>이 변경은 한 번에 적용할 수 없어요. 위 안내대로 두 번에 나눠 적용해요.</FieldMessage>
             {:else}
-              <FieldMessage>적용하면 트래픽이 바뀌어요. 커밋 {Math.max(commits.length, 1)}건을 함께 적용해요.{where}</FieldMessage>
+              <FieldMessage>커밋 {Math.max(commits.length, 1)}건을 함께 적용해요.{where}</FieldMessage>
             {/if}
             {@render lostNote()}
             <Button variant="danger" loading={desk.applying} disabled={view.bindBlockers.length > 0 || lost} onclick={() => { asking = true; }}>{desk.applying ? '적용하는 중' : `적용: r${view.revision}`}</Button>
