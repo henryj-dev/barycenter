@@ -2249,10 +2249,12 @@ async function handle(
    * 먼저 보고 그대로 둔다. `bary_` 모양만 계정 PG 에 묻는다. 못 물으면 세션과 같이 503 — 캐시로 넘기지 않는다.
    * 틀린 토큰은 아래의 실패 계수(`authFailures`)를 지금과 똑같이 지난다.
    */
-  const personalToken = /^Bearer\s+(bary_\S+)$/.exec((req.headers.authorization ?? '').trim())?.[1];
-  if (bearer === undefined && personalToken !== undefined && api.accounts !== undefined) {
+  // 들고 온 값으로 분기하지 않는다 — `authenticateToken` 이 `bary_` 모양이 아니면 DB 에 묻지 않고 undefined 를 낸다.
+  // (헤더 값으로 「물을지」 를 가르면 그 조건이 곧 사용자가 쥔 문이 된다 — CodeQL js/user-controlled-bypass.)
+  const presented = /^Bearer\s+(\S+)$/.exec((req.headers.authorization ?? '').trim())?.[1] ?? '';
+  if (bearer === undefined && api.accounts !== undefined) {
     try {
-      bearer = await api.accounts.authenticateToken(personalToken);
+      bearer = await api.accounts.authenticateToken(presented);
     } catch (e) {
       if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
       throw e;
