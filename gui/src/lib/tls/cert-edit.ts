@@ -6,7 +6,7 @@
  * **모델의 칸만 싣는다.** 화면이 받은 인증서에는 API 가 붙인 표시용 칸(만료 · 주체 …)이 섞여 있어서,
  * 그대로 보내면 해독기가 「모양이 잘못됐다」 로 거절한다.
  */
-import type { Item } from '@web/resources';
+import type { Item } from '../../../../src/web/resources.js';
 
 export const MODEL_FIELDS = ['materialRef', 'chainDigest', 'keyDigest'] as const;
 

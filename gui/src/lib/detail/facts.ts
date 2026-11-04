@@ -4,7 +4,7 @@
  * 모두 이미 받은 값(head 모델 · 헬스 · 상태 API)에서 읽는다. 새로 묻지 않는다.
  * 모르는 것은 지어내지 않는다 — 상태 API 를 못 읽었으면 「모름」 이다.
  */
-import { itemOf, type ModelLike, type ResourceKind } from '@web/resources';
+import { itemOf, type ResourceKind } from '@web/resources';
 import type { ListenerMark } from '@web/listeners-view';
 import type { Tone } from '#lib/ui';
 import type { createDesk } from '#lib/desk.svelte.ts';
@@ -32,28 +32,9 @@ export const LISTENER_MARK: Record<ListenerMark, Mark> = {
   off: { tone: 'neutral', icon: '○', text: '꺼짐' },
 };
 
-/**
- * 출발지 제한 한 줄 — 시안 `srcSummary(rows)` 그대로.
- *   · 없으면 「제한 없음」
- *   · 집합 하나뿐이면 「Cloudflare만 (대역 15개) · @cloudflare」 — 대역 수는 그 집합을 **펼친 실제 수**다
- *   · 집합만 여럿이면 「Cloudflare + office · @cloudflare @office」
- *   · 대역이 섞이면 「Cloudflare + 대역 2개 · @cloudflare」, 대역만이면 「대역 2개」
- * 집합의 이름은 시안 `label || name` — 모델에 label 이 없어서 Cloudflare 출처는 「Cloudflare」, 나머지는 이름 그대로다.
- * head 에 없는 집합은 대역 0 개로 센다(검증기가 막는다 — 여기서 지어내지 않는다).
- */
-export function sourceAllowSummary(model: ModelLike, allow: readonly string[]): { text: string; ranges: number; on: boolean } {
-  if (allow.length === 0) return { text: '제한 없음', ranges: 0, on: false };
-  const sets = [...new Set(allow.filter((s) => s.startsWith('@')).map((s) => s.slice(1)))];
-  const direct = allow.filter((s) => !s.startsWith('@') && s.trim() !== '').length;
-  const info = (n: string): Record<string, unknown> | undefined => itemOf(model, 'addressSet', n);
-  const label = (n: string): string => (info(n)?.['source'] === 'cloudflare' ? 'Cloudflare' : n);
-  const count = (n: string): number => { const c = info(n)?.['cidrs']; return Array.isArray(c) ? c.length : 0; };
-  const ranges = direct + sets.reduce((a, n) => a + count(n), 0);
-  const t = direct === 0 && sets.length === 1 ? `${label(sets[0]!)}만 (대역 ${count(sets[0]!)}개)`
-    : direct === 0 ? sets.map(label).join(' + ')
-      : [...sets.map(label), `대역 ${direct}개`].join(' + ');
-  return { text: t + (sets.length > 0 ? ` · ${sets.map((n) => `@${n}`).join(' ')}` : ''), ranges, on: true };
-}
+/** 출발지 제한 한 줄 — 시안 `srcSummary(rows)`. 보기 구획(`view-secs.ts`)과 한 자리다. */
+export { sourceAllowSummary } from './view-secs';
+import type { ViewContext } from './view-secs';
 
 const obj = (v: unknown): Record<string, unknown> | undefined =>
   (typeof v === 'object' && v !== null ? v as Record<string, unknown> : undefined);
@@ -187,6 +168,14 @@ export function statusOf(desk: Desk, kind: ResourceKind, key: string): Mark | un
     return c === undefined ? undefined : { tone: c.tone, icon: c.icon, text: c.t };
   }
   return undefined;
+}
+
+/** 보기 구획(`viewSecsOf`)이 모델 밖에서 읽는 사실 — 드레인(상태 API) · 인증서 자료 도메인(SAN). 모르면 비운다(「—」). */
+export function viewContextOf(desk: Desk, kind: ResourceKind, key: string): ViewContext {
+  return {
+    draining: kind === 'backend' && desk.traffic.has(key) ? backendDraining(desk, key) : undefined,
+    certDomains: kind === 'certificate' ? desk.certs.rows.find((r) => r.key === key)?.domains : undefined,
+  };
 }
 
 /* 「연결된 리소스」 탭의 수는 `relation-rows.ts` 의 `relationRows(…).length` 다 — 탭이 그리는 줄과 같다. */

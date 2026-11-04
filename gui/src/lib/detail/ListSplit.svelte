@@ -22,15 +22,14 @@
    *   · 처음은 늘 **보기 모드**(아래 요약). `inline` 스니펫이 있고 쓸 수 있으면 머리의 「수정」 이 **인라인 수정**(시안 `isecs` — 그 리소스의 `INL` 필드, 저장 / 되돌리기). 스니펫 안에서
    *     `InlineEdit`(틀 · 문구)에 그 리소스의 `FormRow` 들을 넣는다. 쓸 수 없으면(팔로워 · 연락 없음 · 합산에서 못 쓰는 지역)
    *     인라인 대신 아래 요약을 그린다.
-   *   · 없으면 **읽기 요약**(시안 보기 모드 `viewSecs` — `ViewSections` 의 「기본」 구획). 백엔드는 「트래픽을 받지 않는 이유」,
-   *     풀은 「소속 백엔드」 를 더 보인다. 쓸 수 없을 때(인라인 대신)도 이것이다.
+   *   · 없으면 **보기 모드**(시안 `viewSecs` — 그 리소스 설정 폼의 구획 · 칸 전부, `viewSecsOf` → `ViewSections`). 백엔드는 위에
+   *     「트래픽을 받지 않는 이유」, 풀은 아래 「소속 백엔드 · N」 을 더 보인다. 쓸 수 없을 때(인라인 대신)도 이것이다.
    *
    * **전체 합산**(전역에서 지역을 안 골랐다, §2.5)이면 선택은 합산 행 키(`rid`)다. 그 행의 지역 desk 로 그리고,
    * 아래 컴포넌트는 `InRegion` 으로 그 지역을 본다. 「상세 페이지 ↗」 는 그 지역으로 좁혀 연다(`?region=`).
    */
   import { getContext, setContext, type Snippet } from 'svelte';
-  import { detailOfListener } from '@web/listeners-view';
-  import { RESOURCES, itemOf, resourcePath, summaryOf, type ResourceKind } from '@web/resources';
+  import { RESOURCES, itemOf, resourcePath, type ResourceKind } from '@web/resources';
   import { Badge, Button, SplitView } from '#lib/ui';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import { useAggregate } from '#lib/global/use-aggregate.svelte.ts';
@@ -39,6 +38,8 @@
   import BackendReasons from './BackendReasons.svelte';
   import PoolBackends from './PoolBackends.svelte';
   import ViewSections from './ViewSections.svelte';
+  import { viewSecsOf } from './view-secs';
+  import { viewContextOf } from './facts';
   import { PENDING_MARK, isPendingResource } from '#lib/pending';
 
   let { kind, selected = $bindable([]), table, extra, actions, inline }: {
@@ -70,7 +71,8 @@
   /** 상세 · 수정 주소 — 합산이면 그 지역으로 좁혀 연다. */
   const link = (path: string): string => (agg.on && at !== undefined ? agg.href(at.region, path) : path);
   const item = $derived(key === undefined || desk === undefined ? undefined : itemOf(desk.model, kind, key));
-  const lines = $derived(item === undefined ? [] : kind === 'listener' ? detailOfListener(item) : summaryOf(kind, item));
+  /** 시안 `viewSecs` — 설정 폼의 구획 · 칸 전부. 드레인 · 인증서 자료 도메인은 모델 밖(상태 API)에서 읽는다. */
+  const secs = $derived(item === undefined || key === undefined || desk === undefined ? [] : viewSecsOf(desk.model, kind, key, viewContextOf(desk, kind, key)));
   /** 「◐ 적용 대기」(시안 `selPendD`) — 엔진이 돌리는 것과 head 가 다르면. 분할 머리에는 이것만 붙는다(시안). */
   const pending = $derived(key !== undefined && desk !== undefined && isPendingResource(desk.pendingResources, kind, key));
   const poolCount = $derived(kind === 'pool' && key !== undefined && desk !== undefined ? desk.pools.rows.find((p) => p.key === key)?.backends.length ?? 0 : 0);
@@ -85,7 +87,7 @@
 {#snippet summary(key: string)}
   <div class="sd">
     {#if kind === 'backend'}<BackendReasons backend={key} />{/if}
-    {#if lines.length > 0}<ViewSections sections={[{ t: '기본', f: lines.map((l) => ({ l: l.label, v: l.value, mono: true })) }]} />{/if}
+    {#if secs.length > 0}<ViewSections sections={secs} />{/if}
     {#if kind === 'pool'}
       <section class="sub">
         <h3>소속 백엔드 · {poolCount}</h3>
@@ -138,7 +140,7 @@
 
 <style>
   .sd { display: flex; flex-direction: column; gap: 14px; padding: 12px 16px; }
-  .sub { display: flex; flex-direction: column; gap: 6px; }
+  .sub { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
   .sub h3 { margin: 0; font: var(--t-cap); font-weight: 600; color: var(--tx2); }
   .det { color: var(--accent); font: 500 12px/1 var(--font); text-decoration: none; white-space: nowrap; }
   .det:hover { text-decoration: underline; }

@@ -4,14 +4,15 @@
    *
    * 리스너는 폼, 풀은 헬스체크 폼(2026-11-02) + 업스트림 TLS 폼 + JSON 수정, 백엔드 · 주소 집합은 폼(시안 「기본」) + JSON 수정,
    * 인증서는 보기만(자료를 다시 넣는 것이 수정이다), 나머지는 JSON 수정이다.
-   * 쓰기가 막혀 있으면(전역 모드 · 팔로워) 시안 `tSetView` 읽기 구획(`ReadView` — 까닭 · 「기본」 구획 · 「이 지역에서 열기 ↗」)으로
-   * 편다. 「기본」 은 개요와 같은 사람 말 줄(`summaryOf` · 리스너는 `detailOfListener`)이고, 모든 칸은 아래 「전체 정의」 가 보인다.
+   * 쓰기가 막혀 있으면(전역 모드 · 팔로워) 시안 `tSetView` 읽기 구획(`ReadView` — 까닭 · 설정 폼의 구획 · 칸 전부(`viewSecsOf`) ·
+   * 「이 지역에서 열기 ↗」)으로 편다. 폼에 없는 칸까지 아래 「전체 정의」 가 보인다.
    * 전역에서 지역을 골랐으면 **첫 폼만** 「쓸 지역」 한 줄을 단다(`Writable target`) — 풀처럼 폼이 여럿이어도 한 번만 보인다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { RESOURCES, flattenFields, itemOf, summaryOf, type ResourceKind } from '@web/resources';
-  import { detailOfListener } from '@web/listeners-view';
+  import { RESOURCES, itemOf, type ResourceKind } from '@web/resources';
+  import { viewSecsOf } from './view-secs';
+  import { viewContextOf } from './facts';
   import { Banner, Button, CodeViewer, Disclosure } from '#lib/ui';
   import ReadView from './ReadView.svelte';
   import type { Scope } from '#lib/global/scope.svelte.ts';
@@ -31,14 +32,8 @@
   const scope = getContext<Scope | undefined>('scope');
   const key = $derived(page.params['key'] ?? '');
   const item = $derived(itemOf(desk.model, kind, key));
-  /** 읽기 구획(시안 `viewSecs`) — 「기본」 하나. 사람 말 줄이 없으면 모든 칸을 그대로 든다. */
-  const view = $derived.by(() => {
-    if (item === undefined) return [];
-    const lines = kind === 'listener' ? detailOfListener(item) : summaryOf(kind, item);
-    const f = lines.length > 0 ? lines.map((l) => ({ l: l.label, v: l.value, mono: true }))
-      : flattenFields(item).map((x) => ({ l: x.path, v: x.value, mono: true }));
-    return [{ t: '기본', f }];
-  });
+  /** 읽기 구획(시안 `viewSecs`) — 설정 폼의 구획 · 칸 전부(분할 상세 보기 모드와 같다). */
+  const view = $derived(item === undefined ? [] : viewSecsOf(desk.model, kind, key, viewContextOf(desk, kind, key)));
   const writable = $derived(RESOURCES[kind].editable && scope?.readOnly !== true);
 </script>
 

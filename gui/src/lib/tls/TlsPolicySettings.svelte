@@ -12,6 +12,7 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { isPendingResource } from '#lib/pending';
   import SettingsFrame from '#lib/detail/SettingsFrame.svelte';
+  import { viewSecsOf } from '#lib/detail/view-secs';
   import { CIPHERS, HSTS_MAX, MAX_VERSIONS, MISMATCH, VERSIONS, ageError, policyBody, policyForm, rangeError, type PolicyForm } from './policy-edit.ts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -30,12 +31,8 @@
     void desk.putResource('tlsPolicy', key, policyBody(f, itemOf(desk.model, 'tlsPolicy', key)))
       .then((ok) => { saving = false; after(resourcePath('tlsPolicy', key))(ok); });
   };
-  const label = <T extends string>(opts: readonly { value: T; label: string }[], v: T): string => opts.find((o) => o.value === v)?.label ?? v;
-  const view = $derived([
-    { t: '기본', f: [{ l: '이름', v: key, mono: true }, { l: '최소 버전', v: label(VERSIONS, initial.min) }, { l: '최대 버전', v: label(MAX_VERSIONS, initial.max) }, { l: '암호군', v: initial.cipher, mono: true }] },
-    { t: 'HSTS', f: [{ l: 'HSTS', v: initial.hsts ? '켜짐' : '꺼짐' }, ...(initial.hsts ? [{ l: 'max-age', v: `${initial.maxAge} s`, mono: true }] : [])] },
-    { t: '검증', f: [{ l: 'SNI-Host 불일치', v: label(MISMATCH, initial.mismatch) }] },
-  ]);
+  /** 쓸 수 없을 때의 읽기 구획 — 분할 상세 보기 모드와 같은 `viewSecsOf`. */
+  const view = $derived(viewSecsOf(desk.model, 'tlsPolicy', key));
 </script>
 
 <SettingsFrame {view} {dirty} invalid={range !== undefined || age !== undefined} {pending} {saving} onsave={save} onrevert={() => { f = { ...initial }; }}>

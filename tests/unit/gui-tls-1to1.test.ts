@@ -144,8 +144,8 @@ describe('상세 — 시안 상세 페이지', () => {
     // 설정 틀은 트래픽과 같은 하나다(`lib/detail/SettingsFrame`) — 쓸 수 없으면 시안 `tSetView`(`ReadView`).
     const s = src('lib/detail/SettingsFrame.svelte');
     expect(s).toContain("'저장하면 커밋하고 적용 대기에 새 리비전이 생겨요.'");
-    expect(s).toContain('{#if scope?.blocked === true && view !== undefined}');
-    expect(s).toContain('<ReadView sections={view} />');
+    expect(s).toContain('{#if scope?.blocked === true && sections !== undefined}');
+    expect(s).toContain('<ReadView {sections} />');
     for (const f of ['CertificateSettings', 'TlsPolicySettings', 'SniBindingSettings']) {
       expect(src(`lib/tls/${f}.svelte`), f).toContain("import SettingsFrame from '#lib/detail/SettingsFrame.svelte';");
     }
