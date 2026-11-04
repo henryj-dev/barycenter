@@ -5,6 +5,7 @@
    * 리스너는 폼, 풀은 헬스체크 폼(2026-11-02) + 업스트림 TLS 폼 + JSON 수정, 백엔드 · 주소 집합은 폼(시안 「기본」) + JSON 수정,
    * 인증서는 보기만(자료를 다시 넣는 것이 수정이다), 나머지는 JSON 수정이다.
    * 쓰기가 막혀 있으면(전역 모드) 모든 칸을 보기로 편다.
+   * 전역에서 지역을 골랐으면 **첫 폼만** 「쓸 지역」 한 줄을 단다(`Writable target`) — 풀처럼 폼이 여럿이어도 한 번만 보인다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
@@ -13,10 +14,13 @@
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import ListenerForm from '#lib/listener/ListenerForm.svelte';
   import PoolTlsForm from '#lib/pool/PoolTlsForm.svelte';
+  import PoolBasicsForm from '#lib/pool/PoolBasicsForm.svelte';
   import PoolHealthForm from '#lib/pool/PoolHealthForm.svelte';
   import JsonEdit from './JsonEdit.svelte';
   import BackendSettings from './BackendSettings.svelte';
   import AddressSetSettings from './AddressSetSettings.svelte';
+  import HttpRouteForm from '#lib/forms/HttpRouteForm.svelte';
+  import PassthroughRouteForm from '#lib/forms/PassthroughRouteForm.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   let { kind }: { kind: ResourceKind } = $props();
@@ -32,10 +36,13 @@
   <div class="set">
     {#if writable && kind === 'listener'}
       <ListenerForm />
-      <Disclosure title="모든 칸 보기" hint="폼에 없는 칸은 저장해도 그대로 남아요">
-        <DescriptionList labelWidth="220px" items={fields} />
+      <!-- 폼이 모델의 칸을 다 고친다(#126 후속). 폼에 없는 칸은 다른 리소스처럼 접힌 JSON 수정이 맡는다. -->
+      <Disclosure title="JSON 으로 고치기" hint="폼에 없는 칸까지 통째로">
+        <JsonEdit {kind} />
       </Disclosure>
     {:else if writable && kind === 'pool'}
+      <!-- 기본 · 전송(알고리즘 · hash 키 · PROXY 송신) → 헬스체크 → 업스트림 TLS → JSON -->
+      <PoolBasicsForm />
       <PoolHealthForm />
       <PoolTlsForm />
       <JsonEdit {kind} />
@@ -44,8 +51,14 @@
       <Disclosure title="JSON 으로 고치기" hint="폼에 없는 칸까지 통째로">
         <JsonEdit {kind} />
       </Disclosure>
+    {:else if writable && (kind === 'httpRoute' || kind === 'passthroughRoute')}
+      <!-- 라우트는 만들기 폼의 수정 모드(시안 `fieldsFor('routes')`) + 접은 JSON 수정. -->
+      {#if kind === 'httpRoute'}<HttpRouteForm edit />{:else}<PassthroughRouteForm edit />{/if}
+      <Disclosure title="JSON 으로 고치기" hint="폼에 없는 칸까지 통째로">
+        <JsonEdit {kind} />
+      </Disclosure>
     {:else if writable}
-      <JsonEdit {kind} />
+      <JsonEdit {kind} target />
     {:else}
       {#if kind === 'certificate' && scope?.readOnly !== true}
         <Banner tone="info">

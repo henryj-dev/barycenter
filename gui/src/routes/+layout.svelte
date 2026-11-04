@@ -6,7 +6,7 @@
    * 않았으면 로그인 화면으로 보낸다 — 화면마다 「연결하면 …」 을 띄우는 대신 한 자리에서 막는다.
    * **로그인 상태에서는 토큰 칸을 어디에도 안 보인다.** 토큰 연결은 로그인 화면에 있다.
    */
-  import { onMount, setContext, type Snippet } from 'svelte';
+  import { onMount, setContext, untrack, type Snippet } from 'svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { isDynamicGuiPath, pageOf } from '@web/page';
@@ -15,9 +15,9 @@
   import { createDesk } from '#lib/desk.svelte.ts';
   import { createSession } from '#lib/account/session.svelte.ts';
   import StepUpDialog from '#lib/account/StepUpDialog.svelte';
-  import { createScope } from '#lib/global/scope.svelte.ts';
+  import { LOST_LABEL, createScope, type RegionSummary } from '#lib/global/scope.svelte.ts';
   import { Banner, Toaster } from '#lib/ui';
-  import Sidebar from '#lib/shell/Sidebar.svelte';
+  import Sidebar, { type SideRegion } from '#lib/shell/Sidebar.svelte';
   import TopBar from '#lib/shell/TopBar.svelte';
   import PageHeader from '#lib/shell/PageHeader.svelte';
   // 글꼴은 빌드가 자기 자산으로 들인다 — 외부 출처를 열지 않는다(serve-gui 의 CSP).
@@ -103,8 +103,13 @@
   // 좁은 화면에서 메뉴를 눌러 옮기면 사이드바를 닫는다.
   $effect(() => { void page.url.pathname; menuOpen = false; });
 
-  /** 실시간 연결 — 붙어 있으면 수신 중, 자격은 있는데 끊겼으면 재연결 중, 자격이 없으면 끊김. */
-  const conn = $derived(connStateOf({ live: desk.live, signedIn: session.me !== undefined || desk.token !== '', hasStream: hasStream(scope) }));
+  /**
+   * 실시간 연결 — 붙어 있으면 수신 중, 자격은 있는데 끊겼으면 재연결 중, 자격이 없으면 끊김.
+   * 재연결 고리가 멈췄으면(401 등, `desk.retrying` 거짓) 「재연결 중」 이 아니라 끊김이다 — 사람이 다시 연결해야 한다.
+   */
+  const connRaw = $derived(connStateOf({ live: desk.live, signedIn: session.me !== undefined || desk.token !== '', hasStream: hasStream(scope) }));
+  const conn = $derived(connRaw === 'reconnecting' && !desk.retrying ? 'down' as const : connRaw);
+  const stalled = $derived(connRaw === 'reconnecting' && !desk.retrying);
 
   /** 클러스터면 이 노드 이름을 상단 바에 보인다. 붙을 때 한 번 묻는다. */
   let node = $state<string | undefined>();
@@ -116,21 +121,99 @@
     });
   });
 
+  /**
+   * **팔로워면 읽기 전용이다** — 서버가 쓰기를 503 `not_leader` 로 막는다. 상태 스냅샷(`leader.isLeader`)을 받은 뒤에만 판정한다
+   * (받기 전의 기본값은 거짓이라 모두 팔로워로 보인다). 리더의 이름 · 주소는 `/cluster/nodes` 에서 읽는다 — 상태의 `holder` 는
+   * 이 노드 자신의 이름이라 리더가 아니다. 전역이면 고른 지역의 노드를 본다(같은 경로가 그 지역으로 간다).
+   */
+  const standby = $derived(desk.live && desk.head !== undefined && !desk.status.leader.isLeader);
+  /** 리더 정보를 물은 곳(지역 이름, 지역 인스턴스면 ''). 같은 곳에서 팔로워인 동안 다시 묻지 않는다. 반응형이 아니다. */
+  let askedLeader: string | undefined;
+  $effect(() => {
+    // 스냅샷마다 다시 본다 — 503 안전망이 팔로워로 본 뒤 상태가 리더라고 하면 풀어야 한다.
+    void desk.status;
+    const where = scope.region?.name ?? '';
+    if (!standby) {
+      askedLeader = undefined;
+      if (untrack(() => scope.follower) !== undefined) scope.follow(undefined);
+      return;
+    }
+    if (untrack(() => scope.follower) === undefined) scope.follow({});
+    if (askedLeader === where) return;
+    askedLeader = where;
+    void desk.clusterNodes().then((r) => {
+      if (!standby || askedLeader !== where) return;
+      const b = r as { leader?: { name?: unknown }; nodes?: { name?: unknown; url?: unknown; role?: unknown }[] } | undefined;
+      const name = typeof b?.leader?.name === 'string' ? b.leader.name : undefined;
+      const lead = (b?.nodes ?? []).find((n) => (name !== undefined ? n.name === name : n.role === 'leader'));
+      const leader = name ?? (typeof lead?.name === 'string' ? lead.name : undefined);
+      const gui = typeof lead?.url === 'string' && lead.url !== '' ? lead.url : undefined;
+      scope.follow({ ...(leader === undefined ? {} : { leader }), ...(gui === undefined ? {} : { gui }) });
+    }).catch(() => undefined);
+  });
+
+  /**
+   * 전역이면 사이드바 지역 상자가 지역 요약(`/api/v1/regions`)을 본다 — 지역 화면 · 적용 대기 화면이 읽는 것과 같다.
+   * 적용 대기 수나 head 가 바뀌면 다시 묻는다(셸은 폴링하지 않는다 — `tests/unit/v10-open.test.ts`). 받으면 고른 지역의 연락 여부도 고친다(`scope.sync`).
+   */
+  let regions = $state<RegionSummary[]>([]);
+  const signedIn = $derived(session.me !== undefined || desk.token !== '');
+  const loadRegions = async (): Promise<void> => {
+    const r = await fetch('/api/v1/regions', { credentials: 'same-origin', headers: desk.token === '' ? {} : { authorization: `Bearer ${desk.token}` } }).catch(() => undefined);
+    if (r === undefined || !r.ok) return;
+    regions = ((await r.json()) as { regions: RegionSummary[] }).regions;
+    scope.sync(regions);
+  };
+  $effect(() => {
+    if (scope.mode !== 'global' || !signedIn) return;
+    void desk.pendingCount; void desk.head;
+    void loadRegions();
+  });
+  const pendingOf = (r: RegionSummary): number => {
+    const p = (r.status as { pendingApply?: unknown } | undefined)?.pendingApply;
+    return Array.isArray(p) ? p.length : 0;
+  };
+  const sideRegions = $derived<SideRegion[]>(regions.map((r) => {
+    const current = r.name === scope.region?.name;
+    const lost = current ? scope.lost : !r.reachable;
+    const pending = current ? desk.pendingCount : pendingOf(r);
+    const pickable = r.reachable && r.auth === undefined;
+    if (lost) return { name: r.name, current, pickable, tone: 'neutral', icon: '○', text: LOST_LABEL };
+    if (r.auth === 'rejected') return { name: r.name, current, pickable, tone: 'danger', icon: '✕', text: '인증 거절' };
+    return { name: r.name, current, pickable, tone: pending > 0 ? 'pending' : 'ok', icon: '●', text: pending > 0 ? `대기 ${pending}` : '' };
+  }));
+  /** 사이드바에서 지역을 바꾼다 — 지역 화면의 「보기」 와 같다. 보던 화면은 그대로 두고, 지역 화면에 있었으면 첫 화면으로. */
+  const pickRegion = (name: string): void => {
+    const r = regions.find((x) => x.name === name);
+    if (r === undefined || !r.reachable || r.auth !== undefined) return;
+    desk.disconnect();
+    scope.choose(r);
+    // **기다리지 않는다.** `connect` 는 스트림이 끊길 때까지 끝나지 않는다.
+    void desk.connect();
+    if (place === 'regions') void goto('/');
+  };
+
   /** 적용 대기 배너 — 닫으면 건수가 바뀔 때까지 안 띄운다. 적용 대기 화면에서는 안 띄운다. */
   let dismissedAt = $state(-1);
   const showPending = $derived(desk.pendingCount > 0 && dismissedAt !== desk.pendingCount && place !== 'impact');
 
   const regionLabel = $derived(scope.mode === 'global'
-    ? `전역 · ${scope.region?.name ?? '지역을 고른다'}`
+    ? `전역 · ${scope.region?.name ?? '전체 지역 합산'}`
     : [scope.self, node].filter((x) => x !== undefined).join(' · ') || '이 인스턴스');
-  const crumbs = $derived(crumbsOf(place, detail ? decodeURIComponent(page.params['key'] ?? page.params['node'] ?? '') : undefined));
+  /** 브레드크럼 첫 칸은 보는 범위다 — 전역이면 「전역」, 아니면 「지역」(시안). 그 뒤는 `crumbsOf` 그대로다. */
+  const crumbs = $derived([
+    scope.mode === 'global' ? { label: '전역', href: '/regions' } : { label: '지역' },
+    ...crumbsOf(place, detail ? decodeURIComponent(page.params['key'] ?? page.params['node'] ?? '') : undefined),
+  ]);
+  /** 대시보드는 전역이면 모든 지역을 합쳐 보인다 — 설명도 그렇게 말한다(시안). 나머지는 `PAGE_META` 그대로다. */
+  const desc = $derived(place === 'dashboard' && scope.mode === 'global' ? '모든 지역의 상태를 확인해요.' : meta.desc);
 </script>
 
 {#if standalone}
   <main class="solo">
     <div class="solo-brand"><span class="logo" aria-hidden="true">b</span>barycenter</div>
     <div class="solo-card">
-      <PageHeader title={meta.title} desc={meta.desc} />
+      <!-- 혼자 서는 화면은 페이지 머리를 그리지 않는다 — 단계마다 화면이 제목과 한 줄 설명을 그린다(시안 lTitle · lSub). -->
       {#if logoutNote !== undefined}<Banner tone="danger">{logoutNote}</Banner>{/if}
       {@render children()}
     </div>
@@ -139,12 +222,12 @@
   <div class="app" data-menu={menuOpen}>
     <div class="side">
       <Sidebar {place} bind:collapsed pending={desk.pendingCount} global={scope.mode === 'global'} {regionLabel}
-        regionHref={scope.mode === 'global' ? '/regions' : undefined} />
+        regionHref={scope.mode === 'global' ? '/regions' : undefined} regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} />
     </div>
     {#if menuOpen}<button type="button" class="scrim" aria-label="메뉴 닫기" onclick={() => { menuOpen = false; }}></button>{/if}
     <div class="main">
       <TopBar {crumbs} {node} head={desk.head} {conn} pending={desk.pendingCount}
-        user={session.me?.username} role={session.me?.role} bind:theme bind:menuOpen onlogout={() => { void logout(); }} ondisconnect={disconnect} />
+        user={session.me?.username} role={session.me?.role} mfa={session.me?.mfa.totp} bind:theme bind:menuOpen onlogout={() => { void logout(); }} ondisconnect={disconnect} />
       {#if scope.mode === 'global' && scope.region !== undefined}
         <div class="strip"><Banner tone="info" icon="◎">전역 화면에서 <b>{scope.region.name}</b> 을 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.</Banner></div>
       {/if}
@@ -158,10 +241,17 @@
       {/if}
       {#if conn === 'reconnecting' && ready}
         <div class="strip"><Banner tone="danger">실시간 연결이 끊겼어요. 헬스가 최신이 아닐 수 있어요. 다시 연결하는 중이에요.</Banner></div>
+      {:else if stalled && ready}
+        <div class="strip">
+          <Banner tone="danger">
+            실시간 연결이 끊겼어요. 헬스가 최신이 아닐 수 있어요.
+            {#snippet action()}<button type="button" class="banner-action" onclick={() => { void desk.connect(); }}>다시 연결해요</button>{/snippet}
+          </Banner>
+        </div>
       {/if}
       <main class="content">
         {#if desk.error}<Banner tone="danger">{desk.error}</Banner>{/if}
-        {#if !detail}<PageHeader title={meta.title} desc={meta.desc} actions={pageActions.snippet} />{/if}
+        {#if !detail}<PageHeader title={meta.title} {desc} actions={pageActions.snippet} />{/if}
         {@render children()}
       </main>
     </div>

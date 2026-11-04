@@ -31,6 +31,8 @@ export type LinkPreview = {
 export type UserRow = {
   id: string; username: string; displayName: string | null; email: string | null; role: Role;
   roleAuthority: string; status: 'active' | 'suspended'; createdAt: string; lockedUntil: string | null; totp: boolean;
+  /** 마지막으로 쓸 수 있는 세션이 생긴 시각(MFA 까지 끝난 로그인). 한 번도 없으면 null. */
+  lastLoginAt: string | null;
 };
 
 export type InvitationRow = {
@@ -101,6 +103,8 @@ export const accountApi = {
   invitations: () => call<InvitationRow[]>('GET', '/api/v1/invitations'),
   invite: (role: Role, email: string) =>
     call<{ id: string; token: string; expiresAt: string; mailed: boolean }>('POST', '/api/v1/invitations', { role, ...(email === '' ? {} : { email }) }),
+  resendInvitation: (id: string) =>
+    call<{ id: string; token: string; expiresAt: string; mailed: boolean }>('POST', `/api/v1/invitations/${encodeURIComponent(id)}/resend`),
   revokeInvitation: (id: string) => call<{ revoked: true }>('DELETE', `/api/v1/invitations/${encodeURIComponent(id)}`),
 };
 

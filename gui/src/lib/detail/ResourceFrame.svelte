@@ -8,8 +8,8 @@
   import { getContext, type Snippet } from 'svelte';
   import { page } from '$app/state';
   import { RESOURCES, itemOf, resourcePath, type ResourceKind } from '@web/resources';
-  import { after } from '#lib/after';
-  import { Badge, Button, ConfirmDialog, DetailHeader, Skeleton } from '#lib/ui';
+  import { Badge, Button, DetailHeader, Skeleton } from '#lib/ui';
+  import DeleteConfirm from '#lib/lists/DeleteConfirm.svelte';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { relationCount, statusOf } from './facts';
@@ -23,8 +23,11 @@
   const rest = $derived(page.url.pathname.slice(base.length).replace(/^\//, '').replace(/\/$/, ''));
   const extraLabel: Record<string, string> = { rebuild: 'URL로 다시 만들기' };
   const extra = $derived(extraLabel[rest]);
+  /** 「URL로 다시 만들기」 는 풀로 보내는 라우트에만 있다(시안 `action === 'proxy'`). 리다이렉트 · 거절에는 대상 풀이 없다. */
+  const rebuildable = $derived((item?.['action'] as { kind?: unknown } | undefined)?.kind === 'proxy');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   let asking = $state(false);
   // 시안: 「연결된 리소스」 탭에 수를 단다.
   const relCount = $derived(relationCount(desk, kind, key));
@@ -64,18 +67,15 @@
       {#snippet actions()}
         {#if !ro}
           {#if spec.editable && rest !== 'settings'}<Button href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}
-          {#if spec.extras.includes('rebuild') && rest !== 'rebuild'}<Button href={resourcePath(kind, key, 'rebuild')}>URL로 다시 만들기</Button>{/if}
+          {#if spec.extras.includes('rebuild') && rebuildable && rest !== 'rebuild'}<Button href={resourcePath(kind, key, 'rebuild')}>URL로 다시 만들기</Button>{/if}
           <Button error disabled={desk.editing} onclick={() => { asking = true; }}>삭제…</Button>
         {/if}
       {/snippet}
     </DetailHeader>
     <div class="body">{@render children()}</div>
   </div>
-  <ConfirmDialog bind:open={asking} title="삭제: {spec.label} {key} 를 설정에서 빼요" requireName={key} confirmLabel="삭제해요"
-    sub="저장하면 커밋해요. 트래픽은 적용해야 바뀌어요."
-    lines={[{ tone: 'danger', icon: '✕', text: '이것을 쓰는 리소스가 있으면 plan 이 막혀요. 연결된 리소스 탭에서 먼저 봐요.' }]}
-    busy={desk.editing}
-    onconfirm={() => { void desk.withdraw(kind, key).then((ok) => { asking = false; after(listHref, '삭제를 커밋했어요')(ok); }); }} />
+  <!-- 목록과 같은 확인 — 이것을 실제로 쓰는 리소스를 줄마다 든다. 지우면 목록으로 간다. -->
+  <DeleteConfirm bind:target={() => (asking ? { kind, key } : undefined), (t) => { asking = t !== undefined; }} href={listHref} />
 {/if}
 
 <style>

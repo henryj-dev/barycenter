@@ -805,6 +805,17 @@
         }
       }
     },
+    "/api/v1/invitations/{id}/resend": {
+      "post": {
+        "operationId": "POST:/api/v1/invitations/:id/resend",
+        "x-scope": "admin",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/invitations/{id}": {
       "delete": {
         "operationId": "DELETE:/api/v1/invitations/:id",

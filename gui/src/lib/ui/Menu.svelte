@@ -16,8 +16,10 @@
    * 트리거는 `trigger` 스니펫이 그린다(받은 `toggle` 을 누르면 열고 닫는다). 밖을 누르거나 Esc 면 닫힌다.
    */
   import type { Snippet } from 'svelte';
-  let { items, align = 'right', label, trigger }: {
+  let { items, align = 'right', label, trigger, header }: {
     items: readonly MenuItem[];
+    /** 항목 위의 머리(사용자 메뉴의 이름 · 역할). 고를 수 없다. */
+    header?: { title: string; sub?: string };
     align?: 'left' | 'right';
     label: string;
     trigger: Snippet<[{ open: boolean; toggle: (e?: Event) => void }]>;
@@ -41,6 +43,9 @@
   {@render trigger({ open, toggle })}
   {#if open}
     <div class="pop" role="menu" aria-label={label} data-align={align}>
+      {#if header !== undefined}
+        <div class="hd" role="presentation"><b>{header.title}</b>{#if header.sub}<span>{header.sub}</span>{/if}</div>
+      {/if}
       {#each items as it (it.label)}
         {#if it.href !== undefined && !it.disabled}
           <a role="menuitem" class="item" href={it.href} data-danger={it.danger} onclick={() => { open = false; }}>{it.label}</a>
@@ -72,5 +77,8 @@
   .item:not(:disabled):hover { background: var(--bg-hover); color: var(--tx); }
   .item[data-danger='true'] { color: var(--danger); }
   .item:disabled { color: var(--tx3); }
+  .hd { display: grid; gap: 2px; padding: 6px 8px 8px; margin-bottom: 4px; border-bottom: 1px solid var(--bd); white-space: nowrap; }
+  .hd b { font: 600 13px/18px var(--font); color: var(--tx); }
+  .hd span { font: 400 12px/16px var(--font); color: var(--tx2); }
   .mark { width: 14px; color: var(--accent); font-weight: 700; }
 </style>

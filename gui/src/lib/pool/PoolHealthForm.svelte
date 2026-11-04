@@ -64,7 +64,7 @@
 </script>
 
 {#if pool !== undefined}
-  <Writable>
+  <Writable target>
     <Card title="헬스체크" sub="프로버가 백엔드를 어떻게 찌르나">
       {#if verdicts.length > 0}
         <ul class="now">

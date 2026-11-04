@@ -8,14 +8,17 @@
   import { FormRow, FormSection, ListInput } from '#lib/ui';
   import { hostLine } from './checks';
 
-  let { value = $bindable() }: { value: string } = $props();
+  /** `bare` 면 구획 없이 칸만 낸다 — 설정 탭은 「기본」 구획 안에 둔다(시안). */
+  let { value = $bindable(), bare = false }: { value: string; bare?: boolean } = $props();
 </script>
 
-<FormSection title="호스트" hint="server_name">
+{#snippet row()}
   <FormRow
     label="호스트"
     help="한 줄에 하나씩 넣어요. 넣으면 이 이름들만 받고, 같은 포트를 다른 리스너와 함께 쓸 수 있어요(서비스마다 인증서 · 출발지 제한 · 기본 동작을 따로 둬요). 비우면 이 포트의 기본 리스너가 돼요 — 맞는 이름이 없는 요청도 받아요."
   >
     <ListInput label="호스트" bind:value check={hostLine} minRows={2} placeholder={'app.example.com\n*.example.com'} />
   </FormRow>
-</FormSection>
+{/snippet}
+
+{#if bare}{@render row()}{:else}<FormSection title="호스트" hint="server_name">{@render row()}</FormSection>{/if}

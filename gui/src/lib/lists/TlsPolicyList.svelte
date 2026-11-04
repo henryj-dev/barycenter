@@ -6,13 +6,15 @@
   import { Badge, Button, DataTable, type Column, type MenuItem } from '#lib/ui';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
+  import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import DeleteConfirm from './DeleteConfirm.svelte';
 
   type Row = { key: string; min: string; max: string; cipher: string; hsts?: number; mismatch: string; used: number };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   let del = $state<{ kind: 'tlsPolicy'; key: string } | undefined>();
 
   const rows = $derived<Row[]>(itemsOf(desk.model, 'tlsPolicy').map((p) => {
@@ -46,8 +48,9 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/tls/policy/new">＋ 생성</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/tls/policy/new">＋ 만들기</Button>{/snippet}
 
+<WriteNote spaced />
 <DataTable label="TLS 정책 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live}
   search={{ placeholder: '이름으로 찾기', match: (r, q) => r.key.toLowerCase().includes(q) }}
   emptyTitle="TLS 정책이 없어요" emptyBody="HTTPS 리스너를 열려면 하나가 필요해요."

@@ -10,8 +10,8 @@
   import type { RegionSummary, Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { loadRegions } from './fetch';
+  import { nodeState, type ClusterBody } from './cluster';
 
-  type Pend = { planId: string; revision: string };
   type StatCard = { label: string; value: string; sub: string; badge?: { tone: Tone; text: string } };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
@@ -19,17 +19,58 @@
   const global = $derived(scope?.mode === 'global');
   const v = $derived(desk.status);
 
+  /** 클러스터면 노드별 상태 화면으로 가는 길을 보인다. 전역은 지역마다 다르므로 묻지 않는다. */
+  let cluster = $state<ClusterBody | undefined>();
+  $effect(() => {
+    void desk.status;
+    if (!desk.live || global) return;
+    void desk.clusterNodes().then((r) => { cluster = r as ClusterBody | undefined; });
+  });
+  const clustered = $derived(cluster?.enabled === true);
+
+  /**
+   * 리더 카드 — 시안: 클러스터가 아니면 「클러스터 모드가 아니에요.」, 클러스터면 팔로워가 맞는지를 센다.
+   * 말은 클러스터 화면과 같다(★ 리더 · 팔로워 · 맞음). 「맞음」 은 `nodeState` 가 판정한다 — 연락 없음도 맞지 않은 쪽이다.
+   */
+  const leaderCard = $derived.by<StatCard>(() => {
+    // `leader.holder` 는 **이 인스턴스 자신의 이름**이다(src/control/leader.ts) — 팔로워에서 리더 이름으로 쓰면 자기를 리더라고 말한다.
+    const value = v.leader.isLeader ? '★ 이 인스턴스' : '☆ 다른 인스턴스';
+    if (global) {
+      const name = scope?.region?.name;
+      return {
+        label: '리더', value, sub: `${name === undefined ? '' : `${name} · `}클러스터는 그 지역의 GUI 에서 봐요.`,
+        badge: v.leader.isLeader ? { tone: 'ok', text: '정상' } : { tone: 'info', text: '팔로워' },
+      };
+    }
+    if (cluster === undefined || !cluster.enabled) {
+      const where = scope?.self;
+      return v.leader.isLeader
+        ? { label: '리더', value, sub: `${where === undefined ? '' : `${where} · `}클러스터 모드가 아니에요.`, badge: { tone: 'ok', text: '정상' } }
+        : { label: '리더', value, sub: `이 인스턴스는 팔로워예요. 쓰기는 리더가 해요.${v.leader.reason ? ` ${v.leader.reason}` : ''}`, badge: { tone: 'info', text: '팔로워' } };
+    }
+    const followers = cluster.nodes.filter((n) => n.role === 'follower');
+    const ok = followers.filter((n) => nodeState(n).tone === 'ok').length;
+    const counted = `팔로워 ${followers.length}대 · ${ok}대가 맞음${followers.length > ok ? `, ${followers.length - ok}대는 확인이 필요해요.` : '.'}`;
+    if (v.leader.isLeader) {
+      return {
+        label: '리더', value: cluster.self === undefined ? value : `★ ${cluster.self}`, sub: counted,
+        badge: followers.length > ok ? { tone: 'warn', text: '팔로워 확인' } : { tone: 'ok', text: '정상' },
+      };
+    }
+    return {
+      label: '리더', value: `☆ ${cluster.leader?.name ?? '다른 인스턴스'}`,
+      sub: `이 노드${cluster.self === undefined ? '' : `(${cluster.self})`}는 팔로워예요. 쓰기는 리더가 해요. ${counted}`,
+      badge: followers.length > ok ? { tone: 'warn', text: '팔로워 확인' } : { tone: 'info', text: '팔로워' },
+    };
+  });
+
   const cards = $derived<StatCard[]>([
     {
       label: 'head 리비전', value: v.head === undefined ? '—' : `r${v.head}`,
       sub: '커밋된 가장 새 리비전이에요.',
       badge: v.pending.length > 0 ? { tone: 'pending', text: `적용 대기 ${v.pending.length}건` } : { tone: 'ok', text: '적용 대기 없음' },
     },
-    {
-      label: '리더', value: v.leader.isLeader ? '★ 이 인스턴스' : `☆ ${v.leader.holder}`,
-      sub: v.leader.isLeader ? `잠금을 쥔 곳: ${v.leader.holder}` : `쓰기는 리더가 해요.${v.leader.reason ? ` ${v.leader.reason}` : ''}`,
-      badge: v.leader.isLeader ? { tone: 'ok', text: '정상' } : { tone: 'warn', text: '스탠바이' },
-    },
+    leaderCard,
     { label: '게시 세대', value: v.published.generation ?? '—', sub: `게시: ${v.published.kind}` },
     {
       label: '미완 전환', value: v.unfinished ? '1건' : '0건',
@@ -43,12 +84,6 @@
     },
   ]);
 
-  /** 클러스터면 노드별 상태 화면으로 가는 길을 보인다. 전역은 지역마다 다르므로 묻지 않는다. */
-  let clustered = $state(false);
-  $effect(() => {
-    if (!desk.live || global) return;
-    void desk.clusterNodes().then((r) => { clustered = (r as { enabled?: boolean } | undefined)?.enabled === true; });
-  });
 
   type RegRow = { name: string; reachable: boolean; v: ReturnType<typeof viewOfStatus> | undefined; error: string | undefined };
   let regions = $state<RegRow[] | undefined>();
@@ -68,15 +103,10 @@
   const regColumns: Column<RegRow>[] = [
     { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '90px', text: (r) => (r.v?.head === undefined ? unknown : `r${r.v.head}`) },
-    { key: 'leader', label: '리더', mono: true, text: (r) => r.v?.leader.holder ?? unknown },
+    { key: 'leader', label: '리더', mono: true, text: (r) => (r.v === undefined ? unknown : r.v.leader.isLeader ? r.v.leader.holder : '팔로워가 답했어요') },
     { key: 'gen', label: '게시 세대', mono: true, text: (r) => (r.v === undefined ? unknown : r.v.published.generation ?? '—') },
     { key: 'unf', label: '미완 전환', mono: true, width: '100px', text: (r) => (r.v === undefined ? unknown : r.v.unfinished ? '1' : '0') },
     { key: 'engine', label: '엔진', mono: true, text: (r) => (r.v === undefined ? (r.error ?? '닿지 않아요') : r.v.engine.label) },
-  ];
-
-  const columns: Column<Pend>[] = [
-    { key: 'planId', label: 'plan', mono: true, text: (r) => r.planId },
-    { key: 'revision', label: '리비전', mono: true, text: (r) => `r${r.revision}`, width: '120px' },
   ];
 </script>
 
@@ -126,13 +156,10 @@
       </Card>
     {/if}
 
-    <Card title="적용 대기 plan" sub={v.pending.length > 0 ? `${v.pending.length}개` : undefined} padded={false}>
-      {#if v.pending.length === 0}
-        <div class="pad"><FieldMessage>대기 중인 plan 이 없어요.</FieldMessage></div>
-      {:else}
-        <DataTable rows={v.pending} rowKey={(r) => r.planId} {columns} label="적용 대기 plan" minHeight="0" />
-      {/if}
-    </Card>
+    <!-- 적용 대기 plan 의 표는 적용 대기 화면이 정본이다 — 여기는 그리로 가는 한 줄만 둔다. -->
+    {#if v.pending.length > 0}
+      <div><Button size="sm" variant="text" href="/change/pending">적용 대기 plan {v.pending.length}개 — 적용 대기 화면에서 영향을 확인해요 →</Button></div>
+    {/if}
   </div>
 {/if}
 

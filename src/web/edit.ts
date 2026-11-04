@@ -1222,6 +1222,7 @@ export function putPassthroughRejectPatch(input: {
  *   백엔드 `name-1`  URL 호스트·포트(기본 443 / 80)
  *   리스너 `name`    `listen` 을 줬을 때만. 호스트가 없으면 기본 동작이 풀이다.
  *   라우트 `name`    호스트를 줬을 때. `Host` 헤더와 `rewritePrefix`(URL 경로)를 싣는다.
+ *                    `keep` 을 주면(다시 만들기) 그 라우트의 다른 설정을 그대로 싣는다.
  *
  * 리스너 기본 동작에는 경로 바꾸기가 없다. 그래서 URL 에 `/` 가 아닌 경로가 있으면 라우트가
  * 필요하고, 라우트에는 호스트가 필요하다 — 그 조합은 미리 거절한다.
@@ -1245,7 +1246,31 @@ export type ProxyFromUrlInput = {
   protocol?: 'http' | 'https';
   /** https 리스너의 TLS 정책과 기본 인증서. 둘 다 있어야 저장된다. */
   tls?: { policy: string; certificate: string };
+  /**
+   * 「URL 로 다시 만들기」 가 그대로 둘 라우트 설정 (2026-11-04). URL 은 **대상만** 정한다 — 풀 · 경로 바꾸기 · `Host` 헤더.
+   * 나머지(우선순위 · WebSocket · 출발지 규칙 · 다른 요청 헤더)는 여기서 그대로 싣는다. 요청 헤더는 `Host`(대소문자 무시)만
+   * 새 값으로 바꾸고, 없으면 끝에 덧붙인다. 출발지 규칙은 다른 풀을 가리켜도 손대지 않는다.
+   */
+  keep?: {
+    priority?: number;
+    websocket?: boolean;
+    sourceRules?: readonly SourceRuleInput[];
+    requestHeaders?: readonly HeaderRuleInput[];
+  };
 };
+
+/** 요청 헤더 목록에서 `Host` 만 바꾼다 — 자리는 그대로, 없으면 끝에 덧붙인다. 다른 헤더는 손대지 않는다. */
+function withHostHeader(headers: readonly HeaderRuleInput[] | undefined, value: string): HeaderRuleInput[] {
+  const out: HeaderRuleInput[] = [];
+  let placed = false;
+  for (const h of headers ?? []) {
+    if (h.name.trim().toLowerCase() !== 'host') { out.push({ name: h.name, value: h.value }); continue; }
+    if (!placed) out.push({ name: 'Host', value });
+    placed = true;
+  }
+  if (!placed) out.push({ name: 'Host', value });
+  return out;
+}
 
 export type ProxyFromUrlOp =
   | PutPoolOp | PutBackendOp | PutHttpListenerOp | PutHttpsListenerOp | PutHttpRouteOp | PutSniBindingOp;
@@ -1323,7 +1348,10 @@ export function proxyFromUrlPatch(input: ProxyFromUrlInput): ProxyFromUrlOp[] {
       key: name, listener: input.listener ?? name, hosts, pool: name,
       ...(input.pathPrefix === undefined ? {} : { pathPrefix: input.pathPrefix }),
       ...(input.pathPrefixes === undefined ? {} : { pathPrefixes: input.pathPrefixes }),
-      requestHeaders: hostRule,
+      ...(input.keep?.priority === undefined ? {} : { priority: input.keep.priority }),
+      ...(input.keep?.websocket === undefined ? {} : { websocket: input.keep.websocket }),
+      ...(input.keep?.sourceRules === undefined ? {} : { sourceRules: input.keep.sourceRules }),
+      requestHeaders: withHostHeader(input.keep?.requestHeaders, hostHeader),
       // `/` → `/` 는 바꾸는 것이 없다. 렌더 바이트를 늘리지 않는다.
       ...(path === '/' && routePaths(pathFieldsOf(input)).every((p) => p === '/') ? {} : { rewritePrefix: path }),
     }));

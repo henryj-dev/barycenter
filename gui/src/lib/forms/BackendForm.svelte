@@ -6,7 +6,7 @@
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
-  import { KEY_HELP, filled, keyError, portError } from './checks';
+  import { KEY_HELP, filled, keyError, portError, weightError } from './checks';
 
   let { pool: initial }: { pool?: string } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -17,12 +17,13 @@
   let key = $state('');
   let host = $state('');
   let port = $state('80');
+  let weight = $state('1');
 
-  const ready = $derived(pool !== undefined && filled(key, keyError) && filled(host) && filled(port, portError));
+  const ready = $derived(pool !== undefined && filled(key, keyError) && filled(host) && filled(port, portError) && filled(weight, weightError));
   const submit = (): void => {
     if (pool === undefined) return;
     const p = pool;
-    void desk.insertBackend(key.trim(), { pool: p, host: host.trim(), port: Number(port) }).then(after(resourcePath('backend', key.trim())));
+    void desk.insertBackend(key.trim(), { pool: p, host: host.trim(), port: Number(port), weight: Number(weight) }).then(after(resourcePath('backend', key.trim())));
   };
 </script>
 
@@ -39,6 +40,9 @@
     </FormRow>
     <FormRow label="포트" for="be-port" required error={portError(port)}>
       <TextInput id="be-port" bind:value={port} invalid={portError(port) !== undefined} inputmode="numeric" width="120px" />
+    </FormRow>
+    <FormRow label="가중치" for="be-weight" required error={weightError(weight)} help="클수록 요청을 더 받아요. 1 이상이에요. 트래픽을 멈추려면 가중치 대신 드레인을 써요.">
+      <TextInput id="be-weight" bind:value={weight} invalid={weightError(weight) !== undefined} inputmode="numeric" width="120px" />
     </FormRow>
   </FormSection>
 </CreateForm>

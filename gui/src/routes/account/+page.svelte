@@ -6,6 +6,7 @@
   import { getContext, onMount } from 'svelte';
   import { accountApi, type Me } from '#lib/account/api';
   import type { Session } from '#lib/account/session.svelte.ts';
+  import { ROLE_LABEL } from '#lib/account/text';
   import ChangePassword from '#lib/account/ChangePassword.svelte';
   import TotpManage from '#lib/account/TotpManage.svelte';
   import ChangeEmail from '#lib/account/ChangeEmail.svelte';
@@ -30,7 +31,6 @@
     note = r.ok ? { ok: true, text: `세션 ${r.data.revoked}개를 끊었어요. 이 기기도 다시 로그인해요.` } : { ok: false, text: r.message };
     await session.refresh();
   };
-  const ROLE_LABEL: Record<string, string> = { admin: '관리자', operator: '운영자', auditor: '보기' };
   const columns: Column<Sess>[] = [
     { key: 'last', label: '마지막 사용', mono: true, width: '200px', text: (r) => new Date(r.lastSeenAt).toLocaleString(), sort: (r) => r.lastSeenAt },
     { key: 'methods', label: '인증', mono: true, text: (r) => r.methods.join(' + ') },

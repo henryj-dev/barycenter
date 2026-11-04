@@ -9,14 +9,17 @@
   import { Badge, Button, DataTable, type Column, type MenuItem } from '#lib/ui';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import type { Scope } from '#lib/global/scope.svelte.ts';
+  import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import { listState } from './list-state';
 
   type Row = { key: string; count: number; source: string; used: number };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   let del = $state<{ kind: 'addressSet'; key: string } | undefined>();
   let selected = $state<string[]>([]);
 
@@ -44,10 +47,11 @@
   usePageActions(() => (ro ? undefined : create));
 </script>
 
-{#snippet create()}<Button variant="primary" href="/traffic/address-set/new">＋ 생성</Button>{/snippet}
+{#snippet create()}<Button variant="primary" href="/traffic/address-set/new">＋ 만들기</Button>{/snippet}
 
 {#snippet table()}
-<DataTable label="주소 집합 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live} bind:selected
+<WriteNote spaced />
+<DataTable label="주소 집합 목록" {rows} rowKey={(r) => r.key} {columns} {...listState(desk)} bind:selected
   search={{ placeholder: '이름으로 찾기', match: (r, q) => r.key.toLowerCase().includes(q) }}
   emptyTitle="주소 집합이 없어요" emptyBody="리스너의 출발지 제한에서 @이름 으로 써요. CLI 의 bary address-set create --cloudflare 로도 만들어요."
   onopen={(r) => { void goto(resourcePath('addressSet', r.key)); }} rowMenu={menu}>

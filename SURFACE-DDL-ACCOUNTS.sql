@@ -215,3 +215,12 @@ CREATE INDEX auth_throttle_last_idx ON auth_throttle(last_failure_at);
 
 -- 계정 단위 계수도 마지막 실패 뒤 15분이 지나면 처음부터 센다(공통 수치 1차 추가) — 그 시각을 둔다.
 ALTER TABLE users ADD COLUMN last_failed_at timestamptz;
+
+-- 006_last_login.sql
+-- 006_last_login.sql
+-- 마지막 로그인 (#126 사람 화면 시안). 관리자의 사용자 목록이 「마지막 로그인」을 보인다.
+--
+-- **세션이 생길 때 적는다** — MFA 를 다 지나 쓸 수 있는 세션이 된 순간이다. 비밀번호만 맞고 MFA 를 기다리는
+-- 세션·실패한 시도는 적지 않는다. 세션 표를 훑어 구하지 않는다: 세션은 철회·탈퇴 때 지워지고, 목록이 커진다.
+-- 아직 로그인한 적 없는 계정은 NULL 이다.
+ALTER TABLE users ADD COLUMN last_login_at timestamptz;

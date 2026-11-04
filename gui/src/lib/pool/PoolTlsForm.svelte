@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
-   * 풀 설정 탭의 「백엔드로 가는 TLS」 (2026-10-31). 풀의 다른 칸은 아래 JSON 수정이 맡는다 — 이 폼은
-   * `upstreamTls` 만 바꾸고 나머지(알고리즘 · 헬스체크 · hash 키)는 그대로 둔다.
+   * 풀 설정 탭의 「업스트림 TLS」(백엔드로 가는 TLS, 2026-10-31). 이 폼은 `upstreamTls` 만 바꾸고
+   * 나머지(알고리즘 · 헬스체크 · hash 키 · PROXY 송신)는 그대로 둔다 — 그 칸은 「기본」 · 「전송」 폼과 헬스체크 폼이 맡는다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';

@@ -117,7 +117,8 @@ export function detailOfListener(m: Readonly<Record<string, unknown>>): Listener
     const tls = typeof m['tls'] === 'object' && m['tls'] !== null ? m['tls'] as Record<string, unknown> : {};
     add('TLS 정책', typeof tls['policy'] === 'string' ? tls['policy'] : undefined);
     add('기본 인증서', typeof tls['defaultCertificate'] === 'string' ? tls['defaultCertificate'] : undefined);
-    add('HTTP/2', m['http2'] === true ? '켜짐' : '꺼짐');
+    // 렌더러는 `http2` 가 없으면 켠다(`l.http2 ?? true`, 엔진이 지원할 때). 끈 것은 `false` 를 적은 경우뿐이다.
+    add('HTTP/2', m['http2'] === false ? '꺼짐' : '켜짐');
     const rd = typeof m['httpRedirect'] === 'object' && m['httpRedirect'] !== null ? m['httpRedirect'] as { port?: unknown } : undefined;
     add('HTTP 리다이렉트', rd === undefined ? '꺼짐' : `켜짐 — :${String(rd.port)} 의 평문 요청을 HTTPS 로 301`);
   }

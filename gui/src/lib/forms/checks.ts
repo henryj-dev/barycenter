@@ -26,6 +26,14 @@ export const portError = (v: string | number): string | undefined => {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? undefined : '포트는 1–65535 사이의 정수예요.';
 };
 
+/** 가중치 — 해독기와 같은 범위(1 부터). nginx 가 `weight=0` 을 거절한다. 트래픽을 멈추는 자리는 드레인이다. */
+export const weightError = (v: string): string | undefined => {
+  const t = v.trim();
+  if (t === '') return undefined;
+  const n = Number(t);
+  return Number.isInteger(n) && n >= 1 && n <= 1_000_000 ? undefined : '가중치는 1 이상의 정수예요. 트래픽을 끊으려면 드레인을 써요.';
+};
+
 /** 칸이 채워졌고 오류가 없는가. */
 export const filled = (v: string | number, err?: (v: string) => string | undefined): boolean => {
   const t = String(v).trim();

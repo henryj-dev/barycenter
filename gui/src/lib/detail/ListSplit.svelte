@@ -16,7 +16,7 @@
   import PoolBackends from './PoolBackends.svelte';
   import { statusOf } from './facts';
 
-  let { kind, selected = $bindable([]), table, extra }: {
+  let { kind, selected = $bindable([]), table, extra, actions }: {
     kind: ResourceKind;
     /** 목록(DataTable)의 선택. 하나만 골랐을 때 아래가 열린다. */
     selected: string[];
@@ -24,10 +24,13 @@
     table: Snippet;
     /** 요약 아래에 더 그릴 것(고른 키를 받는다). */
     extra?: Snippet<[string]>;
+    /** 「상세 페이지 ↗」 앞에 더 둘 버튼(고른 키를 받는다) — 시안의 라우트 「URL로 다시 만들기」. */
+    actions?: Snippet<[string]>;
   } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
-  const ro = $derived(scope?.readOnly === true);
+  // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
+  const ro = $derived(scope?.blocked === true);
   const key = $derived(selected.length === 1 ? selected[0] : undefined);
   const item = $derived(key === undefined ? undefined : itemOf(desk.model, kind, key));
   const lines = $derived(item === undefined ? [] : kind === 'listener' ? detailOfListener(item) : summaryOf(kind, item));
@@ -43,6 +46,7 @@
     {#if key !== undefined}
       <div class="sd">
         <div class="act">
+          {#if actions}{@render actions(key)}{/if}
           <Button size="sm" variant="text" href={resourcePath(kind, key)}>상세 페이지 ↗</Button>
           {#if !ro && RESOURCES[kind].editable}<Button size="sm" href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}
         </div>

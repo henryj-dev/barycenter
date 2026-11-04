@@ -7,6 +7,7 @@
   import { getContext } from 'svelte';
   import { Badge, Button, Card, ConfirmDialog, FieldMessage, RadioGroup, Skeleton, toast } from '#lib/ui';
   import { LOST_MESSAGE, type Scope } from '#lib/global/scope.svelte.ts';
+  import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
   type Rev = {
@@ -57,7 +58,7 @@
   };
 </script>
 
-<Card title="리비전 롤백" sub="되돌릴 리비전을 골라요. 롤백하면 새 리비전이 만들어져요." padded={false}>
+<Card title="리비전 롤백" sub="되돌릴 리비전을 선택해요. 롤백하면 새 리비전이 만들어져요." padded={false}>
   {#if failed}
     <div class="pad"><FieldMessage>리비전 목록을 못 읽었어요. 잠시 뒤 다시 열어 봐요.</FieldMessage></div>
   {:else if rows === undefined}
@@ -92,6 +93,8 @@
       <Button error disabled={selected === undefined || lost || desk.editing} loading={desk.editing && asking}
         onclick={() => { asking = true; }}>{selected === undefined ? '롤백' : `롤백: r${selected}`}</Button>
     </div>
+  {:else if ro && rows !== undefined && !failed}
+    <div class="foot"><WriteNote /></div>
   {/if}
 </Card>
 

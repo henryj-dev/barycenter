@@ -108,7 +108,7 @@
     { label: '자료', value: hasMaterial ? '발급됨 — 리스너 · SNI 에 걸 수 있어요' : '아직 없음 — 첫 발급을 기다려요', tone: hasMaterial ? 'ok' : 'warn' },
     { label: '자동 갱신', value: '켜짐 — 만료 전에 스케줄러가 다시 받아요' },
   ]} />
-  <Writable>
+  <Writable target>
     <div class="switch">
       <Disclosure title="CA 바꾸기" hint="계정을 바꾸면 만료를 안 기다리고 새 계정으로 다시 받아요" open={switching}>
         <FormSection>
