@@ -8,6 +8,7 @@
    * 「초대 · N」(행마다 「다시 보내기」 · 「취소」) · SSO 공급자(공급자마다 JIT). 「마지막 로그인」 은 MFA 까지 끝난
    * 로그인의 시각이다(서버가 세션을 만들 때 적는다).
    * 「다시 보내기」 는 옛 링크를 죽이고 새 링크를 만든다 — 전달은 만들 때와 같다(메일, 아니면 한 번만 보이는 링크).
+   * 「토큰」 칸은 그 사람의 살아 있는 개인 API 토큰 수다. 누르면 목록이 열리고 폐기할 수 있다(대신 만들지는 않는다).
    */
   import { getContext, onMount } from 'svelte';
   import { ago } from '#lib/detail/facts';
@@ -15,6 +16,7 @@
   import type { Session } from '#lib/account/session.svelte.ts';
   import { ROLE_LABEL } from '#lib/account/text';
   import SsoJit from '#lib/account/SsoJit.svelte';
+  import UserTokens from '#lib/account/UserTokens.svelte';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
   import { Badge, Banner, Button, Card, ConfirmDialog, DataTable, FieldMessage, Form, FormRow, FormSection, Select, TextInput, toast, type Column, type FilterChip, type MenuItem } from '#lib/ui';
 
@@ -34,6 +36,9 @@
   let error = $state<string | undefined>();
   let deleting = $state<UserRow | undefined>();
   let asking = $state(false);
+  /** 토큰 목록을 연 사람. 목록을 다시 읽어도 같은 사람을 가리키도록 id 로 둔다. */
+  let tokensOf = $state<string | undefined>();
+  const tokensUser = $derived(users.find((u) => u.id === tokensOf));
 
   const load = async (): Promise<void> => {
     const [u, i] = await Promise.all([accountApi.users(), accountApi.invitations()]);
@@ -119,6 +124,7 @@
     { key: 'email', label: '이메일', mono: true, muted: true, hideable: true, text: (r) => r.email ?? '—' },
     { key: 'login', label: '마지막 로그인', muted: true, width: '130px', hideable: true,
       text: (r) => (r.lastLoginAt === null ? '아직 없어요' : ago(r.lastLoginAt) ?? '—'), sort: (r) => r.lastLoginAt ?? '' },
+    { key: 'tokens', label: '토큰', width: '80px', sort: (r) => r.tokens },
     { key: 'act', label: '', align: 'right', width: '100px' },
   ];
   const chips: FilterChip<UserRow>[] = [
@@ -131,6 +137,7 @@
     { label: u.roleAuthority === 'idp' ? '역할 정본을 로컬로' : '역할 정본을 IdP 로', onselect: () => { void accountApi.updateUser(u.id, { roleAuthority: u.roleAuthority === 'idp' ? 'local' : 'idp' }).then(act); } },
     { label: u.status === 'active' ? '정지' : '다시 활성', onselect: () => { setStatus(u); } },
     { label: '세션 끊기', onselect: () => { void accountApi.revokeSessions(u.id).then(act); } },
+    { label: `API 토큰 보기 · ${u.tokens}`, onselect: () => { tokensOf = u.id; } },
     { label: '복구 링크 만들기', onselect: () => { void recovery(u); } },
     { label: '삭제…', danger: true, onselect: () => { deleting = u; asking = true; } },
   ];
@@ -160,6 +167,8 @@
     <span title={u.lastLoginAt === null ? undefined : new Date(u.lastLoginAt).toLocaleString()}>{c.text?.(u) ?? ''}</span>
   {:else if c.key === 'totp'}
     {#if u.totp}<Badge tone="ok" icon="●">켜짐</Badge>{:else}<Badge tone="warn" icon="▲">꺼짐</Badge>{/if}
+  {:else if c.key === 'tokens'}
+    <Button size="sm" title="{u.username}의 API 토큰 보기" onclick={() => { tokensOf = u.id; }}>{u.tokens}</Button>
   {:else if c.key === 'act'}
     <Button size="sm" onclick={() => { setStatus(u); }}>{u.status === 'active' ? '정지' : '활성화'}</Button>
   {:else}{c.text?.(u) ?? ''}{/if}
@@ -209,6 +218,10 @@
         search={{ placeholder: '아이디 · 이메일 검색', match: (r, q) => r.username.includes(q.toLowerCase()) || (r.email ?? '').toLowerCase().includes(q.toLowerCase()) }}
         rowMenu={userMenu} emptyTitle="사람이 없어요" minHeight="0" />
     </Card>
+
+    {#if tokensUser !== undefined}
+      <UserTokens user={tokensUser} onclose={() => { tokensOf = undefined; }} onchanged={load} />
+    {/if}
 
     <Card title="초대 · {openInvites.length}" padded={false}>
       <DataTable rows={openInvites} rowKey={(r) => r.id} columns={inviteCols} cell={inviteCell} {loading} label="열린 초대"

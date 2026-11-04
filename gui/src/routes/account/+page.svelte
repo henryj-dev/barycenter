@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
-   * 내 계정 — 누구인가 · 비밀번호 · 인증 앱 · 복구 코드 · SSO 연결 · 이메일 · 열린 세션.
-   * 시안의 순서를 따른다. 시안의 「토큰」 표는 사람 세션으로 API 토큰을 만들고 거두는 API 가 없어서 뺐다.
+   * 내 계정 — 누구인가 · 비밀번호 · 인증 앱 · 복구 코드 · SSO 연결 · 이메일 · API 토큰 · 열린 세션.
+   * 시안의 순서를 따른다. 「API 토큰」 은 시안의 「토큰」 표다 — 토큰은 사람 한 명의 것이라 내 계정에 둔다.
    */
   import { getContext, onMount } from 'svelte';
   import { accountApi, type Me } from '#lib/account/api';
@@ -11,6 +11,7 @@
   import TotpManage from '#lib/account/TotpManage.svelte';
   import ChangeEmail from '#lib/account/ChangeEmail.svelte';
   import SsoIdentities from '#lib/account/SsoIdentities.svelte';
+  import ApiTokens from '#lib/account/ApiTokens.svelte';
   import { Badge, Button, Card, DataTable, DescriptionList, FieldMessage, Skeleton, type Column } from '#lib/ui';
 
   type Sess = Me['sessions'][number];
@@ -63,6 +64,7 @@
     <TotpManage {me} onChanged={session.refresh} />
     {#if ssoOn}<SsoIdentities {me} onChanged={session.refresh} />{/if}
     {#if mailOn}<ChangeEmail />{/if}
+    <ApiTokens {me} />
     <Card title="열린 세션 · {me.sessions.length}" padded={false}>
       {#snippet actions()}<Button size="sm" variant="danger" onclick={() => { void logoutAll(); }}>모든 기기에서 로그아웃</Button>{/snippet}
       <DataTable rows={me.sessions} rowKey={(r) => r.createdAt + r.lastSeenAt} {columns} label="열린 세션" emptyTitle="열린 세션이 없어요" minHeight="0" />

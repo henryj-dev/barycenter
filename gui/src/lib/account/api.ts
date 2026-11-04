@@ -33,6 +33,14 @@ export type UserRow = {
   roleAuthority: string; status: 'active' | 'suspended'; createdAt: string; lockedUntil: string | null; totp: boolean;
   /** 마지막으로 쓸 수 있는 세션이 생긴 시각(MFA 까지 끝난 로그인). 한 번도 없으면 null. */
   lastLoginAt: string | null;
+  /** 철회되지 않고 만료되지 않은 개인 API 토큰 수. */
+  tokens: number;
+};
+
+/** 개인 API 토큰 한 줄 — **값은 없다**(발급 응답에 한 번만 나온다). `prefix` 는 비밀이 아닌 앞부분이다. */
+export type ApiToken = {
+  id: string; name: string; role: Role; prefix: string;
+  createdAt: string; expiresAt: string; lastUsedAt: string | null;
 };
 
 export type InvitationRow = {
@@ -100,6 +108,13 @@ export const accountApi = {
   deleteUser: (id: string) => call<{ deleted: true }>('DELETE', `/api/v1/users/${encodeURIComponent(id)}`),
   revokeSessions: (id: string) => call<{ revoked: number }>('POST', `/api/v1/users/${encodeURIComponent(id)}/revoke-sessions`, {}),
   recoveryLink: (id: string) => call<{ token: string }>('POST', `/api/v1/users/${encodeURIComponent(id)}/recovery-link`, {}),
+  tokens: () => call<ApiToken[]>('GET', '/api/v1/account/tokens'),
+  createToken: (name: string, role: Role, expiresInDays: number) =>
+    call<ApiToken & { token: string }>('POST', '/api/v1/account/tokens', { name, role, expiresInDays }),
+  revokeToken: (id: string) => call<{ revoked: true }>('DELETE', `/api/v1/account/tokens/${encodeURIComponent(id)}`),
+  userTokens: (userId: string) => call<ApiToken[]>('GET', `/api/v1/users/${encodeURIComponent(userId)}/tokens`),
+  revokeUserToken: (userId: string, id: string) =>
+    call<{ revoked: true }>('DELETE', `/api/v1/users/${encodeURIComponent(userId)}/tokens/${encodeURIComponent(id)}`),
   invitations: () => call<InvitationRow[]>('GET', '/api/v1/invitations'),
   invite: (role: Role, email: string) =>
     call<{ id: string; token: string; expiresAt: string; mailed: boolean }>('POST', '/api/v1/invitations', { role, ...(email === '' ? {} : { email }) }),

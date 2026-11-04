@@ -917,6 +917,10 @@ const ROUTES: Route[] = [
       ...(c.who.account !== undefined && api.accounts !== undefined
         ? { alive: ((acc, h) => () => acc.sessionAlive(h))(api.accounts, c.who.account.sessionHash) }
         : {}),
+      // 개인 토큰도 같다 — 폐기·만료·주인 정지 뒤 열린 스트림을 닫는다.
+      ...(c.who.token !== undefined && api.accounts !== undefined
+        ? { alive: ((acc, id) => () => acc.tokenAlive(id))(api.accounts, c.who.token.id) }
+        : {}),
     });
   }),
 
@@ -1126,6 +1130,37 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
     json(c.res, 200, { unlinked: true });
   }, { leaderFree: true }),
 
+  /**
+   * **개인 API 토큰** (2026-11-04 사용자 승인 설계). 사람 세션만 — 토큰으로 토큰을 만들지 못한다(`personOf`).
+   * 발급·폐기는 민감 작업이다(최근 인증 앱 확인). 값은 발급 응답에 **한 번만** 나간다.
+   */
+  route<AccountApi>('GET', '/api/v1/account/tokens', 'read', async (c, api) => {
+    json(c.res, 200, await accountsOf(api).listTokens(personOf(c.who).userId));
+  }, { leaderFree: true }),
+
+  route<AccountApi>('POST', '/api/v1/account/tokens', 'read', async (c, api) => {
+    const b = (c.body ?? {}) as Record<string, unknown>;
+    const out = await accountsOf(api).issueToken(personOf(c.who).userId, {
+      name: b['name'], role: b['role'], ...('expiresInDays' in b ? { expiresInDays: b['expiresInDays'] } : {}),
+    }, c.who.name, metaOf(c.req));
+    json(c.res, 201, out, { 'cache-control': 'no-store' });
+  }, { leaderFree: true, sensitive: true }),
+
+  route<AccountApi>('DELETE', '/api/v1/account/tokens/:id', 'read', async (c, api) => {
+    await accountsOf(api).revokeToken(personOf(c.who).userId, c.params['id'] ?? '', c.who.name, metaOf(c.req));
+    json(c.res, 200, { revoked: true });
+  }, { leaderFree: true, sensitive: true }),
+
+  /** 관리자 — 남의 토큰을 보고 폐기한다. **남의 토큰을 만들지는 못한다**(그런 경로가 없다). */
+  route<AccountApi>('GET', '/api/v1/users/:id/tokens', 'admin', async (c, api) => {
+    json(c.res, 200, await accountsOf(api).listTokens(c.params['id'] ?? ''));
+  }, { leaderFree: true }),
+
+  route<AccountApi>('DELETE', '/api/v1/users/:id/tokens/:tokenId', 'admin', async (c, api) => {
+    await accountsOf(api).revokeToken(c.params['id'] ?? '', c.params['tokenId'] ?? '', c.who.name, metaOf(c.req));
+    json(c.res, 200, { revoked: true });
+  }, { leaderFree: true, sensitive: true }),
+
   route<AccountApi>('GET', '/api/v1/sso-providers', 'admin', async (c, api) => {
     json(c.res, 200, {
       configured: api.oidcRp?.issuer ?? null,
@@ -1289,9 +1324,13 @@ const relayTo = (path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GE
    */
   const acc = api.accounts;
   const hash = c.who.account?.sessionHash;
-  const timer = acc !== undefined && hash !== undefined
+  const tokenId = c.who.token?.id;
+  const alive = acc === undefined ? undefined
+    : hash !== undefined ? () => acc.sessionAlive(hash)
+      : tokenId !== undefined ? () => acc.tokenAlive(tokenId) : undefined;
+  const timer = alive !== undefined
     ? setInterval(() => {
-      acc.sessionAlive(hash).then((ok) => { if (!ok) c.res.end(); }, () => c.res.end());
+      alive().then((ok) => { if (!ok) c.res.end(); }, () => c.res.end());
     }, 15_000)
     : undefined;
   timer?.unref?.();
@@ -1782,6 +1821,16 @@ async function dispatch<A>(
     return;
   }
 
+  // **개인 토큰은 민감 작업을 못 한다** (2026-11-04). 주인의 세션은 인증 앱을 다시 확인해야 하는 일이다 — 토큰은
+  // 그 확인을 받을 수 없으니, 받아 주면 토큰이 주인을 넘는다. 파일 토큰(비상 출입구)은 아래처럼 그대로다.
+  if (hit.r.sensitive === true && who.token !== undefined) {
+    json(res, 403, {
+      code: 'token_not_allowed',
+      message: '이 작업은 사람 세션에서 인증 앱을 확인해야 한다 — 개인 API 토큰으로는 못 한다',
+    });
+    return;
+  }
+
   // **민감 작업은 최근 MFA** (공통 회원정책 1차). 사람 세션만 — 기계 토큰은 MFA 가 없다.
   if (hit.r.sensitive === true && who.account !== undefined) {
     const at = who.account.mfaAt;
@@ -2194,7 +2243,21 @@ async function handle(
    * 인증서는 이름만 말하고 역할은 토큰 표에서 온다. `principalFromClientCert` 가
    * 그 규칙을 진다.
    */
-  const bearer = api.auth.authenticate(req.headers.authorization);
+  let bearer = api.auth.authenticate(req.headers.authorization);
+  /**
+   * **개인 API 토큰은 파일 토큰 다음이다** (2026-11-04). 파일 토큰은 계정 PG 가 내려가도 들어오는 비상 출입구라
+   * 먼저 보고 그대로 둔다. `bary_` 모양만 계정 PG 에 묻는다. 못 물으면 세션과 같이 503 — 캐시로 넘기지 않는다.
+   * 틀린 토큰은 아래의 실패 계수(`authFailures`)를 지금과 똑같이 지난다.
+   */
+  const personalToken = /^Bearer\s+(bary_\S+)$/.exec((req.headers.authorization ?? '').trim())?.[1];
+  if (bearer === undefined && personalToken !== undefined && api.accounts !== undefined) {
+    try {
+      bearer = await api.accounts.authenticateToken(personalToken);
+    } catch (e) {
+      if (e instanceof AccountStoreUnavailable) { accountStoreDown(res); return; }
+      throw e;
+    }
+  }
   /**
    * 사람 계정 세션은 **요청마다 계정 PG 로 확인**한다 — 로그아웃·정지·역할 하향이 다음 요청부터
    * 반영되는 자리다. 못 물으면 거부한다(503). OIDC 메모리 세션(현행)은 그 뒤에 본다.

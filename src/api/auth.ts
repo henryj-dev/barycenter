@@ -123,7 +123,30 @@ export type Principal = {
    * `/me` 같은 「그 사람」 경로가 기계 신원을 사람으로 착각하지 않게 하는 표식이다.
    */
   account?: { userId: string; sessionHash: string; mfaAt?: number };
+  /**
+   * 개인 API 토큰일 때만 있다 (계정 PG 의 `api_tokens`). 사람 세션이 **아니다** — `account` 는 없다. 그래서
+   * 「나」 경로(`/me` · 토큰 발급)는 못 쓰고, 인증 앱 확인(step-up)이 필요한 민감 작업도 못 한다: 토큰은 MFA 를
+   * 다시 받을 수 없고, 주인의 세션이 못 하는 것을 토큰이 하면 토큰이 주인을 넘는다.
+   */
+  token?: { id: string; userId: string };
 };
+
+/** 역할의 높낮이 — auditor < operator < admin. 개인 토큰의 「주인을 넘지 않는다」가 이것으로 잰다. */
+export const roleRank = (role: Role): number => {
+  if (role === 'auditor') return 0;
+  if (role === 'operator') return 1;
+  if (role === 'admin') return 2;
+  throw new Error(`아는 역할이 아니다: ${JSON.stringify(role)}`);
+};
+
+/** 둘 중 낮은 역할. */
+export const minRole = (a: Role, b: Role): Role => (roleRank(a) <= roleRank(b) ? a : b);
+
+/**
+ * 개인 API 토큰의 모양 — `bary_<lookup 16 hex>_<secret 43 base64url>`. 접두사는 비밀 스캐너(gitleaks 등)가
+ * 잡으라고 둔다. `lookup` 은 비밀이 아니다(행을 찾는 값). 비밀은 뒤쪽 32바이트다.
+ */
+export const PERSONAL_TOKEN = /^bary_([0-9a-f]{16})_([A-Za-z0-9_-]{43})$/;
 
 export type TokenSpec = {
   name: string;
