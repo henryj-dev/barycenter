@@ -52,7 +52,7 @@
   {:else}{c.text?.(t) ?? ''}{/if}
 {/snippet}
 
-<Card title="{user.username}의 API 토큰 · {tokens.length}" sub="그 사람이 만든 토큰이에요. 관리자는 폐기만 해요." padded={false}>
+<Card title="{user.username}의 API 토큰 · {tokens.length}" sub="그 사람이 만든 토큰이에요. 관리자는 폐기만 해요. 정지하면 모두 폐기되고, 다시 활성해도 돌아오지 않아요." padded={false}>
   {#snippet actions()}<Button size="sm" onclick={onclose}>닫기</Button>{/snippet}
   {#if error !== undefined}<div class="note"><FieldMessage tone="error">{error}</FieldMessage></div>{/if}
   <DataTable rows={tokens} rowKey={(r) => r.id} {columns} {cell} {loading} label="{user.username}의 API 토큰"

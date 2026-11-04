@@ -416,6 +416,9 @@ export class AccountService {
         await c.query('DELETE FROM mfa_totp WHERE user_id=$1', [userId]);
         await c.query('DELETE FROM mfa_recovery_codes WHERE user_id=$1', [userId]);
         await c.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId]);
+        // 복구는 인증 수단을 처음부터 다시 정하는 일이다 — 옛 수단으로 만든 토큰도 거둔다(사용자 결정 2026-11-04).
+        // 비밀번호만 바꾸는 것(`changePassword` · 메일 재설정)은 토큰을 그대로 둔다.
+        await this.#revokeAllTokens(c, userId, `user:${userId}`, 'recovery', meta);
       } else {
         const username = (input.username ?? '').trim().toLowerCase();
         if (!USERNAME.test(username)) throw new AccountError(400, 'bad_username', '아이디는 영소문자·숫자·._- 2~63자다');
@@ -1191,6 +1194,18 @@ export class AccountService {
     };
   }
 
+  /**
+   * 그 사람의 살아 있는 토큰을 전부 거둔다 — 정지 · 복구 링크 사용. 거둔 것이 있으면 계정 감사에 id 와 개수를 남긴다
+   * (값 · 해시는 없다).
+   */
+  async #revokeAllTokens(c: Queryable, userId: string, by: string, reason: 'suspend' | 'recovery', meta: Meta): Promise<void> {
+    const ids = (await c.query(
+      `UPDATE api_tokens SET revoked_at=$3, revoked_by=$2 WHERE user_id=$1 AND revoked_at IS NULL RETURNING id`,
+      [userId, by, new Date(this.#now())],
+    )).rows.map((r) => str(r, 'id'));
+    if (ids.length > 0) await this.#audit(c, by, 'account.token_revoke_all', userId, meta, { reason, count: ids.length, tokenIds: ids });
+  }
+
   /** 열린 SSE 의 하트비트가 묻는다(개인 토큰). 못 물으면 던진다 — 스트림 쪽이 닫는다. */
   async tokenAlive(tokenId: string): Promise<boolean> {
     if (!UUID.test(tokenId)) return false;
@@ -1264,6 +1279,8 @@ export class AccountService {
         await c.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId]);
       }
       await this.#audit(c, by, 'account.update', userId, meta, { role, status, roleAuthority: authority });
+      // 개인 토큰도 세션과 같다 — 정지는 거둔다. 다시 활성해도 돌아오지 않는다(사용자 결정 2026-11-04).
+      if (status === 'suspended') await this.#revokeAllTokens(c, userId, by, 'suspend', meta);
     });
   }
 

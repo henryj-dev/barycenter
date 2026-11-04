@@ -4,6 +4,7 @@
    *
    * 토큰은 **내 것**이다. 역할은 내 역할 이하로만 고르고(서버가 다시 판정한다), 내 역할이 내려가면 토큰도 같이
    * 깎인다. 만료는 반드시 있다(기본 90일, 최대 365일). 값은 만든 순간 **한 번만** 보인다 — 서버에는 해시만 있다.
+   * 정지 · 복구 링크 사용은 토큰을 전부 거둔다(다시 활성해도 안 돌아온다). 비밀번호 변경은 그대로 둔다.
    * 만들기 · 폐기는 민감 작업이라 인증 앱 확인을 다시 묻는다(`StepUpDialog`). 인증 앱이 없으면 만들 수 없다.
    */
   import { onMount } from 'svelte';
@@ -108,7 +109,7 @@
       </div>
       {#if nameError !== undefined}<FieldMessage tone="error">{nameError}</FieldMessage>
       {:else if daysError !== undefined}<FieldMessage tone="error">{daysError}</FieldMessage>
-      {:else}<FieldMessage>역할은 내 역할({ROLE_LABEL[me.role]}) 이하로만 골라요. 내 역할이 내려가면 토큰도 같이 내려가요. 만료는 기본 90일, 최대 365일이에요.</FieldMessage>{/if}
+      {:else}<FieldMessage>역할은 내 역할({ROLE_LABEL[me.role]}) 이하로만 골라요. 내 역할이 내려가면 토큰도 같이 내려가요. 만료는 기본 90일, 최대 365일이에요. 계정이 정지되거나 복구 링크를 쓰면 토큰은 모두 폐기돼요.</FieldMessage>{/if}
     </div>
   {/if}
   {#if created !== undefined}

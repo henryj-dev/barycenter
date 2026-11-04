@@ -137,21 +137,63 @@ describe('개인 토큰 — 서비스', () => {
     await expect(s.revokeToken(op.id, 'not-a-uuid', 'user:op')).rejects.toMatchObject({ code: 'no_token' });
   });
 
-  it('**주인이 정지되면 401, 삭제되면 토큰도 거둔다**', async () => {
+  it('**정지하면 토큰을 거두고, 다시 활성해도 돌아오지 않는다** — 감사에는 id · 개수만', async () => {
+    const s = svc();
+    await person(s, 'admin', 'root');
+    const op = await person(s, 'operator', 'op');
+    const a = await s.issueToken(op.id, { name: 'ci', role: 'operator' }, 'user:op');
+    const b = await s.issueToken(op.id, { name: 'ro', role: 'auditor' }, 'user:op');
+    await s.updateUser(op.id, { status: 'suspended' }, 'user:root');
+    expect(await s.authenticateToken(a.token)).toBeUndefined();
+    expect(await s.tokenAlive(a.id)).toBe(false);
+    // 정지된 사람은 새로 발급하지 못한다
+    await expect(s.issueToken(op.id, { name: 'ci2', role: 'auditor' }, 'user:op')).rejects.toMatchObject({ code: 'no_user' });
+    await s.updateUser(op.id, { status: 'active' }, 'user:root');
+    expect(await s.authenticateToken(a.token)).toBeUndefined();
+    expect(await s.authenticateToken(b.token)).toBeUndefined();
+    expect(await s.listTokens(op.id)).toEqual([]);
+    const all = (await auditRows()).filter((r) => r.action === 'account.token_revoke_all');
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ actor: 'user:root', subject_user: op.id });
+    const d = all[0]!.detail as { reason: string; count: number; tokenIds: string[] };
+    expect(d.reason).toBe('suspend');
+    expect(d.count).toBe(2);
+    expect([...d.tokenIds].sort()).toEqual([a.id, b.id].sort());
+    expect(JSON.stringify(all)).not.toContain(a.token.slice(-43));
+    // 거둘 것이 없으면 감사를 늘리지 않는다
+    await s.updateUser(op.id, { status: 'suspended' }, 'user:root');
+    expect((await auditRows()).filter((r) => r.action === 'account.token_revoke_all')).toHaveLength(1);
+  });
+
+  it('**삭제되면 토큰도 거둔다**', async () => {
     const s = svc();
     await person(s, 'admin', 'root');
     const op = await person(s, 'operator', 'op');
     const t = await s.issueToken(op.id, { name: 'ci', role: 'operator' }, 'user:op');
-    await s.updateUser(op.id, { status: 'suspended' }, 'user:root');
-    expect(await s.authenticateToken(t.token)).toBeUndefined();
-    expect(await s.tokenAlive(t.id)).toBe(false);
-    // 정지된 사람은 새로 발급하지 못한다
-    await expect(s.issueToken(op.id, { name: 'ci2', role: 'auditor' }, 'user:op')).rejects.toMatchObject({ code: 'no_user' });
-    await s.updateUser(op.id, { status: 'active' }, 'user:root');
-    expect(await s.authenticateToken(t.token)).toBeDefined();
     await s.deleteUser(op.id, 'user:root');
     expect(await s.authenticateToken(t.token)).toBeUndefined();
     expect((await db.query('SELECT revoked_at FROM api_tokens WHERE id=$1', [t.id])).rows[0]!['revoked_at']).not.toBeNull();
+  });
+
+  it('**복구 링크를 쓰면 토큰을 거두고, 비밀번호만 바꾸면 그대로다**', async () => {
+    const s = svc();
+    await person(s, 'admin', 'root');
+    const op = await person(s, 'operator', 'op');
+    const t = await s.issueToken(op.id, { name: 'ci', role: 'operator' }, 'user:op');
+    // 비밀번호 변경 — 토큰은 산다
+    await s.changePassword(op.id, op.password, 'operator-Pass-2y', 'keep-none');
+    expect((await s.authenticateToken(t.token))?.role).toBe('operator');
+    // 복구 링크는 만들기만 해서는 거두지 않는다 — 쓸 때 거둔다
+    const link = await s.recoveryLink(op.id, 'user:root');
+    expect(await s.authenticateToken(t.token)).toBeDefined();
+    await s.acceptLink({ token: link, password: 'operator-Pass-3z' });
+    expect(await s.authenticateToken(t.token)).toBeUndefined();
+    expect(await s.listTokens(op.id)).toEqual([]);
+    const all = (await auditRows()).filter((r) => r.action === 'account.token_revoke_all');
+    expect(all.map((r) => (r.detail as { reason: string; tokenIds: string[] }))).toEqual([{ reason: 'recovery', count: 1, tokenIds: [t.id] }]);
+    // 복구 뒤 새로 만든 토큰은 쓴다
+    const n = await s.issueToken(op.id, { name: 'ci', role: 'operator' }, 'user:op');
+    expect(await s.authenticateToken(n.token)).toBeDefined();
   });
 
   it('**발급 역할은 주인의 역할 이하다** — operator 는 admin 토큰을 못 만든다', async () => {
