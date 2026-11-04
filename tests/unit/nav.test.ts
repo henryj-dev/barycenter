@@ -42,6 +42,14 @@ describe('사이드바 메뉴', () => {
       expect(PAGE_META[r.place].desc, r.path).not.toBe('');
     }
   });
+
+  it('지역 화면 설명은 전역이 읽기만 한다고 하지 않는다 — 고른 지역에 바로 쓴다', () => {
+    // 2026-11-01 부터 전역은 고른 지역으로 쓰기를 중계한다(src/global/relay.ts). 읽기 전용은 고르기 전뿐이다.
+    const d = PAGE_META.regions.desc;
+    expect(d).not.toContain('전역 화면은 읽기만 해요');
+    expect(d).not.toContain('그 지역의 GUI에서 바꿔요');
+    expect(d).toContain('고른 지역에 바로 써요');
+  });
 });
 
 describe('브레드크럼', () => {
