@@ -14,7 +14,7 @@
    * 항목을 누르면 `onpick` 을 부른다 — 셸의 desk 를 옮기지 않는다. 오른쪽 영향 · 적용 · 확인 창은 그 지역의 desk · 범위다.
    */
   import { getContext } from 'svelte';
-  import { Button, ConfirmDialog, Disclosure, FieldMessage, ImpactCard, RadioGroup, StepList, toast, type ConfirmLine, type ImpactLine, type StepState, type Tone } from '#lib/ui';
+  import { Button, ConfirmDialog, FieldMessage, ImpactCard, RadioGroup, StepList, toast, type ConfirmLine, type ImpactLine, type StepState, type Tone } from '#lib/ui';
   import WriteNote from '#lib/global/WriteNote.svelte';
   import { LOST_LABEL, LOST_MESSAGE, type RegionSummary, type Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
@@ -95,6 +95,20 @@
   const removed = $derived(desk.pendingResources.removed.map((r) => ({
     ...r, label: Object.hasOwn(RESOURCES, r.kind) ? RESOURCES[r.kind as ResourceKind].label : r.kind,
   })));
+  /** 활성 리비전 — 게시된 세대(`r<리비전>-e<epoch>`, `src/control/plane.ts`)에서 읽는다. 모르면 undefined. */
+  const active = $derived(/^r(\d+)-e/.exec(desk.status.published.generation ?? '')?.[1]);
+  /**
+   * 판정 한 줄(시안 `vt`). 롤백 plan · 세대만 새로 서는 엔진은 시안에 없는 사실이라 그 말을 그대로 둔다.
+   * reload 는 진행 중인 세션을 옛 워커가 마무리한다(nginx graceful reload).
+   */
+  const verdict = $derived(view === undefined ? ''
+    : view.rollbackOf !== undefined ? `r${view.rollbackOf}의 내용으로 되돌려요. 영향은 미리 재지 않았어요.`
+    : view.requiresReload ? 'reload가 필요해요. 진행 중인 세션은 옛 워커가 마무리해요.'
+    : view.headline.startsWith('산출물은 같지만') ? '산출물은 같지만 이 엔진은 세대를 새로 세워요. 멤버십 평면이 없어요.'
+    : '세대 전환이 필요 없어요.');
+  /** 「리비전 r8 → r9」 — 활성 리비전을 모르면 head 만. */
+  const span = $derived(view === undefined ? '' : active === undefined ? `r${view.revision}` : `r${active} → r${view.revision}`);
+  let commitsOpen = $state(false);
   const tone = $derived<Tone>(view === undefined ? 'ok' : view.bindBlockers.length > 0 ? 'danger' : view.requiresReload || view.rollbackOf !== undefined ? 'warn' : 'ok');
 
   // ---- 적용 항목 (시안 `groupsOf`) — 전역이면 지역 요약에서 지역마다 적용 대기 수를 읽는다
@@ -176,8 +190,10 @@
     const error = thrown ?? desk.error;
     if (error === undefined) {
       const revision = /r(\d+)$/.exec(title)?.[1];
+      const gen = desk.status.published.generation;
+      const genText = revision !== undefined && gen?.startsWith(`r${revision}-`) === true ? ` 세대 ${gen}을 확인했어요.` : '';
       result = {
-        tone: 'ok', title: `● ${title.replace(/^적용: /, '적용했어요: ')}`, done: true,
+        tone: 'ok', title: `● ${title.replace(/^적용: /, '적용했어요: ')}.${genText}`, done: true,
         body: `${n > 1 ? `커밋 ${n}건(${list})이 함께 들어갔어요. ` : ''}활성화를 확인했어요.${where}`,
         ...(planId === undefined ? {} : { planId }),
         ...(revision === undefined ? {} : { revision }),
@@ -202,7 +218,7 @@
     void settle(`적용: r${f.revision}`, () => desk.retryApply(), f.planId, 1, `r${f.revision}`);
   };
   const dlgLines = $derived<ConfirmLine[]>(view === undefined ? [] : [
-    { tone, icon: tone === 'ok' ? '●' : '▲', text: view.headline },
+    { tone, icon: tone === 'ok' ? '●' : '▲', text: verdict },
     ...breaking.slice(0, 2),
     ...(view.rollbackOf === undefined ? [{ tone: 'ok' as const, icon: '＋', text: `소켓 ${opened.length}개를 열고 ${closed.length}개를 닫아요.` }] : []),
   ]);
@@ -213,17 +229,16 @@
     <div class="res" data-tone={result.tone} role="status">
       <div class="rt">{result.title}</div>
       <div class="rb">{result.body}</div>
-      {#if result.done}<StepList steps={steps('done')} label="적용 단계" />{/if}
-      <!-- 클러스터면 노드마다 따라왔는지를 몇 번 다시 읽어 보인다(시안 `convRows`). -->
-      {#if result.done}<ClusterConvergence revision={result.revision} />{/if}
-      <div><Button size="sm" onclick={() => { result = undefined; }}>닫기</Button></div>
+      <div class="rc"><Button size="sm" onclick={() => { result = undefined; }}>닫기</Button></div>
     </div>
+    <!-- 클러스터면 노드마다 따라왔는지를 몇 번 다시 읽어 보인다(시안 `convRows` — 결과 아래 구획). -->
+    {#if result.done}<ClusterConvergence revision={result.revision} />{/if}
   {/if}
 {/snippet}
 
 {#snippet progressBlock()}
   <div class="stp">
-    <div class="sh">적용 단계 · 끝나면 결과를 보여요</div>
+    <div class="sh">적용 단계</div>
     <StepList steps={steps('todo')} label="적용 단계" />
   </div>
 {/snippet}
@@ -234,7 +249,7 @@
       <div class="sh" style:color="var(--danger)">− 지울 것 · {removed.length}</div>
       <div class="tbl lst" role="table" aria-label="지울 것">
         {#each removed as r (`${r.kind}/${r.key}`)}
-          <div class="tr gone" role="row"><span role="cell" class="muted">{r.label}</span><span role="cell"><code>{r.key}</code></span></div>
+          <div class="tr gone" role="row"><span role="cell" class="muted">{r.label}</span><span role="cell" class="mono">{r.key}</span></div>
         {/each}
       </div>
     </div>
@@ -260,7 +275,7 @@
           {#if g !== undefined}
             <span class="row" title={g.lost ? LOST_MESSAGE : undefined}>
               <span class="r1">
-                <code>{g.head === undefined ? '—' : `r${g.head}`}</code>
+                <span class="rev">{g.head === undefined ? '—' : `r${g.head}`}</span>
                 <span class="by">{g.by}</span>
                 <span class="st" style:color="var(--{g.tone})">{ICON[g.tone]} {g.text}</span>
               </span>
@@ -278,27 +293,33 @@
     {#if unknownRow !== undefined}
       <span class="lost" role="status" data-tone={unknownRow.tone}>{ICON[unknownRow.tone]} {unknownRow.name} · {unknownRow.title}</span>
     {:else if view !== undefined}
-      <ImpactCard {tone} title={view.headline} {breaking} calm={view.rollbackOf === undefined ? '끊기는 연결이 없어요.' : undefined}
-        {quiet} progress={desk.applying ? progressBlock : undefined} result={result !== undefined ? resultBlock : undefined}>
+      <!-- 시안 순서: 포함된 커밋 → 끊기거나 바뀌는 것 → 소켓 → 영향 리스너 → 영향 없음. 그래서 끊기는 것도 details 로 그린다. -->
+      <ImpactCard {tone} title={verdict} {quiet} progress={desk.applying ? progressBlock : undefined} result={result !== undefined ? resultBlock : undefined}>
         {#snippet sub()}
-          <code>r{view.revision}</code>{#if commits.length > 1} · 커밋 {commits.length}건을 합친 영향{/if}{#if view.rollbackOf === undefined && opened.length === 0 && closed.length === 0} · 소켓 변화 없음{/if}{#if view.planes.length > 0} · 평면 {view.planes.join(', ')}{/if} · plan <code>{view.planId}</code>
+          리비전 {span} · 커밋 {Math.max(commits.length, 1)}건을 합친 영향{#if view.planes.length > 0} · 평면 {view.planes.join(', ')}{/if} · plan <span class="mono">{view.planId}</span>
         {/snippet}
         {#snippet details()}
           {#if commits.length > 0}
-            <div class="sec">
-              <Disclosure title={`포함된 커밋 · ${commits.length}`} hint={revList}>
-                <div class="tbl commits">
-                  {#each commits as c (c.rev)}<div class="tr"><code>r{c.rev}</code><span>{c.title}</span><span class="muted">{c.by}</span></div>{/each}
-                </div>
-              </Disclosure>
-            </div>
+            <details class="cm" bind:open={commitsOpen}>
+              <summary>{commitsOpen ? '▾' : '▸'} 포함된 커밋 · {commits.length}</summary>
+              <div class="cml">
+                {#each commits as c (c.rev)}<div class="cmr"><span class="rev">r{c.rev}</span><span>{c.title}</span><span class="cby">{c.by}</span></div>{/each}
+              </div>
+            </details>
           {/if}
+          <div class:sec={commits.length > 0}>
+            <div class="sh" style:color="var(--danger)">끊기거나 바뀌는 것 · {breaking.length}</div>
+            <div class="lines">
+              {#each breaking as l, i (i)}<div class="line"><span style:color="var(--{l.tone})">{l.icon}</span><span>{l.text}</span></div>{/each}
+              {#if breaking.length === 0}<div class="calm">● 끊기는 연결이 없어요.</div>{/if}
+            </div>
+          </div>
           {#if opened.length + closed.length > 0}
             <div class="sec socks">
               <div><div class="sh" style:color="var(--ok)">＋ 열리는 소켓 · {opened.length}</div>
-                <div class="mono">{#each opened as a (a)}<span>{a}</span>{:else}<span class="none">없음</span>{/each}</div></div>
+                <div class="sl">{#each opened as a (a)}<span>{a}</span>{:else}<span class="none">없음</span>{/each}</div></div>
               <div><div class="sh" style:color="var(--danger)">− 닫히는 소켓 · {closed.length}</div>
-                <div class="mono">{#each closed as a (a)}<span>{a}</span>{:else}<span class="none">없음</span>{/each}</div></div>
+                <div class="sl">{#each closed as a (a)}<span>{a}</span>{:else}<span class="none">없음</span>{/each}</div></div>
             </div>
           {/if}
           {#if listeners.length > 0}
@@ -307,7 +328,7 @@
               <div class="tbl lst" role="table" aria-label="영향을 받는 리스너">
                 <div class="tr th" role="row"><span role="columnheader">리스너</span><span role="columnheader">변경 종류</span><span role="columnheader">기존 세션 영향</span></div>
                 {#each listeners as l (l.key)}
-                  <div class="tr" role="row"><span role="cell"><code>{l.key}</code> <span class="muted">{l.where}</span></span><span role="cell">{l.change}</span><span role="cell" class="muted">{l.sess}</span></div>
+                  <div class="tr" role="row"><span role="cell" class="mono" title={l.where}>{l.key}</span><span role="cell">{l.change}</span><span role="cell" class="muted">{l.sess}</span></div>
                 {/each}
               </div>
             </div>
@@ -317,9 +338,9 @@
         {#snippet footer()}
           {#if !ro}
             {#if view.bindBlockers.length > 0}
-              <FieldMessage>이 변경은 한 번에 적용할 수 없어요. 위 안내대로 두 번에 나눠 적용해요.</FieldMessage>
+              <span class="note">이 변경은 한 번에 적용할 수 없어요. 위 안내대로 두 번에 나눠 적용해요.</span>
             {:else}
-              <FieldMessage>커밋 {Math.max(commits.length, 1)}건을 함께 적용해요.{where}</FieldMessage>
+              <span class="note">{active === undefined ? '' : `활성 리비전 r${active} → r${view.revision} · `}커밋 {Math.max(commits.length, 1)}건을 함께 적용해요.{where}</span>
             {/if}
             {@render lostNote()}
             <Button variant="danger" loading={desk.applying} disabled={view.bindBlockers.length > 0 || lost} onclick={() => { asking = true; }}>{desk.applying ? '적용하는 중' : `적용: r${view.revision}`}</Button>
@@ -336,7 +357,7 @@
         {#snippet details()}{@render removedBlock()}{/snippet}
         {#snippet footer()}
           {#if !ro}
-            <FieldMessage>같은 설정으로 다시 시도해요. 새 리비전은 안 만들어요.{where}</FieldMessage>
+            <span class="note">같은 설정으로 다시 시도해요. 새 리비전은 안 만들어요.{where}</span>
             {@render lostNote()}
             <Button variant="danger" loading={desk.applying} disabled={lost} onclick={retry}>{desk.applying ? '적용하는 중' : `r${desk.failedApply.revision} 다시 적용해요`}</Button>
           {:else}
@@ -344,17 +365,20 @@
           {/if}
         {/snippet}
       </ImpactCard>
-    {:else}
-      {@render resultBlock()}
-      {#if desk.live}
-        <FieldMessage>커밋했지만 적용하지 않은 plan 이 없어요. 리소스를 저장하거나 <code>bary import</code> 를 하면 여기 와요.</FieldMessage>
-        {#if !ro && desk.head !== undefined}
-          <div class="again">
-            <Button loading={desk.applying} disabled={lost} onclick={() => { void desk.rerender(); }}>{desk.applying ? '만드는 중' : `r${desk.head} 다시 렌더해요`}</Button>
-            <FieldMessage>설정은 그대로예요. barycenter 를 새 판으로 올린 뒤, 바뀐 nginx 설정을 내려고 써요. 영향을 먼저 보여 줘요.</FieldMessage>
-            {@render lostNote()}
-          </div>
-        {/if}
+    {:else if result !== undefined}
+      <!-- 방금 적용했다 — 시안: 판정 없이 결과 블록 · 수렴, 아래 「이미 적용했어요.」 와 막힌 적용 버튼. -->
+      <section class="done">
+        <div class="db">{@render resultBlock()}</div>
+        <footer><span class="note">이미 적용했어요.</span><Button variant="danger" disabled>적용</Button></footer>
+      </section>
+    {:else if desk.live}
+      <FieldMessage>커밋했지만 적용하지 않은 plan 이 없어요. 리소스를 저장하거나 <code>bary import</code> 를 하면 여기 와요.</FieldMessage>
+      {#if !ro && desk.head !== undefined}
+        <div class="again">
+          <Button loading={desk.applying} disabled={lost} onclick={() => { void desk.rerender(); }}>{desk.applying ? '만드는 중' : `r${desk.head} 다시 렌더해요`}</Button>
+          <FieldMessage>설정은 그대로예요. barycenter 를 새 판으로 올린 뒤, 바뀐 nginx 설정을 내려고 써요. 영향을 먼저 보여 줘요.</FieldMessage>
+          {@render lostNote()}
+        </div>
       {/if}
     {/if}
   </div>
@@ -363,57 +387,69 @@
 <ConfirmDialog
   bind:open={asking}
   title={`적용: r${view?.revision ?? ''}`}
-  sub={`커밋 ${Math.max(commits.length, 1)}건${revList === '' ? '' : `(${revList})`}이 함께 들어가요.${where}`}
+  sub={`${active === undefined ? '' : `활성 리비전은 r${active}이에요. `}커밋 ${Math.max(commits.length, 1)}건${revList === '' ? '' : `(${revList})`}이 함께 들어가요.${where}`}
   lines={dlgLines}
   confirmLabel="적용" danger requireCheck busy={desk.applying}
   onconfirm={confirmApply}
 />
 
 <style>
+  /* 시안 값 그대로 — 적용 대기 화면(`pnDisp`). */
   .pi { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
   @media (max-width: 860px) { .pi { grid-template-columns: minmax(0, 1fr); } }
   .plans { background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; }
-  .ph { padding: 10px 14px; border-bottom: 1px solid var(--bd); font: 600 14px/20px var(--font); }
-  /* RadioGroup 의 선택지를 적용 항목 한 줄로 — 고른 줄은 바탕과 왼쪽 막대(시안). */
+  .ph { padding: 10px 14px; border-bottom: 1px solid var(--bd); font-weight: 600; font-size: 14px; }
+  /* RadioGroup 의 선택지를 적용 항목 한 줄로 — 줄마다 위 테두리, 고른 줄은 바탕과 왼쪽 막대(시안 `pl.bg` · `pl.bar`). */
   .plans :global([role='radiogroup']) { gap: 0; }
-  .plans :global([role='radio']) { padding: 0; border-bottom: 1px solid var(--bd); border-radius: 0; text-align: left; }
-  .plans :global([role='radio']:last-child) { border-bottom: 0; }
+  .plans :global([role='radio']) { width: 100%; padding: 0; border: 0; border-top: 1px solid var(--bd); border-radius: 0; background: transparent; color: var(--tx); text-align: left; }
   .plans :global([role='radio'][aria-checked='true']) { background: var(--bg-sel); box-shadow: inset 3px 0 0 var(--accent); }
   .plans :global([role='radio']:not(:disabled):not([aria-checked='true']):hover) { background: var(--bg-hover); }
   .plans :global([role='radio']:focus-visible) { outline: 2px solid var(--focus); outline-offset: -2px; }
-  .row { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; font: var(--t-small); }
+  .row { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; font-size: 13px; }
   .r1 { display: flex; gap: 8px; align-items: center; }
-  .r1 code { color: var(--accent); }
+  .rev { font-family: var(--mono); color: var(--accent); }
   .by { flex: 1; font-size: 12px; color: var(--tx3); }
-  .st { font-size: 12px; white-space: nowrap; }
+  .st { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
   .reg { font-family: var(--mono); font-size: 12px; color: var(--tx3); }
-  .empty { padding: 24px; text-align: center; color: var(--tx3); font: var(--t-small); }
+  .empty { padding: 24px; text-align: center; color: var(--tx3); font-size: 13px; }
   .main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
   .sec { padding-top: 12px; border-top: 1px solid var(--bd); }
-  .sh { font: 600 12px/16px var(--font); color: var(--tx2); margin-bottom: 6px; }
+  .sh { font-size: 12px; font-weight: 600; color: var(--tx2); margin-bottom: 6px; }
+  .lines { display: flex; flex-direction: column; gap: 6px; }
+  .line { display: flex; gap: 8px; }
+  .calm { color: var(--ok); }
+  /* 포함된 커밋 — 글자 단추처럼 접고 편다(시안 `toggleCommits`). */
+  .cm summary { list-style: none; cursor: pointer; padding: 0; font-size: 12px; font-weight: 600; color: var(--tx2); width: fit-content; }
+  .cm summary::-webkit-details-marker { display: none; }
+  .cm summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
+  .cml { display: flex; flex-direction: column; margin-top: 8px; border: 1px solid var(--bd); border-radius: var(--r-md); overflow: hidden; animation: bc-in var(--dur) var(--ease); }
+  .cmr { display: grid; grid-template-columns: 48px minmax(0, 1fr) 90px; gap: 12px; padding: 8px 12px; border-top: 1px solid var(--bd); align-items: start; }
+  .cby { font-size: 12px; color: var(--tx3); text-align: right; }
+  .socks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .sl { display: flex; flex-direction: column; gap: 4px; font-family: var(--mono); font-size: 12px; }
+  .none { color: var(--tx3); font-family: var(--font); }
   .tbl { border: 1px solid var(--bd); border-radius: var(--r-md); overflow: hidden; }
-  .commits { background: var(--bg-panel); }
   .tr { display: grid; gap: 12px; padding: 6px 12px; align-items: center; border-top: 1px solid var(--bd); min-height: var(--row-h); }
   .tr:first-child { border-top: 0; }
-  .commits .tr { grid-template-columns: 56px minmax(0, 1fr) 90px; align-items: start; }
-  .commits code { color: var(--accent); }
-  .commits .tr > :last-child { text-align: right; }
   .lst .tr { grid-template-columns: 1fr 1fr 1.6fr; }
   .lst .tr.gone { grid-template-columns: 140px minmax(0, 1fr); }
-  .th { min-height: 28px; padding: 0 12px; background: var(--bg-hover); font: 600 12px/16px var(--font); color: var(--tx2); }
-  .socks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .mono { display: flex; flex-direction: column; gap: 4px; font: 12px/16px var(--mono); }
-  .none { color: var(--tx3); font-family: var(--font); }
+  .th { height: 28px; min-height: 0; padding: 0 12px; background: var(--bg-hover); font-size: 12px; font-weight: 600; color: var(--tx2); }
+  .mono { font-family: var(--mono); }
   .muted { color: var(--tx2); }
   code { font-family: var(--mono); font-size: 12px; }
 
   .stp { display: flex; flex-direction: column; gap: 6px; }
-  .res { --c: var(--ok); --cb: var(--ok-bg); display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--r-md); background: var(--cb); border: 1px solid var(--c); font: var(--t-small); }
+  .res { --c: var(--ok); --cb: var(--ok-bg); padding: 10px 12px; border-radius: var(--r-md); background: var(--cb); border: 1px solid var(--c); }
   .res[data-tone='danger'] { --c: var(--danger); --cb: var(--danger-bg); }
   .rt { font-weight: 600; color: var(--c); }
-  .rb { color: var(--tx2); font-size: 12px; }
-  .lost { color: var(--danger); font: var(--t-small); flex: 1; }
+  .rb { color: var(--tx2); font-size: 12px; margin-top: 2px; }
+  .rc { margin-top: 8px; }
+  .note { font-size: 12px; color: var(--tx3); }
+  .lost { color: var(--danger); font-size: 12px; flex: 1; }
   .lost[data-tone='info'] { color: var(--tx2); }
+  .done { background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; }
+  .db { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+  .done footer { padding: 10px 16px; border-top: 1px solid var(--bd); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
   .again { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-top: 12px; }
 </style>

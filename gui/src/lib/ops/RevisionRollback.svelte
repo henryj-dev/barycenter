@@ -5,7 +5,8 @@
    * 전역에서 연락 없는 지역이면 버튼을 막고 사유를 쓴다.
    */
   import { getContext } from 'svelte';
-  import { Badge, Button, Card, ConfirmDialog, FieldMessage, RadioGroup, Skeleton, toast } from '#lib/ui';
+  import { Badge, Button, ConfirmDialog, FieldMessage, RadioGroup, Skeleton, toast } from '#lib/ui';
+  import { whenText } from './audit';
   import { LOST_MESSAGE, type Scope } from '#lib/global/scope.svelte.ts';
   import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
@@ -58,7 +59,9 @@
   };
 </script>
 
-<Card title="리비전 롤백" sub="되돌릴 리비전을 선택해요. 롤백하면 새 리비전이 만들어져요." padded={false}>
+<!-- 시안: 머리 줄 한 줄(제목 왼쪽 · 안내 오른쪽), 라디오 목록, 오른쪽 끝의 위험 테두리 버튼. -->
+<section class="rb" aria-labelledby="rb-title">
+  <div class="rh"><span class="rt" id="rb-title">리비전 롤백</span><span class="rs">되돌릴 리비전을 선택해요. 롤백하면 새 리비전이 만들어져요.</span></div>
   {#if failed}
     <div class="pad"><FieldMessage>리비전 목록을 못 읽었어요. 잠시 뒤 다시 열어 봐요.</FieldMessage></div>
   {:else if rows === undefined}
@@ -68,7 +71,7 @@
   {:else}
     <div class="list">
       {#if headRev !== undefined}
-        <div class="rv head"><span class="dot" aria-hidden="true"></span><code>r{headRev.revision}</code><span class="when">{new Date(headRev.createdAt).toLocaleString()}</span><span class="sum">{summary(headRev)} <Badge tone="ok" icon={null}>head</Badge></span><span class="by">{headRev.createdBy}</span></div>
+        <div class="rv head"><span class="dot" aria-hidden="true"></span><code>r{headRev.revision}</code><span class="when">{whenText(headRev.createdAt)}</span><span class="sum">{summary(headRev)} <Badge tone="ok" icon={null}>head</Badge></span><span class="by">{headRev.createdBy}</span></div>
       {/if}
       <RadioGroup label="되돌릴 리비전" direction="column" dot={false} bind:value={selected}
         options={pickable.map((r) => ({ value: r.revision, label: `r${r.revision}`, disabled: ro || desk.editing }))}>
@@ -76,7 +79,7 @@
           {@const r = byRev.get(o.value)}
           {#if r !== undefined}
             <span class="rv"><span class="dot" aria-hidden="true"></span><code>r{r.revision}</code>
-              <span class="when">{new Date(r.createdAt).toLocaleString()}</span>
+              <span class="when">{whenText(r.createdAt)}</span>
               <span class="sum">{summary(r)}{#if r.rollbackOf !== null && r.note !== null} <Badge tone="pending" icon={null}>r{r.rollbackOf} 로 롤백</Badge>{/if}</span>
               <span class="by">{r.createdBy}</span></span>
           {/if}
@@ -96,7 +99,7 @@
   {:else if ro && rows !== undefined && !failed}
     <div class="foot"><WriteNote /></div>
   {/if}
-</Card>
+</section>
 
 <ConfirmDialog
   bind:open={asking}
@@ -111,28 +114,32 @@
 />
 
 <style>
+  /* 시안 값 그대로 — 패널 · 머리 줄(10px 16px · 600 14px · 안내 12px --tx3) · 행(20px 56px 130px 1fr auto · --row-h · 13px). */
+  .rb { background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; }
+  .rh { padding: 10px 16px; border-bottom: 1px solid var(--bd); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .rt { font-weight: 600; font-size: 14px; flex: 1; }
+  .rs { font-size: 12px; color: var(--tx3); }
   .pad { padding: 12px 16px; }
   .list { display: flex; flex-direction: column; }
-  /* RadioGroup 의 선택지를 표 한 줄로 — 고른 줄은 바탕과 동그라미로 보인다(시안). */
+  /* RadioGroup 의 선택지를 표 한 줄로 — 줄마다 위 테두리, 고른 줄은 바탕과 5px 동그라미(시안). */
   .list :global([role='radiogroup']) { gap: 0; }
-  .list :global([role='radio']) { padding: 0; border-bottom: 1px solid var(--bd); border-radius: 0; }
+  .list :global([role='radio']) { padding: 0; border: 0; border-top: 1px solid var(--bd); border-radius: 0; background: transparent; color: var(--tx); }
   .list :global([role='radio']:not(:disabled):hover) { background: var(--bg-hover); }
-  .list :global([role='radio']:last-child) { border-bottom: 0; }
   .list :global([role='radio'][aria-checked='true']) { background: var(--bg-sel); }
   .list :global([role='radio']:focus-visible) { outline: 2px solid var(--focus); outline-offset: -2px; }
   .rv {
-    flex: 1; display: grid; grid-template-columns: 20px 56px 160px minmax(0, 1fr) auto; gap: 12px; align-items: center;
-    padding: 0 16px; min-height: var(--row-h); text-align: left; font: var(--t-body);
+    flex: 1; display: grid; grid-template-columns: 20px 56px 130px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+    padding: 0 16px; height: var(--row-h); text-align: left; font-size: 13px;
   }
-  .rv.head { color: var(--tx2); border-bottom: 1px solid var(--bd); }
+  .rv.head { color: var(--tx2); border-top: 1px solid var(--bd); }
   .dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--bd-strong); background: var(--bg-input); transition: border-width var(--dur-fast) var(--ease); }
   .list :global([role='radio'][aria-checked='true'] .dot) { border: 5px solid var(--accent); }
   code { font-family: var(--mono); color: var(--accent); }
-  .when, .by { font-size: 12px; color: var(--tx3); }
-  .sum { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; }
-  @media (max-width: 720px) { .rv { grid-template-columns: 20px 56px minmax(0, 1fr); padding: 6px 16px; } .when, .by { display: none; } }
+  .when, .by { font-size: 12px; color: var(--tx3); white-space: nowrap; }
+  .sum { display: inline-flex; gap: 6px; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 720px) { .rv { grid-template-columns: 20px 56px minmax(0, 1fr); } .when, .by { display: none; } }
   .more { padding: 6px 16px; border-top: 1px solid var(--bd); }
   .foot { padding: 10px 16px; border-top: 1px solid var(--bd); display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
-  .hint { flex: 1; font: var(--t-small); color: var(--tx3); }
-  .lost { flex: 1; font: var(--t-small); color: var(--danger); }
+  .hint { flex: 1; font-size: 12px; color: var(--tx3); align-self: center; }
+  .lost { flex: 1; font-size: 12px; color: var(--danger); align-self: center; }
 </style>

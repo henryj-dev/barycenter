@@ -34,7 +34,6 @@
   };
   const rows = $derived((body?.nodes ?? []).map((n) => ({ name: n.name, gen: n.activeGeneration, ...convOf(n) })));
   const settled = $derived(rows.length > 0 && rows.every((r) => r.tone !== 'info'));
-  const okN = $derived(rows.filter((r) => r.tone === 'ok').length);
 
   const read = async (last: boolean): Promise<void> => {
     if (stopped) return;
@@ -52,28 +51,35 @@
 </script>
 
 {#if body?.enabled === true && rows.length > 1}
+  <!-- 시안 `convD`: 제목 한 줄, 노드마다 이름(84px 고정폭)과 상태 배지. 진행 중이면 배지 안에 스피너. -->
   <div class="conv" aria-live="polite">
-    <div class="ct">클러스터 수렴{revision === undefined ? '' : ` · r${revision}`} · {rows.length}대 중 {okN}대 맞음{reading && !settled ? ' · 확인하는 중' : ''}</div>
-    <ul>
+    <div class="ct">클러스터 수렴{revision === undefined ? '' : ` · r${revision}`}</div>
+    <div class="rows">
       {#each rows as r (r.name)}
-        <li>
-          <span class="n">{r.name}{r.name === body.self ? ' · 이 노드' : ''}</span>
-          <span class="b" style:color="var(--{r.tone})">{r.icon} {r.text}</span>
-          <span class="g">{r.gen ?? '—'}</span>
-        </li>
+        <div class="cv">
+          <span class="n" title={r.name === body.self ? '이 노드' : undefined}>{r.name}</span>
+          <span class="b" data-tone={r.tone} title={r.gen === undefined ? undefined : `활성 세대 ${r.gen}`}>{#if r.tone === 'info' && reading}<span class="spin" aria-hidden="true"></span>{/if}{r.icon} {r.text}</span>
+        </div>
       {/each}
-    </ul>
+    </div>
     {#if !reading && !settled}<div class="hint">아직 따라오지 않은 노드가 있어요. 클러스터 화면에서 확인해요.</div>{/if}
   </div>
 {/if}
 
 <style>
-  .conv { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--bd); }
-  .ct { font: 600 12px/16px var(--font); color: var(--tx2); }
-  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-  li { display: flex; align-items: center; gap: 10px; font: var(--t-small); min-width: 0; }
-  .n { flex: none; min-width: 84px; font-family: var(--mono); }
-  .b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .g { flex: none; font-family: var(--mono); color: var(--tx3); }
-  .hint { font: var(--t-cap); color: var(--tx3); }
+  .conv { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--bd); }
+  .ct { font-size: 12px; font-weight: 600; color: var(--tx2); }
+  .rows { display: flex; flex-direction: column; gap: 4px; }
+  .cv { display: flex; align-items: center; gap: 10px; font-size: 13px; min-width: 0; }
+  .n { width: 84px; flex: none; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .b {
+    display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--r-sm); font-size: 12px;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: var(--neutral-bg); color: var(--neutral);
+  }
+  .b[data-tone='ok'] { background: var(--ok-bg); color: var(--ok); }
+  .b[data-tone='info'] { background: var(--info-bg); color: var(--info); }
+  .b[data-tone='danger'] { background: var(--danger-bg); color: var(--danger); }
+  .spin { width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: bc-spin .8s linear infinite; flex: none; }
+  .hint { font-size: 12px; color: var(--tx3); }
 </style>

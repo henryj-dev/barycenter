@@ -61,5 +61,6 @@
 </div>
 
 <style>
-  .pend { display: flex; flex-direction: column; gap: 24px; max-width: 1200px; }
+  /* 시안 `pnDisp`: 위 영향 · 아래 롤백, 간격 16px. */
+  .pend { display: flex; flex-direction: column; gap: 16px; }
 </style>

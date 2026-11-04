@@ -8,7 +8,7 @@
    */
   import { getContext } from 'svelte';
   import { viewOfRendered, type RenderedView } from '@web/rendered-view';
-  import { Badge, CodeViewer, FieldMessage, Select, Skeleton } from '#lib/ui';
+  import { CodeViewer, FieldMessage, Select, Skeleton } from '#lib/ui';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { getJson, loadRegions, regionPath } from './fetch';
@@ -44,9 +44,13 @@
     const path = at('/api/v1/config/revisions?limit=100');
     void getJson(path, desk.token).then((r) => { revs = Array.isArray(r) ? (r as Rev[]) : []; });
   });
+  /** head 의 번호 — 셸의 desk 가 알면 그것, 아니면 리비전 목록의 가장 큰 번호(목록의 맨 끝이 head 다). */
+  const headNum = $derived(own && desk.head !== undefined ? desk.head
+    : (revs ?? []).reduce<string | undefined>((m, r) => (m === undefined || Number(r.revision) > Number(m) ? r.revision : m), undefined));
+  /** 시안: 「r9 (head)」 · 「r7」. 활성 리비전은 이 화면이 모른다 — 「(활성)」 은 붙이지 않는다. */
   const revOptions = $derived([
-    { value: HEAD, label: 'head', hint: '커밋된 가장 새 리비전' },
-    ...(revs ?? []).map((r) => ({
+    { value: HEAD, label: headNum === undefined ? 'head' : `r${headNum} (head)` },
+    ...(revs ?? []).filter((r) => r.revision !== headNum).map((r) => ({
       value: r.revision, label: `r${r.revision}`,
       hint: [r.createdBy, r.createdAt === undefined ? undefined : new Date(r.createdAt).toLocaleString()].filter(Boolean).join(' · '),
     })),
@@ -72,7 +76,6 @@
     });
   });
   const v = $derived(own && rev === HEAD ? desk.rendered : picked);
-  const headRev = $derived(own ? desk.head : undefined);
 </script>
 
 {#if aggregate && regionNames.length === 0 && regionsRead}
@@ -86,18 +89,16 @@
     {/if}
     <CodeViewer code={v?.conf ?? ''} maxHeight="calc(100vh - 240px)">
       {#snippet head()}
-        <span class="meta">
-          <code>nginx.conf</code>
-          <span class="dim" aria-hidden="true">·</span>
-          <Select label="리비전" width="150px" bind:value={rev} options={revOptions} />
-          {#if global}
-            <Select label="지역" width="170px" value={region} options={regionOptions} placeholder="지역" onchange={(x) => { regionPick = x; rev = HEAD; }} />
-          {/if}
-          {#if v?.revision !== undefined}<code class="dim">r{v.revision}{v.revision === headRev ? ' (head)' : ''}</code>{/if}
-          {#if v?.digest !== undefined}<code class="dim" title={v.digest}>{v.digest.slice(0, 19)}…</code>{/if}
-          {#each v?.planes ?? [] as p (p)}<Badge icon={null}>{p}</Badge>{/each}
-          {#if loading}<span class="dim">읽는 중…</span>{/if}
-        </span>
+        <!-- 시안 머리 줄: nginx.conf · 리비전 · (전역) 지역 · 오른쪽 검색. digest · 평면은 시안에 없는 사실이라 흐린 글로 덧붙인다. -->
+        <code>nginx.conf</code>
+        <span class="dim" aria-hidden="true">·</span>
+        <Select label="리비전" width="140px" bind:value={rev} options={revOptions} />
+        {#if global}
+          <Select label="지역" width="170px" value={region} options={regionOptions} placeholder="지역" onchange={(x) => { regionPick = x; rev = HEAD; }} />
+        {/if}
+        {#if v?.digest !== undefined}<code class="dim" title={v.digest}>{v.digest.slice(0, 19)}…</code>{/if}
+        {#if (v?.planes.length ?? 0) > 0}<span class="dim">{v?.planes.join(' · ')}</span>{/if}
+        {#if loading}<span class="dim">읽는 중…</span>{/if}
       {/snippet}
     </CodeViewer>
     {#if v !== undefined && v.conf === '' && !loading}
@@ -107,8 +108,8 @@
 {/if}
 
 <style>
-  .rc { display: flex; flex-direction: column; gap: 12px; }
-  .meta { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  /* 시안 「렌더된 설정」: 패널이 남은 높이를 채운다(flex:1;min-height:0). */
+  .rc { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
   code { font-family: var(--mono); font-size: 12px; color: var(--tx); }
   .dim { color: var(--tx3); }
 </style>
