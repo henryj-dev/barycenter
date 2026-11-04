@@ -23,6 +23,8 @@
   const rest = $derived(page.url.pathname.slice(base.length).replace(/^\//, '').replace(/\/$/, ''));
   const extraLabel: Record<string, string> = { rebuild: 'URL로 다시 만들기' };
   const extra = $derived(extraLabel[rest]);
+  /** 「URL로 다시 만들기」 는 풀로 보내는 라우트에만 있다(시안 `action === 'proxy'`). 리다이렉트 · 거절에는 대상 풀이 없다. */
+  const rebuildable = $derived((item?.['action'] as { kind?: unknown } | undefined)?.kind === 'proxy');
   const scope = getContext<Scope | undefined>('scope');
   const ro = $derived(scope?.readOnly === true);
   let asking = $state(false);
@@ -64,7 +66,7 @@
       {#snippet actions()}
         {#if !ro}
           {#if spec.editable && rest !== 'settings'}<Button href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}
-          {#if spec.extras.includes('rebuild') && rest !== 'rebuild'}<Button href={resourcePath(kind, key, 'rebuild')}>URL로 다시 만들기</Button>{/if}
+          {#if spec.extras.includes('rebuild') && rebuildable && rest !== 'rebuild'}<Button href={resourcePath(kind, key, 'rebuild')}>URL로 다시 만들기</Button>{/if}
           <Button error disabled={desk.editing} onclick={() => { asking = true; }}>삭제…</Button>
         {/if}
       {/snippet}
