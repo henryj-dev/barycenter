@@ -73,7 +73,8 @@ describe('공통 컴포넌트 — 시안 1:1 (3차)', () => {
   });
 
   it('쓸 수 없는 설정 탭 · 분할 보기 모드 = 시안 viewSecs', () => {
-    expect(src('lib/detail/ViewSections.svelte')).toContain("n >= 3 ? '100%' : n === 2 ? 'calc(50% - 8px)' : 'calc(25% - 12px)'");
+    expect(src('lib/detail/view-secs.ts')).toContain("n >= 3 ? '100%' : n === 2 ? 'calc(50% - 8px)' : 'calc(25% - 12px)'");
+    expect(src('lib/detail/ViewSections.svelte')).toContain('style:width={width(sec.f.length)}');
     expect(src('lib/detail/ReadView.svelte')).toContain('.view { display: flex; flex-direction: column; gap: 14px; max-width: 900px; }');
     expect(src('lib/detail/Settings.svelte')).toContain('<ReadView sections={view}>');
     expect(src('lib/detail/ListSplit.svelte')).toContain('<ViewSections sections=');

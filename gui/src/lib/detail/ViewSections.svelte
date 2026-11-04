@@ -1,6 +1,6 @@
 <script lang="ts" module>
-  /** 보기 구획 하나 — 시안 `viewSecs` 의 `{ t, f: [{ l, v, ff }] }`. */
-  export type ViewSection = { t: string; f: { l: string; v: string; mono?: boolean }[] };
+  /** 보기 구획 하나 — 시안 `viewSecs` 의 `{ t, f: [{ l, v, ff }] }`. 만드는 곳은 `view-secs.ts` 다. */
+  export type { ViewSection } from './view-secs';
 </script>
 
 <script lang="ts">
@@ -9,8 +9,9 @@
    * 구획마다 머리(12px · 600 · --tx2 · 아래 선) + 이름 · 값 격자(auto-fit 220px · 간격 10px 24px).
    * 구획 너비(시안 `sec.w`): 칸이 셋 이상이면 한 줄, 둘이면 반, 하나면 사분의 일.
    */
+  import { viewSecWidth as width, type ViewSection } from './view-secs';
+
   let { sections }: { sections: readonly ViewSection[] } = $props();
-  const width = (n: number): string => (n >= 3 ? '100%' : n === 2 ? 'calc(50% - 8px)' : 'calc(25% - 12px)');
 </script>
 
 <div class="secs">

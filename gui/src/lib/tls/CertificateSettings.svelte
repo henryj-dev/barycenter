@@ -22,7 +22,8 @@
   import Resolved from './Resolved.svelte';
   import SettingsFrame from '#lib/detail/SettingsFrame.svelte';
   import { certBody, challengeOf, domainsError, parseDomains } from './cert-edit.ts';
-  import { certIssuer } from './tls-view.ts';
+  import { viewSecsOf } from '#lib/detail/view-secs';
+  import { viewContextOf } from '#lib/detail/facts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const key = untrack(() => page.params['key'] ?? '');
@@ -45,7 +46,6 @@
   const dirty = $derived(isAcme && (parseDomains(domains).join(',') !== parseDomains(domains0).join(',') || accountChanged));
   const challenge = $derived(challengeOf(parseDomains(domains)));
   const pending = $derived(isPendingResource(desk.pendingResources, 'certificate', key));
-  const issuer = row0 === undefined ? '—' : certIssuer(row0);
 
   const save = async (): Promise<void> => {
     const item = itemOf(desk.model, 'certificate', key);
@@ -59,12 +59,8 @@
     after(resourcePath('certificate', key), next !== acme0?.account ? 'CA 를 바꿨어요' : '커밋했어요')(ok);
   };
   const revert = (): void => { domains = domains0; account = acme0?.account; gen += 1; };
-  const view = $derived([{ t: '기본', f: [
-    { l: '이름', v: key, mono: true },
-    { l: '도메인', v: domains0 || '—', mono: true },
-    { l: '발급자', v: issuer },
-    ...(isAcme ? [{ l: 'ACME 계정', v: acme0?.account ?? '—' }, { l: '자동 갱신', v: '켜짐' }, { l: '검증 방식', v: challengeOf(parseDomains(domains0)), mono: true }] : []),
-  ] }]);
+  /** 쓸 수 없을 때의 읽기 구획 — 분할 상세 보기 모드와 같은 `viewSecsOf`. */
+  const view = $derived(viewSecsOf(desk.model, 'certificate', key, viewContextOf(desk, 'certificate', key)));
 </script>
 
 <SettingsFrame {view} {dirty} invalid={err !== undefined || (isAcme && !accountReady)} {pending} {saving} onsave={() => { void save(); }} onrevert={revert}>

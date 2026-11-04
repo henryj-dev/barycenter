@@ -4,8 +4,8 @@
  * 시안의 선택지(`TLS 1.2` · `TLS 1.3`, `modern-2026` · `intermediate-2026`, 거절 · 허용)에 모델에만 있는 값을 더한다:
  * 최대 버전 「제한 없음」(안 적으면 위를 막지 않는다 — 모델 기본). 몸체는 모델 기본과 같은 칸을 싣지 않는다.
  */
-import type { TlsVersion } from '@web/edit';
-import type { Item } from '@web/resources';
+import type { TlsVersion } from '../../../../src/web/edit.js';
+import type { Item } from '../../../../src/web/resources.js';
 
 export type MaxVersion = TlsVersion | 'none';
 export type Cipher = 'modern-2026' | 'intermediate-2026';

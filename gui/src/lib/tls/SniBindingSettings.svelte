@@ -11,6 +11,7 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { isPendingResource } from '#lib/pending';
   import SettingsFrame from '#lib/detail/SettingsFrame.svelte';
+  import { viewSecsOf } from '#lib/detail/view-secs';
   import { boundCerts, hostsError, hostsHelp, httpsListeners, listRows, parseHosts } from './sni-edit.ts';
   import { sniHosts } from './tls-view.ts';
 
@@ -43,10 +44,8 @@
       .then((ok) => { saving = false; after(resourcePath('sniBinding', key))(ok); });
   };
   const revert = (): void => { listener = init.listener || undefined; hosts = init.hosts; cert = init.cert || undefined; };
-  const view = [{ t: '기본', f: [
-    { l: '이름', v: key, mono: true }, { l: '리스너', v: init.listener || '—', mono: true },
-    { l: '호스트 목록', v: init.hosts || '없음', mono: true }, { l: '인증서', v: init.cert || '—', mono: true },
-  ] }];
+  /** 쓸 수 없을 때의 읽기 구획 — 분할 상세 보기 모드와 같은 `viewSecsOf`. */
+  const view = $derived(viewSecsOf(desk.model, 'sniBinding', key));
 </script>
 
 <SettingsFrame {view} {dirty} invalid={err !== undefined} {pending} {saving} onsave={save} onrevert={revert}>

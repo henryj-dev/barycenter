@@ -17,7 +17,7 @@
    *   · 적용 대기면 「◐ 적용 대기 중인 변경이 있어요.」 · 아니면 「바뀐 값이 없어요.」
    * 「저장」 · 「되돌리기」 는 바꾼 것이 없으면 잠긴다. 저장의 뜻은 부르는 쪽이 정한다.
    * 전역에서 지역을 골랐으면 위에 「쓸 지역」 한 줄(`Writable target`).
-   * **쓸 수 없으면**(`scope.blocked` — 팔로워 · 연락 없음 · 전체 합산) 그리고 `view` 를 주면 읽기 구획(`ReadView` — 시안 `tSetView`).
+   * **쓸 수 없으면**(`scope.blocked` — 팔로워 · 연락 없음 · 전체 합산) 읽기 구획(`ReadView` — 시안 `tSetView`, `view` 또는 `kind` 의 `viewSecsOf`).
    */
   import { getContext, type Snippet } from 'svelte';
   import { page } from '$app/state';
@@ -28,12 +28,13 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { isPendingResource } from '#lib/pending';
   import ReadView from './ReadView.svelte';
-  import type { ViewSection } from './ViewSections.svelte';
+  import { viewSecsOf, type ViewSection } from './view-secs';
+  import { viewContextOf } from './facts';
 
   let { kind, view, dirty, invalid = false, pending: pendingIn, saving: savingIn, onsave, onrevert, children, after }: {
     /** 「적용 대기」 를 이 리소스로 판정한다. 안 주면 `pending` 을 준다. */
     kind?: ResourceKind;
-    /** 쓸 수 없을 때의 읽기 구획(시안 `viewSecs`). 안 주면 쓸 수 없어도 폼을 그린다(쓰기는 `Writable` 이 막는다). */
+    /** 쓸 수 없을 때의 읽기 구획(시안 `viewSecs`). 안 주면 `kind` 로 만든다. 둘 다 없으면 쓸 수 없어도 폼을 그린다(쓰기는 `Writable` 이 막는다). */
     view?: readonly ViewSection[];
     dirty: boolean;
     invalid?: boolean;
@@ -53,6 +54,8 @@
   const key = $derived(page.params['key'] ?? '');
   const pending = $derived(pendingIn ?? (kind !== undefined && isPendingResource(desk.pendingResources, kind, key)));
   const saving = $derived(savingIn ?? desk.editing);
+  /** 읽기 구획 — 안 주면 `kind` 로 설정 폼의 구획 · 칸 전부(`viewSecsOf`, 분할 상세 보기 모드와 같다). */
+  const sections = $derived(view ?? (kind === undefined ? undefined : viewSecsOf(desk.model, kind, key, viewContextOf(desk, kind, key))));
   const hint = $derived(invalid ? '✕ 오류가 있는 항목을 고쳐요' : dirty ? '저장하면 커밋하고 적용 대기에 새 리비전이 생겨요.'
     : pending ? '◐ 적용 대기 중인 변경이 있어요.' : '바뀐 값이 없어요.');
   const hintColor = $derived(invalid ? 'var(--danger)' : dirty ? 'var(--pending)' : 'var(--tx3)');
@@ -63,8 +66,8 @@
   };
 </script>
 
-{#if scope?.blocked === true && view !== undefined}
-  <ReadView sections={view} />
+{#if scope?.blocked === true && sections !== undefined}
+  <ReadView {sections} />
 {:else}
   <Writable target>
     <form class="set" onsubmit={(e) => { e.preventDefault(); save(); }}>
