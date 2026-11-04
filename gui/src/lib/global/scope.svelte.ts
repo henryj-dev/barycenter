@@ -13,10 +13,10 @@ export type RegionSummary = {
 
 import { toast } from '#lib/ui';
 
+/** 연락 없는 지역의 이름(「연락 없음」) — 순수 모듈(`aggregate.ts`)에 두고 여기서 다시 내보낸다. */
+export { LOST_LABEL } from './aggregate.ts';
 /** 연락이 없는 지역에 쓰려 할 때의 한 줄 (시안 `roMsg`). */
 export const LOST_MESSAGE = '이 지역과 연결되지 않아 지금은 쓸 수 없어요.';
-/** 연락 없는 지역의 이름 — 어디서나 이 말 하나다(시안 「○ 연락 없음」, 톤 neutral). */
-export const LOST_LABEL = '연락 없음';
 /** 지역이 403 으로 쓰기를 거절했을 때 (시안). 권한은 지역이 판정한다. */
 export const deniedMessage = (region: string): string => `${region}에서 쓰기 권한이 없어요. 그 지역의 관리자에게 역할을 요청해요.`;
 /**
@@ -38,9 +38,13 @@ const pathOf = (input: string | URL | Request): string => {
 const OWN = ['/api/v1/me', '/api/v1/session', '/api/v1/oidc', '/api/v1/invitations', '/api/v1/users',
   '/api/v1/account', '/api/v1/sso-providers', '/api/v1/regions'];
 
-export function createScope() {
-  let mode = $state<'unknown' | 'region' | 'global'>('unknown');
-  let region = $state<RegionSummary | undefined>();
+/**
+ * @param fixed 전체 합산의 지역 하나를 보는 범위(`regions.svelte.ts`) — 전역 모드로 시작하고 그 지역에 묶인다.
+ *   `detect` · `choose` 를 부르지 않는다. 셸의 범위(인자 없음)는 지금처럼 `/readyz` 로 모드를 안다.
+ */
+export function createScope(fixed?: RegionSummary) {
+  let mode = $state<'unknown' | 'region' | 'global'>(fixed === undefined ? 'unknown' : 'global');
+  let region = $state<RegionSummary | undefined>(fixed);
   /** 지역 인스턴스가 말한 자기 이름 (`BARY_REGION`). 없으면 undefined. */
   let self = $state<string | undefined>();
   /**
@@ -86,12 +90,20 @@ export function createScope() {
     get region() { return region; },
     get self() { return self; },
     /**
-     * 전역에서 지역을 고르기 전에만 읽기 전용이다. 고른 뒤에는 쓰기도 그 지역으로 넘긴다 — 보는 사람의 세션 그대로
-     * (2026-11-01 사용자 결정, docs/design-global-mode.md §1.1). 권한은 지역이 판정한다.
+     * 전역에서 지역을 안 골랐다 — **전체 합산**이다(2026-11-04 사용자 결정, docs/design-global-mode.md §2.5).
+     * 합산 화면은 지역마다 붙은 desk(`regions.svelte.ts`)로 그린다. 셸의 desk 는 이때 어디에도 안 붙는다.
+     */
+    get aggregate() { return mode === 'global' && region === undefined; },
+    /** 전체 합산의 지역 하나에 묶인 범위다(`createScope(fixed)`). 좁혀 보기와 갈라 행 주소에 `?region=` 을 단다. */
+    get fixed() { return fixed !== undefined; },
+    /**
+     * **이 범위의 desk 로는** 쓸 수 없다. 전체 합산(지역을 안 골랐다)이면 셸의 desk 가 어느 지역에도 안 붙어 있어 참이다 —
+     * 합산 목록은 행마다 그 지역의 desk 로 쓴다(`use-aggregate.svelte.ts` 의 `writable`). 지역을 고른 뒤(좁혀 보기)에는
+     * 쓰기도 그 지역으로 넘긴다 — 보는 사람의 세션 그대로(2026-11-01 사용자 결정, §1.1). 권한은 지역이 판정한다.
      * **팔로워 노드도 읽기 전용이다** — 서버가 쓰기를 503 `not_leader` 로 막는다. 쓰기 판정은 이 둘을 한곳에서 본다.
      */
     get readOnly() { return isReadOnly(); },
-    /** 지금 쓸 수 없다 — 읽기 전용이거나(지역을 안 골랐다 · 팔로워) 고른 지역과 연락이 없다. 목록 · 버튼이 이것 하나로 닫힌다. */
+    /** 지금 쓸 수 없다 — 읽기 전용이거나(전체 합산 · 팔로워) 고른 지역과 연락이 없다. 목록 · 버튼이 이것 하나로 닫힌다. */
     get blocked() { return isReadOnly() || isLost(); },
     get follower() { return follower; },
     /** 셸이 상태를 보고 부른다 — 팔로워면 리더 정보를, 리더면 undefined. */

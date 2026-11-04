@@ -92,9 +92,12 @@ describe('쓰기 판정 — 팔로워 · 연락 없음', () => {
     expect(layout).toContain('scope.follow({ ...(leader === undefined');
   });
 
-  it('WriteNote 가 까닭을 말한다 — 지역 고르기 전 · 연락 없음 · 팔로워(리더에서 열기 ↗)', () => {
+  // 2026-11-04 결정(전역 = 전체 합산, design-global-mode §2.5): 지역을 안 골랐으면 「읽기만」 이 아니라 합산이다.
+  // 지역 하나에 쓰는 자리(폼 · 적용)만 「지역을 골라 좁혀 보면 써요」 라고 한다. 합산 목록은 행마다 그 지역에 쓴다.
+  it('WriteNote 가 까닭을 말한다 — 전체 합산 · 연락 없음 · 팔로워(리더에서 열기 ↗)', () => {
     const n = src('lib/global/WriteNote.svelte');
-    expect(n).toContain('지역을 고르기 전에는 읽기만 해요.');
+    expect(n).not.toContain('지역을 고르기 전에는 읽기만 해요.');
+    expect(n).toContain('전체 합산에서는 여기서 쓰지 않아요. 지역을 골라 좁혀 보면 그 지역에 써요.');
     expect(n).toContain('{LOST_MESSAGE}');
     expect(n).toContain('{followerMessage(scope.follower.leader)}');
     expect(n).toContain('리더에서 열기 ↗');
@@ -108,9 +111,9 @@ describe('쓰기 판정 — 팔로워 · 연락 없음', () => {
       expect(s).toContain('<WriteNote spaced />');
     });
 
-  it('상세 틀 · 목록 옆 상세도 blocked 로 닫는다', () => {
+  it('상세 틀 · 목록 옆 상세도 blocked 로 닫는다 — 목록 옆 상세는 합산이면 그 행의 지역으로 판정한다', () => {
     expect(src('lib/detail/ResourceFrame.svelte')).toContain('const ro = $derived(scope?.blocked === true);');
-    expect(src('lib/detail/ListSplit.svelte')).toContain('const ro = $derived(scope?.blocked === true);');
+    expect(src('lib/detail/ListSplit.svelte')).toContain('const ro = $derived(agg.on ? entry?.writable !== true : scope?.blocked === true);');
   });
 
   it('적용 · 롤백은 읽기 전용이면 까닭(WriteNote)을 보이고, 「전역 화면은 읽기만 해요」 라고 하지 않는다', () => {
@@ -123,7 +126,9 @@ describe('쓰기 판정 — 팔로워 · 연락 없음', () => {
 
 describe('전역 문구 · 지역 상자', () => {
   it('연락 없는 지역의 이름은 어디서나 「연락 없음」 하나다', () => {
-    expect(src('lib/global/scope.svelte.ts')).toContain("export const LOST_LABEL = '연락 없음';");
+    // 순수 모듈(합산 알림도 쓴다)에 두고 scope 가 다시 내보낸다.
+    expect(src('lib/global/aggregate.ts')).toContain("export const LOST_LABEL = '연락 없음';");
+    expect(src('lib/global/scope.svelte.ts')).toContain("export { LOST_LABEL } from './aggregate.ts';");
     for (const p of ['routes/regions/+page.svelte', 'lib/ops/PendingImpact.svelte', 'lib/ops/Dashboard.svelte', 'routes/+layout.svelte']) {
       const s = src(p);
       expect(s, p).toContain('LOST_LABEL');
@@ -132,15 +137,19 @@ describe('전역 문구 · 지역 상자', () => {
     }
   });
 
-  it('사이드바는 지역을 고르기 전에만 읽기 전용이라고 하고, 지역마다 한 줄을 그린다 · 접으면 작은 상자', () => {
+  // 2026-11-04 결정: 지역을 안 골랐으면 전체 합산이다 — 「◎ 전역 · 전체 합산」 줄이 지역 줄 위에 있고, 읽기 전용이라고 하지 않는다.
+  it('사이드바는 「◎ 전역 · 전체 합산」 줄과 지역마다 한 줄을 그리고, 합산의 쓰기를 말한다 · 접으면 작은 상자', () => {
     const sb = src('lib/shell/Sidebar.svelte');
     expect(sb).not.toContain('전역 화면은 읽기만 해요');
-    expect(sb).toContain("{chosen === undefined ? '지역을 고르기 전에는 읽기만 해요.' : '고른 지역에 바로 써요.'}");
+    expect(sb).not.toContain('지역을 고르기 전에는 읽기만 해요.');
+    expect(sb).toContain("{aggregate ? '행을 고치면 그 행의 지역에 써요. 만들 때는 지역을 골라요.' : '고른 지역에 바로 써요.'}");
+    expect(sb).toMatch(/<span class="rn">전역<\/span><span class="rv">전체 합산<\/span>[\s\S]*\{#each regions as r \(r\.name\)\}/);
+    expect(sb).toContain("onclick={() => { if (!aggregate) onwiden?.(); }}");
     expect(sb).toContain('지역 · {regions.length}곳');
     expect(sb).toContain('{#each regions as r (r.name)}');
     expect(sb).toMatch(/\{:else if global && regionHref\}\s*<div class="regions mini">/);
     const layout = src('routes/+layout.svelte');
-    expect(layout).toContain('regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion}');
+    expect(layout).toContain('regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} onwiden={widen}');
     expect(layout).toContain("text: pending > 0 ? `대기 ${pending}` : ''");
   });
 });

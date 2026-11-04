@@ -16,7 +16,9 @@
   import { createSession } from '#lib/account/session.svelte.ts';
   import StepUpDialog from '#lib/account/StepUpDialog.svelte';
   import { LOST_LABEL, createScope, type RegionSummary } from '#lib/global/scope.svelte.ts';
-  import { Banner, Toaster } from '#lib/ui';
+  import { createRegionDesks } from '#lib/global/regions.svelte.ts';
+  import { REGION_PARAM, aggregateFallback, isAggregatePath } from '#lib/global/aggregate.ts';
+  import { Banner, Toaster, toast } from '#lib/ui';
   import Sidebar, { type SideRegion } from '#lib/shell/Sidebar.svelte';
   import TopBar from '#lib/shell/TopBar.svelte';
   import PageHeader from '#lib/shell/PageHeader.svelte';
@@ -32,6 +34,12 @@
   setContext('scope', scope);
   const desk = createDesk(scope);
   setContext('desk', desk);
+  /**
+   * 전체 합산(전역에서 지역을 안 골랐다)의 지역마다 desk — 합산 화면이 열려 있는 동안만 붙는다(`useAggregate`).
+   * 지역 인스턴스에서는 지역 요약을 안 받으므로 비어 있고 아무것도 안 붙는다.
+   */
+  const regionDesks = createRegionDesks({ token: () => desk.token });
+  setContext('regions', regionDesks);
   // 사람 계정 — 쿠키 세션이면 `/me` 가 답한다. 토큰으로 붙었으면 비어 있다.
   const session = createSession();
   setContext('session', session);
@@ -48,12 +56,18 @@
   const detail = $derived(isDynamicGuiPath(page.url.pathname));
   const meta = $derived(PAGE_META[place]);
 
-  /** 전역인데 지역을 안 골랐다 — 설정 화면은 볼 것이 없다. 계정 화면은 그대로 쓴다. */
+  /** 주소가 그 지역으로 좁혀 열라고 한다(`?region=<이름>`, 합산 행의 상세 · 수정 · 만들기). 전역에서만 읽는다. */
+  const wanted = $derived(scope.mode === 'global' ? page.url.searchParams.get(REGION_PARAM) : null);
+  /**
+   * 전역인데 지역을 안 골랐다 — **전체 합산**이다(2026-11-04, docs/design-global-mode.md §2.5). 합산으로 그리는 화면
+   * (`AGGREGATE_PATHS`)과 계정 화면은 그대로 쓴다. 아직 지역 하나만 그릴 줄 아는 화면은 지역 고르기로(합산 목록의 상세 · 만들기면
+   * 그 목록으로) 보낸다. 좁혀 열라는 주소면 좁힐 때까지 기다린다.
+   */
   const needsRegion = $derived(
-    scope.mode === 'global' && scope.region === undefined
+    scope.mode === 'global' && scope.region === undefined && wanted === null && !isAggregatePath(page.url.pathname)
       && !['regions', 'login', 'invite', 'account', 'users', 'reset', 'email', 'design'].includes(place),
   );
-  $effect(() => { if (needsRegion) void goto('/regions'); });
+  $effect(() => { if (needsRegion) void goto(aggregateFallback(page.url.pathname)); });
 
   let ready = $state(false);
   onMount(async () => {
@@ -73,12 +87,14 @@
   const logout = async (): Promise<void> => {
     const r = await session.logout();
     desk.disconnect();
+    regionDesks.closeAll();
     // 서버가 철회를 확인 못 했으면(503) 그렇다고 말한다 — 「로그아웃됐다」로 덮지 않는다.
     logoutNote = r.ok ? undefined : r.message;
     await goto('/login');
   };
   const disconnect = (): void => {
     desk.disconnect();
+    regionDesks.closeAll();
     desk.token = '';
     void goto('/login');
   };
@@ -163,10 +179,13 @@
     if (r === undefined || !r.ok) return;
     regions = ((await r.json()) as { regions: RegionSummary[] }).regions;
     scope.sync(regions);
+    regionDesks.sync(regions);
   };
   $effect(() => {
     if (scope.mode !== 'global' || !signedIn) return;
     void desk.pendingCount; void desk.head;
+    // 전체 합산이면 셸의 desk 는 안 붙어 있다 — 지역마다 붙은 desk 의 대기 수 · head 가 바뀌면 다시 묻는다(폴링 아님).
+    for (const e of regionDesks.entries) { void e.desk.pendingCount; void e.desk.head; }
     void loadRegions();
   });
   const pendingOf = (r: RegionSummary): number => {
@@ -175,23 +194,52 @@
   };
   const sideRegions = $derived<SideRegion[]>(regions.map((r) => {
     const current = r.name === scope.region?.name;
-    const lost = current ? scope.lost : !r.reachable;
-    const pending = current ? desk.pendingCount : pendingOf(r);
+    // 합산 화면이 열려 있으면 지역마다 붙은 desk 가 더 새 값이다(연락 없음 · 대기 수).
+    const e = regionDesks.active ? regionDesks.get(r.name) : undefined;
+    const lost = current ? scope.lost : !r.reachable || e?.state === 'lost';
+    const pending = current ? desk.pendingCount : e?.state === 'ok' ? e.desk.pendingCount : pendingOf(r);
     const pickable = r.reachable && r.auth === undefined;
     if (lost) return { name: r.name, current, pickable, tone: 'neutral', icon: '○', text: LOST_LABEL };
     if (r.auth === 'rejected') return { name: r.name, current, pickable, tone: 'danger', icon: '✕', text: '인증 거절' };
     return { name: r.name, current, pickable, tone: pending > 0 ? 'pending' : 'ok', icon: '●', text: pending > 0 ? `대기 ${pending}` : '' };
   }));
-  /** 사이드바에서 지역을 바꾼다 — 지역 화면의 「보기」 와 같다. 보던 화면은 그대로 두고, 지역 화면에 있었으면 첫 화면으로. */
-  const pickRegion = (name: string): void => {
+  /** 그 지역으로 좁힌다 — 셸의 desk 를 그 지역에 다시 붙인다. 못 고르는 지역(연락 없음 · 인증 거절)이면 거짓. */
+  const narrow = (name: string): boolean => {
     const r = regions.find((x) => x.name === name);
-    if (r === undefined || !r.reachable || r.auth !== undefined) return;
+    if (r === undefined || !r.reachable || r.auth !== undefined) return false;
     desk.disconnect();
     scope.choose(r);
     // **기다리지 않는다.** `connect` 는 스트림이 끊길 때까지 끝나지 않는다.
     void desk.connect();
-    if (place === 'regions') void goto('/');
+    return true;
   };
+  /** 사이드바에서 지역을 바꾼다(좁혀 보기) — 지역 화면의 「보기」 와 같다. 보던 화면은 그대로 두고, 지역 화면에 있었으면 첫 화면으로. */
+  const pickRegion = (name: string): void => {
+    if (narrow(name) && place === 'regions') void goto('/');
+  };
+  /**
+   * 「◎ 전역 · 전체 합산」 — 좁혀 보기를 풀고 합산으로 돌아온다(시안 `regionList` 첫 줄). 셸의 desk 는 끊는다.
+   * 보던 화면이 합산을 못 그리면 `needsRegion` 이 그 목록 · 지역 고르기로 보낸다.
+   */
+  const widen = (): void => {
+    if (scope.mode !== 'global' || scope.region === undefined) return;
+    desk.disconnect();
+    scope.choose(undefined);
+  };
+  /**
+   * `?region=<이름>` 으로 왔다 — 지역 요약을 받은 뒤 그 지역으로 좁히고 인자를 지운다(합산 행의 상세 · 수정 · 만들기, 새 탭 포함).
+   * 못 고르는 지역이면 알리고 인자만 지운다 — 그러면 합산 화면 규칙(`needsRegion`)대로 간다.
+   */
+  $effect(() => {
+    if (wanted === null || regions.length === 0) return;
+    const name = wanted;
+    if (untrack(() => scope.region?.name) !== name && !narrow(name)) {
+      toast.fail(`${name} 지역을 열 수 없어요`, regions.some((x) => x.name === name) ? '이 지역과 지금 연결되지 않았어요.' : '모르는 지역이에요.');
+    }
+    const u = new URL(page.url);
+    u.searchParams.delete(REGION_PARAM);
+    void goto(`${u.pathname}${u.search}${u.hash}`, { replaceState: true, keepFocus: true, noScroll: true });
+  });
 
   /** 적용 대기 배너 — 닫으면 건수가 바뀔 때까지 안 띄운다. 적용 대기 화면에서는 안 띄운다. */
   let dismissedAt = $state(-1);
@@ -222,14 +270,19 @@
   <div class="app" data-menu={menuOpen}>
     <div class="side">
       <Sidebar {place} bind:collapsed pending={desk.pendingCount} global={scope.mode === 'global'} {regionLabel}
-        regionHref={scope.mode === 'global' ? '/regions' : undefined} regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} />
+        regionHref={scope.mode === 'global' ? '/regions' : undefined} regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} onwiden={widen} />
     </div>
     {#if menuOpen}<button type="button" class="scrim" aria-label="메뉴 닫기" onclick={() => { menuOpen = false; }}></button>{/if}
     <div class="main">
       <TopBar {crumbs} {node} head={desk.head} {conn} pending={desk.pendingCount}
         user={session.me?.username} role={session.me?.role} mfa={session.me?.mfa.totp} bind:theme bind:menuOpen onlogout={() => { void logout(); }} ondisconnect={disconnect} />
       {#if scope.mode === 'global' && scope.region !== undefined}
-        <div class="strip"><Banner tone="info" icon="◎">전역 화면에서 <b>{scope.region.name}</b> 을 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.</Banner></div>
+        <div class="strip">
+          <Banner tone="info" icon="◎">
+            전역 화면에서 <b>{scope.region.name}</b> 만 좁혀 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.
+            {#snippet action()}<button type="button" class="banner-action" onclick={widen}>전체 합산으로</button>{/snippet}
+          </Banner>
+        </div>
       {/if}
       {#if showPending}
         <div class="strip">

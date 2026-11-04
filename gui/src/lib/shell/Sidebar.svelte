@@ -9,14 +9,15 @@
    * 사이드바 — 디자인 시안 「App Shell」. 제품명과 지금 지역, 그 아래 메뉴 그룹. 접으면 아이콘만(56px).
    * 적용 대기 항목에 건수 배지. 전역 모드면 클러스터를 숨기고, 아래에 지역 상자를 둔다.
    *
-   * 지역 상자(시안 `regionList`): 「지역 · N곳」 머리와 지역마다 한 줄 — 상태 표시(● 대기 N · ○ 연락 없음 · ✕ 인증 거절),
-   * 누르면 그 지역으로 바꾼다. 연락 없거나 인증이 거절된 지역은 못 고른다. 접으면 작은 상자 하나(지금 지역 → 지역 화면).
-   * 아래 한 줄은 쓰기 여부다: 지역을 고르기 전에만 읽기 전용이고, 고른 뒤에는 그 지역에 바로 쓴다.
+   * 지역 상자(시안 `regionList`): 「지역 · N곳」 머리, 첫 줄 「◎ 전역 · 전체 합산」, 그 아래 지역마다 한 줄 — 상태 표시
+   * (● 대기 N · ○ 연락 없음 · ✕ 인증 거절). 지역 줄을 누르면 그 지역만 좁혀 본다. 「◎ 전역」 을 누르면 다시 합산이다
+   * (2026-11-04, docs/design-global-mode.md §2.5). 연락 없거나 인증이 거절된 지역은 못 고른다. 접으면 작은 상자 하나(→ 지역 화면).
+   * 아래 한 줄은 쓰기 여부다: 합산이면 행마다 그 행의 지역에 쓰고(만들 때는 지역을 고른다), 좁혀 보면 그 지역에 바로 쓴다.
    */
   import { NAV_GROUPS } from '@web/nav';
   import type { Place } from '@web/page';
 
-  let { place, collapsed = $bindable(false), pending = 0, global = false, regionLabel, regionHref, regions = [], chosen, onpick }: {
+  let { place, collapsed = $bindable(false), pending = 0, global = false, regionLabel, regionHref, regions = [], chosen, onpick, onwiden }: {
     place: Place;
     collapsed?: boolean;
     pending?: number;
@@ -25,10 +26,13 @@
     /** 전역 모드면 지역 고르기 화면. */
     regionHref?: string;
     regions?: readonly SideRegion[];
-    /** 전역에서 고른 지역. 없으면 아직 안 골랐다(읽기 전용). */
+    /** 전역에서 좁혀 보는 지역. 없으면 전체 합산이다. */
     chosen?: string;
     onpick?: (name: string) => void;
+    /** 「◎ 전역 · 전체 합산」 을 눌렀다 — 좁혀 보기를 푼다. */
+    onwiden?: () => void;
   } = $props();
+  const aggregate = $derived(chosen === undefined);
 
   const groups = $derived(NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => !(global && i.place === 'cluster')) })));
 </script>
@@ -57,19 +61,23 @@
     <div class="regions" role="group" aria-label="지역">
       <a class="rh" href={regionHref} aria-current={place === 'regions' ? 'page' : undefined}>지역 · {regions.length}곳</a>
       <div class="rl">
+        <button type="button" class="rg" aria-current={aggregate ? 'true' : undefined} title="모든 지역을 합쳐서 봐요"
+          onclick={() => { if (!aggregate) onwiden?.(); }}>
+          <span style:color="var(--info)" aria-hidden="true">◎</span><span class="rn">전역</span><span class="rv">전체 합산</span>
+        </button>
         {#each regions as r (r.name)}
           <button type="button" class="rg" aria-current={r.current ? 'true' : undefined} disabled={!r.pickable && !r.current}
-            title={r.pickable || r.current ? `${r.name} 지역으로 이동` : `${r.name} — ${r.text}`}
+            title={r.pickable || r.current ? `${r.name} 지역만 보기` : `${r.name} — ${r.text}`}
             onclick={() => { if (!r.current && r.pickable) onpick?.(r.name); }}>
             <span style:color="var(--{r.tone})" aria-hidden="true">{r.icon}</span><span class="rn">{r.name}</span><span class="rv">{r.text}</span>
           </button>
         {/each}
       </div>
-      <div class="ro">{chosen === undefined ? '지역을 고르기 전에는 읽기만 해요.' : '고른 지역에 바로 써요.'}</div>
+      <div class="ro">{aggregate ? '행을 고치면 그 행의 지역에 써요. 만들 때는 지역을 골라요.' : '고른 지역에 바로 써요.'}</div>
     </div>
   {:else if global && regionHref}
     <div class="regions mini">
-      <a class="item" href={regionHref} title={chosen === undefined ? '지역 고르기' : `지역: ${chosen} — 다른 지역 고르기`} aria-label={chosen === undefined ? '지역 고르기' : `지역 ${chosen}`}
+      <a class="item" href={regionHref} title={chosen === undefined ? '전체 합산 — 지역 화면' : `지역: ${chosen} — 다른 지역 고르기`} aria-label={chosen === undefined ? '전체 합산 · 지역 화면' : `지역 ${chosen}`}
         aria-current={place === 'regions' ? 'page' : undefined}><span class="ic" aria-hidden="true">◎</span></a>
     </div>
   {/if}
