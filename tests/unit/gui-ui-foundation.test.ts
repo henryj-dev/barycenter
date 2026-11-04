@@ -27,7 +27,7 @@ describe('목록 칸 도우미 (시안 cellMap)', () => {
     expect(cellStyle(m('a'))).toEqual({ font: 'var(--mono)', color: 'var(--tx)' });
     expect(cellStyle(x('켜짐'))).toEqual({ font: 'var(--font)', color: 'var(--tx2)' });
     expect(b('ok', '●', '정상')).toEqual({ kind: 'badge', tone: 'ok', icon: '●', t: '정상' });
-    expect(b('neutral', '', 'x').icon).toBe('·');
+    expect(b('neutral', '', 'x')).toMatchObject({ icon: '·' });
     for (const v of ['', null, undefined]) expect(m(v).t).toBe('—');
     expect(m(0).t).toBe('0');
     expect(dash.t).toBe('—');
