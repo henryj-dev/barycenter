@@ -86,7 +86,7 @@
             <li>
               <span class="st">{clockText(s.at)}</span>
               <span class="nm">{s.name}</span>
-              <span class="ok">● 성공{#if s.note} · {s.note}{/if}{#if s.principal !== g.who}<span class="by"> · {s.principal}</span>{/if}{#if s.subject}<span class="by"> · <code>{s.subject}</code></span>{/if}</span>
+              <span class="ok">● 성공{#if s.note} · {s.note}{/if}{#if s.principal.replace(/^user:/, '') !== g.who}<span class="by"> · {s.principal.replace(/^user:/, '')}</span>{/if}{#if s.subject}<span class="by"> · <code>{s.subject}</code></span>{/if}</span>
             </li>
           {/each}
           {#if g.waiting}

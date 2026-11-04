@@ -148,7 +148,7 @@ describe('화면의 연결', () => {
     const p = src('lib/detail/PoolBackends.svelte');
     expect(p).toContain("const desk = getContext<ReturnType<typeof createDesk>>('desk');");
     expect(p).toContain('scope?.fixed === true && scope.region !== undefined ? inRegion(path, scope.region.name) : path');
-    expect(p).toContain("href={link(resourcePath('backend', r.key))}");
+    expect(p).toContain("href={link(resourcePath('backend', b.n))}");
   });
 
   it('합산의 만들기 드로어: 머리에 「쓸 지역」 고르기 · 연결 안 된 지역은 못 고름 · 폼은 고른 지역 desk · 만든 뒤 합산 목록', () => {

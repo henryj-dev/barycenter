@@ -117,7 +117,8 @@ export function groupAudit(rows: readonly AuditRow[], pending: readonly string[]
       ...r, name: STEP[r.action] ?? r.action, ...(auto && r === apply ? { note: '자동 적용' } : {}),
     }));
     const revision = commit?.revision ?? last.revision;
-    const who = [...new Set(d.rows.map((r) => r.principal))].join(', ');
+    // 사람 계정은 이름만(시안 「alice」) — 감사의 주체는 `user:<이름>` 이다. 토큰은 이름 그대로.
+    const who = [...new Set(d.rows.map((r) => r.principal.replace(/^user:/, '')))].join(', ');
     const change = d.kind === 'changeset' || d.kind === 'rollback';
 
     let result: ChangeGroup['result'];

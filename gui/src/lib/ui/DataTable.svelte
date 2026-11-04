@@ -313,9 +313,9 @@
   .sort { border: 0; background: transparent; padding: 0; color: var(--tx2); font: inherit; }
   .sort[data-on='true'] { color: var(--tx); }
   .arrow { color: var(--accent); }
-  /* 시안의 표는 한 줄이다 — 긴 값은 줄을 바꾸지 않고 표가 옆으로 흐른다(.scroll). 줄이 바뀌면 행이 들쭉날쭉하고 오른쪽 열이 밀려난다. */
+  /* 시안 td 에는 white-space 가 없다 — 긴 값은 줄을 바꿔 표가 화면 폭 안에 든다(오른쪽 열 · 지역 열이 잘리지 않는다). */
   /* 칸 색은 시안 `cellMap`: 고정폭은 --tx, 보통 글은 --tx2. */
-  td { height: var(--row-h); padding: 0 12px; border-bottom: 1px solid var(--bd); white-space: nowrap; color: var(--tx2); }
+  td { height: var(--row-h); padding: 0 12px; border-bottom: 1px solid var(--bd); color: var(--tx2); }
   td.mono { font-family: var(--mono); color: var(--tx); }
   td.muted { color: var(--tx2); }
   tbody tr { cursor: pointer; }
