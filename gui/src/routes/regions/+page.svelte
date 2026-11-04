@@ -60,11 +60,11 @@
   {:else}{c.text?.(r) ?? ''}{/if}
 {/snippet}
 
-{#snippet toolbar()}<Button size="sm" onclick={() => { void load(); }}>다시 묻기</Button>{/snippet}
+{#snippet actions()}<Button size="sm" onclick={() => { void load(); }}>다시 묻기</Button>{/snippet}
 
 <div class="rg">
   {#if error !== undefined}<Banner tone="danger">{error}</Banner>{/if}
-  <DataTable rows={regions} rowKey={(r) => r.name} {columns} {cell} {toolbar} {loading} label="지역" emptyTitle="지역이 없어요" />
+  <DataTable rows={regions} rowKey={(r) => r.name} {columns} {cell} {actions} {loading} label="지역" emptyTitle="지역이 없어요" />
 </div>
 
 <style>

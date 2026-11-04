@@ -4,13 +4,17 @@
    *
    * 리스너는 폼, 풀은 헬스체크 폼(2026-11-02) + 업스트림 TLS 폼 + JSON 수정, 백엔드 · 주소 집합은 폼(시안 「기본」) + JSON 수정,
    * 인증서는 보기만(자료를 다시 넣는 것이 수정이다), 나머지는 JSON 수정이다.
-   * 쓰기가 막혀 있으면(전역 모드) 모든 칸을 보기로 편다.
+   * 쓰기가 막혀 있으면(전역 모드 · 팔로워) 시안 `tSetView` 읽기 구획(`ReadView` — 까닭 · 설정 폼의 구획 · 칸 전부(`viewSecsOf`) ·
+   * 「이 지역에서 열기 ↗」)으로 편다. 폼에 없는 칸까지 아래 「전체 정의」 가 보인다.
    * 전역에서 지역을 골랐으면 **첫 폼만** 「쓸 지역」 한 줄을 단다(`Writable target`) — 풀처럼 폼이 여럿이어도 한 번만 보인다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { RESOURCES, flattenFields, itemOf, type ResourceKind } from '@web/resources';
-  import { Banner, Button, Card, CodeViewer, DescriptionList, Disclosure } from '#lib/ui';
+  import { RESOURCES, itemOf, type ResourceKind } from '@web/resources';
+  import { viewSecsOf } from './view-secs';
+  import { viewContextOf } from './facts';
+  import { Banner, Button, CodeViewer, Disclosure } from '#lib/ui';
+  import ReadView from './ReadView.svelte';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import ListenerForm from '#lib/listener/ListenerForm.svelte';
   import PoolTlsForm from '#lib/pool/PoolTlsForm.svelte';
@@ -28,7 +32,8 @@
   const scope = getContext<Scope | undefined>('scope');
   const key = $derived(page.params['key'] ?? '');
   const item = $derived(itemOf(desk.model, kind, key));
-  const fields = $derived(item === undefined ? [] : flattenFields(item).map((f) => ({ label: f.path, value: f.value, mono: true })));
+  /** 읽기 구획(시안 `viewSecs`) — 설정 폼의 구획 · 칸 전부(분할 상세 보기 모드와 같다). */
+  const view = $derived(item === undefined ? [] : viewSecsOf(desk.model, kind, key, viewContextOf(desk, kind, key)));
   const writable = $derived(RESOURCES[kind].editable && scope?.readOnly !== true);
 </script>
 
@@ -66,12 +71,11 @@
           {#snippet action()}<Button size="sm" href="/tls/certificate/new">인증서 넣기</Button>{/snippet}
         </Banner>
       {/if}
-      <Card title="설정">
-        <DescriptionList labelWidth="220px" items={fields} />
-      </Card>
-      <Disclosure title="전체 정의" hint="head 모델 · JSON">
-        <CodeViewer code={JSON.stringify(item, null, 2)} maxHeight="420px" />
-      </Disclosure>
+      <ReadView sections={view}>
+        <Disclosure title="전체 정의" hint="head 모델 · JSON">
+          <CodeViewer code={JSON.stringify(item, null, 2)} maxHeight="420px" />
+        </Disclosure>
+      </ReadView>
     {/if}
   </div>
 {/if}

@@ -21,21 +21,26 @@ describe('쓸 지역 표시', () => {
 
   it.each([
     'lib/forms/CreateForm.svelte',
-    'lib/listener/ListenerForm.svelte',
+    // 리스너 · 풀 · 백엔드 · 주소 집합의 설정 탭은 시안 `tSet` 틀(SettingsFrame) 하나가 「쓸 지역」 을 단다.
+    'lib/detail/SettingsFrame.svelte',
     'lib/pool/PoolHealthForm.svelte',
-    'lib/detail/BackendSettings.svelte',
-    'lib/detail/AddressSetSettings.svelte',
-    'lib/detail/Rebuild.svelte',
     'lib/detail/BackendHealth.svelte',
-    'lib/detail/Acme.svelte',
   ])('%s 의 쓰는 폼이 target 을 켠다', (p) => {
     expect(src(p)).toMatch(/<Writable target>/);
   });
 
   it('만들기 화면은 모두 CreateForm 을 거친다 — 빠른 프록시 · 라우트 그룹 포함', () => {
+    // URL로 다시 만들기도 드로어 안의 CreateForm 이다(시안 `rebuild` 드로어).
+    expect(src('lib/detail/Rebuild.svelte')).toContain('<CreateForm');
     for (const f of ['QuickProxyForm', 'RouteGroupForm', 'HttpListenerForm', 'TcpListenerForm', 'UdpListenerForm', 'PassthroughListenerForm',
       'PoolForm', 'BackendForm', 'AddressSetForm', 'HttpRouteForm', 'PassthroughRouteForm', 'CertificateForm', 'TlsPolicyForm', 'SniBindingForm']) {
       expect(src(`lib/forms/${f}.svelte`), f).toContain('<CreateForm');
+    }
+  });
+
+  it('리스너 · 풀 · 백엔드 · 주소 집합의 설정 폼은 SettingsFrame 위에 있다', () => {
+    for (const p of ['lib/listener/ListenerForm.svelte', 'lib/pool/PoolSettings.svelte', 'lib/detail/BackendSettings.svelte', 'lib/detail/AddressSetSettings.svelte']) {
+      expect(src(p), p).toMatch(/<SettingsFrame kind="/);
     }
   });
 
@@ -149,7 +154,7 @@ describe('전역 문구 · 지역 상자', () => {
     expect(sb).toContain('{#each regions as r (r.name)}');
     expect(sb).toMatch(/\{:else if global && regionHref\}\s*<div class="regions mini">/);
     const layout = src('routes/+layout.svelte');
-    expect(layout).toContain('regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} onwiden={widen}');
+    expect(layout).toContain('regions={narrowShown ? sideRegions : sideRegions.map((r) => ({ ...r, current: false }))} chosen={narrowShown ? scope.region?.name : undefined} onpick={pickRegion} onwiden={widen}');
     expect(layout).toContain("text: pending > 0 ? `대기 ${pending}` : ''");
   });
 });

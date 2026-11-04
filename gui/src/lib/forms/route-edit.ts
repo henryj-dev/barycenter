@@ -45,6 +45,16 @@ export const routePathsError = (text: string): string | undefined => {
 
 export const PRIORITY_HELP = '큰 값을 먼저 평가해요.';
 
+/** 이름 칸의 오류 — 콘솔 시안 `validate` 문구 그대로. 판정은 `keyError`(저장소의 키 문법)다. */
+export const NAME_ERROR = '이름은 영문·숫자로 시작하고 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 쓸 수 있어요. 63자까지예요.';
+
+/** 「출발지별 동작」 규칙 칸의 도움말 — 시안 그대로. */
+export const RULES_HELP = '위에서부터 보고 처음 맞는 규칙의 동작을 해요. 맞는 규칙이 없으면 위의 기본 동작을 해요. 리스너의 출발지 제한은 누가 붙을 수 있나를 정하고, 이 규칙은 출발지마다 어디로 보내나를 정해요.';
+
+/** 평문으로 저장돼 렌더된 설정 · 내보내기에 보이는 헤더(시안 `/^(authorization|cookie|x-api-key)$/i`). */
+export const plainHeader = (name: string): boolean => /^(authorization|cookie|x-api-key)$/i.test(name.trim());
+export const PLAIN_HEADER_WARN = '▲ 헤더 값은 설정에 평문으로 저장돼요. 렌더된 설정과 내보내기에 보여요.';
+
 /** 우선순위 — 해독기와 같은 범위(0–1000000 의 정수). 맞으면 undefined. */
 export const priorityError = (v: string): string | undefined => {
   const t = v.trim();

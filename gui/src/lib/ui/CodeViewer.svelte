@@ -57,11 +57,11 @@
   .grow { flex: 1; }
   .find { display: flex; align-items: center; gap: 6px; border: 1px solid var(--bd-strong); border-radius: var(--r-sm); padding: 0 4px 0 8px; background: var(--bg-input); }
   .find span { color: var(--tx3); }
-  .find input { width: 110px; height: 24px; border: 0; background: transparent; color: var(--tx); font: var(--t-cap); outline: none; padding: 0; }
+  .find input { width: 140px; height: 26px; border: 0; background: transparent; color: var(--tx); font: var(--t-cap); outline: none; padding: 0; }
   .cnt { font-family: var(--mono); min-width: 34px; text-align: right; }
   .find button { border: 0; background: transparent; color: var(--tx2); padding: 0 4px; }
   .code { font: 400 12.5px/20px var(--mono); padding: 8px 0; overflow: auto; }
-  .ln { display: grid; grid-template-columns: 52px 1fr; }
+  .ln { display: grid; grid-template-columns: 48px 1fr; }
   .ln[data-hit='true'] { background: var(--bg-sel); }
   .ln[data-cur='true'] { background: var(--warn-bg); box-shadow: inset 3px 0 0 var(--warn); }
   .n { text-align: right; padding-right: 12px; color: var(--tx3); user-select: none; }

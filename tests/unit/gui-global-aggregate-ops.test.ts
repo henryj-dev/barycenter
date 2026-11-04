@@ -121,8 +121,8 @@ describe('화면의 연결', () => {
     expect(s).toContain('const t = $derived<Tally>(agg.on ? total : local);');
     const cols = s.slice(s.indexOf('const aggColumns'), s.indexOf('];', s.indexOf('const aggColumns')));
     expect([...cols.matchAll(/label: '([^']+)'/g)].map((m) => m[1])).toEqual(['지역', 'head', '적용 대기', '백엔드 정상', '상태']);
-    expect(s).toContain('mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter((g) => g.change) }))');
-    expect(s).toContain('<RegionNotices {notices} />');
+    expect(s).toContain('mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter(committed) }))');
+    expect(s).toContain('<RegionNotices {notices} strip={false} />');
     // 붙지 않은 지역은 숫자 없이 상태 배지 — 0 이 아니다.
     expect(cols).toContain("r.tally === undefined ? '—'");
   });
@@ -139,7 +139,7 @@ describe('화면의 연결', () => {
     expect(s).toContain('{#if agg.on}<span>지역</span>{/if}');
     expect(s).toContain("mergeByTime(agg.entries.filter((e) => e.state === 'ok')");
     expect(s).toContain('{#each shown as g (g.rid)}');
-    expect(s).toContain('{#if agg.on}<RegionNotices notices={agg.notices} />{/if}');
+    expect(s).toContain('{#if agg.on}<RegionNotices notices={agg.notices} strip={false} />{/if}');
   });
 
   it('적용 대기: 고른 지역의 desk 로 영향 · 적용 · 롤백을 그린다 · 확인 창은 지역 이름을 쓴다 · 모르는 지역은 막힌 사유만', () => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Traffic from '#lib/detail/Traffic.svelte';
+  import TrafficPath from '#lib/detail/TrafficPath.svelte';
 </script>
 
-<Traffic kind="pool" />
+<TrafficPath kind="pool" />

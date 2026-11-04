@@ -13,13 +13,14 @@
   import { getContext } from 'svelte';
   import { itemsOf } from '@web/resources';
   import { viewOfStatus, type StatusFact } from '@web/status-view';
-  import { Badge, Banner, Button, Card, DataTable, FieldMessage, Skeleton, type Column, type Tone } from '#lib/ui';
+  import { Badge, Banner, Button, Skeleton, type Column, type Tone } from '#lib/ui';
   import { LOST_LABEL, type RegionSummary, type Scope } from '#lib/global/scope.svelte.ts';
   import { useAggregate } from '#lib/global/use-aggregate.svelte.ts';
   import RegionNotices from '#lib/global/RegionNotices.svelte';
   import { rowId, type RegionState } from '#lib/global/aggregate.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { clockText, groupAudit, type ChangeGroup } from './audit';
+  import { titleOf, want } from './change-titles.svelte';
   import { loadRegions } from './fetch';
   import { nodeState, type ClusterBody } from './cluster';
   import { certOrder, mergeByTime, regionBadge, sumTally, tallyNotices, type Tally } from './aggregate-view';
@@ -108,7 +109,8 @@
       ...(t.nearest === undefined ? { tone: 'ok' as const, text: '30일 안에 만료되는 것이 없어요' }
         : !t.nearest.hasMaterial ? { tone: 'danger' as const, text: `${nearText(t.nearest)} 자료 없음` }
         : (t.nearest.days ?? 0) < 0 ? { tone: 'danger' as const, text: `${nearText(t.nearest)} 만료됨` }
-        : { tone: 'warn' as const, text: `${nearText(t.nearest)} ${t.nearest.days}일` }),
+        // 전역은 시안대로 「가장 가까운 N일」 — 어느 것인지는 아래 인증서 만료 패널이 지역과 함께 쓴다.
+        : { tone: 'warn' as const, text: agg.on || global ? `가장 가까운 ${t.nearest.days}일` : `${nearText(t.nearest)} ${t.nearest.days}일` }),
     },
   ]);
 
@@ -138,6 +140,8 @@
     { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '100px', text: (r) => (r.status?.head === undefined ? '—' : `r${r.status.head}`) },
     { key: 'pend', label: '적용 대기', width: '120px', text: (r) => { const n = pendingOf(r); return n === undefined ? '—' : `${n}건`; } },
+    // 지역 요약에는 백엔드 헬스가 없다 — 지어내지 않는다.
+    { key: 'be', label: '백엔드 정상', mono: true, text: () => '—' },
     { key: 'state', label: '상태', sort: (r) => regionState(r).text },
   ];
 
@@ -162,12 +166,42 @@
     { key: 'state', label: '상태', sort: (r) => aggState(r).text },
   ];
 
+  /** 지역별 현황 표 한 벌 — 열 정의(`aggColumns` · `regionColumns`)를 시안의 평문 칸으로 편다. */
+  type RegionTable = {
+    head: string[]; note?: string;
+    rows: { key: string; cells: { text: string; mono: boolean; name: boolean; pend: boolean; badge?: { tone: Tone; text: string } }[] }[];
+  };
+  const tableOf = <R extends { name: string }>(rows: readonly R[], cols: readonly Column<R>[], state: (r: R) => { tone: Tone; text: string }, pend: (r: R) => boolean, loading = false): RegionTable => ({
+    head: cols.map((c) => c.label),
+    ...(loading ? { note: '지역 요약을 읽는 중이에요.' } : rows.length === 0 ? { note: '지역이 없어요.' } : {}),
+    rows: rows.map((r) => ({
+      key: r.name,
+      cells: cols.map((c) => (c.key === 'state'
+        ? { text: '', mono: false, name: false, pend: false, badge: state(r) }
+        : { text: c.text?.(r) ?? '', mono: c.mono === true, name: c.key === 'name', pend: c.key === 'pend' && pend(r) })),
+    })),
+  });
+
   // ── 패널 ──
   const groups = $derived(groupAudit(desk.audit.rows, st.pending.map((p) => p.revision)));
   type Recent = ChangeGroup & { region: string; rid: string };
+  /** 최근 변경은 리비전이 생긴 변경만(시안: 줄마다 rN). 커밋 안 한 · 버린 changeset 은 기록 화면에만 있다. */
+  const committed = (g: ChangeGroup): boolean => g.change && g.revision !== undefined;
   const recent = $derived<Recent[]>(agg.on
-    ? mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter((g) => g.change) })), (g) => g.key, (g) => g.at).slice(0, 4)
-    : groups.filter((g) => g.change).slice(0, 4).map((g) => ({ ...g, region: '', rid: g.key })));
+    ? mergeByTime(parts.map((p) => ({ region: p.name, rows: p.groups.filter(committed) })), (g) => g.key, (g) => g.at).slice(0, 4)
+    : groups.filter(committed).slice(0, 4).map((g) => ({ ...g, region: '', rid: g.key })));
+  /** 최근 변경의 설명(시안 `백엔드 demo-2 추가`) — 보이는 넷만 읽는다. 못 읽으면 「설정 변경」 그대로다. 합산이면 그 지역 desk 로. */
+  const recentSrc = (g: Recent): Desk | undefined => (agg.on ? parts.find((p) => p.name === g.region)?.desk : desk);
+  $effect(() => {
+    for (const g of recent) {
+      const src = recentSrc(g);
+      if (src !== undefined && g.changeset !== undefined) want(src, g.changeset.id, g.changeset.ver);
+    }
+  });
+  const recentTitle = (g: Recent): string => {
+    const src = recentSrc(g);
+    return (src === undefined ? undefined : titleOf(src, g.changeset?.id))?.title ?? g.title;
+  };
   const whoIn = (gs: readonly ChangeGroup[], rev: string): string | undefined => gs.find((g) => g.change && g.revision === rev)?.who;
   const revsOf = (d: Desk): string[] => d.status.pending.map((p) => p.revision).sort((a, b) => Number(a) - Number(b));
   const whoOfRevs = (gs: readonly ChangeGroup[], revs: readonly string[]): string =>
@@ -249,22 +283,31 @@
   ]);
   /** 합산이면 붙은 지역이 하나도 없고 오는 중인 지역이 있을 때만 뼈대다. 모두 빠졌으면 지역별 표가 「연락 없음」 을 말한다. */
   const waiting = $derived(agg.on ? agg.listState.loading : !desk.live);
+  /** 실시간 연결 표시(시안 `connMap`) — 수신 중 · 재연결 중 · 끊김. 합산이면 붙은 지역이 모두 붙어야 수신 중이다. */
+  const conn = $derived<'ok' | 'reconn' | 'down'>(agg.on
+    ? (liveRegions > 0 && liveRegions === agg.entries.length ? 'ok' : liveRegions > 0 ? 'reconn' : 'down')
+    : desk.live ? 'ok' : desk.retrying ? 'reconn' : 'down');
+  const connText = $derived(agg.on && conn !== 'ok' && liveRegions > 0 ? `실시간 수신 중 · ${liveRegions} / ${agg.entries.length} 지역`
+    : { ok: '실시간 수신 중', reconn: '재연결 중', down: '끊김' }[conn]);
 </script>
 
-{#snippet regionCell(r: RegionSummary, c: Column<RegionSummary>)}
-  {#if c.key === 'state'}
-    {@const s = regionState(r)}<Badge tone={s.tone}>{s.text}</Badge>
-  {:else if c.key === 'pend'}
-    {@const n = pendingOf(r)}<span class:pend={(n ?? 0) > 0}>{c.text?.(r)}</span>
-  {:else}{c.text?.(r) ?? ''}{/if}
-{/snippet}
-
-{#snippet aggCell(r: AggRegion, c: Column<AggRegion>)}
-  {#if c.key === 'state'}
-    {@const s = aggState(r)}<Badge tone={s.tone}>{s.text}</Badge>
-  {:else if c.key === 'pend'}
-    <span class:pend={(r.tally?.pending ?? 0) > 0}>{c.text?.(r)}</span>
-  {:else}{c.text?.(r) ?? ''}{/if}
+{#snippet regionTable(tbl: RegionTable)}
+  <!-- 시안 `regionRows`: 패널 머리 · 32px 머리 줄 · 1.4fr .8fr .8fr 1fr 1fr · 행 --row-h. 칸은 평문이다. -->
+  <section class="panel" aria-labelledby="dash-regions">
+    <div class="ph" id="dash-regions">지역별 현황</div>
+    <div role="table" aria-labelledby="dash-regions">
+      <div class="rgh" role="row">{#each tbl.head as h (h)}<span role="columnheader">{h}</span>{/each}</div>
+      {#if tbl.note !== undefined}<div class="rgr" role="row"><span role="cell" class="muted">{tbl.note}</span></div>{/if}
+      {#each tbl.rows as r (r.key)}
+        <div class="rgr" role="row">
+          {#each r.cells as c, i (i)}
+            {#if c.badge !== undefined}<span role="cell"><Badge tone={c.badge.tone}>{c.badge.text}</Badge></span>
+            {:else}<span role="cell" class:name={c.name} class:mono={c.mono} class:pend={c.pend}>{c.text}</span>{/if}
+          {/each}
+        </div>
+      {/each}
+    </div>
+  </section>
 {/snippet}
 
 {#if waiting}
@@ -272,7 +315,7 @@
 {:else}
   <div class="dash">
     {#if agg.on}
-      <RegionNotices {notices} />
+      <RegionNotices {notices} strip={false} />
       {#each total.unfinishedIn as name (name)}
         <Banner tone="warn">
           {name} 에 끝나지 않은 전환이 있어요. 복구가 이어받아야 그 지역에서 다음 적용을 할 수 있어요.
@@ -291,135 +334,133 @@
         <a class="stat" href={s.href}>
           <span class="l">{s.label}</span>
           <span class="n">{s.value}</span>
-          <span><Badge tone={s.tone}>{s.text}</Badge></span>
+          <span class="b"><Badge tone={s.tone}>{s.text}</Badge></span>
         </a>
       {/each}
     </div>
 
     {#if agg.on}
-      <Card title="지역별 현황" padded={false}>
-        <DataTable rows={aggRegions} rowKey={(r) => r.name} columns={aggColumns} cell={aggCell}
-          label="지역별 현황" emptyTitle="지역이 없어요" minHeight="0" />
-      </Card>
+      {@render regionTable(tableOf(aggRegions, aggColumns, aggState, (r) => r.tally !== undefined))}
     {:else if global}
-      <Card title="지역별 현황" padded={false}>
-        <DataTable rows={regions ?? []} loading={regions === undefined} rowKey={(r) => r.name} columns={regionColumns} cell={regionCell}
-          label="지역별 현황" emptyTitle="지역이 없어요" minHeight="0" />
-      </Card>
+      {@render regionTable(tableOf(regions ?? [], regionColumns, regionState, (r) => pendingOf(r) !== undefined, regions === undefined))}
     {/if}
 
     <div class="panels">
-      <Card title="적용 대기" padded={false}>
-        {#snippet actions()}{#if agg.on ? aggHasPlan : global ? regionPending > 0 : desk.view !== undefined}<Button size="sm" variant="primary" href="/change/pending">영향 확인</Button>{/if}{/snippet}
+      <section class="panel" aria-labelledby="dash-plans">
+        <div class="phx"><span class="pt" id="dash-plans">적용 대기</span><a class="go-pend" href="/change/pending">영향 확인</a></div>
         {#if agg.on}
           <!-- 전체 합산 — 적용 대기가 있는 지역마다 한 줄(시안 `plans`), 모르는 지역은 「연락 없음」 등으로. -->
           {#if aggPlans.length === 0}
-            <div class="pad"><FieldMessage tone="ok">적용 대기가 없어요. 지역마다 head 가 트래픽에 걸려 있어요.</FieldMessage></div>
+            <div class="empty">적용 대기가 없어요. 지역마다 head 가 트래픽에 걸려 있어요.</div>
           {:else}
             {#each aggPlans as p (p.name)}
               {#if p.plan !== undefined}
-                <div class="line plan">
+                <div class="plan">
                   <span class="rev">r{p.plan.revision}</span>
                   <div class="grow">
                     <div>적용 — 커밋 {p.plan.revs.length}건 포함{p.plan.revs.length > 0 ? ` (${p.plan.revs.map((r) => `r${r}`).join(', ')})` : ''}</div>
-                    <div class="cap">{p.plan.who !== '' ? `${p.plan.who} · ` : ''}<span class="mono">{p.name}</span></div>
+                    <div class="cap">{p.plan.who !== '' ? `${p.plan.who} · ` : ''}{p.name}</div>
                   </div>
                   {#if p.plan.reload}<Badge tone="warn">reload 필요</Badge>{:else}<Badge tone="ok">세대 전환 불필요</Badge>{/if}
                 </div>
               {:else if p.badge !== undefined}
-                <div class="line">
-                  <span class="grow mono">{p.name}</span>
+                <div class="plan">
+                  <span class="rev">—</span>
+                  <div class="grow"><div class="muted">지금 값을 몰라요.</div><div class="cap">{p.name}</div></div>
                   <Badge tone={p.badge.tone}>{p.badge.text}</Badge>
                 </div>
               {/if}
             {/each}
           {/if}
         {:else if global}
-          <!-- 전역 — 지역마다 한 줄(시안). 고른 지역의 plan 상세는 적용 대기 화면에서 본다. -->
+          <!-- 좁혀 보기 — 지역 요약으로 지역마다 한 줄(시안 `plans`). 커밋한 사람 · reload 여부는 요약에 없다 — 적용 대기 화면에서 본다. -->
           {#if regions === undefined}
-            <div class="pad"><Skeleton height="40px" label="지역 요약을 읽는 중" /></div>
-          {:else if regions.length === 0}
-            <div class="pad"><FieldMessage>지역이 없어요.</FieldMessage></div>
+            <div class="empty">지역 요약을 읽는 중이에요.</div>
+          {:else if regionViews.every(({ v }) => v !== undefined && v.pending.length === 0)}
+            <div class="empty">적용 대기가 없어요. 지역마다 head 가 트래픽에 걸려 있어요.</div>
           {:else}
             {#each regionViews as { r, v } (r.name)}
-              {@const n = v?.pending.length}
-              <div class="line">
-                <span class="grow mono">{r.name}</span>
-                <span class="rev">{v?.head === undefined ? '—' : `r${v.head}`}</span>
-                {#if n === undefined}<Badge tone="neutral">{regionState(r).text}</Badge>
-                {:else if n > 0}<Badge tone="pending">적용 대기 {n}건</Badge>
-                {:else}<Badge tone="ok">없음</Badge>{/if}
-              </div>
+              {#if v === undefined}
+                <div class="plan">
+                  <span class="rev">—</span>
+                  <div class="grow"><div class="muted">지금 값을 몰라요.</div><div class="cap">{r.name}</div></div>
+                  <Badge tone={regionState(r).tone}>{regionState(r).text}</Badge>
+                </div>
+              {:else if v.pending.length > 0}
+                {@const revs = v.pending.map((p) => p.revision).sort((a, b) => Number(a) - Number(b))}
+                <div class="plan">
+                  <span class="rev">{v.head === undefined ? '—' : `r${v.head}`}</span>
+                  <div class="grow">
+                    <div>적용 — 커밋 {revs.length}건 포함 ({revs.map((x) => `r${x}`).join(', ')})</div>
+                    <div class="cap">{r.name}</div>
+                  </div>
+                  <Badge tone="pending">적용 대기</Badge>
+                </div>
+              {/if}
             {/each}
           {/if}
         {:else if desk.view === undefined}
-          <div class="pad"><FieldMessage tone="ok">적용 대기가 없어요. head{desk.head === undefined ? '' : ` r${desk.head}`} 가 트래픽에 걸려 있어요.</FieldMessage></div>
+          <div class="empty">적용 대기가 없어요. head{desk.head === undefined ? '' : ` r${desk.head}`} 가 트래픽에 걸려 있어요.</div>
         {:else}
-          <div class="line plan">
+          <div class="plan">
             <span class="rev">r{desk.view.revision}</span>
             <div class="grow">
               <div>적용 — 커밋 {pendingRevs.length}건 포함{pendingRevs.length > 0 ? ` (${pendingRevs.map((r) => `r${r}`).join(', ')})` : ''}</div>
-              <div class="cap">{desk.view.headline}{pendingWho !== '' ? ` · ${pendingWho}` : ''}</div>
+              <div class="cap">{pendingWho !== '' ? `${pendingWho} · ` : ''}이 인스턴스</div>
             </div>
             {#if desk.view.requiresReload}<Badge tone="warn">reload 필요</Badge>{:else}<Badge tone="ok">세대 전환 불필요</Badge>{/if}
           </div>
         {/if}
-      </Card>
+      </section>
 
-      <Card title="풀별 백엔드 헬스" padded={false}>
-        <!-- 헬스는 실시간 스트림으로 온다 — 그 연결 상태를 머리에 둔다(시안). 끊기면 이 화면은 뼈대로 바뀐다. 합산이면 붙은 지역 수. -->
-        {#snippet actions()}
-          {#if agg.on}
-            <span class="conn" data-live={liveRegions > 0 && liveRegions === agg.entries.length}><span class="dot" aria-hidden="true"></span>{liveRegions === agg.entries.length ? '실시간 수신 중' : `실시간 수신 중 · ${liveRegions} / ${agg.entries.length} 지역`}</span>
-          {:else}
-            <span class="conn" data-live={desk.live}><span class="dot" aria-hidden="true"></span>{desk.live ? '실시간 수신 중' : '끊김'}</span>
-          {/if}
-        {/snippet}
+      <section class="panel" aria-labelledby="dash-pools">
+        <!-- 헬스는 실시간 스트림으로 온다 — 그 연결 상태를 머리에 둔다(시안 `connName`). 합산이면 붙은 지역 수. -->
+        <div class="phx"><span class="pt" id="dash-pools">풀별 백엔드 헬스</span><span class="conn" data-conn={conn} role="status"><span class="dot" aria-hidden="true"></span>{connText}</span></div>
         {#if pools.length === 0}
-          <div class="pad"><FieldMessage>풀이 없어요.</FieldMessage></div>
+          <div class="empty">풀이 없어요.</div>
         {:else}
           {#each pools as p (p.rid)}
-            <svelte:element this={p.href === undefined ? 'div' : 'a'} class="line pool" href={p.href}>
+            <svelte:element this={p.href === undefined ? 'div' : 'a'} class="pool" href={p.href}>
               <span class="mono name" title={p.key}>{p.key}</span>
               <span class="hb">
-                <span class="bar" aria-hidden="true">{#each p.segs as [tone, n] (tone)}{#if n > 0}<span data-tone={tone} style:width="{(n / p.total) * 100}%"></span>{/if}{/each}</span>
-                <span class="cap">{p.text}</span>
+                <span class="bar" aria-hidden="true">{#each p.segs as [tone, n] (tone)}<span data-tone={tone} style:width="{(n / p.total) * 100}%"></span>{/each}</span>
+                <span class="ptx">{p.text}</span>
               </span>
             </svelte:element>
           {/each}
         {/if}
-      </Card>
+      </section>
 
-      <Card title="인증서 만료" padded={false}>
-        {#snippet actions()}<Button size="sm" variant="text" href="/tls/certificate">자세히</Button>{/snippet}
+      <section class="panel" aria-labelledby="dash-certs">
+        <div class="phx"><span class="pt" id="dash-certs">인증서 만료</span><a class="more" href="/tls/certificate">자세히</a></div>
         {#if certs.length === 0}
-          <div class="pad"><FieldMessage>인증서가 없어요.</FieldMessage></div>
+          <div class="empty">인증서가 없어요.</div>
         {:else}
           {#each certs as { c, region, rid, href } (rid)}
             {@const tc = certTone(c)}
-            <a class="line" {href}>
-              <span class="grow mono" title={c.key}>{c.key}{#if region !== ''} <span class="cap">· {region}</span>{/if}</span>
-              <span class="cap mono">{c.notAfter?.slice(0, 10) ?? '—'}</span>
+            <a class="cert" {href}>
+              <span class="cn mono" title={c.key}>{c.key}{#if region !== ''} <span class="cap">· {region}</span>{/if}</span>
+              <span class="cd">{c.notAfter?.slice(0, 10) ?? '—'}</span>
               <Badge tone={tc.tone}>{tc.text}</Badge>
             </a>
           {/each}
         {/if}
-      </Card>
+      </section>
 
-      <Card title="최근 변경" padded={false}>
-        {#snippet actions()}<Button size="sm" variant="text" href="/ops/audit">자세히</Button>{/snippet}
+      <section class="panel" aria-labelledby="dash-acts">
+        <div class="phx"><span class="pt" id="dash-acts">최근 변경</span><a class="more" href="/ops/audit">자세히</a></div>
         {#if recent.length === 0}
-          <div class="pad"><FieldMessage>최근 변경이 없어요.</FieldMessage></div>
+          <div class="empty">최근 변경이 없어요.</div>
         {:else}
           {#each recent as g (g.rid)}
-            <div class="line act">
-              <span class="cap mono">{clockText(g.at)}</span>
-              <span class="grow"><b>{g.title}</b> <span class="cap">· {g.who}{g.region !== '' ? ` · ${g.region}` : ''}</span></span>
-              <span class="rev">{g.revision === undefined ? '' : `r${g.revision}`}</span>
+            <div class="act">
+              <span class="at">{clockText(g.at)}</span>
+              <span class="an"><b>{recentTitle(g)}</b> <span class="cap">· {g.who}{g.region !== '' ? ` · ${g.region}` : ''}</span></span>
+              <span class="ar">{g.revision === undefined ? '' : `r${g.revision}`}</span>
             </div>
           {/each}
         {/if}
-      </Card>
+      </section>
     </div>
 
     <dl class="engine">
@@ -429,52 +470,90 @@
 {/if}
 
 <style>
-  .dash { display: flex; flex-direction: column; gap: 16px; max-width: 1280px; }
+  /* 시안 값 그대로 — 대시보드(`dashDisp`). */
+  .dash { display: flex; flex-direction: column; gap: 16px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
   .stat {
-    display: flex; flex-direction: column; gap: 6px; padding: 14px 16px;
+    text-align: left; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px;
     background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg);
     color: var(--tx); text-decoration: none; transition: border-color var(--dur-fast) var(--ease);
   }
   .stat:hover { border-color: var(--accent); }
   .stat:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
-  .l { font: var(--t-cap); color: var(--tx3); }
-  .n { font: 600 26px/32px var(--mono); }
-  /* 시안: 두 열 — 적용 대기 | 풀별 헬스, 인증서 만료 | 최근 변경. 셋이 한 줄에 끼면 이름이 겹친다. */
-  .panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
-  @media (max-width: 1000px) { .panels { grid-template-columns: minmax(0, 1fr); } }
-  .pad { padding: 12px 16px; }
-  .line {
-    display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--bd);
-    font: var(--t-small); color: var(--tx); text-decoration: none;
+  .l { font-size: 12px; color: var(--tx3); }
+  .n { font-family: var(--mono); font-size: 26px; line-height: 32px; font-weight: 600; }
+  .b { align-self: flex-start; }
+
+  .panel { background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; min-width: 0; }
+  .ph { padding: 10px 16px; border-bottom: 1px solid var(--bd); font-weight: 600; font-size: 14px; }
+  .phx { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--bd); }
+  .pt { font-weight: 600; font-size: 14px; flex: 1; }
+  .go-pend {
+    height: 24px; padding: 0 10px; display: inline-flex; align-items: center; border: 1px solid var(--pending); background: transparent;
+    color: var(--pending); border-radius: var(--r-sm); font-weight: 600; font-size: 12px; text-decoration: none;
   }
-  .line:first-child { border-top: 0; }
-  a.line:hover { background: var(--bg-hover); }
-  a.line:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-  .plan { align-items: flex-start; }
-  .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .line > span.grow, .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .rev { flex: none; font-family: var(--mono); color: var(--accent); }
-  .plan .rev { width: 40px; }
-  .act .rev { width: 40px; text-align: right; }
-  .cap { font: var(--t-cap); color: var(--tx3); }
+  .go-pend:hover { background: var(--pending-bg); }
+  .more { border: 0; background: transparent; color: var(--accent); font-weight: 500; font-size: 12px; text-decoration: none; }
+  .more:hover { color: var(--focus); }
+  .go-pend:focus-visible, .more:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  .rgh, .rgr { display: grid; grid-template-columns: 1.4fr .8fr .8fr 1fr 1fr; gap: 12px; padding: 0 16px; align-items: center; }
+  .rgh { height: 32px; background: var(--bg-hover); font-size: 12px; font-weight: 600; color: var(--tx2); }
+  .rgr { height: var(--row-h); border-top: 1px solid var(--bd); font-size: 13px; }
+  .rgr > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rgr .name { font-weight: 500; }
+  .pend { color: var(--pending); }
+
+  /* 패널은 시안처럼 두 열까지 — `auto-fit, minmax(380px, 1fr)` 이 시안 폭(1400px 틀)에서 두 열이 된다. 넓은 화면에서도 두 열을 넘지 않는다. */
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(380px, calc((100% - 16px) / 2)), 1fr)); gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .panels { grid-template-columns: minmax(0, 1fr); } }
+  .empty { padding: 10px 16px; font-size: 13px; color: var(--tx3); }
+  .plan { display: flex; align-items: flex-start; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--bd); font-size: 13px; }
+  .plan > :global(.badge) { flex: none; }
+  .rev { font-family: var(--mono); color: var(--accent); flex: none; width: 40px; }
+  .grow { flex: 1; min-width: 0; }
+  .cap { font-size: 12px; color: var(--tx3); }
+  .muted { color: var(--tx2); }
   .mono { font-family: var(--mono); }
   b { font-weight: 500; }
-  .pool { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; }
-  .hb { display: flex; flex-direction: column; gap: 4px; }
+
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ok); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .conn[data-conn='reconn'] { color: var(--warn); }
+  .conn[data-conn='reconn'] .dot { animation: bc-pulse 1s infinite; }
+  .conn[data-conn='down'] { color: var(--danger); }
+  .conn[data-conn='down'] .dot { border-radius: 2px; }
+
+  .pool {
+    width: 100%; text-align: left; display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: center; padding: 10px 16px;
+    border-top: 1px solid var(--bd); background: transparent; color: var(--tx); font-size: 13px; text-decoration: none;
+  }
+  .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .hb { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-hover); }
   .bar [data-tone='ok'] { background: var(--ok); }
   .bar [data-tone='drain'] { background: var(--drain); }
   .bar [data-tone='danger'] { background: var(--danger); }
   .bar [data-tone='neutral'] { background: var(--neutral); }
-  .pend { color: var(--pending); }
-  .conn { display: inline-flex; align-items: center; gap: 6px; font: var(--t-cap); color: var(--danger); }
-  .conn[data-live='true'] { color: var(--ok); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .ptx { font-size: 12px; color: var(--tx2); }
+
+  .cert { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--bd); font-size: 13px; color: var(--tx); text-decoration: none; }
+  .cn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cd { font-family: var(--mono); color: var(--tx3); font-size: 12px; }
+
+  .act { display: grid; grid-template-columns: 64px 1fr 36px; gap: 12px; align-items: center; padding: 0 16px; height: var(--row-h); border-top: 1px solid var(--bd); font-size: 13px; }
+  .at { font-family: var(--mono); font-size: 12px; color: var(--tx3); }
+  .an { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .an .cap { font-size: inherit; }
+  .ar { font-family: var(--mono); color: var(--accent); text-align: right; }
+
+  a.pool:hover, a.cert:hover { background: var(--bg-hover); }
+  a.pool:focus-visible, a.cert:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
   .engine {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 24px; margin: 0; padding: 12px 16px;
-    background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg); font: var(--t-small);
+    background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg); font-size: 13px;
   }
-  .engine dt { font: var(--t-cap); color: var(--tx3); }
+  .engine dt { font-size: 12px; color: var(--tx3); }
   .engine dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
 </style>

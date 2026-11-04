@@ -49,3 +49,12 @@ describe('화면 자리', () => {
     expect(pageOf('/')).toBe('dashboard');
   });
 });
+
+describe('엔진 기능 — 상태 화면 엔진 카드 「기능: …」(시안)', () => {
+  it('지원하는 것만 시안 말로 늘어놓는다', async () => {
+    const { viewOfStatus } = await import('../../src/web/status-view.js');
+    const v = viewOfStatus({ engine: { probed: true, flavor: 'openresty', version: '1.25.3', supports: { stream: true, http2: true, sniPassthrough: false } } });
+    expect(v.engine.features).toEqual(['무중단 reload', 'TCP·UDP stream', 'HTTP/2']);
+    expect(viewOfStatus({ engine: { probed: false } }).engine.features).toEqual([]);
+  });
+});

@@ -65,7 +65,8 @@
       {/if}
       <div class="foot">
         <div bind:this={cancelEl}><Button onclick={cancel}>취소</Button></div>
-        <Button variant={danger ? 'danger' : 'primary'} disabled={blocked} loading={busy} onclick={onconfirm}>{confirmLabel}</Button>
+        <!-- 시안 `dlgOp`: 잠기면 위험 색 그대로 흐리기만 한다(.45). -->
+        <Button variant={danger ? 'danger' : 'primary'} dim disabled={blocked} loading={busy} onclick={onconfirm}>{confirmLabel}</Button>
       </div>
     </div>
   </div>
@@ -73,8 +74,8 @@
 
 <style>
   .backdrop {
-    position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(0, 0, 0, .5);
-    display: grid; place-items: center; padding: 16px;
+    position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(0, 0, 0, .55);
+    display: grid; place-items: center; padding: 24px;
   }
   .dlg {
     width: 100%; max-width: 460px; background: var(--bg-panel); border: 1px solid var(--bd-strong);

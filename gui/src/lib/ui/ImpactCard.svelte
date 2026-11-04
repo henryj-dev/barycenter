@@ -15,10 +15,12 @@
   import type { Snippet } from 'svelte';
   import { TONE_ICON } from './Badge.svelte';
 
-  let { tone = 'warn', title, sub, breaking = [], calm, details, quiet = [], quietLabel, progress, result, footer }: {
+  let { tone = 'warn', title, sub, lead, breaking = [], calm, details, quiet = [], quietLabel, progress, result, footer }: {
     tone?: Tone;
     title: string;
     sub?: Snippet;
+    /** 「끊기거나 바뀌는 것」 위에 둘 구획 — 콘솔 적용 대기의 「▸ 포함된 커밋 · N」. */
+    lead?: Snippet;
     breaking?: readonly ImpactLine[];
     calm?: string;
     details?: Snippet;
@@ -37,15 +39,16 @@
     <div><div class="t">{title}</div>{#if sub}<div class="s">{@render sub()}</div>{/if}</div>
   </header>
   <div class="body">
-    {#if breaking.length > 0}
-      <div>
+    {#if lead}<div class="lead">{@render lead()}</div>{/if}
+    {#if breaking.length > 0 || calm !== undefined}
+      <!-- 콘솔: 끊기는 것이 없어도 제목(· 0)은 남기고 그 아래 「● 끊기는 연결이 없어요.」 -->
+      <div class:sec={lead !== undefined}>
         <div class="bt">끊기거나 바뀌는 것 · {breaking.length}</div>
         <div class="lines">
           {#each breaking as l, i (i)}<div class="line"><span style:color="var(--{l.tone})">{l.icon}</span><span>{l.text}</span></div>{/each}
+          {#if breaking.length === 0 && calm !== undefined}<div class="calm">● {calm}</div>{/if}
         </div>
       </div>
-    {:else if calm !== undefined}
-      <div class="calm">● {calm}</div>
     {/if}
     {#if details}{@render details()}{/if}
     {#if quiet.length > 0}
@@ -76,12 +79,12 @@
   .hi { color: var(--c); font-weight: 700; font-size: 16px; }
   .t { font: 600 15px/22px var(--font); }
   .s { color: var(--tx2); font: var(--t-small); }
-  .body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; font: var(--t-small); }
+  .body { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; font: var(--t-small); }
   .bt { font: 600 12px/16px var(--font); color: var(--danger); margin-bottom: 6px; }
   .calm { color: var(--ok); }
   .lines { display: flex; flex-direction: column; gap: 6px; }
   .line { display: flex; gap: 8px; }
-  .sec { padding-top: 10px; border-top: 1px solid var(--bd); }
+  .sec { padding-top: 12px; border-top: 1px solid var(--bd); }
   .body > .sec:first-child { padding-top: 0; border-top: 0; }
   .qt { border: 0; background: transparent; padding: 0; font: 600 12px/16px var(--font); color: var(--ok); }
   .quiet { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; color: var(--tx2); animation: bc-in var(--dur) var(--ease); }

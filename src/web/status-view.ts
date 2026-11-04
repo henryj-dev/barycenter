@@ -18,7 +18,8 @@ export type StatusFact = {
 export type StatusView = {
   head: string | undefined;
   leader: { isLeader: boolean; holder: string; reason: string | undefined };
-  engine: { probed: boolean; label: string };
+  /** `features`: 엔진이 지원한다고 답한 것 — 상태 화면 엔진 카드의 「기능: …」(시안). 못 물었으면 비어 있다. */
+  engine: { probed: boolean; label: string; features: string[] };
   driver: { loaded: boolean; name: string | undefined };
   published: { kind: string; generation: string | undefined };
   unfinished: boolean;
@@ -30,6 +31,14 @@ const rec = (v: unknown): Record<string, unknown> =>
 
 const text = (v: unknown): string | undefined =>
   (typeof v === 'string' && v !== '' ? v : undefined);
+
+/** nginx 는 늘 무중단 reload(graceful)다. 나머지는 프로브가 답한 대로. */
+const featuresOf = (sup: Record<string, unknown>): string[] => [
+  '무중단 reload',
+  ...(sup['stream'] === true ? ['TCP·UDP stream'] : []),
+  ...(sup['http2'] === true ? ['HTTP/2'] : []),
+  ...(sup['sniPassthrough'] === true ? ['SNI 패스스루'] : []),
+];
 
 export function viewOfStatus(snap: StatusFact): StatusView {
   const leader = rec(snap.leader);
@@ -55,6 +64,7 @@ export function viewOfStatus(snap: StatusFact): StatusView {
       label: probed
         ? [flavor, version].filter(Boolean).join(' ') || '프로브됨'
         : (text(engine['reason']) ?? '엔진을 못 물었다'),
+      features: probed ? featuresOf(rec(engine['supports'])) : [],
     },
     driver: {
       loaded: driver['loaded'] === true,

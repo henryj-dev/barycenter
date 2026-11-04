@@ -172,7 +172,7 @@ describe('운영 화면은 공통 컴포넌트다', () => {
   it('적용 대기는 영향 요약 카드다 — 끊기는 것을 먼저 쓴다', () => {
     const src = read('lib/ops/PendingImpact.svelte');
     expect(markup(src)).toContain('<ImpactCard');
-    expect(src.indexOf('socketsRemoved'), '닫히는 소켓이 열리는 소켓보다 먼저다').toBeLessThan(src.indexOf('socketsAdded.map'));
+    expect(src.indexOf('socketsRemoved'), '닫히는 소켓이 열리는 소켓보다 먼저다').toBeLessThan(src.indexOf('view?.socketsAdded'));
   });
 
   it('옛 운영 컴포넌트와 상세 공통 스타일이 남아 있지 않다', () => {

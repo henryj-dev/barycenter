@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Settings from '#lib/detail/Settings.svelte';
+  import TrafficSettings from '#lib/detail/TrafficSettings.svelte';
 </script>
 
-<Settings kind="pool" />
+<TrafficSettings kind="pool" />

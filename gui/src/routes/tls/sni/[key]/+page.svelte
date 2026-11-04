@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Overview from '#lib/detail/Overview.svelte';
+  import TlsOverview from '#lib/tls/TlsOverview.svelte';
 </script>
 
-<Overview kind="sniBinding" />
+<TlsOverview kind="sniBinding" />

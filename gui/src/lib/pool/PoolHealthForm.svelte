@@ -96,8 +96,8 @@
             <Disclosure title="더 보기" hint="별도 포트 · 주소 · 주기 · 판정 횟수">
               <FormRow label="포트" for="hc-port" help="비우면 백엔드 포트예요."><TextInput id="hc-port" bind:value={f.port} autocomplete="off" placeholder="8080" /></FormRow>
               <FormRow label="주소" for="hc-addr" help="사이드카 프로브용. 비우면 백엔드 주소예요."><TextInput id="hc-addr" bind:value={f.hostOverride} autocomplete="off" /></FormRow>
-              <FormRow label="주기(초)" for="hc-int"><TextInput id="hc-int" bind:value={f.intervalS} autocomplete="off" placeholder="2" /></FormRow>
-              <FormRow label="타임아웃(초)" for="hc-to" help="주기보다 길 수 없어요."><TextInput id="hc-to" bind:value={f.timeoutS} autocomplete="off" placeholder="1" /></FormRow>
+              <FormRow label="주기" for="hc-int"><TextInput id="hc-int" bind:value={f.intervalS} autocomplete="off" placeholder="2" unit="s" /></FormRow>
+              <FormRow label="타임아웃" for="hc-to" help="주기보다 길 수 없어요."><TextInput id="hc-to" bind:value={f.timeoutS} autocomplete="off" placeholder="1" unit="s" /></FormRow>
               <FormRow label="rise" for="hc-rise" help="몇 번 연속 성공하면 살았다고 보나."><TextInput id="hc-rise" bind:value={f.rise} autocomplete="off" placeholder="2" /></FormRow>
               <FormRow label="fall" for="hc-fall" help="몇 번 연속 실패하면 죽었다고 보나."><TextInput id="hc-fall" bind:value={f.fall} autocomplete="off" placeholder="3" /></FormRow>
             </Disclosure>

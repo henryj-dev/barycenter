@@ -44,8 +44,8 @@
   .g:last-child { border-bottom: 0; }
   button {
     width: 100%; text-align: left; border: 0; background: transparent; color: var(--tx);
-    display: grid; grid-template-columns: 16px 110px minmax(0, 1fr) 64px; gap: 12px; align-items: center;
-    padding: 0 12px; min-height: var(--row-h); font: inherit;
+    display: grid; grid-template-columns: 16px 76px minmax(0, 1fr) 44px; gap: 12px; align-items: center;
+    padding: 0 12px; min-height: var(--row-h); font: inherit; font-size: 13px;
   }
   button:disabled { cursor: default; }
   .mk { color: var(--tx2); }
@@ -54,7 +54,7 @@
   .who { color: var(--tx3); }
   .rev { font-family: var(--mono); color: var(--accent); text-align: right; }
   .steps { padding: 6px 12px 8px 40px; background: var(--bg-page); display: flex; flex-direction: column; }
-  .st { display: grid; grid-template-columns: 110px 140px 1fr; gap: 12px; min-height: 26px; align-items: center; font: var(--t-cap); }
+  .st { display: grid; grid-template-columns: 76px 120px 1fr; gap: 12px; min-height: 26px; align-items: center; font: var(--t-cap); }
   .nm { font-family: var(--mono); color: var(--tx2); }
   .ok { color: var(--ok); }
   .bad { color: var(--danger); }

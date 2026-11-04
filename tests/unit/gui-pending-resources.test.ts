@@ -79,7 +79,7 @@ describe('적용 대기 리소스 — 상세 머리 배지', () => {
 
 describe('적용 대기 리소스 — 배선', () => {
   const LISTS = [
-    ['ListenerList', 'listener'], ['HttpRouteList', 'httpRoute'], ['PassthroughRouteList', 'passthroughRoute'],
+    ['HttpRouteList', 'httpRoute'], ['PassthroughRouteList', 'passthroughRoute'],
     ['PoolList', 'pool'], ['BackendList', 'backend'], ['AddressSetList', 'addressSet'],
     ['CertificateList', 'certificate'], ['TlsPolicyList', 'tlsPolicy'], ['SniBindingList', 'sniBinding'],
   ] as const;
@@ -89,16 +89,20 @@ describe('적용 대기 리소스 — 배선', () => {
     expect(src).toContain(`<PendingMark kind="${kind}" key={r.key}`);
   });
 
-  it('리스너는 「◐ 적용하면 열림」 행에서 감춘다', () => {
-    expect(read('lists/ListenerList.svelte')).toContain(`<PendingMark kind="listener" key={r.key} hide={r.mark === 'join'} />`);
+  it('리스너는 상태 칸이 적용 대기를 말한다(시안 `cells(\'listeners\')`) — 이름 칸에 따로 달지 않는다', () => {
+    const cells = read('lists/traffic-cells.ts');
+    expect(cells).toContain("pending: isPendingResource(desk.pendingResources, 'listener', r.key)");
+    expect(cells).toContain("r.mark === 'join' ? b('pending', '◐', '반영대기') : r.pending ? b('pending', '◐', '적용 대기') : b('ok', '●', '정상')");
+    expect(read('lists/ListenerList.svelte')).not.toContain('<PendingMark');
   });
 
-  it('분할 상세 · 상세 머리가 같은 규칙(headerMarks)을 쓴다', () => {
-    for (const f of ['detail/ListSplit.svelte', 'detail/ResourceFrame.svelte']) {
-      const src = read(f);
-      expect(src).toMatch(/headerMarks\(mark, isPendingResource\(desk\.pendingResources, kind, key\)\)/);
-      expect(src).toContain('{#each marks as m');
-    }
+  it('상세 머리는 상태 배지 + 「◐ 적용 대기」(headerMarks), 분할 머리는 시안대로 「◐ 적용 대기」 만', () => {
+    const frame = read('detail/ResourceFrame.svelte');
+    expect(frame).toMatch(/headerMarks\(mark, isPendingResource\(desk\.pendingResources, kind, key\)\)/);
+    expect(frame).toContain('{#each marks as m');
+    const split = read('detail/ListSplit.svelte');
+    expect(split).toMatch(/isPendingResource\(/);
+    expect(split).not.toContain('headerMarks(');
   });
 
   it('적용 대기 화면이 「지울 것」 을 보인다', () => {

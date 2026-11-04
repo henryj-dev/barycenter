@@ -27,45 +27,43 @@
    * 신뢰 대역 없이는 못 켠다 — 없으면 클라이언트가 자기 IP 를 정한다. UDP 는 PROXY 수신이 없어서 이 구획을 안 그린다.
    * HTTP 헤더는 http · https 만이다. tcp · 패스스루의 PROXY 수신은 출발지 제한과 함께 못 쓴다(stream 에 `if` 가 없다).
    */
-  import { FormRow, FormSection, ListInput, RadioGroup, Select } from '#lib/ui';
-  import { sourceAllowLine } from '#lib/forms/checks';
+  import { FormRow, FormSection, RadioGroup, Select } from '#lib/ui';
+  import SourceRows from '#lib/forms/SourceRows.svelte';
 
-  let { source = $bindable('none'), header = $bindable('CF-Connecting-IP'), trusted = $bindable(''), http, allowUsed = false }: {
+  let { source = $bindable('none'), header = $bindable('CF-Connecting-IP'), trusted = $bindable(''), http, invalid = $bindable(false) }: {
     source: RealIpSource;
     header: RealIpHeader;
     trusted: string;
     /** http · https 면 HTTP 헤더를 고를 수 있다. */
     http: boolean;
-    /** 출발지 제한을 쓰는가 — tcp · 패스스루의 PROXY 수신과 함께 못 쓴다. */
-    allowUsed?: boolean;
+    /** 신뢰 대역이 비었거나 틀린 행이 있는가(출처가 없음이면 거짓). */
+    invalid?: boolean;
   } = $props();
 
+  // 시안 `realipSrc` 라디오: 없음 · PROXY protocol · HTTP 헤더(http 계열만), 세로로.
   const options = $derived<{ value: RealIpSource; label: string }[]>([
     { value: 'none', label: '없음' },
     { value: 'proxy', label: 'PROXY protocol' },
     ...(http ? [{ value: 'header' as const, label: 'HTTP 헤더' }] : []),
   ]);
   const headers = REAL_IP_HEADERS.map((h) => ({ value: h }));
-  const conflict = $derived(!http && source === 'proxy' && allowUsed);
-  const trustedHelp = $derived(source === 'header'
-    ? '신뢰 대역 밖에서 온 헤더는 무시해요. 한 줄에 하나씩 CIDR, IP, @주소집합을 넣어요.'
-    : '신뢰 대역에서 온 PROXY 헤더만 받아요. 한 줄에 하나씩 CIDR, IP, @주소집합을 넣어요.');
+  let rowsBad = $state(false);
+  const trustedErr = $derived(source === 'none' ? undefined : trusted.trim() === '' ? '신뢰 대역을 하나 이상 입력해요.' : rowsBad ? '잘못된 대역이 있어요. 표시된 행을 고쳐요.' : undefined);
+  $effect(() => { invalid = trustedErr !== undefined; });
 </script>
 
 <FormSection title="원본 IP">
-  <FormRow label="출처"
-    error={conflict ? 'PROXY protocol 과 출발지 제한은 함께 쓸 수 없어요. 출발지 제한을 비우거나 출처를 바꿔요.' : undefined}
-    help="출처는 하나만 고를 수 있어요. 앞단 프록시가 원본 IP 를 넘기는 방법을 골라요.">
-    <RadioGroup label="원본 IP 출처" bind:value={source} {options} />
+  <FormRow label="출처" help="출처는 하나만 선택할 수 있어요.">
+    <RadioGroup label="출처" bind:value={source} {options} direction="column" />
   </FormRow>
-  {#if source === 'header'}
-    <FormRow label="헤더" required help="Cloudflare 는 CF-Connecting-IP 예요. X-Forwarded-For 는 오른쪽부터 신뢰 대역을 걷어 내요.">
+  {#if http && source === 'header'}
+    <FormRow label="헤더">
       <Select label="헤더" bind:value={header} options={headers} width="100%" mono />
     </FormRow>
   {/if}
   {#if source !== 'none'}
-    <FormRow label="신뢰 대역" required error={trusted.trim() === '' ? '신뢰 대역을 하나 이상 넣어요.' : undefined} help={trustedHelp}>
-      <ListInput label="신뢰 대역" bind:value={trusted} check={sourceAllowLine} minRows={3} placeholder={'173.245.48.0/20\n@cloudflare'} />
+    <FormRow label="신뢰 대역" error={trustedErr} help={source === 'header' ? '신뢰 대역 밖에서 온 헤더는 무시해요.' : '신뢰 대역에서 온 PROXY 헤더만 받아요.'}>
+      <SourceRows label="신뢰 대역" bind:value={trusted} bind:invalid={rowsBad} />
     </FormRow>
   {/if}
 </FormSection>

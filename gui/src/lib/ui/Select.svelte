@@ -5,7 +5,7 @@
   import { tick } from 'svelte';
 
   type Option = { value: T; label?: string; hint?: string; disabled?: boolean };
-  let { value = $bindable(), options, placeholder = '고른다', label, disabled = false, width = '200px', mono = true, invalid = false, onchange }: {
+  let { value = $bindable(), options, placeholder = '고른다', label, disabled = false, width = '200px', mono = true, invalid = false, size = 'md', onchange }: {
     value?: T;
     options: readonly Option[];
     placeholder?: string;
@@ -15,6 +15,8 @@
     width?: string;
     mono?: boolean;
     invalid?: boolean;
+    /** md 32px(기본) · sm 28px · 12px · 반경 --r-sm(콘솔 렌더된 설정의 리비전 · 지역 고르기, 사람 화면의 역할). */
+    size?: 'md' | 'sm';
     onchange?: (v: T) => void;
   } = $props();
 
@@ -50,7 +52,7 @@
 
 <svelte:window onclick={outside} />
 
-<div class="sel" bind:this={root} style:width>
+<div class="sel" data-size={size} bind:this={root} style:width>
   <button
     type="button" class="trigger" class:mono role="combobox" aria-expanded={open} aria-controls={listId}
     aria-label={label} aria-invalid={invalid || undefined} {disabled} onclick={toggle} onkeydown={key}
@@ -94,6 +96,9 @@
   .trigger:not(:disabled):hover { border-color: var(--tx3); }
   .trigger[aria-invalid='true'] { border-color: var(--danger); }
   .trigger:disabled { background: var(--bg-hover); border-color: var(--bd); color: var(--tx3); }
+  .sel[data-size='sm'] .trigger { height: 28px; padding: 0 8px; font-size: 12px; border-radius: var(--r-sm); }
+  .sel[data-size='sm'] .list { top: 32px; }
+  .sel[data-size='sm'] .opt { font-size: 12px; }
   .ph { color: var(--tx3); }
   .caret { color: var(--tx3); font-size: 10px; }
   .list {

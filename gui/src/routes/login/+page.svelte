@@ -8,7 +8,10 @@
   import PasswordStep from '#lib/account/PasswordStep.svelte';
   import MfaStep from '#lib/account/MfaStep.svelte';
   import { accountApi } from '#lib/account/api';
-  import { Button, FieldMessage, TextInput } from '#lib/ui';
+  import { Button, TextInput } from '#lib/ui';
+  import AuthCard from '#lib/shell/AuthCard.svelte';
+  import AuthField from '#lib/shell/AuthField.svelte';
+  import AuthError from '#lib/shell/AuthError.svelte';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const session = getContext<Session>('session');
@@ -128,46 +131,43 @@
   };
 </script>
 
-<section>
-  <!-- 시안: 단계마다 제목과 한 줄 설명. 둘째 단계는 인증 코드만 받는다. -->
-  <div class="head">
-    <h1>{step === 'password' ? '로그인' : '2단계 인증'}</h1>
-    <p>{step === 'password' ? '계정으로 콘솔에 로그인해요.' : '인증 앱의 6자리 코드를 입력해요.'}</p>
-  </div>
+<!--
+  시안 Login(lMode login): 카드 — 단계마다 제목과 한 줄 설명, 그 아래 폼. 카드 밖 아래에 「비밀번호 찾기」 · 「초대 수락」.
+  SSO 와 토큰 연결은 시안에 없는 기능이라 같은 카드 안, 폼 아래에 같은 모양(라벨 13 · 칸 36 · 버튼 36)으로 둔다.
+-->
+<AuthCard title={step === 'password' ? '로그인' : '2단계 인증'} sub={step === 'password' ? '계정으로 콘솔에 로그인해요.' : '인증 앱의 6자리 코드를 입력해요.'}>
   {#if step === 'password'}
     <PasswordStep onDone={(next) => { if (next === 'mfa') step = 'mfa'; else void signedIn(); }} />
   {:else}
     <MfaStep onDone={() => { void signedIn(); }} onRestart={() => { step = 'password'; }} />
   {/if}
-  {#if mailOn && step === 'password'}<p><a href="/reset">비밀번호 찾기</a></p>{/if}
-</section>
 
-<!-- SSO 콜백을 받는 중이거나 그 오류는 OIDC 설정과 상관없이 보인다. -->
-{#if ssoOn || exchanging || startError !== undefined}
-<section>
-  <h2>SSO</h2>
-  <div><Button onclick={() => { void startLogin(); }} disabled={starting || exchanging} loading={starting || exchanging}>IdP로 로그인해요</Button></div>
-  <p>계정이 없으면 관리자에게 초대를 받아요. 공개 가입은 없어요.</p>
-  {#if startError !== undefined}<FieldMessage tone="error">{startError}</FieldMessage>{/if}
-</section>
-{/if}
+  <!-- SSO 콜백을 받는 중이거나 그 오류는 OIDC 설정과 상관없이 보인다. -->
+  {#if step === 'password' && (ssoOn || exchanging || startError !== undefined)}
+    <div class="more">
+      <Button onclick={() => { void startLogin(); }} disabled={starting || exchanging} loading={starting || exchanging} style="width: 100%; height: 36px; font-size: 14px">IdP로 로그인해요</Button>
+      {#if startError !== undefined}<AuthError>{startError}</AuthError>{/if}
+      <div class="note">계정이 없으면 관리자에게 초대를 받아요. 공개 가입은 없어요.</div>
+    </div>
+  {/if}
 
-<section>
-  <h2>토큰으로 연결</h2>
-  <form class="tok" onsubmit={(e) => { e.preventDefault(); void connectToken(); }}>
-    <TextInput type="password" autocomplete="off" aria-label="Bearer 토큰" placeholder="Bearer 토큰" bind:value={tokenInput} invalid={tokenError !== undefined} />
-    <Button type="submit" loading={tokenBusy}>연결해요</Button>
-  </form>
-  {#if tokenError !== undefined}<FieldMessage tone="error">{tokenError}</FieldMessage>{/if}
-  <p>자동화나 비상 접근에 써요. 토큰은 이 탭의 메모리에만 있어요. 새로고침하면 다시 넣어요.</p>
-</section>
+  {#if step === 'password'}
+    <form class="more" novalidate onsubmit={(e) => { e.preventDefault(); void connectToken(); }}>
+      <AuthField label="토큰으로 연결" for="lg-token" help="자동화나 비상 접근에 써요. 토큰은 이 탭의 메모리에만 있어요. 새로고침하면 다시 넣어요.">
+        <TextInput id="lg-token" type="password" autocomplete="off" placeholder="Bearer 토큰" bind:value={tokenInput} invalid={tokenError !== undefined} />
+      </AuthField>
+      {#if tokenError !== undefined}<AuthError>{tokenError}</AuthError>{/if}
+      <Button type="submit" loading={tokenBusy} style="width: 100%; height: 36px; font-size: 14px">연결해요</Button>
+    </form>
+  {/if}
+
+  {#snippet links()}
+    {#if mailOn}<a href="/reset">비밀번호 찾기</a>{/if}
+    <a href="/invite">초대 수락</a>
+  {/snippet}
+</AuthCard>
 
 <style>
-  section { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--bd); }
-  section:first-of-type { padding-top: 0; border-top: 0; }
-  h1 { font: var(--t-title); margin: 0; }
-  h2 { font: var(--t-h); margin: 0; }
-  .head { display: grid; gap: 4px; }
-  p { margin: 0; color: var(--tx2); font: var(--t-small); }
-  .tok { display: flex; gap: 8px; }
+  .more { display: flex; flex-direction: column; gap: 14px; padding-top: 16px; border-top: 1px solid var(--bd); }
+  .note { font-size: 12px; color: var(--tx3); }
 </style>

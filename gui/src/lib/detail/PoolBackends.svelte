@@ -54,7 +54,7 @@
   {:else}{c.text?.(r) ?? ''}{/if}
 {/snippet}
 
-{#snippet toolbar()}
+{#snippet actions()}
   <Writable><Button size="sm" href={addHref}>＋ 이 풀에 백엔드 넣기</Button></Writable>
 {/snippet}
 
@@ -63,7 +63,7 @@
 {/snippet}
 
 <DataTable
-  {rows} rowKey={(r) => r.key} {columns} {cell} {toolbar} {emptyAction} label="소속 백엔드"
+  {rows} rowKey={(r) => r.key} {columns} {cell} {actions} {emptyAction} label="소속 백엔드"
   onopen={(r) => { void goto(link(resourcePath('backend', r.key))); }}
   emptyTitle="백엔드가 없어요" emptyBody="이 풀로 가는 요청은 실패해요." minHeight="0"
 />
