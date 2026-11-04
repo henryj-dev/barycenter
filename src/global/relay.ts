@@ -29,6 +29,8 @@ export const RELAY_PATHS: readonly string[] = [
   'config/head', 'config/revisions', 'config/history', 'changesets/:id', 'plans/:id', 'operations/:id',
   'address-sets', 'cluster/nodes', 'cluster/nodes/:node/history', 'system/addresses', 'acme/accounts',
   'acme/orders/:id', 'sockets', 'health/backends',
+  // 리소스별 「적용 대기」 (#126 후속).
+  'config/pending-resources',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */

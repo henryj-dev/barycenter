@@ -341,6 +341,14 @@ const ROUTES: Route[] = [
     json(c.res, 200, await api.store.resourceHistory(kind, key, { limit: asked }));
   }),
 
+  /**
+   * **적용 대기 리소스** (#126 후속) — 엔진이 돌리는 리비전(활성)과 head 가 다른 리소스, (kind, key) 하나씩.
+   * GUI 가 목록 · 상세에 「◐ 적용 대기」 를 붙이고, 적용 대기 화면이 지울 것을 보여 준다.
+   */
+  route('GET', '/api/v1/config/pending-resources', 'read', async (c, api) => {
+    json(c.res, 200, await api.store.pendingResources());
+  }),
+
   route('GET', '/api/v1/config/rendered', 'read', async (c, api) => {
     const rev = c.url.searchParams.get('revision') ?? (await api.store.head()).revision;
     // **저장소를 거친다.** 여기서 `render()` 를 직접 부르면 capability 인자를 빼먹고,
@@ -1331,6 +1339,7 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/acme/orders/:id', 'read', relayTo('acme/orders/:id')),
   route('GET', '/api/v1/regions/:name/sockets', 'read', relayTo('sockets')),
   route('GET', '/api/v1/regions/:name/health/backends', 'read', relayTo('health/backends')),
+  route('GET', '/api/v1/regions/:name/config/pending-resources', 'read', relayTo('config/pending-resources')),
   /**
    * **쓰기 중계** (2026-11-01 사용자 결정, 설계 §1.1). 보는 사람의 자격 그대로 지역에 넘긴다. 범위는 지역 라우트와 같다.
    */
