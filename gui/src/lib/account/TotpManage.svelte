@@ -27,8 +27,11 @@
   let asking = $state(false);
   /** 「등록 해제…」 를 눌러 비밀번호 줄을 열었다. */
   let removing = $state(false);
+  /** 시안: 비밀번호 줄은 「새로 만들기…」 를 누른 뒤에 열린다. */
+  let regenOpen = $state(false);
   /** 「새로 만들기…」 를 눌렀는데 비밀번호가 비었다. */
   const askCodes = (): void => {
+    if (!regenOpen) { regenOpen = true; codeError = undefined; return; }
     if (codePassword === '') { codeError = '비밀번호를 입력해요.'; return; }
     codeError = undefined;
     asking = true;
@@ -66,7 +69,7 @@
 <Card>
   <div class="tm">
     <div class="row">
-      <div class="tx"><div class="t">인증 앱</div><div class="s">로그인할 때 6자리 코드를 써요.{#if me.mfa.totp && me.role === 'admin'} 관리자는 인증 앱을 풀 수 없어요.{/if}</div></div>
+      <div class="tx"><div class="t">인증 앱</div><div class="s">로그인할 때 6자리 코드를 써요.{#if me.mfa.totp && me.role === 'admin'}{' '}관리자는 인증 앱을 풀 수 없어요.{/if}</div></div>
       {#if me.mfa.totp}<Badge tone="ok" icon="●">등록됨</Badge>{:else}<Badge tone="warn" icon="▲">등록 안 됨</Badge>{/if}
       {#if me.mfa.totp}
         {#if me.role !== 'admin'}<Button onclick={() => { removing = !removing; error = undefined; password = ''; }}>등록 해제…</Button>{/if}
@@ -100,7 +103,7 @@
         <Badge tone={me.mfa.recoveryCodesLeft > 2 ? 'neutral' : 'warn'} icon={null}>남은 코드 {me.mfa.recoveryCodesLeft}개</Badge>
         {#if me.mfa.totp}<Button loading={busy} onclick={askCodes} outline="danger">새로 만들기…</Button>{/if}
       </div>
-      {#if me.mfa.totp}
+      {#if me.mfa.totp && regenOpen}
         <div class="grid">
           <label for="rc-pass">비밀번호 확인</label>
           <TextInput id="rc-pass" type="password" autocomplete="current-password" mono={false} bind:value={codePassword} oninput={() => { codeError = undefined; }} invalid={codeError !== undefined} />
@@ -118,7 +121,7 @@
   sub="새 코드 10개를 만들어요."
   lines={[{ tone: 'danger', icon: '✕', text: `기존 복구 코드 ${me.mfa.recoveryCodesLeft}개를 쓸 수 없어요.` }]}
   requireCheck confirmLabel="새로 만들기"
-  onconfirm={() => { asking = false; void regenerate(); }}
+  onconfirm={() => { asking = false; regenOpen = false; void regenerate(); }}
 />
 
 <style>

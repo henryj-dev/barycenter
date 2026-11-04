@@ -7,13 +7,12 @@
   import { getContext, onMount } from 'svelte';
   import { accountApi } from '#lib/account/api';
   import type { Session } from '#lib/account/session.svelte.ts';
-  import { ROLE_LABEL } from '#lib/account/text';
   import ChangePassword from '#lib/account/ChangePassword.svelte';
   import TotpManage from '#lib/account/TotpManage.svelte';
   import ChangeEmail from '#lib/account/ChangeEmail.svelte';
   import SsoIdentities from '#lib/account/SsoIdentities.svelte';
   import ApiTokens from '#lib/account/ApiTokens.svelte';
-  import { Badge, Button, Card, DescriptionList, FieldMessage, Skeleton } from '#lib/ui';
+  import { Button, Card, FieldMessage, Skeleton } from '#lib/ui';
 
   const session = getContext<Session>('session');
   let note = $state<{ ok: boolean; text: string } | undefined>();
@@ -46,17 +45,7 @@
 {:else}
   {@const me = session.me}
   <div class="acct">
-    <Card>
-      <div class="hd row">
-        <div class="t mono">{me.username}</div>
-        <Badge tone="accent" icon={null}>{ROLE_LABEL[me.role] ?? me.role} · {me.role}</Badge>
-      </div>
-      <DescriptionList items={[
-        { label: '이름', value: me.displayName ?? '—' },
-        { label: '이메일', value: me.email ?? '—', mono: true },
-        { label: '역할 정본', value: me.roleAuthority === 'idp' ? 'IdP — SSO 로그인이 역할을 맞춰요' : '로컬' },
-      ]} />
-    </Card>
+    <!-- 시안 내 계정은 비밀번호 카드부터다 — 이름 · 역할은 상단 사용자 메뉴가 말한다. -->
     {#if me.hasPassword}<ChangePassword />{/if}
     <TotpManage {me} onChanged={session.refresh} />
     {#if ssoOn}<SsoIdentities {me} onChanged={session.refresh} />{/if}
@@ -83,9 +72,7 @@
 <style>
   .acct { display: flex; flex-direction: column; gap: 16px; max-width: 820px; }
   .hd { margin-bottom: 12px; }
-  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .t { font-weight: 600; font-size: 14px; }
-  .t.mono { font-family: var(--mono); }
   .s { font-size: 12px; color: var(--tx3); }
   .pad { margin-top: 12px; }
   /* 시안의 카드 표 — 머리 행 --bg-hover 32px · 행 --row-h · 위 테두리 */
