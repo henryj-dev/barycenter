@@ -18,6 +18,8 @@
   const scope = getContext<Scope>('scope');
   /** 자체 로그인 단계 — 비밀번호 → (필요하면) 인증 코드. */
   let step = $state<'password' | 'mfa'>('password');
+  /** 「토큰으로 연결」 을 눌러 토큰 칸을 열었다. */
+  let tokenOpen = $state(false);
   /** 메일이 켜진 배포에서만 「비밀번호를 잊었다」를 그린다. */
   let mailOn = $state(false);
   /** OIDC 가 설정된 배포에서만 「IdP로 로그인해요」 를 그린다 — 누르고 나서 「설정되지 않았어요」 를 보이지 않게. */
@@ -151,7 +153,8 @@
     </div>
   {/if}
 
-  {#if step === 'password'}
+  <!-- 토큰 연결은 시안에 없다 — 기본은 접어 두고, 카드 아래 링크 줄의 「토큰으로 연결」 이 연다. -->
+  {#if step === 'password' && tokenOpen}
     <form class="more" novalidate onsubmit={(e) => { e.preventDefault(); void connectToken(); }}>
       <AuthField label="토큰으로 연결" for="lg-token" help="자동화나 비상 접근에 써요. 토큰은 이 탭의 메모리에만 있어요. 새로고침하면 다시 넣어요.">
         <TextInput id="lg-token" type="password" autocomplete="off" placeholder="Bearer 토큰" bind:value={tokenInput} invalid={tokenError !== undefined} />
@@ -164,6 +167,7 @@
   {#snippet links()}
     {#if mailOn}<a href="/reset">비밀번호 찾기</a>{/if}
     <a href="/invite">초대 수락</a>
+    {#if step === 'password' && !tokenOpen}<a href="/login" onclick={(e) => { e.preventDefault(); tokenOpen = true; }}>토큰으로 연결</a>{/if}
   {/snippet}
 </AuthCard>
 
