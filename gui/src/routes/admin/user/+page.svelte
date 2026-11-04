@@ -173,7 +173,7 @@
   {:else if c.key === 'tokens'}
     <Button size="sm" title="{u.username}의 API 토큰 보기" onclick={() => { tokensOf = u.id; }}>{u.tokens}</Button>
   {:else if c.key === 'act'}
-    <Button size="sm" style="height: 24px" onclick={() => { setStatus(u); }}>{u.status === 'active' ? '비활성화' : '활성화'}</Button>
+    <Button size="xs" onclick={() => { setStatus(u); }}>{u.status === 'active' ? '비활성화' : '활성화'}</Button>
   {:else}{c.text?.(u) ?? ''}{/if}
 {/snippet}
 
@@ -182,7 +182,7 @@
     {#if expired(i)}<Badge tone="neutral" icon="○">만료</Badge>{:else}<Badge tone="info" icon="↻">수락 대기</Badge>{/if}
   {:else if c.key === 'sent'}
     <span title={new Date(i.createdAt).toLocaleString()}>{c.text?.(i) ?? ''}</span>
-  {:else if c.key === 'act'}{#if i.kind === 'invite'}<Button size="sm" style="height: 24px" onclick={() => { void resend(i); }}>다시 보내기</Button> {/if}<Button size="sm" style="height: 24px; border-color: var(--danger); color: var(--danger)" onclick={() => { void accountApi.revokeInvitation(i.id).then(async (r) => { if (r.ok) toast.ok('초대를 취소했어요', i.email ?? ''); await act(r); }); }}>취소</Button>
+  {:else if c.key === 'act'}{#if i.kind === 'invite'}<Button size="xs" onclick={() => { void resend(i); }}>다시 보내기</Button> {/if}<Button size="xs" outline="danger" onclick={() => { void accountApi.revokeInvitation(i.id).then(async (r) => { if (r.ok) toast.ok('초대를 취소했어요', i.email ?? ''); await act(r); }); }}>취소</Button>
   {:else}{c.text?.(i) ?? ''}{/if}
 {/snippet}
 

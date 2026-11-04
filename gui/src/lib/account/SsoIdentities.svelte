@@ -36,7 +36,7 @@
       <span class="n" title={r.subject}>{r.issuer}</span>
       {#if r.lastLoginAt !== null}<span class="l" title="마지막 로그인">{new Date(r.lastLoginAt).toLocaleString()}</span>{/if}
       <Badge tone="ok" icon="●">연결됨</Badge>
-      {#if me.hasPassword}<Button size="sm" style="height: 24px" disabled={password === ''} title="비밀번호를 먼저 넣어요" onclick={() => { void unlink(r.issuer, r.subject); }}>연결 끊기</Button>{/if}
+      {#if me.hasPassword}<Button size="xs" disabled={password === ''} title="비밀번호를 먼저 넣어요" onclick={() => { void unlink(r.issuer, r.subject); }}>연결 끊기</Button>{/if}
     </div>
   {:else}
     <div class="empty">연결된 SSO 계정이 없어요.</div>

@@ -98,7 +98,7 @@
       <div class="row">
         <div class="tx"><div class="t">복구 코드</div><div class="s">인증 앱이 없을 때 코드로 로그인해요. 코드마다 한 번만 쓸 수 있어요.</div></div>
         <Badge tone={me.mfa.recoveryCodesLeft > 2 ? 'neutral' : 'warn'} icon={null}>남은 코드 {me.mfa.recoveryCodesLeft}개</Badge>
-        {#if me.mfa.totp}<Button loading={busy} onclick={askCodes} style="border-color: var(--danger); color: var(--danger); font-weight: 600">새로 만들기…</Button>{/if}
+        {#if me.mfa.totp}<Button loading={busy} onclick={askCodes} outline="danger">새로 만들기…</Button>{/if}
       </div>
       {#if me.mfa.totp}
         <div class="grid">

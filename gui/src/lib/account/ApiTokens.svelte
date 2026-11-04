@@ -114,7 +114,7 @@
         <span class="sc" title={ROLE_LABEL[t.role]}>{ROLE_SCOPES[t.role]}</span>
         <span class="mu">{#if expired(t)}<Badge tone="neutral" icon="○">만료</Badge>{:else}<span title={new Date(t.expiresAt).toLocaleString()}>{new Date(t.expiresAt).toLocaleDateString()}</span>{/if}</span>
         <span class="mu" title={t.lastUsedAt === null ? undefined : new Date(t.lastUsedAt).toLocaleString()}>{t.lastUsedAt === null ? '아직 안 썼어요' : ago(t.lastUsedAt) ?? '—'}</span>
-        <span><Button size="sm" style="height: 24px; border-color: var(--danger); color: var(--danger)" onclick={() => { void revoke(t); }}>폐기</Button></span>
+        <span><Button size="xs" outline="danger" onclick={() => { void revoke(t); }}>폐기</Button></span>
       </div>
     {:else}
       <div class="empty">토큰이 없어요. 「＋ 토큰 만들기」 로 자동화용 토큰을 만들어요.</div>
