@@ -707,6 +707,12 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     return r.ok ? asList<unknown>(await r.json()) : undefined;
   };
 
+  /** 기록 · 최근 변경의 설명 — changeset 의 patch(`change-titles.svelte.ts`). 못 읽으면 undefined. */
+  const changeset = async (id: string): Promise<unknown> => {
+    const r = await fetch(api(`/api/v1/changesets/${encodeURIComponent(id)}`), { headers: auth() });
+    return r.ok ? await r.json() : undefined;
+  };
+
   /** 적용 대기 화면의 롤백 구획 — 리비전 목록. */
   const revisions = async (): Promise<unknown[] | undefined> => {
     const r = await fetch(api('/api/v1/config/revisions?limit=100'), { headers: auth() });
@@ -1152,6 +1158,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     hostAddresses,
     createAcmeAccount,
     historyOf,
+    changeset,
     revisions,
     rollback,
     clusterNodes,
