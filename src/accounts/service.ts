@@ -8,9 +8,9 @@
  *
  * A 단계에 **없는 것**: SSO 연결·JIT·IdP 권한 정본·IdP MFA·메일 재설정(B 단계).
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import { scopesOfRole, type Principal, type Role } from '../api/auth.js';
+import { minRole, PERSONAL_TOKEN, roleRank, scopesOfRole, type Principal, type Role } from '../api/auth.js';
 import type { Db, Queryable, Row } from '../store/pg.js';
 import { burnPasswordTime, hashPassword, needsRehash, passwordProblem, verifyPassword } from './password.js';
 import { mailText, type Mailer } from './mail.js';
@@ -41,6 +41,15 @@ const RESET_EVERY_MS = 5 * 60 * 1000;
 export const STEP_UP_MAX_AGE_MS = 10 * 60 * 1000;
 /** last_seen 을 요청마다 쓰지 않는다 — 읽기 화면의 요청마다 쓰기가 생긴다. */
 const TOUCH_EVERY_MS = 60_000;
+/** 개인 API 토큰 만료 (사용자 승인 설계) — 기본 90일, 최대 365일. 만료 없는 토큰은 없다. */
+export const TOKEN_DEFAULT_DAYS = 90;
+export const TOKEN_MAX_DAYS = 365;
+/** 한 사람이 동시에 가질 수 있는 (철회 안 된) 토큰 수. 넘으면 먼저 폐기한다. */
+const TOKEN_MAX_PER_USER = 50;
+/** 토큰 이름 — 시안의 규칙(영문·숫자로 시작, 영문·숫자·`.`·`_`·`-`, 63자까지). DDL 의 CHECK 와 같다. */
+export const TOKEN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ROLES: readonly Role[] = ['auditor', 'operator', 'admin'];
 /** 5번째 실패부터 1초·2초·4초 … 최대 15분. 그 전은 0. */
@@ -74,6 +83,12 @@ export type SsoClaims = {
 };
 
 export type SsoOutcome = LoginOutcome | { kind: 'linked' } | { kind: 'not_linked' };
+
+/** 내 토큰 목록의 한 줄 — **비밀은 없다**(값·해시 둘 다). `prefix` 는 유출된 값을 찾아 맞춰 보는 비밀 아닌 앞부분이다. */
+export type ApiTokenRow = {
+  id: string; name: string; role: Role; prefix: string;
+  createdAt: string; expiresAt: string; lastUsedAt: string | null;
+};
 
 export type InvitePreview = { kind: string; role: Role; email: string | null; username?: string; needsTotp: boolean; totp?: { secret: string; uri: string } };
 
@@ -1056,18 +1071,153 @@ export class AccountService {
     return codes;
   }
 
+  // ── 개인 API 토큰 ────────────────────────────────────────────────────
+  //
+  // 한 사람의 것이다. 역할은 발급 때 주인의 역할 이하로 고르고, 인증할 때마다 주인의 **지금** 역할로 다시 깎는다.
+  // 값은 발급 응답에 한 번만 나간다 — 저장·감사·로그에는 해시도 값도 남기지 않는다(감사는 id·이름·역할·만료).
+
+  /** 철회되지 않은 내 토큰. 만료된 것도 보인다(「만료」로) — 사라지면 왜 안 되는지 알 길이 없다. */
+  async listTokens(userId: string): Promise<ApiTokenRow[]> {
+    if (!UUID.test(userId)) return [];
+    return (await this.#q(
+      `SELECT id, name, role, lookup, created_at, expires_at, last_used_at FROM api_tokens
+        WHERE user_id=$1 AND revoked_at IS NULL ORDER BY created_at DESC`, [userId],
+    )).map((r) => ({
+      id: str(r, 'id'), name: str(r, 'name'), role: str(r, 'role') as Role, prefix: `bary_${str(r, 'lookup')}`,
+      createdAt: isoAt(r['created_at']), expiresAt: isoAt(r['expires_at']),
+      lastUsedAt: r['last_used_at'] === null ? null : isoAt(r['last_used_at']),
+    }));
+  }
+
+  /**
+   * 토큰을 만든다. **역할은 주인의 지금 역할 이하**, 만료는 1–365일(정수, 기본 90). 주인은 active 여야 한다.
+   * 돌려주는 `token` 은 이번 한 번만 보인다 — 서버에는 SHA-256 만 남는다.
+   */
+  async issueToken(userId: string, input: { name: unknown; role: unknown; expiresInDays?: unknown }, actor: string, meta: Meta = {}):
+    Promise<ApiTokenRow & { token: string }> {
+    const name = typeof input.name === 'string' ? input.name.trim() : '';
+    if (!TOKEN_NAME.test(name)) {
+      throw new AccountError(400, 'bad_token_name', '이름은 영문·숫자로 시작하고 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 쓸 수 있다. 63자까지다');
+    }
+    if (!isRole(input.role)) throw new AccountError(400, 'malformed', '역할은 auditor | operator | admin 이다');
+    const role = input.role;
+    const days = input.expiresInDays === undefined ? TOKEN_DEFAULT_DAYS : input.expiresInDays;
+    if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > TOKEN_MAX_DAYS) {
+      throw new AccountError(400, 'bad_expiry', `만료는 1–${TOKEN_MAX_DAYS}일(정수)이다 — 만료 없는 토큰은 없다`);
+    }
+    if (!UUID.test(userId)) throw new AccountError(404, 'no_user', '계정이 없다');
+    const lookup = randomBytes(8).toString('hex');
+    const value = `bary_${lookup}_${randomBytes(32).toString('base64url')}`;
+    const created = new Date(this.#now());
+    const expires = new Date(created.getTime() + days * DAY_MS);
+    return this.#tx(async (c) => {
+      const u = (await c.query(`SELECT role, status FROM users WHERE id=$1 FOR UPDATE`, [userId])).rows[0];
+      if (u === undefined || str(u, 'status') !== 'active') throw new AccountError(404, 'no_user', '쓸 수 있는 계정이 아니다');
+      const owner = str(u, 'role');
+      if (!isRole(owner) || roleRank(role) > roleRank(owner)) {
+        throw new AccountError(403, 'role_exceeds_owner', `토큰 역할은 내 역할(${owner}) 이하로만 고른다`);
+      }
+      const n = (await c.query(`SELECT count(*) AS n FROM api_tokens WHERE user_id=$1 AND revoked_at IS NULL`, [userId])).rows[0]!;
+      if (Number(n['n']) >= TOKEN_MAX_PER_USER) {
+        throw new AccountError(409, 'too_many_tokens', `토큰은 ${TOKEN_MAX_PER_USER}개까지다 — 안 쓰는 것을 먼저 폐기한다`);
+      }
+      const id = str((await c.query(
+        `INSERT INTO api_tokens (user_id, name, role, lookup, token_hash, created_at, created_by, expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [userId, name, role, lookup, sha(value), created, actor, expires],
+      )).rows[0]!, 'id');
+      await this.#audit(c, actor, 'account.token_issue', userId, meta, { tokenId: id, name, role, expiresAt: expires.toISOString() });
+      return {
+        id, name, role, prefix: `bary_${lookup}`, createdAt: created.toISOString(), expiresAt: expires.toISOString(),
+        lastUsedAt: null, token: value,
+      };
+    });
+  }
+
+  /**
+   * 토큰을 폐기한다 — `ownerId` 의 것만. 내 토큰은 나, 남의 토큰은 관리자 경로가 주인 id 를 넘긴다.
+   * 없거나·이미 폐기됐거나·남의 것이면 똑같이 404 다.
+   */
+  async revokeToken(ownerId: string, tokenId: string, actor: string, meta: Meta = {}): Promise<void> {
+    if (!UUID.test(ownerId) || !UUID.test(tokenId)) throw new AccountError(404, 'no_token', '그런 토큰이 없다');
+    await this.#tx(async (c) => {
+      const r = (await c.query(
+        `UPDATE api_tokens SET revoked_at=$3, revoked_by=$4 WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL
+         RETURNING name, role, expires_at`,
+        [tokenId, ownerId, new Date(this.#now()), actor],
+      )).rows[0];
+      if (r === undefined) throw new AccountError(404, 'no_token', '그런 토큰이 없다');
+      await this.#audit(c, actor, 'account.token_revoke', ownerId, meta, {
+        tokenId, name: str(r, 'name'), role: str(r, 'role'), expiresAt: isoAt(r['expires_at']),
+      });
+    });
+  }
+
+  /**
+   * **개인 토큰 인증.** `bary_` 모양이 아니면 DB 에 묻지 않는다. `lookup` 으로 행을 찾고 해시를 **상수 시간**으로
+   * 비교한다. 철회·만료·주인 정지/삭제는 전부 undefined(401). 실효 역할 = min(토큰 역할, 주인의 지금 역할).
+   * 성공하면 `last_used_at` 을 적는다 — 1분에 한 번까지(조건부 UPDATE 라 동시 요청도 한 번만 쓴다).
+   * 못 물으면 `AccountStoreUnavailable`(서버가 503 으로 거부한다).
+   */
+  async authenticateToken(value: string): Promise<Principal | undefined> {
+    const m = PERSONAL_TOKEN.exec(value);
+    if (m === null) return undefined;
+    const r = (await this.#q(
+      `SELECT t.id, t.user_id, t.name, t.role AS token_role, t.token_hash, t.expires_at, t.revoked_at, t.last_used_at,
+              u.username, u.role AS user_role, u.status
+         FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.lookup=$1`, [m[1]],
+    ))[0];
+    if (r === undefined) return undefined;
+    const want = Buffer.from(sha(value), 'utf8');
+    const got = Buffer.from(str(r, 'token_hash'), 'utf8');
+    if (got.length !== want.length || !timingSafeEqual(got, want)) return undefined;
+    const now = this.#now();
+    if (r['revoked_at'] !== null || new Date(String(r['expires_at'])).getTime() <= now) return undefined;
+    if (str(r, 'status') !== 'active') return undefined;
+    const tokenRole = str(r, 'token_role');
+    const ownerRole = str(r, 'user_role');
+    if (!isRole(tokenRole) || !isRole(ownerRole)) return undefined;
+    const role = minRole(tokenRole, ownerRole);
+    const last = r['last_used_at'] === null ? undefined : new Date(String(r['last_used_at'])).getTime();
+    if (last === undefined || now - last >= TOUCH_EVERY_MS) {
+      await this.#q(
+        `UPDATE api_tokens SET last_used_at=$2 WHERE id=$1 AND (last_used_at IS NULL OR last_used_at <= $3)`,
+        [str(r, 'id'), new Date(now), new Date(now - TOUCH_EVERY_MS)],
+      );
+    }
+    return {
+      name: `user:${str(r, 'username')}/token:${str(r, 'name')}`, role, scopes: new Set(scopesOfRole(role)),
+      token: { id: str(r, 'id'), userId: str(r, 'user_id') },
+    };
+  }
+
+  /** 열린 SSE 의 하트비트가 묻는다(개인 토큰). 못 물으면 던진다 — 스트림 쪽이 닫는다. */
+  async tokenAlive(tokenId: string): Promise<boolean> {
+    if (!UUID.test(tokenId)) return false;
+    const r = await this.#q(
+      `SELECT 1 FROM api_tokens t JOIN users u ON u.id=t.user_id
+        WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at > $2 AND u.status='active'`,
+      [tokenId, new Date(this.#now())],
+    );
+    return r.length > 0;
+  }
+
   // ── 관리 ─────────────────────────────────────────────────────────────
 
   async listUsers(): Promise<unknown[]> {
     return (await this.#q(
       `SELECT u.id, u.username, u.display_name, u.email, u.role, u.role_authority, u.status, u.created_at,
-              u.locked_until, u.last_login_at, t.confirmed_at IS NOT NULL AS totp
+              u.locked_until, u.last_login_at, t.confirmed_at IS NOT NULL AS totp,
+              (SELECT count(*) FROM api_tokens k WHERE k.user_id=u.id AND k.revoked_at IS NULL AND k.expires_at > $1) AS tokens
          FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.status <> 'deleted' ORDER BY u.username`,
+      [new Date(this.#now())],
     )).map((u) => ({
       id: str(u, 'id'), username: str(u, 'username'), displayName: opt(u, 'display_name'), email: opt(u, 'email'),
       role: str(u, 'role'), roleAuthority: str(u, 'role_authority'), status: str(u, 'status'),
       createdAt: iso(u['created_at']), lockedUntil: isoOpt(u['locked_until']), totp: u['totp'] === true,
       lastLoginAt: isoOpt(u['last_login_at']),
+      /** 철회되지 않고 만료되지 않은 개인 API 토큰 수. */
+      tokens: Number(u['tokens']),
     }));
   }
 
@@ -1144,6 +1294,8 @@ export class AccountService {
       await c.query(`DELETE FROM password_resets WHERE user_id=$1`, [userId]);
       await c.query(`DELETE FROM email_changes WHERE user_id=$1`, [userId]);
       await c.query(`DELETE FROM login_flows WHERE user_id=$1`, [userId]);
+      // 개인 토큰도 거둔다 — 인증은 어차피 주인 상태로 막지만, 묘비 계정에 산 토큰을 남기지 않는다.
+      await c.query(`UPDATE api_tokens SET revoked_at=now(), revoked_by=$2 WHERE user_id=$1 AND revoked_at IS NULL`, [userId, by]);
       await this.#audit(c, by, 'account.delete', userId, meta);
     });
   }
@@ -1215,3 +1367,5 @@ function base32Decode(s: string): Buffer {
 
 const iso = (v: unknown): string => new Date(String(v)).toISOString();
 const isoOpt = (v: unknown): string | null => (v === null || v === undefined ? null : iso(v));
+/** 밀리초까지 — `String(Date)` 를 거치면 초 아래가 잘린다. 토큰의 만료는 발급 응답과 목록·감사가 같은 값이어야 한다. */
+const isoAt = (v: unknown): string => (v instanceof Date ? v : new Date(String(v))).toISOString();
