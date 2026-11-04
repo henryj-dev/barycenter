@@ -79,14 +79,30 @@
     ...view.capabilityWarnings.map((s) => ({ tone: 'warn' as const, icon: '▲', text: `엔진 — ${s}` })),
     ...view.certificates.map((s) => ({ tone: 'warn' as const, icon: '▲', text: `인증서 — ${s}` })),
   ]);
-  const opened = $derived(view?.socketsAdded.map((s) => s) ?? []);
-  const closed = $derived(view?.socketsRemoved ?? []);
+  /**
+   * 소켓 한 줄 — 시안 「10.0.0.10:8443 (admin-https)」. 엔진 표기(`tcp://0.0.0.0:8443`)에서 전송 접두를 떼고,
+   * 같은 주소:포트의 리스너가 영향 표에 있으면 이름을 붙인다.
+   */
+  const sockLine = (s: string): string => {
+    const addr = s.replace(/^[a-z]+:\/\//, '');
+    const l = listeners.find((x) => x.where.endsWith(` ${addr}`) || x.where === addr);
+    return l === undefined ? addr : `${addr} (${l.key})`;
+  };
+  const opened = $derived((view?.socketsAdded ?? []).map(sockLine));
+  const closed = $derived((view?.socketsRemoved ?? []).map(sockLine));
   const quiet = $derived(view === undefined ? [] : view.sessions.filter(calmSession));
   /** `viewOfImpact` 의 리스너 한 줄은 두 칸 띄움으로 나뉜다: 키 · 프로토콜 · 바인드:포트 · (변경). */
   const listeners = $derived((view?.listeners ?? []).map((l) => {
     const [key = l, protocol = '', bind = '', change] = l.split(/\s{2,}/);
     const sess = view?.sessions.find((s) => s.startsWith(`${protocol} —`));
-    return { key, where: `${protocol} ${bind}`.trim(), change: change?.replace(/^\(|\)$/g, '') ?? '설정 변경', sess: sess?.slice(protocol.length + 2).trim() ?? '—' };
+    const kind = change?.replace(/^\(|\)$/g, '') ?? '설정 변경';
+    // 시안 「변경 종류」 · 「기존 세션 영향」 말: 새 리스너는 소켓 열림 · 영향 없음(신규), 지운 리스너는 소켓 닫힘.
+    const opens = /추가|신규|열/.test(kind); const closes = /삭제|제거|닫/.test(kind);
+    const raw = sess?.slice(protocol.length + 2).trim();
+    const sessText = opens ? '영향 없음 (신규)'
+      : closes ? '진행 중인 세션은 옛 워커가 마무리해요'
+      : raw === undefined ? '—' : calmSession(raw) ? '새 연결 · 새 요청부터 바뀌어요. 진행 중인 것은 옛 값으로 처리해요' : raw;
+    return { key, where: `${protocol} ${bind}`.trim(), change: opens ? '소켓 열림' : closes ? '소켓 닫힘' : kind, sess: sessText };
   }));
   /**
    * **지울 것** (#126 후속) — head 에서 지웠지만 엔진은 아직 돌리는 리소스. 목록에는 행이 없어서 여기서만 보인다.
@@ -296,7 +312,7 @@
       <!-- 시안 순서: 포함된 커밋 → 끊기거나 바뀌는 것 → 소켓 → 영향 리스너 → 영향 없음. 그래서 끊기는 것도 details 로 그린다. -->
       <ImpactCard {tone} title={verdict} {quiet} progress={desk.applying ? progressBlock : undefined} result={result !== undefined ? resultBlock : undefined}>
         {#snippet sub()}
-          리비전 {span} · 커밋 {Math.max(commits.length, 1)}건을 합친 영향{#if view.planes.length > 0} · 평면 {view.planes.join(', ')}{/if} · plan <span class="mono">{view.planId}</span>
+          리비전 {span} · 커밋 {Math.max(commits.length, 1)}건을 합친 영향
         {/snippet}
         {#snippet details()}
           {#if commits.length > 0}
