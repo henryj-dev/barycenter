@@ -8,8 +8,8 @@
   import { getContext, type Snippet } from 'svelte';
   import { page } from '$app/state';
   import { RESOURCES, itemOf, resourcePath, type ResourceKind } from '@web/resources';
-  import { after } from '#lib/after';
-  import { Badge, Button, ConfirmDialog, DetailHeader, Skeleton } from '#lib/ui';
+  import { Badge, Button, DetailHeader, Skeleton } from '#lib/ui';
+  import DeleteConfirm from '#lib/lists/DeleteConfirm.svelte';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { relationCount, statusOf } from './facts';
@@ -71,11 +71,8 @@
     </DetailHeader>
     <div class="body">{@render children()}</div>
   </div>
-  <ConfirmDialog bind:open={asking} title="삭제: {spec.label} {key} 를 설정에서 빼요" requireName={key} confirmLabel="삭제해요"
-    sub="저장하면 커밋해요. 트래픽은 적용해야 바뀌어요."
-    lines={[{ tone: 'danger', icon: '✕', text: '이것을 쓰는 리소스가 있으면 plan 이 막혀요. 연결된 리소스 탭에서 먼저 봐요.' }]}
-    busy={desk.editing}
-    onconfirm={() => { void desk.withdraw(kind, key).then((ok) => { asking = false; after(listHref, '삭제를 커밋했어요')(ok); }); }} />
+  <!-- 목록과 같은 확인 — 이것을 실제로 쓰는 리소스를 줄마다 든다. 지우면 목록으로 간다. -->
+  <DeleteConfirm bind:target={() => (asking ? { kind, key } : undefined), (t) => { asking = t !== undefined; }} href={listHref} />
 {/if}
 
 <style>

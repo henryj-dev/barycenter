@@ -10,7 +10,7 @@
   import { itemOf, resourcePath } from '@web/resources';
   import { Button, Form, FormRow, FormSection, Select, TextInput } from '#lib/ui';
   import { after } from '#lib/after';
-  import { filled, portError } from '#lib/forms/checks';
+  import { filled, portError, weightError } from '#lib/forms/checks';
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
@@ -35,13 +35,6 @@
     loaded = key;
   });
 
-  /** 해독기와 같은 범위 — 1 부터. nginx 가 `weight=0` 을 거절한다. */
-  const weightError = (v: string): string | undefined => {
-    const t = v.trim();
-    if (t === '') return undefined;
-    const n = Number(t);
-    return Number.isInteger(n) && n >= 1 && n <= 1_000_000 ? undefined : '가중치는 1 이상의 정수예요. 트래픽을 끊으려면 드레인을 써요.';
-  };
   const ready = $derived(pool !== undefined && filled(host) && filled(port, portError) && filled(weight, weightError));
   const moved = $derived(item !== undefined && pool !== undefined && pool !== item['pool']);
   const save = (): void => {

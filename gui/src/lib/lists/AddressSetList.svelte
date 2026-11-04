@@ -12,6 +12,7 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
+  import { listState } from './list-state';
 
   type Row = { key: string; count: number; source: string; used: number };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -47,7 +48,7 @@
 {#snippet create()}<Button variant="primary" href="/traffic/address-set/new">＋ 생성</Button>{/snippet}
 
 {#snippet table()}
-<DataTable label="주소 집합 목록" {rows} rowKey={(r) => r.key} {columns} loading={!desk.live} bind:selected
+<DataTable label="주소 집합 목록" {rows} rowKey={(r) => r.key} {columns} {...listState(desk)} bind:selected
   search={{ placeholder: '이름으로 찾기', match: (r, q) => r.key.toLowerCase().includes(q) }}
   emptyTitle="주소 집합이 없어요" emptyBody="리스너의 출발지 제한에서 @이름 으로 써요. CLI 의 bary address-set create --cloudflare 로도 만들어요."
   onopen={(r) => { void goto(resourcePath('addressSet', r.key)); }} rowMenu={menu}>
