@@ -80,7 +80,7 @@ describe('행의 지역으로 좁혀 연다', () => {
   });
 
   it('합산으로 그리는 화면은 목록 주소뿐이다 · 상세 · 만들기는 그 목록으로, 나머지는 지역 고르기로', () => {
-    expect(AGGREGATE_PATHS).toEqual(['/traffic/listener', '/traffic/backend']);
+    expect(AGGREGATE_PATHS).toEqual(['/traffic/listener', '/traffic/backend', '/tls/certificate', '/tls/policy', '/tls/sni']);
     expect(isAggregatePath('/traffic/listener/')).toBe(true);
     expect(isAggregatePath('/traffic/listener/web')).toBe(false);
     expect(aggregateFallback('/traffic/backend/b1/settings')).toBe('/traffic/backend');
@@ -113,7 +113,7 @@ describe('화면의 연결', () => {
     expect(src('lib/global/scope.svelte.ts')).toContain("get aggregate() { return mode === 'global' && region === undefined; }");
   });
 
-  it.each(['ListenerList', 'BackendList'])('%s: 합산이면 지역 열 · 빠진 지역 알림 · 행 키 rid · 행의 지역으로 쓰기 · 만들 지역 고르기', (f) => {
+  it.each(['ListenerList', 'BackendList', 'CertificateList', 'TlsPolicyList', 'SniBindingList'])('%s: 합산이면 지역 열 · 빠진 지역 알림 · 행 키 rid · 행의 지역으로 쓰기 · 만들 지역 고르기', (f) => {
     const s = src(`lib/lists/${f}.svelte`);
     expect(s).toContain('const agg = useAggregate();');
     expect(s).toContain('withRegionColumn(columns, regionColumn<AggRow>())');
