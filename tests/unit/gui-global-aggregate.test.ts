@@ -32,10 +32,11 @@ describe('합산 행 — 키 · 합치기 · 열', () => {
     expect(new Set(rows.map((r) => r.rid)).size).toBe(3);
   });
 
-  it('「지역」 열은 셋째 열 뒤다(시안) · 셋보다 적으면 끝 · 원래 배열은 그대로', () => {
+  it('「지역」 열은 맨 끝이다(시안 `lcols = colsOf(page).concat([\'지역\'])`) · 원래 배열은 그대로', () => {
     const cols = ['이름', '프로토콜', '바인드', '호스트'];
-    expect(withRegionColumn(cols, '지역')).toEqual(['이름', '프로토콜', '바인드', '지역', '호스트']);
+    expect(withRegionColumn(cols, '지역')).toEqual(['이름', '프로토콜', '바인드', '호스트', '지역']);
     expect(withRegionColumn(['이름'], '지역')).toEqual(['이름', '지역']);
+    expect(withRegionColumn([], '지역')).toEqual(['지역']);
     expect(cols).toHaveLength(4);
   });
 });

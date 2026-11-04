@@ -7,7 +7,7 @@
  *
  *   - 행 키: 지역이 다르면 같은 이름도 다른 행이다 → `rowId(지역, 키)` · `splitRowId`.
  *   - 합치기: 지역마다 받은 행에 `region` 을 달아 지역 순서대로 잇는다 → `mergeRegionRows`.
- *   - 열: 「지역」 열은 셋째 열 뒤다(시안 `dat.cols.slice(0, 3).concat(['지역'], …)`) → `withRegionColumn`.
+ *   - 열: 「지역」 열은 맨 끝이다(시안 `lcols = colsOf(page).concat(glob ? ['지역'] : [])`) → `withRegionColumn`.
  *   - 알림: 행이 빠진 지역은 목록 위에 한 줄씩 → `regionNotices`. 연락 없는 지역의 행은 **지어내지 않는다**(§2.4).
  *   - 주소: 행의 상세 · 수정 · 만들기는 그 지역으로 좁혀 연다 → `inRegion` (셸이 `?region=` 을 읽어 좁힌다).
  */
@@ -83,9 +83,12 @@ export function mergeRegionRows<T>(parts: readonly { region: string; rows: reado
   return parts.flatMap((p) => p.rows.map((r) => ({ ...r, region: p.region, rid: rowId(p.region, key(r)) })));
 }
 
-/** 「지역」 열을 셋째 열 뒤에 넣는다(시안). 열이 셋보다 적으면 끝에 둔다. 받은 배열은 바꾸지 않는다. */
+/**
+ * 「지역」 열을 맨 끝에 붙인다 — 시안 콘솔 목록 `lcols = colsOf(page).concat(glob ? ['지역'] : [])`,
+ * 칸은 `cells(page, r).concat(glob ? [{ t: r.reg, mono: true }] : [])`. 받은 배열은 바꾸지 않는다.
+ */
 export function withRegionColumn<C>(columns: readonly C[], region: C): C[] {
-  return [...columns.slice(0, 3), region, ...columns.slice(3)];
+  return [...columns, region];
 }
 
 /** 목록 위 알림 한 줄. `region` 은 지역 이름. */
