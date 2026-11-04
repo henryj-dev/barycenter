@@ -24,7 +24,10 @@ export const REGION_PARAM = 'region';
  */
 export const AGGREGATE_PATHS: readonly string[] = ['/traffic/listener', '/traffic/backend',
   '/traffic/pool', '/traffic/address-set', '/traffic/route/http', '/traffic/route/passthrough',
-  '/tls/certificate', '/tls/policy', '/tls/sni'];
+  '/tls/certificate', '/tls/policy', '/tls/sni',
+  // 운영 화면 — 대시보드 · 상태 · 적용 대기 · 기록 · 렌더된 설정(지역을 그 자리에서 고른다).
+  '/', '/ops/status', '/change/pending', '/ops/audit', '/ops/rendered',
+];
 
 /** 이 주소가 합산 화면인가. 끝의 `/` 는 무시한다. 상세(`/traffic/listener/<key>`) · 만들기(`/new`)는 아니다. */
 export const isAggregatePath = (pathname: string): boolean =>

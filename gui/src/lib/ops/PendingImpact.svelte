@@ -8,6 +8,10 @@
    * **끊기는 것을 먼저 쓴다:** 닫히는 소켓 · 기존 세션 · 라우트 순서 경고 · 엔진 경고 · 인증서. 그 아래 포함된 커밋,
    * 소켓 변화, 영향 리스너 표. 새 요청부터 바뀌는 것은 「영향 없음」 으로 접는다.
    * 적용은 확인 대화상자(영향 확인 체크)를 지난다. 전역에서 연락 없는 지역이면 적용 버튼을 막고 사유를 쓴다.
+   *
+   * **전체 합산**(2026-11-04, §2.5)이면 적용 대기 화면(`routes/change/pending`)이 이 컴포넌트를 고른 지역의
+   * `InRegion` 안에 그리고, 왼쪽 항목(지역마다 한 줄)을 `plans` 로 넘긴다. 그때 이 컴포넌트는 지역 요약을 묻지 않고
+   * 항목을 누르면 `onpick` 을 부른다 — 셸의 desk 를 옮기지 않는다. 오른쪽 영향 · 적용 · 확인 창은 그 지역의 desk · 범위다.
    */
   import { getContext } from 'svelte';
   import { Button, ConfirmDialog, Disclosure, FieldMessage, ImpactCard, RadioGroup, StepList, toast, type ConfirmLine, type ImpactLine, type StepState, type Tone } from '#lib/ui';
@@ -16,6 +20,16 @@
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { RESOURCES, type ResourceKind } from '@web/resources';
   import ClusterConvergence from './ClusterConvergence.svelte';
+  import type { PlanRow } from './aggregate-view';
+
+  let { plans, picked, onpick }: {
+    /** 전체 합산의 왼쪽 항목(지역마다 한 줄). 주면 지역 요약을 묻지 않고 이것을 그린다. */
+    plans?: readonly PlanRow[] | undefined;
+    /** 고른 항목의 이름(지역). */
+    picked?: string | undefined;
+    /** 항목을 눌렀다 — 부르는 쪽이 그 지역으로 바꿔 그린다. */
+    onpick?: ((name: string) => void) | undefined;
+  } = $props();
 
   type Rev = { revision: string; createdBy: string; note: string | null; rollbackOf: string | null };
   type Group = { name: string; head?: string; pending: number; lost: boolean; current: boolean; region?: RegionSummary };
@@ -86,7 +100,7 @@
   // ---- 적용 항목 (시안 `groupsOf`) — 전역이면 지역 요약에서 지역마다 적용 대기 수를 읽는다
   let regions = $state<RegionSummary[]>([]);
   const loadRegions = async (): Promise<void> => {
-    if (scope?.mode !== 'global') return;
+    if (scope?.mode !== 'global' || plans !== undefined) return;
     const r = await fetch('/api/v1/regions', { credentials: 'same-origin', headers: desk.token === '' ? {} : { authorization: `Bearer ${desk.token}` } }).catch(() => undefined);
     if (r === undefined || !r.ok) return;
     regions = ((await r.json()) as { regions: RegionSummary[] }).regions;
@@ -127,7 +141,24 @@
     if (g.current && result !== undefined) return '적용했어요. 결과를 확인해요.';
     return '적용할 변경이 없어요.';
   };
-  const ICON: Partial<Record<Tone, string>> = { ok: '●', pending: '◐', danger: '✕', neutral: '○' };
+  const ICON: Partial<Record<Tone, string>> = { ok: '●', pending: '◐', danger: '✕', neutral: '○', info: '↻' };
+
+  /** 왼쪽 한 줄 — 지역 요약으로 만든 항목, 또는 합산이 넘긴 항목(`plans`). */
+  const rows = $derived<PlanRow[]>(plans !== undefined ? [...plans] : groups.map((g) => {
+    const st = rowState(g);
+    return {
+      name: g.name, ...(g.head === undefined ? {} : { head: g.head }), lost: g.lost, tone: st.tone as PlanRow['tone'], text: st.text,
+      by: g.current ? [...new Set(commits.map((c) => c.by).filter((b) => b !== ''))].join(', ') : '', title: rowTitle(g), known: true,
+    };
+  }));
+  /** 합산에서 고른 지역의 지금 값을 모른다(연락 없음 · 인증 거절 · 불러오는 중) — 오른쪽은 그 한 줄만 쓴다. */
+  const unknownRow = $derived(plans?.find((r) => r.name === picked && !r.known));
+  const rowValue = $derived(plans !== undefined ? picked : groups.find((g) => g.current)?.name);
+  const pick = (name: string): void => {
+    if (plans !== undefined) { onpick?.(name); return; }
+    const g = groups.find((x) => x.name === name);
+    if (g !== undefined && !g.current && !g.lost && g.region !== undefined && g.region.auth === undefined) switchTo(g.region);
+  };
 
   // ---- 적용 — 확인 대화상자 → 진행 토스트 → 결과 블록
   const STEPS = ['렌더', '검증', '게시', 'reload', '활성화 확인'];
@@ -216,33 +247,37 @@
 
 <div class="pi" data-glob={glob}>
   <aside class="plans" aria-label="적용 항목">
-    <div class="ph">적용 항목 · {groups.filter((g) => g.pending > 0).length}</div>
-    {#if groups.length > 0}
-      <RadioGroup label="적용 항목" direction="column" dot={false} value={groups.find((g) => g.current)?.name}
-        options={groups.map((g) => ({ value: g.name, label: g.name, disabled: !g.current && (g.lost || g.region?.auth === 'rejected') }))}
-        onchange={(name) => { const g = groups.find((x) => x.name === name); if (g !== undefined && !g.current && !g.lost && g.region !== undefined && g.region.auth === undefined) switchTo(g.region); }}>
+    <div class="ph">적용 항목 · {plans !== undefined ? plans.filter((r) => r.tone === 'pending').length : groups.filter((g) => g.pending > 0).length}</div>
+    {#if rows.length > 0}
+      <!-- 합산이면 연락 없는 지역도 고를 수 있다 — 고르면 오른쪽이 막힌 사유를 쓴다(시안 `lostMsg`). -->
+      <RadioGroup label="적용 항목" direction="column" dot={false} value={rowValue}
+        options={plans !== undefined
+          ? plans.map((r) => ({ value: r.name, label: r.name }))
+          : groups.map((g) => ({ value: g.name, label: g.name, disabled: !g.current && (g.lost || g.region?.auth === 'rejected') }))}
+        onchange={pick}>
         {#snippet item(o)}
-          {@const g = groups.find((x) => x.name === o.value)}
+          {@const g = rows.find((x) => x.name === o.value)}
           {#if g !== undefined}
-            {@const st = rowState(g)}
             <span class="row" title={g.lost ? LOST_MESSAGE : undefined}>
               <span class="r1">
                 <code>{g.head === undefined ? '—' : `r${g.head}`}</code>
-                <span class="by">{g.current ? [...new Set(commits.map((c) => c.by).filter((b) => b !== ''))].join(', ') : ''}</span>
-                <span class="st" style:color="var(--{st.tone})">{ICON[st.tone]} {st.text}</span>
+                <span class="by">{g.by}</span>
+                <span class="st" style:color="var(--{g.tone})">{ICON[g.tone]} {g.text}</span>
               </span>
-              <span>{rowTitle(g)}</span>
+              <span>{g.title}</span>
               {#if glob}<span class="reg">{g.name}{g.lost ? ` · ${LOST_LABEL}` : ''}</span>{/if}
             </span>
           {/if}
         {/snippet}
       </RadioGroup>
     {/if}
-    {#if groups.length === 0}<div class="empty">적용할 변경이 없어요.</div>{/if}
+    {#if rows.length === 0}<div class="empty">적용할 변경이 없어요.</div>{/if}
   </aside>
 
   <div class="main">
-    {#if view !== undefined}
+    {#if unknownRow !== undefined}
+      <span class="lost" role="status" data-tone={unknownRow.tone}>{ICON[unknownRow.tone]} {unknownRow.name} · {unknownRow.title}</span>
+    {:else if view !== undefined}
       <ImpactCard {tone} title={view.headline} {breaking} calm={view.rollbackOf === undefined ? '끊기는 연결이 없어요.' : undefined}
         {quiet} progress={desk.applying ? progressBlock : undefined} result={result !== undefined ? resultBlock : undefined}>
         {#snippet sub()}
@@ -379,5 +414,6 @@
   .rt { font-weight: 600; color: var(--c); }
   .rb { color: var(--tx2); font-size: 12px; }
   .lost { color: var(--danger); font: var(--t-small); flex: 1; }
+  .lost[data-tone='info'] { color: var(--tx2); }
   .again { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-top: 12px; }
 </style>
