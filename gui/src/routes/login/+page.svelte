@@ -111,10 +111,10 @@
     tokenBusy = true;
     desk.token = tokenInput.trim();
     if (scope.mode === 'global') {
-      // 전역에는 스트림이 없다 — 지역 목록으로 토큰을 잰다. 지역을 고르면 그 지역 스트림에 붙는다.
+      // 전역에는 셸 스트림이 없다 — 지역 목록으로 토큰을 잰다. 첫 화면은 전체 합산 대시보드다(2026-11-04 결정).
       const r = await fetch('/api/v1/regions', { headers: { authorization: `Bearer ${desk.token}` } });
       tokenBusy = false;
-      if (r.ok) { tokenInput = ''; await goto('/regions'); return; }
+      if (r.ok) { tokenInput = ''; await goto('/'); return; }
       tokenError = r.status === 401 ? '토큰이 거절됐어요.' : `regions ${r.status}`;
       desk.token = '';
       return;

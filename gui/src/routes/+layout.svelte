@@ -123,7 +123,10 @@
    * 실시간 연결 — 붙어 있으면 수신 중, 자격은 있는데 끊겼으면 재연결 중, 자격이 없으면 끊김.
    * 재연결 고리가 멈췄으면(401 등, `desk.retrying` 거짓) 「재연결 중」 이 아니라 끊김이다 — 사람이 다시 연결해야 한다.
    */
-  const connRaw = $derived(connStateOf({ live: desk.live, signedIn: session.me !== undefined || desk.token !== '', hasStream: hasStream(scope) }));
+  // 전체 합산에서는 셸 스트림이 없다 — 붙어 있는 지역 스트림이 하나라도 살아 있으면 「실시간 수신 중」 이다.
+  const aggLive = $derived(scope.mode === 'global' && scope.region === undefined && regionDesks.active
+    && regionDesks.entries.some((e) => e.state === 'ok'));
+  const connRaw = $derived(connStateOf({ live: desk.live || aggLive, signedIn: session.me !== undefined || desk.token !== '', hasStream: hasStream(scope) || regionDesks.active }));
   const conn = $derived(connRaw === 'reconnecting' && !desk.retrying ? 'down' as const : connRaw);
   const stalled = $derived(connRaw === 'reconnecting' && !desk.retrying);
 

@@ -135,7 +135,7 @@
   const regionEngines = $derived([...new Set(regionViews.map((x) => x.v?.engine.label).filter((e): e is string => e !== undefined))].join(', '));
   const regionsWithLeader = $derived(regionViews.filter((x) => x.v !== undefined).length);
   const regionColumns: Column<RegionSummary>[] = [
-    { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
+    { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '100px', text: (r) => (r.status?.head === undefined ? '—' : `r${r.status.head}`) },
     { key: 'pend', label: '적용 대기', width: '120px', text: (r) => { const n = pendingOf(r); return n === undefined ? '—' : `${n}건`; } },
     { key: 'state', label: '상태', sort: (r) => regionState(r).text },
@@ -155,7 +155,7 @@
     return { tone: 'ok', text: '정상' };
   };
   const aggColumns: Column<AggRegion>[] = [
-    { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
+    { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '100px', text: (r) => (r.head === undefined ? '—' : `r${r.head}`) },
     { key: 'pend', label: '적용 대기', width: '110px', text: (r) => (r.tally === undefined ? '—' : `${r.tally.pending}건`) },
     { key: 'lst', label: '리스너', mono: true, width: '110px', text: (r) => (r.tally === undefined ? '—' : `${r.tally.serving} / ${r.tally.listeners}`) },

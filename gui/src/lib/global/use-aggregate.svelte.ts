@@ -47,7 +47,7 @@ export type Aggregate = {
 };
 
 /** 「지역」 열 — `withRegionColumn(columns, regionColumn())` 으로 셋째 열 뒤에 넣는다. 칸은 목록의 `cell` 스니펫이 `r.region` 으로 그린다. */
-export const regionColumn = <T extends { region: string }>(): Column<T> => ({ key: 'region', label: '지역', mono: true, sort: (r) => r.region });
+export const regionColumn = <T extends { region: string }>(): Column<T> => ({ key: 'region', label: '지역', mono: true, sort: (r) => r.region, text: (r) => r.region });
 
 export function useAggregate(): Aggregate {
   const scope = getContext<Scope | undefined>('scope');

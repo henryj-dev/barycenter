@@ -110,7 +110,7 @@
   });
   const unknown = '모름';
   const regColumns: Column<RegRow>[] = [
-    { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
+    { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '90px', text: (r) => (r.v?.head === undefined ? unknown : `r${r.v.head}`) },
     { key: 'leader', label: '리더', mono: true, text: (r) => (r.v === undefined ? unknown : r.v.leader.isLeader ? r.v.leader.holder : '팔로워가 답했어요') },
     { key: 'gen', label: '게시 세대', mono: true, text: (r) => (r.v === undefined ? unknown : r.v.published.generation ?? '—') },
@@ -123,7 +123,7 @@
   const aggRows = $derived<AggRow[]>(agg.entries.map((e) => ({ name: e.name, entry: e, v: e.state === 'ok' ? e.desk.status : undefined })));
   const dash = '—';
   const aggColumns: Column<AggRow>[] = [
-    { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
+    { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '90px', text: (r) => (r.v?.head === undefined ? dash : `r${r.v.head}`) },
     { key: 'leader', label: '리더', mono: true, text: (r) => (r.v === undefined ? dash : r.v.leader.isLeader ? r.v.leader.holder : '팔로워가 답했어요') },
     { key: 'gen', label: '게시 세대', mono: true, text: (r) => (r.v === undefined ? dash : r.v.published.generation ?? dash) },
