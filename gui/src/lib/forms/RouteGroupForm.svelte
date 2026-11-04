@@ -13,46 +13,42 @@
    * 「n번째 줄」 로 말한다(`sourceRuleErrors`). 경로가 다른 묶음과 섞이거나 기본 동작이 두 번이면 `routeGroupPatch` 가
    * 거절하는 것을 그 줄에서 먼저 말한다. 호스트 · 줄마다의 경로 모양과 「기본 동작을 정할 수 없는 묶음」 도 서버와 같은 판정으로
    * 먼저 본다(`route-edit.ts`) — `routeGroupPatch` 의 해라체 오류는 사람에게 보이지 않는다.
+   *
+   * 모양은 콘솔 시안 `fieldsFor('rgroup')` 그대로다(드로어 680px): 「기본」 · 「경로별 동작」(줄 카드 — `SourceRulesField withPath`) ·
+   * 「만들 라우트」(풀어 쓴 결과 상자). 시안과 다른 곳: 리스너 칸 아래에 「리스너의 기본 동작을 따라요 — 지금: …」 를 둔다(이미 있는
+   * 기능). 「만들 라우트」 상자가 비었을 때 시안의 「URL을 입력하면 …」 문구는 이 자리의 말이 아니라서 두지 않고 도움말만 보인다.
    */
   import { getContext } from 'svelte';
   import { parsePathList, type RedirectStatus, type RejectStatus } from '@web/edit';
   import { fallbackOfListener, routeGroupPatch, type GroupLine } from '@web/route-group';
   import { itemOf, itemsOf, resourcePath } from '@web/resources';
-  import { Banner, Button, FieldMessage, FormRow, FormSection, Select, Switch, TextInput } from '#lib/ui';
+  import { FormRow, FormSection, Select, TextInput } from '#lib/ui';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
-  import { KEY_HELP, filled, keyError, words } from './checks';
+  import { filled, keyError, words } from './checks';
   import { fromTokens, groupKeyOf, setCidrsOf, sourceRuleErrors } from './source-rules';
-  import { routeHostsError, routePathsError } from './route-edit';
+  import { NAME_ERROR, routeHostsError, routePathsError } from './route-edit';
+  import SourceRulesField, { emptyRule, type PathRuleRow } from './SourceRulesField.svelte';
 
   /** 줄 수 상한 — 시안과 같다. 라우트 하나의 규칙은 해독기가 20개로 막는다. */
   const MAX_LINES = 40;
 
-  type Row = {
-    paths: string; from: string; address: 'visitor' | 'connection';
-    kind: 'proxy' | 'redirect' | 'reject'; pool: string | undefined; websocket: boolean;
-    to: string; redirectStatus: string; rejectStatus: string;
-  };
-  const blank = (): Row => ({
-    paths: '', from: '', address: 'visitor', kind: 'proxy', pool: undefined, websocket: false,
-    to: '', redirectStatus: '302', rejectStatus: '444',
-  });
+  /** 줄 하나 — 규칙 줄에 경로가 붙는다(`SourceRulesField withPath`). */
+  type Row = PathRuleRow;
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const listeners = $derived(desk.listeners.rows
     .filter((l) => (l.protocol === 'http' || l.protocol === 'https'))
-    .map((l) => ({ value: l.key, hint: l.protocol })));
+    .map((l) => ({ value: l.key })));
   const pools = $derived(desk.pools.rows.filter((p) => p.protocolClass === 'http').map((p) => ({ value: p.key })));
-  const KINDS = [{ value: 'proxy', label: '풀로 보내기' }, { value: 'redirect', label: 'redirect' }, { value: 'reject', label: 'reject' }];
-  const ADDRESS = [{ value: 'visitor', label: '방문자 주소' }, { value: 'connection', label: '연결 주소' }];
-  const REDIRECT = ['301', '302', '307', '308'].map((v) => ({ value: v }));
-  const REJECT = ['403', '404', '444'].map((v) => ({ value: v, ...(v === '444' ? { hint: '응답 없이 끊어요' } : {}) }));
 
   let key = $state('');
   let listener = $state<string | undefined>();
   let hosts = $state('');
-  let rows = $state<Row[]>([blank()]);
+  // 시안 `openGroup`: 줄 하나(풀로 보내기 · 첫 풀)로 연다.
+  let rows = $state<Row[]>([{ ...emptyRule(), paths: '' }]);
+  $effect(() => { const p = pools[0]?.value; if (p !== undefined && rows.length === 1 && rows[0]!.pool === undefined && rows[0]!.kind === 'proxy') rows[0]!.pool = p; });
   let hostTouched = $state(false);
   $effect(() => { if (hosts.trim() !== '') hostTouched = true; });
   // 호스트는 필수다. 처음 빈 칸은 「만들기」 만 잠그고, 적었다 지우면 그때 말한다.
@@ -87,12 +83,14 @@
       });
       return {
         routes: ops.map((o) => {
-          const b = o.body as { pathPrefix?: string; pathPrefixes?: string[]; sourceRules?: unknown[]; action: { kind: string; pool?: string; status?: number } };
+          const b = o.body as { pathPrefix?: string; pathPrefixes?: string[]; sourceRules?: unknown[]; action: { kind: string; pool?: string; status?: number; websocket?: boolean; to?: string } };
           return {
             key: o.key,
             paths: (b.pathPrefixes ?? [b.pathPrefix ?? '/']).join(', '),
             rules: b.sourceRules?.length ?? 0,
-            action: b.action.kind === 'proxy' ? `풀 ${b.action.pool ?? ''}` : `${b.action.kind} ${b.action.status ?? ''}`,
+            // 시안 `actLabel`.
+            action: b.action.kind === 'proxy' ? `풀 ${b.action.pool ?? ''}${b.action.websocket === true ? ' · WebSocket' : ''}`
+              : b.action.kind === 'redirect' ? `redirect ${b.action.status ?? ''} → ${b.action.to ?? ''}` : `reject ${b.action.status ?? ''}`,
           };
         }),
       };
@@ -137,15 +135,11 @@
   });
   const linesBad = $derived(rows.length > MAX_LINES || lineErrs.some((e) => e !== undefined));
 
+  /** 「만들 라우트」 를 보일 수 있나 — 이름 · 리스너 · 호스트가 맞고 줄에 오류가 없다(시안 `ready && !e.lines`). */
+  const planReady = $derived(filled(key, keyError) && listener !== undefined && routeHostsError(hosts) === undefined && !linesBad && preview.error === undefined);
+  /** 다 넣었는데 펼치지 못했다 — 그 까닭(해요체). */
+  const planErr = $derived(!linesBad && preview.error !== undefined && key.trim() !== '' && listener !== undefined && routeHostsError(hosts) === undefined ? preview.error : undefined);
   const ready = $derived(filled(key, keyError) && listener !== undefined && routeHostsError(hosts) === undefined && !linesBad && preview.error === undefined && preview.routes.length > 0);
-
-  const move = (i: number, d: -1 | 1): void => {
-    const j = i + d;
-    if (j < 0 || j >= rows.length) return;
-    const next = [...rows];
-    [next[i], next[j]] = [next[j]!, next[i]!];
-    rows = next;
-  };
 
   const submit = (): void => {
     if (listener === undefined) return;
@@ -156,96 +150,41 @@
   };
 </script>
 
-<CreateForm {ready} onsubmit={submit} cancelHref="/traffic/route/http" note="만들면 라우트를 한 번에 커밋하고 적용 대기로 보내요.">
+<CreateForm {ready} onsubmit={submit} cancelHref="/traffic/route/http">
   <FormSection title="기본">
-    <FormRow label="이름" for="rg-key" required error={keyError(key)} help={`${KEY_HELP} 묶음이 여럿이면 둘째부터 이름-p2 · 이름-p3 … 이 돼요.`}>
-      <TextInput id="rg-key" bind:value={key} invalid={keyError(key) !== undefined} autocomplete="off" placeholder="counter.tinyuniver.se" />
+    <FormRow label="이름" for="rg-key" error={keyError(key) === undefined ? undefined : NAME_ERROR} help="첫 라우트는 이 이름이에요. 다음은 이름-p2, 이름-p3 순서예요.">
+      <TextInput id="rg-key" bind:value={key} invalid={keyError(key) !== undefined} autocomplete="off" />
     </FormRow>
-    <FormRow label="리스너" required help={listener === undefined ? undefined : `기본 동작을 안 적은 경로는 리스너의 기본 동작을 따라요 — 지금: ${fallbackText}.`}>
+    <FormRow label="리스너" help={listener === undefined ? undefined : `기본 동작을 안 적은 경로는 리스너의 기본 동작을 따라요 — 지금: ${fallbackText}.`}>
       <Select label="리스너" bind:value={listener} options={listeners} placeholder="리스너를 골라요" width="100%" disabled={listeners.length === 0} />
     </FormRow>
-    <FormRow label="호스트" for="rg-hosts" required error={hostErr} help="정확한 이름이나 *.example.com 형태로 넣어요. 쉼표나 공백으로 여러 개를 넣어요.">
-      <TextInput id="rg-hosts" bind:value={hosts} invalid={hostErr !== undefined} autocomplete="off" placeholder="counter.example.com" />
+    <FormRow label="호스트" for="rg-hosts" error={hostErr} help="정확한 이름이나 *.example.com 형태예요. 쉼표나 공백으로 여러 개를 입력해요.">
+      <TextInput id="rg-hosts" bind:value={hosts} invalid={hostErr !== undefined} autocomplete="off" />
     </FormRow>
   </FormSection>
 
-  <FormSection title="경로별 동작" stack>
-    <p class="note">
-      줄마다 경로 · 출발지 · 동작을 적어요. 경로를 똑같이 적은 줄끼리 한 라우트가 돼요. 출발지를 비우면 그 경로의 기본 동작이에요.
-      같은 경로 안에서는 위 줄부터 보고 처음 맞는 것을 써요.
-    </p>
-    {#each rows as row, i (i)}
-      <fieldset class="line" aria-invalid={lineErrs[i] !== undefined || undefined}>
-        <legend>{i + 1}번째 줄</legend>
-        <FormRow label="경로" for="rg-paths-{i}" help="쉼표나 공백으로 여러 개. 비우면 / 예요.">
-          <TextInput id="rg-paths-{i}" bind:value={row.paths} autocomplete="off" placeholder="/count.js, /count" />
-        </FormRow>
-        <FormRow label="출발지" for="rg-from-{i}" help="CIDR · IP · @주소집합. 비우면 그 밖의 모든 출발지예요.">
-          <TextInput id="rg-from-{i}" bind:value={row.from} autocomplete="off" placeholder="@cloudflare-ips-v4, @cloudflare-ips-v6" />
-        </FormRow>
-        {#if row.from.trim() !== ''}
-          <FormRow label="보는 주소" help={row.address === 'connection' ? '연결 주소 — 우리에게 직접 붙은 주소예요.' : '방문자 주소 — 원본 IP 헤더 · PROXY 수신 뒤의 주소예요.'}>
-            <Select label="보는 주소" bind:value={row.address} options={ADDRESS} mono={false} />
-          </FormRow>
-        {/if}
-        <FormRow label="동작"><Select label="동작" bind:value={row.kind} options={KINDS} mono={false} /></FormRow>
-        {#if row.kind === 'proxy'}
-          <FormRow label="풀"><Select label="풀" bind:value={row.pool} options={pools} placeholder="풀을 골라요" width="100%" /></FormRow>
-          <FormRow label="WebSocket"><Switch bind:checked={row.websocket}>켜요</Switch></FormRow>
-        {:else if row.kind === 'redirect'}
-          <FormRow label="대상" for="rg-to-{i}"><TextInput id="rg-to-{i}" bind:value={row.to} autocomplete="off" placeholder="https://example.com/" /></FormRow>
-          <FormRow label="응답 코드"><Select label="응답 코드" bind:value={row.redirectStatus} options={REDIRECT} width="120px" /></FormRow>
-        {:else}
-          <FormRow label="응답 코드"><Select label="응답 코드" bind:value={row.rejectStatus} options={REJECT} width="200px" /></FormRow>
-        {/if}
-        {#if lineErrs[i] !== undefined}<div class="err"><FieldMessage tone="error">{lineErrs[i]}</FieldMessage></div>{/if}
-        <div class="act">
-          <Button variant="text" size="sm" disabled={i === 0} aria-label="{i + 1}번째 줄을 위로" onclick={() => move(i, -1)}>↑ 위로</Button>
-          <Button variant="text" size="sm" disabled={i === rows.length - 1} aria-label="{i + 1}번째 줄을 아래로" onclick={() => move(i, 1)}>↓ 아래로</Button>
-          <Button variant="text" size="sm" disabled={rows.length === 1} aria-label="{i + 1}번째 줄을 지워요" onclick={() => { rows = rows.filter((_, j) => j !== i); }}>지워요</Button>
-        </div>
-      </fieldset>
-    {/each}
-    <div class="add">
-      <Button variant="text" size="sm" disabled={rows.length >= MAX_LINES} onclick={() => { rows = [...rows, blank()]; }}>＋ 줄을 더해요</Button>
-      {#if rows.length >= MAX_LINES}<FieldMessage tone={rows.length > MAX_LINES ? 'error' : 'help'}>줄은 {MAX_LINES}개까지예요.</FieldMessage>{/if}
-    </div>
+  <FormSection title="경로별 동작">
+    <FormRow label="경로별 동작" error={rows.length === 0 ? '줄을 하나 이상 입력해요.' : linesBad ? '잘못된 줄이 있어요. 표시된 행을 고쳐요.' : undefined}
+      help="줄마다 경로 · 출발지 · 동작을 적어요. 경로를 똑같이 적은 줄끼리 한 라우트가 돼요. 출발지를 비우면 그 경로의 기본 동작이에요.">
+      <SourceRulesField bind:rules={rows} {pools} withPath errors={lineErrs} make={(pool) => ({ ...emptyRule(pool), paths: '' })} />
+    </FormRow>
   </FormSection>
 
-  <FormSection title="만들 라우트" hint={preview.error === undefined && !linesBad ? `라우트 ${preview.routes.length}개` : undefined} stack>
-    {#if linesBad}
-      <Banner tone="danger">잘못된 줄이 있어요. 표시된 줄을 고쳐요.</Banner>
-    {:else if preview.error !== undefined}
-      <Banner tone={preview.routes.length === 0 && key.trim() !== '' && listener !== undefined && routeHostsError(hosts) === undefined ? 'danger' : 'info'}>{preview.error}</Banner>
-    {:else}
-      <ul class="plan">
-        {#each preview.routes as r (r.key)}
-          <li>
-            <code class="name">{r.key}</code>
-            <span class="desc"><code>{r.paths}</code> · 출발지 규칙 {r.rules}개 · 기본 동작 {r.action}</span>
-          </li>
+  <FormSection title="만들 라우트">
+    <FormRow label="라우트" error={planErr} help={planReady ? undefined : '이름 · 리스너 · 호스트를 넣으면 만들 라우트가 보여요.'}>
+      <div class="res">
+        {#each planReady ? preview.routes : [] as r (r.key)}
+          <div class="ri"><span class="k">{r.key}</span><span class="v">{r.paths} · 출발지 규칙 {r.rules}개 · 기본 동작 {r.action}</span></div>
         {/each}
-      </ul>
-    {/if}
+      </div>
+    </FormRow>
   </FormSection>
 </CreateForm>
 
 <style>
-  .note { margin: 0 0 8px; font: var(--t-small); color: var(--tx2); }
-  .line {
-    grid-column: 1 / -1;
-    border: 1px solid var(--bd); border-radius: var(--r-md); padding: 8px 12px 4px; margin: 0; min-width: 0;
-    display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 16px; align-items: start;
-  }
-  .line[aria-invalid='true'] { border-color: var(--danger); }
-  legend { font: var(--t-cap); color: var(--tx2); padding: 0 4px; }
-  .err, .act { grid-column: 1 / -1; }
-  .act { display: flex; gap: 4px; justify-content: flex-end; padding-bottom: 4px; }
-  .add { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
-  .plan { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font: var(--t-small); }
-  .plan li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
-  .name { font-family: var(--mono); color: var(--tx); }
-  .desc { color: var(--tx2); }
-  .desc code { font-family: var(--mono); }
-  @media (max-width: 720px) { .line { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
+  /* 시안 `resolved` 상자 — 84px · 나머지, 12px, 값은 고정폭. */
+  .res { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; min-height: 34px; background: var(--bg-page); border: 1px solid var(--bd); border-radius: var(--r-md); }
+  .ri { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; font-size: 12px; }
+  .k { color: var(--tx3); overflow-wrap: anywhere; }
+  .v { font-family: var(--mono); word-break: break-all; }
 </style>

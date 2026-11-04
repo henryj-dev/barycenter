@@ -1,5 +1,6 @@
 <script lang="ts">
-  import Relations from '#lib/detail/Relations.svelte';
+  // 시안 `tRel` — 리스너 · 풀 · 평가 순서.
+  import RouteRelations from '#lib/route/RouteRelations.svelte';
 </script>
 
-<Relations kind="httpRoute" />
+<RouteRelations kind="httpRoute" />

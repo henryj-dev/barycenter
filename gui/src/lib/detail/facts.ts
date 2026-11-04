@@ -8,6 +8,8 @@ import { itemOf, relationsOf, type ModelLike, type ResourceKind } from '@web/res
 import type { ListenerMark } from '@web/listeners-view';
 import type { Tone } from '#lib/ui';
 import type { createDesk } from '#lib/desk.svelte.ts';
+import { routeBadge } from '#lib/lists/route-cells';
+import { routeFactsOf } from '#lib/route/route-facts';
 
 type Desk = ReturnType<typeof createDesk>;
 export type Mark = { tone: Tone; icon: string; text: string };
@@ -152,6 +154,12 @@ export function statusOf(desk: Desk, kind: ResourceKind, key: string): Mark | un
     return HEALTH_MARK[backendHealth(desk, key)];
   }
   if (kind === 'pool') return poolMark(desk, key);
+  // 라우트: 시안 `dpBadge` — 목록 칸 중 첫 배지(reject · 출발지 규칙 · 헤더 · 가려짐). 없으면 안 단다.
+  if (kind === 'httpRoute' || kind === 'passthroughRoute') {
+    const f = routeFactsOf(desk, kind, key);
+    const c = f === undefined ? undefined : routeBadge(f);
+    return c === undefined ? undefined : { tone: c.tone, icon: c.icon, text: c.t };
+  }
   return undefined;
 }
 

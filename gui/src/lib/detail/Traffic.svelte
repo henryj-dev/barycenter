@@ -2,9 +2,11 @@
   /**
    * 트래픽 경로 탭 — 들어온 요청이 라우트 → 풀 → 백엔드로 어떻게 가는가 (`trafficOf`). 시안 `pathData`.
    *
-   * **라우트**는 시안 `pathData('routes')` 의 그림이다 — 왼쪽에 리스너, 줄마다 「라우트 #n → (규칙 n →) 결과」.
-   * 출발지 규칙마다 한 줄이고, 마지막 줄이 「그 밖의 출발지 → 기본 동작」 이다(엔진이 보는 순서와 같다). 풀 노드에는 그 동작이
-   * WebSocket 을 넘기면 배지를 단다. 경로가 여럿이고 경로 바꾸기가 있으면 라우트 노드가 경로마다 결과를 말한다.
+   * **라우트**는 시안 `pathData('routes')` 의 그림이다(마크업 · 값은 시안 `tPath` 그대로 — `g-*` 클래스) — 왼쪽에 리스너,
+   * 줄마다 3열 격자에 「→ 라우트 #n → (규칙 n →) 풀 → 백엔드 · N개」 또는 「→ 결과」. 출발지 규칙마다 한 줄이고, 마지막 줄이
+   * 「그 밖의 출발지(점선) → 기본 동작」 이다(엔진이 보는 순서와 같다). 풀 노드에는 그 동작이 WebSocket 을 넘기면 배지를 단다
+   * (시안 `wsTag`). 리스너 · 풀 · 백엔드 노드를 누르면 그 상세(백엔드는 목록)로 간다. 시안과 다른 곳: 「풀 (외부)」 · 「외부 주소 ↗」
+   * 노드는 모델에 외부 주소 표시가 없어 그리지 않는다. 패스스루의 끊기는 「연결을 끊어요」 다(응답 코드가 없다).
    *
    * **리스너**는 시안 `pathData('listeners')` 다 — 왼쪽에 리스너, 라우트를 **엔진이 보는 순서**대로 한 줄씩(「라우트 #n」),
    * 마지막에 점선 「라우트에 맞지 않는 요청 → 기본 동작」(패스스루는 SNI 폴백 둘, TCP · UDP 는 「모든 연결」).
@@ -21,7 +23,7 @@
   import { Badge, FieldMessage } from '#lib/ui';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { routeOrder } from '#lib/lists/route-order';
-  import { DRAIN_MARK, HEALTH_MARK, backendDraining, backendHealth, healthCheckText } from './facts';
+  import { DRAIN_MARK, HEALTH_MARK, backendDraining, backendHealth, healthCheckText, type Mark } from './facts';
 
   let { kind }: { kind: ResourceKind } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -81,23 +83,62 @@
   const route = $derived(isRoute ? itemOf(desk.model, kind, key) : undefined);
   const listener = $derived(route === undefined ? undefined : itemOf(desk.model, 'listener', String(route['listener'])));
   const pass = $derived(kind === 'passthroughRoute');
-  const routeSub = $derived(route === undefined ? '' : routeSubOf(route, pass));
   const rules = $derived(route === undefined ? [] : (Array.isArray(route['sourceRules']) ? route['sourceRules'] as unknown[] : []).map((r) => obj(r) ?? {}));
   const listenerSub = $derived(listenerSubOf(listener));
 
-  type RouteLane = { step?: { cap: string; head: string; sub: string; dashed?: boolean }; target: Target; websocket: boolean };
-  /** `trafficOf` 의 라우트 줄은 규칙 순서대로, 마지막이 기본 동작이다 — 그 순서에 규칙의 사실을 붙인다. */
-  const lanes = $derived<RouteLane[]>(!isRoute ? [] : lines.map((line, i): RouteLane => {
+  /**
+   * 시안 `pathData('routes')` 의 노드 — 캡션 · 머리(고정폭) · 아랫줄 · 배지 · 백엔드 줄. `href` 가 있으면 누르면 상세로 간다.
+   * 점선(`dashed`)은 「그 밖의 출발지 → 기본 동작」.
+   */
+  type GNode = {
+    cap: string; head?: string; sub?: string; href?: string; dashed?: boolean;
+    badge?: { tone: Mark['tone']; icon: string; text: string };
+    items?: { n: string; mark: Mark; recv?: string }[];
+  };
+  /** 시안 `poolNodes` · `actN` — 풀(+ 백엔드) 또는 결과 노드. `wsTag`: WebSocket 이면 첫 노드에 배지(이미 배지가 있으면 아랫줄에). */
+  const actNodes = (t: Target, ws: boolean): GNode[] => {
+    if (t.kind === 'pool') {
+      const p: GNode = { cap: '풀', head: t.pool, ...(t.missing ? { badge: { tone: 'danger', icon: '✕', text: 'head 에 없어요' } } : { sub: poolSub(t.pool), href: resourcePath('pool', t.pool) }) };
+      if (ws) {
+        if (p.badge === undefined) p.badge = { tone: 'info', icon: '⇄', text: 'WebSocket' };
+        else p.sub = `${p.sub !== undefined && p.sub !== '' ? `${p.sub} · ` : ''}WebSocket`;
+      }
+      if (t.missing) return [p];
+      const items = t.backends.map((b) => {
+        const rx = receiving(b.key);
+        return { n: b.key, mark: backendMark(b.key), ...(rx === undefined ? {} : { recv: rx ? '수신 중' : '수신 안 함' }) };
+      });
+      return [p, { cap: `백엔드 · ${t.backends.length}개`, items, href: '/traffic/backend' }];
+    }
+    if (t.kind === 'redirect') return [{ cap: '결과', head: `redirect ${t.status}`, sub: t.to, badge: { tone: 'info', icon: '↻', text: '이동' } }];
+    return [{ cap: '결과', head: t.status === undefined ? '연결을 끊어요' : `reject ${t.status}`, sub: t.status === undefined ? '' : '요청 거절', badge: { tone: 'danger', icon: '✕', text: '거절' } }];
+  };
+  /** 시안 `rn` — 이 라우트 노드(자기 자신이라 누르지 않는다). */
+  const routeNode = $derived.by((): GNode | undefined => {
+    if (route === undefined) return undefined;
+    const hosts = (strs(route['hosts']).length > 0 ? strs(route['hosts']) : strs(route['snis'])).join(', ');
+    const paths = strs(route['pathPrefixes']).length > 0 ? strs(route['pathPrefixes']) : [typeof route['pathPrefix'] === 'string' ? route['pathPrefix'] : '/'];
+    const rw = obj(route['action'])?.['rewritePrefix'];
+    const shadow = pass ? undefined : meta.shadow.get(key);
+    return {
+      cap: pass ? 'SNI 라우트' : `라우트 #${meta.ord.get(key) ?? '—'}`, head: key,
+      sub: `${hosts}${pass ? '' : ` ${paths.join(', ')}`}${typeof rw === 'string' ? ` → ${rw}` : ''}`,
+      ...(shadow === undefined ? {} : { badge: { tone: 'warn', icon: '▲', text: '가려짐' } }),
+    };
+  });
+  /** 시안 `lns` — 규칙마다 「라우트 → 규칙 n → 결과」, 마지막은 「라우트 → 그 밖의 출발지(점선) → 기본 동작」. 규칙이 없으면 한 줄. */
+  const lanes = $derived<GNode[][]>(!isRoute || routeNode === undefined ? [] : lines.map((line, i): GNode[] => {
     const rule = rules[i];
     const ws = obj(rule === undefined ? route?.['action'] : rule['action'])?.['websocket'] === true;
-    if (rule !== undefined) {
-      return {
-        step: { cap: `규칙 ${i + 1}`, head: strs(rule['from']).join(', '), sub: rule['address'] === 'connection' ? '연결 주소' : '방문자 주소' },
-        target: line.target, websocket: ws,
-      };
-    }
-    return { ...(rules.length > 0 ? { step: { cap: '그 밖의 출발지', head: '기본 동작', sub: '', dashed: true } } : {}), target: line.target, websocket: ws };
+    const mid: GNode[] = rule !== undefined
+      ? [{ cap: `규칙 ${i + 1}`, head: strs(rule['from']).join(', '), sub: rule['address'] === 'connection' ? '연결 주소' : '방문자 주소' }]
+      : rules.length > 0 ? [{ cap: '그 밖의 출발지', head: '기본 동작', dashed: true }] : [];
+    return [routeNode, ...mid, ...actNodes(line.target, ws)];
   }));
+  const leftNode = $derived<GNode | undefined>(route === undefined ? undefined : {
+    cap: '리스너', head: String(route['listener']), href: resourcePath('listener', String(route['listener'])),
+    ...(listenerSub.trim() === '' || listenerSub.trim() === ':' ? {} : { sub: listenerSub }),
+  });
 
   // ── 리스너 그림 ───────────────────────────────────────────────────────────
   const self = $derived(kind === 'listener' ? itemOf(desk.model, 'listener', key) : undefined);
@@ -212,38 +253,36 @@
   </div>
 {/snippet}
 
+{#snippet gnode(n: GNode)}
+  {#snippet inner()}
+    <span class="g-cap">{n.cap}</span>
+    {#if n.head !== undefined && n.head !== ''}<span class="g-head">{n.head}</span>{/if}
+    {#if n.sub !== undefined && n.sub !== ''}<span class="g-sub">{n.sub}</span>{/if}
+    {#if n.badge !== undefined}<span class="g-badge"><Badge tone={n.badge.tone} icon={n.badge.icon}>{n.badge.text}</Badge></span>{/if}
+    {#each n.items ?? [] as it (it.n)}
+      <span class="g-it"><span class="g-n">{it.n}</span><span class="g-mk" style:background="var(--{it.mark.tone}-bg)" style:color="var(--{it.mark.tone})">{it.mark.icon} {it.mark.text}</span>{#if it.recv !== undefined}<span class="g-rx">{it.recv}</span>{/if}</span>
+    {/each}
+  {/snippet}
+  {#if n.href !== undefined}<a class="g-node" class:dashed={n.dashed === true} href={n.href}>{@render inner()}</a>
+  {:else}<div class="g-node" class:dashed={n.dashed === true}>{@render inner()}</div>{/if}
+{/snippet}
+
 {#if isRoute && route !== undefined}
-  <p class="help">이 라우트와 맞은 요청이 지나는 경로예요.{#if rules.length > 0} 출발지 규칙을 위에서부터 보고, 맞는 것이 없으면 기본 동작이에요.{/if}</p>
-  <div class="graph">
-    <div class="node left">
-      <span class="cap">리스너</span>
-      <a class="head lnk" href={resourcePath('listener', String(route['listener']))}>{String(route['listener'])}</a>
-      {#if listenerSub.trim() !== ':'}<span class="sub">{listenerSub}</span>{/if}
-    </div>
-    <div class="lanes">
-      {#each lanes as lane, i (i)}
-        <div class="lane">
-          <span class="arrow" aria-hidden="true">→</span>
-          <div class="node">
-            <span class="cap">{pass ? 'SNI 라우트' : `라우트 #${meta.ord.get(key) ?? '—'}`}</span>
-            <span class="head">{key}</span>
-            <span class="sub">{routeSub}</span>
-            {#if meta.shadow.has(key)}<Badge tone="warn" title={meta.shadow.get(key)}>가려짐</Badge>{/if}
+  <!-- 시안 `tPath`: 도움말 → 왼쪽 리스너 · 줄(lane)마다 「→ 노드」 3열 격자. -->
+  <div class="g">
+    <div class="g-help">이 라우트와 맞은 요청이 지나는 경로예요. 노드를 누르면 상세로 가요.</div>
+    <div class="g-grid">
+      {#if leftNode !== undefined}<div class="g-left">{@render gnode(leftNode)}</div>{/if}
+      <div class="g-lanes">
+        {#each lanes as lane, i (i)}
+          <div class="g-lane">
+            {#each lane as n, j (j)}<div class="g-cell"><span class="g-arrow" aria-hidden="true">→</span>{@render gnode(n)}</div>{/each}
           </div>
-          {#if lane.step !== undefined}
-            <span class="arrow" aria-hidden="true">→</span>
-            <div class="node" class:dashed={lane.step.dashed === true}>
-              <span class="cap">{lane.step.cap}</span><span class="head">{lane.step.head}</span>
-              {#if lane.step.sub !== ''}<span class="sub">{lane.step.sub}</span>{/if}
-            </div>
-          {/if}
-          <span class="arrow" aria-hidden="true">→</span>
-          {@render targetNodes(lane.target, lane.websocket)}
-        </div>
-      {/each}
+        {/each}
+        {#if lanes.length === 0}<div class="g-none">이 리소스로 이어지는 경로가 없어요.</div>{/if}
+      </div>
     </div>
   </div>
-  {#if !pass}<FieldMessage>#n 은 엔진이 실제로 보는 순서예요. 정본은 <a class="lnk" href="/traffic/route/http">HTTP 라우트</a> 목록의 평가 순서예요.</FieldMessage>{/if}
 {:else if kind === 'listener' && self !== undefined}
   <p class="help">리스너에서 백엔드까지 요청이 지나는 경로예요. 라우트는 평가 순서대로 나열해요.</p>
   <div class="graph">
@@ -310,5 +349,31 @@
   .cap { font: var(--t-cap); color: var(--tx3); }
   .head { font-family: var(--mono); font-size: 13px; color: var(--tx); overflow-wrap: anywhere; }
   .sub { font: var(--t-cap); color: var(--tx2); overflow-wrap: anywhere; }
+  /* 라우트 그림 — 시안 `tPath` 마크업의 인라인 style 그대로(`pathGrid` minmax(150px,210px) · 1fr, `pathCols` 3). */
+  .g { display: flex; flex-direction: column; gap: 12px; }
+  .g-help { font-size: 12px; color: var(--tx3); }
+  .g-grid { display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); gap: 12px; align-items: center; overflow-x: auto; }
+  .g-left { display: flex; min-width: 0; }
+  .g-lanes { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .g-lane { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; align-items: start; }
+  .g-cell { display: flex; gap: 6px; align-items: flex-start; min-width: 0; }
+  .g-arrow { color: var(--tx3); padding-top: 10px; }
+  .g-node {
+    flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
+    border: 1px solid var(--bd-strong); border-radius: var(--r-md); background: var(--bg-input); color: var(--tx); text-decoration: none;
+  }
+  a.g-node:hover { background-image: linear-gradient(var(--hov), var(--hov)); text-decoration: none; }
+  a.g-node:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .g-node.dashed { border-style: dashed; }
+  .g-cap { font-size: 11px; color: var(--tx3); }
+  .g-head { font-family: var(--mono); font-size: 13px; font-weight: 500; word-break: break-all; }
+  .g-sub { font-size: 12px; color: var(--tx2); }
+  .g-badge { align-self: flex-start; }
+  .g-it { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+  .g-n { font-family: var(--mono); }
+  .g-mk { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: var(--r-sm); }
+  .g-rx { color: var(--tx3); }
+  .g-none { color: var(--tx3); font-size: 13px; }
+  @media (max-width: 720px) { .g-grid { grid-template-columns: minmax(0, 1fr); } .g-lane { grid-template-columns: minmax(0, 1fr); } }
   @media (max-width: 720px) { .graph, .graph.right { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
 </style>
