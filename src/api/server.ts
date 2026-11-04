@@ -1187,6 +1187,11 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
     }, c.who.name, metaOf(c.req)));
   }, { leaderFree: true, sensitive: true }),
 
+  /** 다시 보내기 — 옛 링크는 죽고 새 링크가 생긴다. 전달은 만들 때와 같다(메일, 아니면 이 응답에만 한 번). */
+  route<AccountApi>('POST', '/api/v1/invitations/:id/resend', 'admin', async (c, api) => {
+    json(c.res, 200, await accountsOf(api).resendInvitation(c.params['id'] ?? '', c.who.name, metaOf(c.req)));
+  }, { leaderFree: true, sensitive: true }),
+
   route<AccountApi>('DELETE', '/api/v1/invitations/:id', 'admin', async (c, api) => {
     await accountsOf(api).revokeInvitation(c.params['id'] ?? '', c.who.name, metaOf(c.req));
     json(c.res, 200, { revoked: true });

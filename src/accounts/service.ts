@@ -314,6 +314,34 @@ export class AccountService {
     }));
   }
 
+  /**
+   * 초대를 다시 보낸다 — 아직 쓰이지 않은(대기·만료) 초대만. **옛 링크는 이 순간 죽는다**: 같은 행의 토큰 해시를
+   * 새 것으로 바꾸므로 옛 토큰은 어떤 행과도 맞지 않는다. 만료는 지금부터 다시 72시간. 전달은 만들 때와 같다 —
+   * 이메일이 있고 메일이 켜져 있으면 메일, 아니면 새 링크가 이 응답에만 한 번 나온다. 쓰인·취소된 초대는 404.
+   */
+  async resendInvitation(id: string, by: string, meta: Meta = {}): Promise<{ id: string; token: string; expiresAt: string; mailed: boolean }> {
+    const t = token();
+    const at = new Date(this.#now() + INVITE_TTL_MS);
+    const out = await this.#tx(async (c) => {
+      const r = (await c.query(
+        `UPDATE invitations SET token_hash=$2, expires_at=$3
+          WHERE id=$1 AND kind='invite' AND used_at IS NULL AND revoked_at IS NULL
+          RETURNING email, role`,
+        [id, sha(t), at],
+      )).rows[0];
+      if (r === undefined) throw new AccountError(404, 'no_invitation', '다시 보낼 수 있는 초대가 아니다');
+      const email = opt(r, 'email');
+      await this.#audit(c, by, 'account.invite_resend', null, meta, { id, role: str(r, 'role'), email: email !== null });
+      return { email, role: str(r, 'role') };
+    });
+    let mailed = false;
+    if (out.email !== null && this.#mail !== undefined) {
+      const [subject, text] = mailText.invite(`${this.#mail.base}/invite#${t}`, out.role, INVITE_TTL_MS / 3600_000);
+      mailed = await this.#mail.mailer.send(out.email, subject, text).then(() => true, () => false);
+    }
+    return { id, token: t, expiresAt: at.toISOString(), mailed };
+  }
+
   async revokeInvitation(id: string, by: string, meta: Meta = {}): Promise<void> {
     await this.#tx(async (c) => {
       const n = (await c.query(`UPDATE invitations SET revoked_at=now() WHERE id=$1 AND used_at IS NULL AND revoked_at IS NULL`, [id])).rowCount;
@@ -771,6 +799,7 @@ export class AccountService {
         [sha(sid), userId, new Date(now + SESSION_MAX_MS), ['pwd', method], meta.ip ?? null, meta.userAgent ?? null],
       );
       await c.query(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
+      await this.#markLogin(c, userId);
       await this.#audit(c, `user:${str(s, 'username')}`, 'session.login', userId, meta, { mfa: method });
       return { kind: 'session', sessionId: sid, maxAgeS: SESSION_MAX_MS / 1000 } as const;
     });
@@ -845,7 +874,17 @@ export class AccountService {
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [sha(sid), userId, new Date(expiresAt), pending, methods, meta.ip ?? null, meta.userAgent ?? null],
     );
+    // MFA 를 기다리는 세션은 아직 로그인이 아니다 — 끝난 세션만 「마지막 로그인」에 적는다.
+    if (!pending) await this.#markLogin(undefined, userId);
     return sid;
+  }
+
+  /** 쓸 수 있는 세션이 생긴 순간 — 비밀번호(MFA 없음)·SSO·MFA 완료가 모두 여기로 온다. */
+  async #markLogin(c: Queryable | undefined, userId: string): Promise<void> {
+    const q = `UPDATE users SET last_login_at=$2 WHERE id=$1`;
+    const v = [userId, new Date(this.#now())];
+    if (c !== undefined) await c.query(q, v);
+    else await this.#q(q, v);
   }
 
   /**
@@ -1022,12 +1061,13 @@ export class AccountService {
   async listUsers(): Promise<unknown[]> {
     return (await this.#q(
       `SELECT u.id, u.username, u.display_name, u.email, u.role, u.role_authority, u.status, u.created_at,
-              u.locked_until, t.confirmed_at IS NOT NULL AS totp
+              u.locked_until, u.last_login_at, t.confirmed_at IS NOT NULL AS totp
          FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.status <> 'deleted' ORDER BY u.username`,
     )).map((u) => ({
       id: str(u, 'id'), username: str(u, 'username'), displayName: opt(u, 'display_name'), email: opt(u, 'email'),
       role: str(u, 'role'), roleAuthority: str(u, 'role_authority'), status: str(u, 'status'),
       createdAt: iso(u['created_at']), lockedUntil: isoOpt(u['locked_until']), totp: u['totp'] === true,
+      lastLoginAt: isoOpt(u['last_login_at']),
     }));
   }
 

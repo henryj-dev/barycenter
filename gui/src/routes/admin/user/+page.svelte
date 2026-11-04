@@ -5,9 +5,12 @@
    * 삭제는 이름을 똑같이 넣는 확인 대화상자를 거친다(브라우저 대화상자를 쓰지 않는다).
    *
    * 시안의 배치: 머리의 「＋ 초대」 → 인라인 「사람 초대」 폼 · 「사용자 · N」 표(역할 셀렉트 · 상태 · MFA · 행 작업) ·
-   * 「초대 · N」 · SSO 공급자(공급자마다 JIT). 시안의 「마지막 로그인」 열과 초대 「다시 보내기」 는 API 가 없어서 뺐다.
+   * 「초대 · N」(행마다 「다시 보내기」 · 「취소」) · SSO 공급자(공급자마다 JIT). 「마지막 로그인」 은 MFA 까지 끝난
+   * 로그인의 시각이다(서버가 세션을 만들 때 적는다).
+   * 「다시 보내기」 는 옛 링크를 죽이고 새 링크를 만든다 — 전달은 만들 때와 같다(메일, 아니면 한 번만 보이는 링크).
    */
   import { getContext, onMount } from 'svelte';
+  import { ago } from '#lib/detail/facts';
   import { accountApi, linkFor, type InvitationRow, type Role, type UserRow } from '#lib/account/api';
   import type { Session } from '#lib/account/session.svelte.ts';
   import SsoJit from '#lib/account/SsoJit.svelte';
@@ -64,6 +67,23 @@
     closeInvite();
     await load();
   };
+  /** 다시 보내기 — 새 링크의 전달은 `invite` 와 같은 모양으로 알린다. */
+  const resend = async (i: InvitationRow): Promise<void> => {
+    const r = await accountApi.resendInvitation(i.id);
+    if (!r.ok) { await act(r); return; }
+    const role = ROLE_LABEL[i.role] ?? i.role;
+    if (r.data.mailed) {
+      shown = undefined;
+      toast.ok('초대를 다시 보냈어요', `${i.email ?? ''} — 옛 링크는 이제 못 써요.`);
+    } else {
+      shown = {
+        label: `${role} 초대 새 링크 (72시간)${i.email !== null ? ' — 메일은 못 보냈어요. 직접 전해요' : ''}. 옛 링크는 이제 못 써요`,
+        link: linkFor(r.data.token),
+      };
+      toast.ok('초대 링크를 새로 만들었어요', '링크를 직접 전해요.');
+    }
+    await act(r);
+  };
   const recovery = async (u: UserRow): Promise<void> => {
     const r = await accountApi.recoveryLink(u.id);
     if (!r.ok) { error = r.message; return; }
@@ -97,6 +117,8 @@
     { key: 'status', label: '상태', width: '130px', sort: (r) => r.status },
     { key: 'totp', label: 'MFA', width: '100px', sort: (r) => (r.totp ? 1 : 0) },
     { key: 'email', label: '이메일', mono: true, muted: true, hideable: true, text: (r) => r.email ?? '—' },
+    { key: 'login', label: '마지막 로그인', muted: true, width: '130px', hideable: true,
+      text: (r) => (r.lastLoginAt === null ? '아직 없어요' : ago(r.lastLoginAt) ?? '—'), sort: (r) => r.lastLoginAt ?? '' },
     { key: 'act', label: '', align: 'right', width: '100px' },
   ];
   const chips: FilterChip<UserRow>[] = [
@@ -118,7 +140,7 @@
     { key: 'sent', label: '보낸 때', muted: true, width: '190px', text: (r) => new Date(r.createdAt).toLocaleString(), sort: (r) => r.createdAt },
     { key: 'state', label: '상태', width: '110px' },
     { key: 'exp', label: '만료', muted: true, hideable: true, hidden: true, text: (r) => new Date(r.expiresAt).toLocaleString(), sort: (r) => r.expiresAt },
-    { key: 'act', label: '', align: 'right', width: '90px' },
+    { key: 'act', label: '', align: 'right', width: '180px' },
   ];
   usePageActions(() => (session.isAdmin ? head : undefined));
 </script>
@@ -134,6 +156,8 @@
       onchange={(v) => { setRole(u, v); }} />
   {:else if c.key === 'status'}
     {#if u.status === 'active'}<Badge tone="ok" icon="●">활성</Badge>{:else}<Badge tone="neutral" icon="○">정지</Badge>{/if}
+  {:else if c.key === 'login'}
+    <span title={u.lastLoginAt === null ? undefined : new Date(u.lastLoginAt).toLocaleString()}>{c.text?.(u) ?? ''}</span>
   {:else if c.key === 'totp'}
     {#if u.totp}<Badge tone="ok" icon="●">켜짐</Badge>{:else}<Badge tone="warn" icon="▲">꺼짐</Badge>{/if}
   {:else if c.key === 'act'}
@@ -144,7 +168,7 @@
 {#snippet inviteCell(i: InvitationRow, c: Column<InvitationRow>)}
   {#if c.key === 'state'}
     {#if expired(i)}<Badge tone="neutral" icon="○">만료</Badge>{:else}<Badge tone="info" icon="↻">수락 대기</Badge>{/if}
-  {:else if c.key === 'act'}<Button size="sm" onclick={() => { void accountApi.revokeInvitation(i.id).then(async (r) => { if (r.ok) toast.ok('초대를 취소했어요', i.email ?? ''); await act(r); }); }}>취소</Button>
+  {:else if c.key === 'act'}{#if i.kind === 'invite'}<Button size="sm" onclick={() => { void resend(i); }}>다시 보내기</Button> {/if}<Button size="sm" onclick={() => { void accountApi.revokeInvitation(i.id).then(async (r) => { if (r.ok) toast.ok('초대를 취소했어요', i.email ?? ''); await act(r); }); }}>취소</Button>
   {:else}{c.text?.(i) ?? ''}{/if}
 {/snippet}
 
