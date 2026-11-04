@@ -61,7 +61,7 @@ describe('ACME 인증서 화면', () => {
   });
 
   it('목록의 만들기 버튼은 모두 「＋ 만들기」 다 (시안)', () => {
-    for (const l of ['Listener', 'Pool', 'Backend', 'AddressSet', 'Certificate', 'TlsPolicy', 'SniBinding']) {
+    for (const l of ['Pool', 'Backend', 'AddressSet', 'Certificate', 'TlsPolicy', 'SniBinding']) {
       const src = read(`lists/${l}List.svelte`);
       expect(src, l).toMatch(/variant="primary" href="[^"]+\/new">＋ 만들기<\/Button>/);
     }
@@ -71,6 +71,11 @@ describe('ACME 인증서 화면', () => {
       expect(src, l).toMatch(/<Button variant="primary" aria-haspopup="menu"[^>]*>＋ 만들기<\/Button>/);
       expect(src, l).toContain("{ label: '경로별 묶음으로 만들기', href: '/traffic/route/http/new/group' }");
     }
+    // 리스너는 시안 `createItems` 메뉴다 — 「＋ 만들기 ▾」 아래 빠른 프록시 만들기 · 리스너 만들기.
+    const ls = read('lists/ListenerList.svelte');
+    expect(ls).toContain('＋ 만들기 ▾</Button>');
+    expect(ls).toContain("{ label: '빠른 프록시 만들기', href: '/traffic/listener/new/quick' }");
+    expect(ls).toContain("{ label: '리스너 만들기', href: '/traffic/listener/new' }");
   });
 
   /**

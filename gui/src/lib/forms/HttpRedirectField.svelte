@@ -23,12 +23,12 @@
 </script>
 
 {#snippet rows()}
-  <FormRow label={bare ? 'HTTP로 온 요청을 HTTPS로 보내기' : 'HTTP → HTTPS'} help="켜면 평문 HTTP 로 온 요청을 이 HTTPS 리스너로 301 리다이렉트해요. 호스트와 출발지 제한은 이 리스너를 따라요.">
-    <Switch bind:checked={on}>켜짐</Switch>
+  <FormRow label={bare ? 'HTTP로 온 요청을 HTTPS로 보내기' : 'HTTP → HTTPS'}>
+    <Switch bind:checked={on}>{on ? '켜짐' : '꺼짐'}</Switch>
   </FormRow>
   {#if on}
-    <FormRow label="HTTP 포트" for="ln-redirect-port" required {error} help={error === undefined ? '이 포트를 다른 HTTP 리스너와 나눠 쓸 수 있어요(호스트가 겹치지 않을 때).' : undefined}>
-      <TextInput id="ln-redirect-port" bind:value={port} invalid={error !== undefined} inputmode="numeric" width="120px" />
+    <FormRow label="HTTP 포트" for="ln-redirect-port" {error} help="기본은 80이에요.">
+      <TextInput id="ln-redirect-port" bind:value={port} invalid={error !== undefined} inputmode="numeric" />
     </FormRow>
   {/if}
 {/snippet}

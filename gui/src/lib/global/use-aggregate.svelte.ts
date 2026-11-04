@@ -16,6 +16,7 @@
 import { getContext } from 'svelte';
 import type { createDesk } from '#lib/desk.svelte.ts';
 import type { Column } from '#lib/ui';
+import { m } from '#lib/ui/cells.ts';
 import type { Scope } from './scope.svelte.ts';
 import type { RegionDesks, RegionEntry } from './regions.svelte.ts';
 import { aggregateListState, inRegion, mergeRegionRows, regionNotices, splitRowId, type RegionNotice, type RegionRow } from './aggregate.ts';
@@ -46,8 +47,11 @@ export type Aggregate = {
   split: typeof splitRowId;
 };
 
-/** 「지역」 열 — `withRegionColumn(columns, regionColumn())` 으로 셋째 열 뒤에 넣는다. 칸은 목록의 `cell` 스니펫이 `r.region` 으로 그린다. */
-export const regionColumn = <T extends { region: string }>(): Column<T> => ({ key: 'region', label: '지역', mono: true, sort: (r) => r.region, text: (r) => r.region });
+/**
+ * 「지역」 열 — `withRegionColumn(columns, regionColumn())` 으로 맨 끝에 붙인다(시안 `lcols`).
+ * 칸은 시안 `{ t: r.reg, mono: true }` 그대로 고정폭 · 기본색(`m()`)이다. `value` 가 있으니 목록의 `cell` 스니펫은 이 칸을 안 그린다.
+ */
+export const regionColumn = <T extends { region: string }>(): Column<T> => ({ key: 'region', label: '지역', mono: true, sort: (r) => r.region, text: (r) => r.region, value: (r) => m(r.region) });
 
 export function useAggregate(): Aggregate {
   const scope = getContext<Scope | undefined>('scope');

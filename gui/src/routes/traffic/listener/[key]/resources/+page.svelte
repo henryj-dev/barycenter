@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Relations from '#lib/detail/Relations.svelte';
+  import RelationRows from '#lib/detail/RelationRows.svelte';
 </script>
 
-<Relations kind="listener" />
+<RelationRows kind="listener" />
