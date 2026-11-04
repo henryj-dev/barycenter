@@ -9,6 +9,9 @@
    * 로그인의 시각이다(서버가 세션을 만들 때 적는다).
    * 「다시 보내기」 는 옛 링크를 죽이고 새 링크를 만든다 — 전달은 만들 때와 같다(메일, 아니면 한 번만 보이는 링크).
    * 「토큰」 칸은 그 사람의 살아 있는 개인 API 토큰 수다. 누르면 목록이 열리고 폐기할 수 있다(대신 만들지는 않는다).
+   *
+   * 시안(People)의 열 순서 · 문구를 따른다: 이름 · 역할 · 상태(● 활성 / ○ 비활성) · MFA · 마지막 로그인 · 「비활성화」.
+   * 시안에 없는 열(역할 정본 · 이메일 · 토큰)은 「컬럼」 메뉴에 두고 처음에는 숨긴다. 서버 값 `suspended` 를 「비활성」 이라 부른다.
    */
   import { getContext, onMount } from 'svelte';
   import { ago } from '#lib/detail/facts';
@@ -18,7 +21,7 @@
   import SsoJit from '#lib/account/SsoJit.svelte';
   import UserTokens from '#lib/account/UserTokens.svelte';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
-  import { Badge, Banner, Button, Card, ConfirmDialog, DataTable, FieldMessage, Form, FormRow, FormSection, Select, TextInput, toast, type Column, type FilterChip, type MenuItem } from '#lib/ui';
+  import { Badge, Banner, Button, Card, ConfirmDialog, DataTable, FieldMessage, Select, TextInput, toast, type Column, type FilterChip, type MenuItem } from '#lib/ui';
 
   const session = getContext<Session>('session');
   /** 시안의 역할 이름은 `ROLE_LABEL`(계정 화면 공통). 서버 값은 옆에 흐리게 둔다. */
@@ -107,7 +110,7 @@
   const setStatus = (u: UserRow): void => {
     const next = u.status === 'active' ? 'suspended' : 'active';
     void accountApi.updateUser(u.id, { status: next }).then(async (r) => {
-      if (r.ok) toast.ok(`${u.username} ${next === 'active' ? '활성화' : '정지'}`, next === 'active' ? '로그인 권한을 열었어요.' : '로그인 권한을 막았어요.');
+      if (r.ok) toast.ok(`${u.username} ${next === 'active' ? '활성화' : '비활성화'}`, next === 'active' ? '로그인 권한을 열었어요.' : '로그인 권한을 막았어요.');
       await act(r);
     });
   };
@@ -118,24 +121,24 @@
   const userCols: Column<UserRow>[] = [
     { key: 'username', label: '이름', mono: true, sort: (r) => r.username },
     { key: 'role', label: '역할', width: '170px', sort: (r) => r.role },
-    { key: 'authority', label: '역할 정본', width: '110px', hideable: true, text: (r) => (r.roleAuthority === 'idp' ? 'IdP' : '로컬'), sort: (r) => r.roleAuthority },
     { key: 'status', label: '상태', width: '130px', sort: (r) => r.status },
-    { key: 'totp', label: 'MFA', width: '100px', sort: (r) => (r.totp ? 1 : 0) },
-    { key: 'email', label: '이메일', mono: true, muted: true, hideable: true, text: (r) => r.email ?? '—' },
-    { key: 'login', label: '마지막 로그인', muted: true, width: '130px', hideable: true,
+    { key: 'totp', label: 'MFA', width: '110px', sort: (r) => (r.totp ? 1 : 0) },
+    { key: 'login', label: '마지막 로그인', mono: true, muted: true, width: '140px', hideable: true,
       text: (r) => (r.lastLoginAt === null ? '아직 없어요' : ago(r.lastLoginAt) ?? '—'), sort: (r) => r.lastLoginAt ?? '' },
-    { key: 'tokens', label: '토큰', width: '80px', sort: (r) => r.tokens },
-    { key: 'act', label: '', align: 'right', width: '100px' },
+    { key: 'authority', label: '역할 정본', width: '110px', hideable: true, hidden: true, text: (r) => (r.roleAuthority === 'idp' ? 'IdP' : '로컬'), sort: (r) => r.roleAuthority },
+    { key: 'email', label: '이메일', mono: true, muted: true, hideable: true, hidden: true, text: (r) => r.email ?? '—' },
+    { key: 'tokens', label: '토큰', width: '80px', hideable: true, hidden: true, sort: (r) => r.tokens },
+    { key: 'act', label: '', align: 'right', width: '130px' },
   ];
   const chips: FilterChip<UserRow>[] = [
     { key: 'admin', label: '관리자', tone: 'accent', icon: '★', match: (r) => r.role === 'admin' },
-    { key: 'suspended', label: '정지', tone: 'neutral', match: (r) => r.status === 'suspended' },
+    { key: 'suspended', label: '비활성', tone: 'neutral', match: (r) => r.status === 'suspended' },
     { key: 'locked', label: '잠김', tone: 'warn', match: (r) => r.lockedUntil !== null },
     { key: 'nomfa', label: 'MFA 꺼짐', tone: 'warn', match: (r) => !r.totp },
   ];
   const userMenu = (u: UserRow): MenuItem[] => [
     { label: u.roleAuthority === 'idp' ? '역할 정본을 로컬로' : '역할 정본을 IdP 로', onselect: () => { void accountApi.updateUser(u.id, { roleAuthority: u.roleAuthority === 'idp' ? 'local' : 'idp' }).then(act); } },
-    { label: u.status === 'active' ? '정지' : '다시 활성', onselect: () => { setStatus(u); } },
+    { label: u.status === 'active' ? '비활성화' : '활성화', onselect: () => { setStatus(u); } },
     { label: '세션 끊기', onselect: () => { void accountApi.revokeSessions(u.id).then(act); } },
     { label: `API 토큰 보기 · ${u.tokens}`, onselect: () => { tokensOf = u.id; } },
     { label: '복구 링크 만들기', onselect: () => { void recovery(u); } },
@@ -144,7 +147,7 @@
   const inviteCols: Column<InvitationRow>[] = [
     { key: 'email', label: '이메일', mono: true, text: (r) => r.email ?? '이메일 없음' },
     { key: 'role', label: '역할', width: '110px', text: (r) => ROLE_LABEL[r.role] ?? r.role },
-    { key: 'sent', label: '보낸 때', muted: true, width: '190px', text: (r) => new Date(r.createdAt).toLocaleString(), sort: (r) => r.createdAt },
+    { key: 'sent', label: '보낸 때', mono: true, muted: true, width: '130px', text: (r) => ago(r.createdAt) ?? '—', sort: (r) => r.createdAt },
     { key: 'state', label: '상태', width: '110px' },
     { key: 'exp', label: '만료', muted: true, hideable: true, hidden: true, text: (r) => new Date(r.expiresAt).toLocaleString(), sort: (r) => r.expiresAt },
     { key: 'act', label: '', align: 'right', width: '180px' },
@@ -162,7 +165,7 @@
     <Select label={`${u.username} 역할`} value={u.role} options={ROLES} width="140px" mono={false} disabled={u.roleAuthority === 'idp'}
       onchange={(v) => { setRole(u, v); }} />
   {:else if c.key === 'status'}
-    {#if u.status === 'active'}<Badge tone="ok" icon="●">활성</Badge>{:else}<Badge tone="neutral" icon="○">정지</Badge>{/if}
+    {#if u.status === 'active'}<Badge tone="ok" icon="●">활성</Badge>{:else}<Badge tone="neutral" icon="○">비활성</Badge>{/if}
   {:else if c.key === 'login'}
     <span title={u.lastLoginAt === null ? undefined : new Date(u.lastLoginAt).toLocaleString()}>{c.text?.(u) ?? ''}</span>
   {:else if c.key === 'totp'}
@@ -170,14 +173,16 @@
   {:else if c.key === 'tokens'}
     <Button size="sm" title="{u.username}의 API 토큰 보기" onclick={() => { tokensOf = u.id; }}>{u.tokens}</Button>
   {:else if c.key === 'act'}
-    <Button size="sm" onclick={() => { setStatus(u); }}>{u.status === 'active' ? '정지' : '활성화'}</Button>
+    <Button size="sm" style="height: 24px" onclick={() => { setStatus(u); }}>{u.status === 'active' ? '비활성화' : '활성화'}</Button>
   {:else}{c.text?.(u) ?? ''}{/if}
 {/snippet}
 
 {#snippet inviteCell(i: InvitationRow, c: Column<InvitationRow>)}
   {#if c.key === 'state'}
     {#if expired(i)}<Badge tone="neutral" icon="○">만료</Badge>{:else}<Badge tone="info" icon="↻">수락 대기</Badge>{/if}
-  {:else if c.key === 'act'}{#if i.kind === 'invite'}<Button size="sm" onclick={() => { void resend(i); }}>다시 보내기</Button> {/if}<Button size="sm" onclick={() => { void accountApi.revokeInvitation(i.id).then(async (r) => { if (r.ok) toast.ok('초대를 취소했어요', i.email ?? ''); await act(r); }); }}>취소</Button>
+  {:else if c.key === 'sent'}
+    <span title={new Date(i.createdAt).toLocaleString()}>{c.text?.(i) ?? ''}</span>
+  {:else if c.key === 'act'}{#if i.kind === 'invite'}<Button size="sm" style="height: 24px" onclick={() => { void resend(i); }}>다시 보내기</Button> {/if}<Button size="sm" style="height: 24px; border-color: var(--danger); color: var(--danger)" onclick={() => { void accountApi.revokeInvitation(i.id).then(async (r) => { if (r.ok) toast.ok('초대를 취소했어요', i.email ?? ''); await act(r); }); }}>취소</Button>
   {:else}{c.text?.(i) ?? ''}{/if}
 {/snippet}
 
@@ -195,21 +200,24 @@
     {#if error !== undefined}<Banner tone="danger" ondismiss={() => { error = undefined; }}>{error}</Banner>{/if}
 
     {#if inviteOpen}
-      <Card title="사람 초대">
-        <Form onsubmit={() => { void invite(); }} note="링크는 72시간 동안 써요. 만든 순간 한 번만 보여요.">
-          <FormSection>
-            <FormRow label="이메일" for="inv-mail" error={emailError} help="비우면 링크만 만들어요. 직접 전해요.">
+      <!-- 시안: 카드 안 제목 「사람 초대」 · 라벨 150px 격자(이메일 · 역할) · 「초대 보내기」 · 「취소」 -->
+      <Card>
+        <form class="inv" novalidate onsubmit={(e) => { e.preventDefault(); void invite(); }}>
+          <div class="t">사람 초대</div>
+          <div class="grid">
+            <label for="inv-mail">이메일</label>
+            <div>
               <TextInput id="inv-mail" type="email" placeholder="name@example.com" bind:value={inviteEmail} invalid={emailError !== undefined} autocomplete="off" />
-            </FormRow>
-            <FormRow label="역할" for="inv-role">
-              <Select label="역할" bind:value={inviteRole} options={ROLES} width="200px" mono={false} />
-            </FormRow>
-          </FormSection>
-          {#snippet actions()}
+              {#if emailError !== undefined}<FieldMessage tone="error">{emailError}</FieldMessage>{:else}<FieldMessage>비우면 링크만 만들어요. 직접 전해요. 링크는 72시간 동안 써요. 만든 순간 한 번만 보여요.</FieldMessage>{/if}
+            </div>
+            <span class="lbl" aria-hidden="true">역할</span>
+            <Select label="역할" bind:value={inviteRole} options={ROLES} width="160px" mono={false} />
+          </div>
+          <div class="acts">
             <Button variant="primary" type="submit" loading={sending} disabled={emailError !== undefined}>초대 보내기</Button>
             <Button onclick={closeInvite}>취소</Button>
-          {/snippet}
-        </Form>
+          </div>
+        </form>
       </Card>
     {/if}
 
@@ -225,7 +233,7 @@
 
     <Card title="초대 · {openInvites.length}" padded={false}>
       <DataTable rows={openInvites} rowKey={(r) => r.id} columns={inviteCols} cell={inviteCell} {loading} label="열린 초대"
-        emptyTitle="대기 중인 초대가 없어요" emptyBody="「＋ 초대」 로 링크를 만들어요." minHeight="0" />
+        emptyTitle="대기 중인 초대가 없어요." minHeight="0" />
     </Card>
 
     <SsoJit />
@@ -243,5 +251,11 @@
 
 <style>
   .adm { display: flex; flex-direction: column; gap: 16px; }
+  .inv { display: flex; flex-direction: column; gap: 12px; }
+  .t { font-weight: 600; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: 150px minmax(0, 360px); gap: 4px 16px; align-items: start; }
+  .grid label, .grid .lbl { padding-top: 6px; font-size: 13px; color: var(--tx2); }
+  .acts { display: flex; gap: 8px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: minmax(0, 1fr); } }
   code { font-family: var(--mono); }
 </style>

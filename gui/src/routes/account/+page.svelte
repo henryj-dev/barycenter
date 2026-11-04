@@ -1,10 +1,11 @@
 <script lang="ts">
   /**
-   * 내 계정 — 누구인가 · 비밀번호 · 인증 앱 · 복구 코드 · SSO 연결 · 이메일 · API 토큰 · 열린 세션.
-   * 시안의 순서를 따른다. 「API 토큰」 은 시안의 「토큰」 표다 — 토큰은 사람 한 명의 것이라 내 계정에 둔다.
+   * 내 계정 — 시안(Account) 순서: 비밀번호 · 인증 앱 · 복구 코드 · SSO 연결. 최대 폭 820 · 카드 사이 16.
+   * 시안에 없는 기능은 같은 모양의 카드로 둔다: 맨 위 「누구인가」, SSO 다음 이메일 · 토큰 · 열린 세션.
+   * 「토큰」 은 시안에서는 사람 화면의 카드다 — 토큰은 사람 한 명의 것(내 역할 이하)이라 내 계정에 둔다.
    */
   import { getContext, onMount } from 'svelte';
-  import { accountApi, type Me } from '#lib/account/api';
+  import { accountApi } from '#lib/account/api';
   import type { Session } from '#lib/account/session.svelte.ts';
   import { ROLE_LABEL } from '#lib/account/text';
   import ChangePassword from '#lib/account/ChangePassword.svelte';
@@ -12,9 +13,8 @@
   import ChangeEmail from '#lib/account/ChangeEmail.svelte';
   import SsoIdentities from '#lib/account/SsoIdentities.svelte';
   import ApiTokens from '#lib/account/ApiTokens.svelte';
-  import { Badge, Button, Card, DataTable, DescriptionList, FieldMessage, Skeleton, type Column } from '#lib/ui';
+  import { Badge, Button, Card, DescriptionList, FieldMessage, Skeleton } from '#lib/ui';
 
-  type Sess = Me['sessions'][number];
   const session = getContext<Session>('session');
   let note = $state<{ ok: boolean; text: string } | undefined>();
   let mailOn = $state(false);
@@ -32,18 +32,12 @@
     note = r.ok ? { ok: true, text: `세션 ${r.data.revoked}개를 끊었어요. 이 기기도 다시 로그인해요.` } : { ok: false, text: r.message };
     await session.refresh();
   };
-  const columns: Column<Sess>[] = [
-    { key: 'last', label: '마지막 사용', mono: true, width: '200px', text: (r) => new Date(r.lastSeenAt).toLocaleString(), sort: (r) => r.lastSeenAt },
-    { key: 'methods', label: '인증', mono: true, text: (r) => r.methods.join(' + ') },
-    { key: 'ip', label: 'IP', mono: true, text: (r) => r.ip ?? '?' },
-    { key: 'ua', label: '브라우저', muted: true, hideable: true, text: (r) => r.userAgent ?? '' },
-  ];
 </script>
 
 {#if session.me === undefined}
   {#if session.checked}
-    <Card title="사람 계정으로 로그인하지 않았어요">
-      <FieldMessage>토큰으로 연결했으면 계정 화면이 없어요.</FieldMessage>
+    <Card>
+      <div class="hd"><div class="t">사람 계정으로 로그인하지 않았어요</div><div class="s">토큰으로 연결했으면 계정 화면이 없어요.</div></div>
       <div class="pad"><Button variant="primary" href="/login">로그인</Button></div>
     </Card>
   {:else}
@@ -52,8 +46,11 @@
 {:else}
   {@const me = session.me}
   <div class="acct">
-    <Card title={me.username}>
-      {#snippet actions()}<Badge tone="accent" icon={null}>{ROLE_LABEL[me.role] ?? me.role} · {me.role}</Badge>{/snippet}
+    <Card>
+      <div class="hd row">
+        <div class="t mono">{me.username}</div>
+        <Badge tone="accent" icon={null}>{ROLE_LABEL[me.role] ?? me.role} · {me.role}</Badge>
+      </div>
       <DescriptionList items={[
         { label: '이름', value: me.displayName ?? '—' },
         { label: '이메일', value: me.email ?? '—', mono: true },
@@ -67,7 +64,17 @@
     <ApiTokens {me} />
     <Card title="열린 세션 · {me.sessions.length}" padded={false}>
       {#snippet actions()}<Button size="sm" variant="danger" onclick={() => { void logoutAll(); }}>모든 기기에서 로그아웃</Button>{/snippet}
-      <DataTable rows={me.sessions} rowKey={(r) => r.createdAt + r.lastSeenAt} {columns} label="열린 세션" emptyTitle="열린 세션이 없어요" minHeight="0" />
+      <div class="th"><span>마지막 사용</span><span>인증</span><span>IP</span><span>브라우저</span></div>
+      {#each me.sessions as r (r.createdAt + r.lastSeenAt)}
+        <div class="tr">
+          <span class="m">{new Date(r.lastSeenAt).toLocaleString()}</span>
+          <span class="m">{r.methods.join(' + ')}</span>
+          <span class="m">{r.ip ?? '?'}</span>
+          <span class="mu" title={r.userAgent ?? ''}>{r.userAgent ?? ''}</span>
+        </div>
+      {:else}
+        <div class="empty">열린 세션이 없어요.</div>
+      {/each}
     </Card>
     {#if note !== undefined}<FieldMessage tone={note.ok ? 'ok' : 'error'}>{note.text}</FieldMessage>{/if}
   </div>
@@ -75,5 +82,18 @@
 
 <style>
   .acct { display: flex; flex-direction: column; gap: 16px; max-width: 820px; }
+  .hd { margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .t { font-weight: 600; font-size: 14px; }
+  .t.mono { font-family: var(--mono); }
+  .s { font-size: 12px; color: var(--tx3); }
   .pad { margin-top: 12px; }
+  /* 시안의 카드 표 — 머리 행 --bg-hover 32px · 행 --row-h · 위 테두리 */
+  .th, .tr { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1.6fr; gap: 12px; padding: 0 16px; align-items: center; }
+  .th { height: 32px; background: var(--bg-hover); font-size: 12px; font-weight: 600; color: var(--tx2); }
+  .tr { height: var(--row-h); border-top: 1px solid var(--bd); font-size: 13px; }
+  .tr:hover { background-image: linear-gradient(var(--hov), var(--hov)); }
+  .m { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mu { font-size: 12px; color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { padding: 20px; text-align: center; color: var(--tx3); font-size: 13px; border-top: 1px solid var(--bd); }
 </style>

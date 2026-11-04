@@ -5,9 +5,13 @@
    * 재설정은 인증 앱을 풀지 않는다(관리자는 로그인 때 코드가 그대로 필요하다).
    */
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { accountApi } from '#lib/account/api';
   import { PASSWORD_HELP } from '#lib/account/text';
-  import { Banner, Button, FormRow, FormSection, TextInput } from '#lib/ui';
+  import { Button, TextInput, toast } from '#lib/ui';
+  import AuthCard from '#lib/shell/AuthCard.svelte';
+  import AuthField from '#lib/shell/AuthField.svelte';
+  import AuthError from '#lib/shell/AuthError.svelte';
 
   let token = $state('');
   let email = $state('');
@@ -21,7 +25,7 @@
   onMount(() => { token = location.hash.replace(/^#/, ''); });
 
   const request = async (): Promise<void> => {
-    if (email.trim() === '') return;
+    if (email.trim() === '') { note = { ok: false, text: '이메일을 입력해요.' }; return; }
     busy = true;
     const r = await accountApi.requestReset(email);
     busy = false;
@@ -30,58 +34,60 @@
       : { ok: false, text: r.message };
   };
   const reset = async (): Promise<void> => {
-    if (!matches) return;
+    if (password === '') { note = { ok: false, text: '비밀번호를 입력해요.' }; return; }
+    if (!matches) { note = { ok: false, text: '비밀번호가 서로 달라요. 같은 값을 두 번 입력해요.' }; return; }
     busy = true;
     const r = await accountApi.confirmReset(token, password);
     busy = false;
     if (!r.ok) { note = { ok: false, text: r.message }; return; }
     history.replaceState(null, '', '/reset');
     token = '';
-    note = { ok: true, text: '바꿨어요. 열려 있던 세션은 모두 끊겼어요. 다시 로그인해요.' };
+    note = undefined;
+    // 시안: 바꾸면 토스트를 띄우고 로그인으로 간다. 열려 있던 세션은 서버가 모두 끊었다.
+    toast.ok('비밀번호를 바꿨어요', '새 비밀번호로 로그인해요.');
+    await goto('/login');
   };
 </script>
 
-<div class="std">
-  <!-- 시안: 단계마다 제목과 한 줄 설명 하나. 셸은 혼자 서는 화면에 페이지 머리를 그리지 않는다. -->
-  <div class="head">
-    {#if token !== ''}
-      <h1>새 비밀번호 설정</h1>
-      <p>새 비밀번호를 두 번 입력해요.</p>
+<!--
+  시안 Login(lMode reset): 1단계 「비밀번호 재설정」(칸 하나 · 「링크 보내기」), 2단계 「새 비밀번호 설정」(새 비밀번호 · 확인 ·
+  「비밀번호 변경」 · 「← 처음으로」), 카드 밖 「← 로그인으로」. 링크는 메일로 가므로 칸은 아이디가 아니라 계정 이메일이다.
+-->
+{#snippet back()}<a href="/login">← 로그인으로</a>{/snippet}
+{#if token !== ''}
+  <AuthCard title="새 비밀번호 설정" sub="새 비밀번호를 두 번 입력해요." links={back}>
+    <form class="std" novalidate onsubmit={(e) => { e.preventDefault(); void reset(); }}>
+      <AuthField label="새 비밀번호" for="lg-pw" help={PASSWORD_HELP}>
+        <TextInput id="lg-pw" type="password" autocomplete="new-password" mono={false} bind:value={password}
+          invalid={(note !== undefined && !note.ok) || mismatch} oninput={() => { note = undefined; }} />
+      </AuthField>
+      <AuthField label="비밀번호 확인" for="lg-pw2">
+        <TextInput id="lg-pw2" type="password" autocomplete="new-password" mono={false} bind:value={confirm}
+          invalid={(note !== undefined && !note.ok) || mismatch} oninput={() => { note = undefined; }} />
+      </AuthField>
+      {#if note !== undefined && !note.ok}<AuthError>{note.text}</AuthError>{/if}
+      <Button variant="primary" type="submit" loading={busy} style="width: 100%; height: 36px; font-size: 14px">비밀번호 변경</Button>
+      <Button variant="text" onclick={() => { token = ''; note = undefined; history.replaceState(null, '', '/reset'); }} style="width: 100%; height: 28px; color: var(--tx2); font-size: 13px; font-weight: 400">← 처음으로</Button>
+    </form>
+  </AuthCard>
+{:else}
+  <AuthCard title="비밀번호 재설정" sub="계정 이메일을 입력하면 재설정 링크를 보내 줘요." links={back}>
+    {#if note !== undefined && note.ok}
+      <!-- 결과는 언제나 같은 문장이다 — 그 주소에 계정이 있는지 말하지 않는다. -->
+      <p class="sent" role="status">✓ {note.text}</p>
     {:else}
-      <h1>비밀번호 재설정</h1>
-      <p>계정 이메일로 링크를 받아요.</p>
+      <form class="std" novalidate onsubmit={(e) => { e.preventDefault(); void request(); }}>
+        <AuthField label="계정 이메일" for="lg-id">
+          <TextInput id="lg-id" type="email" autocomplete="email" bind:value={email} invalid={note !== undefined} oninput={() => { note = undefined; }} />
+        </AuthField>
+        {#if note !== undefined}<AuthError>{note.text}</AuthError>{/if}
+        <Button variant="primary" type="submit" loading={busy} style="width: 100%; height: 36px; font-size: 14px">링크 보내기</Button>
+      </form>
     {/if}
-  </div>
-  {#if token !== ''}
-    <form class="std" onsubmit={(e) => { e.preventDefault(); void reset(); }}>
-      <FormSection stack>
-        <FormRow label="새 비밀번호" for="rs-pass" help={PASSWORD_HELP}>
-          <TextInput id="rs-pass" type="password" autocomplete="new-password" mono={false} bind:value={password} required />
-        </FormRow>
-        <FormRow label="새 비밀번호 확인" for="rs-conf" error={mismatch ? '비밀번호가 서로 달라요. 같은 값을 두 번 입력해요.' : undefined}>
-          <TextInput id="rs-conf" type="password" autocomplete="new-password" mono={false} bind:value={confirm} invalid={mismatch} required />
-        </FormRow>
-      </FormSection>
-      <Button variant="primary" type="submit" loading={busy} disabled={!matches} style="width: 100%">비밀번호 변경</Button>
-    </form>
-  {:else if note === undefined || !note.ok}
-    <form class="std" onsubmit={(e) => { e.preventDefault(); void request(); }}>
-      <FormSection stack>
-        <FormRow label="계정 이메일" for="rs-mail">
-          <TextInput id="rs-mail" type="email" autocomplete="email" bind:value={email} required />
-        </FormRow>
-      </FormSection>
-      <Button variant="primary" type="submit" loading={busy} style="width: 100%">링크 보내기</Button>
-    </form>
-  {/if}
-  {#if note !== undefined}<Banner tone={note.ok ? 'ok' : 'danger'}>{note.text}</Banner>{/if}
-  <a href="/login">← 로그인으로</a>
-</div>
+  </AuthCard>
+{/if}
 
 <style>
-  .std { display: grid; gap: 12px; }
-  a { color: var(--accent); font: var(--t-small); }
-  .head { display: grid; gap: 4px; }
-  h1 { font: var(--t-title); margin: 0; }
-  .head p { margin: 0; font: var(--t-small); color: var(--tx2); }
+  .std { display: flex; flex-direction: column; gap: 14px; }
+  .sent { margin: 0; font-size: 13px; color: var(--ok); }
 </style>

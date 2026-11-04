@@ -104,20 +104,27 @@
   const recall = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
   let theme = $state<'system' | 'dark' | 'light'>('system');
   let collapsed = $state(false);
-  let menuOpen = $state(false);
+  /**
+   * 1024px 이하에서는 사이드바가 접힌다(시안 App Shell 「레이아웃 규칙」). 좁아질 때 접기만 하고, 사람이 펼치면 그대로 둔다.
+   * 좁은 화면에서 바꾼 것은 기억하지 않는다 — 넓은 화면의 선택이 남는다.
+   */
+  let slim = $state(false);
   onMount(() => {
     const t = recall('bary.theme');
     if (t === 'dark' || t === 'light' || t === 'system') theme = t;
     collapsed = recall('bary.sidebar') === 'collapsed';
+    const mq = window.matchMedia('(max-width: 1024px)');
+    const fit = (): void => { slim = mq.matches; if (slim) collapsed = true; else collapsed = recall('bary.sidebar') === 'collapsed'; };
+    fit();
+    mq.addEventListener('change', fit);
+    return () => { mq.removeEventListener('change', fit); };
   });
   $effect(() => {
     if (theme === 'system') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', theme);
     remember('bary.theme', theme);
   });
-  $effect(() => { remember('bary.sidebar', collapsed ? 'collapsed' : 'open'); });
-  // 좁은 화면에서 메뉴를 눌러 옮기면 사이드바를 닫는다.
-  $effect(() => { void page.url.pathname; menuOpen = false; });
+  $effect(() => { const c = collapsed; if (!untrack(() => slim)) remember('bary.sidebar', c ? 'collapsed' : 'open'); });
 
   /**
    * 실시간 연결 — 붙어 있으면 수신 중, 자격은 있는데 끊겼으면 재연결 중, 자격이 없으면 끊김.
@@ -257,9 +264,14 @@
   let dismissedAt = $state(-1);
   const showPending = $derived(pendingTotal > 0 && dismissedAt !== pendingTotal && place !== 'impact');
 
+  /**
+   * 사이드바 브랜드 아래 한 줄(시안 `regionLabel`) — 지역 인스턴스면 「<지역> · 이 인스턴스」, 전체 합산이면 「전역 · 전체 지역 합산」.
+   * 좁혀 보면 「전역 · <지역>」 이다 — 그 지역 인스턴스가 아니라 전역이 그 지역으로 중계한다(시안은 지역으로 옮겨 간다).
+   * 노드 이름은 상단 바의 노드 칩이 말한다.
+   */
   const regionLabel = $derived(scope.mode === 'global'
     ? `전역 · ${scope.region?.name ?? '전체 지역 합산'}`
-    : [scope.self, node].filter((x) => x !== undefined).join(' · ') || '이 인스턴스');
+    : scope.self === undefined ? '이 인스턴스' : `${scope.self} · 이 인스턴스`);
   /** 브레드크럼 첫 칸은 보는 범위다 — 전역이면 「전역」, 아니면 「지역」(시안). 그 뒤는 `crumbsOf` 그대로다. */
   const crumbs = $derived([
     scope.mode === 'global' ? { label: '전역', href: '/regions' } : { label: '지역' },
@@ -270,48 +282,49 @@
 </script>
 
 {#if standalone}
+  <!-- 시안 Login: 가운데 400px 기둥 — 로고 줄 · 카드(화면이 `AuthCard` 로 그린다) · 아래 링크 줄. -->
   <main class="solo">
-    <div class="solo-brand"><span class="logo" aria-hidden="true">b</span>barycenter</div>
-    <div class="solo-card">
-      <!-- 혼자 서는 화면은 페이지 머리를 그리지 않는다 — 단계마다 화면이 제목과 한 줄 설명을 그린다(시안 lTitle · lSub). -->
+    <div class="solo-col">
+      <div class="solo-brand"><span class="solo-logo" aria-hidden="true">b</span><span>barycenter</span></div>
       {#if logoutNote !== undefined}<Banner tone="danger">{logoutNote}</Banner>{/if}
       {@render children()}
     </div>
   </main>
 {:else}
-  <div class="app" data-menu={menuOpen}>
+  <div class="app">
     <div class="side">
       <Sidebar {place} bind:collapsed pending={pendingTotal} global={scope.mode === 'global'} {regionLabel}
         regionHref={scope.mode === 'global' ? '/regions' : undefined} regions={sideRegions} chosen={scope.region?.name} onpick={pickRegion} onwiden={widen} />
     </div>
-    {#if menuOpen}<button type="button" class="scrim" aria-label="메뉴 닫기" onclick={() => { menuOpen = false; }}></button>{/if}
     <div class="main">
-      <TopBar {crumbs} {node} head={aggregateOn ? undefined : desk.head} {conn} pending={pendingTotal}
-        user={session.me?.username} role={session.me?.role} mfa={session.me?.mfa.totp} bind:theme bind:menuOpen onlogout={() => { void logout(); }} ondisconnect={disconnect} />
+      <TopBar {crumbs} monoLast={detail} {node} {standby} head={aggregateOn ? undefined : desk.head} {conn} pending={pendingTotal}
+        user={session.me?.username} role={session.me?.role} mfa={session.me?.mfa.totp} bind:theme onlogout={() => { void logout(); }} ondisconnect={disconnect} />
+      <!-- 배너 줄 — 시안 Pending banner 의 모양(상단 바 바로 아래 한 줄, 아래 테두리). 좁혀 보기 · 연결 끊김 줄은 시안에 없는 기능이라 같은 모양으로 둔다. -->
       {#if scope.mode === 'global' && scope.region !== undefined}
-        <div class="strip">
-          <Banner tone="info" icon="◎">
-            전역 화면에서 <b>{scope.region.name}</b> 만 좁혀 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.
-            {#snippet action()}<button type="button" class="banner-action" onclick={widen}>전체 합산으로</button>{/snippet}
-          </Banner>
+        <div class="bn" data-tone="info" role="status">
+          <span class="bi" aria-hidden="true">◎</span>
+          <span class="bt">전역 화면에서 <b>{scope.region.name}</b> 만 좁혀 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.</span>
+          <button type="button" class="ba" onclick={widen}>전체 합산으로</button>
         </div>
       {/if}
       {#if showPending}
-        <div class="strip">
-          <Banner tone="pending" ondismiss={() => { dismissedAt = pendingTotal; }}>
-            적용 대기 중인 변경이 <b>{pendingTotal}건</b> 있어요.
-            {#snippet action()}<a class="banner-action" href="/change/pending">영향 확인</a>{/snippet}
-          </Banner>
+        <div class="bn" data-tone="pending" role="status">
+          <span class="bi" aria-hidden="true">◐</span>
+          <span class="bt">적용 대기 중인 변경이 <b>{pendingTotal}건</b> 있어요.</span>
+          <a class="ba" href="/change/pending">영향 확인</a>
+          <button type="button" class="bx" aria-label="배너 닫기" onclick={() => { dismissedAt = pendingTotal; }}>✕</button>
         </div>
       {/if}
       {#if conn === 'reconnecting' && ready}
-        <div class="strip"><Banner tone="danger">실시간 연결이 끊겼어요. 헬스가 최신이 아닐 수 있어요. 다시 연결하는 중이에요.</Banner></div>
+        <div class="bn" data-tone="danger" role="alert">
+          <span class="bi" aria-hidden="true">✕</span>
+          <span class="bt">실시간 연결이 끊겼어요. 헬스가 최신이 아닐 수 있어요. 다시 연결하는 중이에요.</span>
+        </div>
       {:else if stalled && ready}
-        <div class="strip">
-          <Banner tone="danger">
-            실시간 연결이 끊겼어요. 헬스가 최신이 아닐 수 있어요.
-            {#snippet action()}<button type="button" class="banner-action" onclick={() => { void desk.connect(); }}>다시 연결해요</button>{/snippet}
-          </Banner>
+        <div class="bn" data-tone="danger" role="alert">
+          <span class="bi" aria-hidden="true">✕</span>
+          <span class="bt">실시간 연결이 끊겼어요. 헬스가 최신이 아닐 수 있어요.</span>
+          <button type="button" class="ba" onclick={() => { void desk.connect(); }}>다시 연결해요</button>
         </div>
       {/if}
       <main class="content">
@@ -329,24 +342,38 @@
   .app { display: flex; min-height: 100vh; }
   .side { flex: none; }
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .strip { padding: 8px 20px 0; }
-  .content { flex: 1; min-width: 0; padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 16px; }
-  .scrim { display: none; }
+  /* 시안 Content: padding 20px 24px · 세로 간격 16 */
+  .content { flex: 1; min-width: 0; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
 
-  .solo { min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 48px 16px; gap: 20px; }
-  .solo-brand { display: flex; align-items: center; gap: 10px; font: 700 16px/1 var(--font); }
-  .logo { width: 28px; height: 28px; border-radius: var(--r-md); background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font: 700 14px/1 var(--font); }
-  .solo-card {
-    width: 100%; max-width: 440px; background: var(--bg-panel); border: 1px solid var(--bd); border-radius: var(--r-lg);
-    padding: 24px; display: flex; flex-direction: column; gap: 16px;
+  /* 시안 Pending banner: 한 줄 · 아래 테두리 · 둥근 모서리 없음 */
+  .bn {
+    --c: var(--pending); --cb: var(--pending-bg);
+    flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 20px;
+    background: var(--cb); border-bottom: 1px solid var(--c); font-size: 13px;
+  }
+  .bn[data-tone='info'] { --c: var(--info); --cb: var(--info-bg); }
+  .bn[data-tone='danger'] { --c: var(--danger); --cb: var(--danger-bg); }
+  .bi { color: var(--c); font-weight: 700; }
+  .bt { flex: 1; min-width: 0; }
+  .ba {
+    height: 24px; padding: 0 10px; display: inline-flex; align-items: center; border: 1px solid var(--c); background: transparent;
+    color: var(--c); border-radius: var(--r-sm); font-weight: 600; font-size: 12px; text-decoration: none; white-space: nowrap;
+  }
+  .ba:hover { color: var(--c); text-decoration: none; background-image: linear-gradient(var(--hov), var(--hov)); }
+  .bx { border: 0; background: transparent; color: var(--tx3); padding: 2px 4px; }
+  .bx:hover { background-image: linear-gradient(var(--hov), var(--hov)); }
+
+  /* 시안 Login: place-items center · padding 24 · 기둥 400px · 간격 20 */
+  .solo { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--bg-page); }
+  .solo-col { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 20px; }
+  .solo-brand { display: flex; align-items: center; gap: 10px; justify-content: center; font-weight: 700; font-size: 20px; letter-spacing: -.2px; }
+  .solo-logo {
+    width: 32px; height: 32px; border-radius: var(--r-md); background: var(--accent); color: var(--accent-fg);
+    display: grid; place-items: center; font-weight: 700; font-size: 16px; letter-spacing: 0;
   }
 
-  /* 좁은 화면 — 사이드바는 메뉴 버튼으로 덮어 연다 */
   @media (max-width: 860px) {
-    .side { position: fixed; inset: 0 auto 0 0; z-index: var(--z-drawer); transform: translateX(-100%); transition: transform var(--dur) var(--ease); }
-    .app[data-menu='true'] .side { transform: none; }
-    .scrim { display: block; position: fixed; inset: 0; z-index: calc(var(--z-drawer) - 1); background: rgba(0, 0, 0, .4); border: 0; }
     .content { padding: 16px 16px 40px; }
-    .strip { padding: 8px 16px 0; }
+    .bn { padding: 8px 16px; }
   }
 </style>

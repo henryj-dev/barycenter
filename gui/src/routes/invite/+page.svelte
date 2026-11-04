@@ -11,7 +11,10 @@
   import { PASSWORD_HELP, ROLE_LABEL } from '#lib/account/text';
   import TotpSetup from '#lib/account/TotpSetup.svelte';
   import RecoveryCodes from '#lib/account/RecoveryCodes.svelte';
-  import { Badge, Banner, Button, FormRow, FormSection, Spinner, TextInput } from '#lib/ui';
+  import { Button, Spinner, TextInput } from '#lib/ui';
+  import AuthCard from '#lib/shell/AuthCard.svelte';
+  import AuthField from '#lib/shell/AuthField.svelte';
+  import AuthError from '#lib/shell/AuthError.svelte';
 
   let token = $state('');
   let preview = $state<LinkPreview | undefined>();
@@ -28,6 +31,8 @@
   const isRecovery = $derived(preview?.kind === 'recovery');
   const passwordsMatch = $derived(password !== '' && password === confirm);
   const mismatch = $derived(confirm !== '' && !passwordsMatch);
+  /** 화면이 막은 까닭(시안: 「✕ …」 한 줄). 서버가 거절한 문장은 `error` 다. */
+  let local = $state<string | undefined>();
 
   onMount(async () => {
     token = location.hash.replace(/^#/, '');
@@ -39,12 +44,17 @@
   const needsTotp = $derived(preview?.totp !== undefined);
   /** 첫 단계의 버튼 — 인증 앱이 필요하면 다음 단계로, 아니면 바로 보낸다. */
   const next = (): void => {
-    if (!passwordsMatch) return;
+    local = !isRecovery && username.trim() === '' ? '아이디를 입력해요.'
+      : password === '' ? '비밀번호를 입력해요.'
+      : !passwordsMatch ? '비밀번호가 서로 달라요. 같은 값을 두 번 입력해요.' : undefined;
+    if (local !== undefined) return;
     if (needsTotp && step === 'password') { error = undefined; step = 'totp'; return; }
     void submit();
   };
   const submit = async (): Promise<void> => {
     if (preview === undefined || !passwordsMatch) return;
+    if (step === 'totp' && code.trim() === '') { local = '숫자 6자리를 입력해요.'; return; }
+    local = undefined;
     busy = true;
     error = undefined;
     const r = await accountApi.acceptLink({
@@ -62,63 +72,71 @@
   };
 </script>
 
-<div class="std">
-  {#if done !== undefined}
-    <h1>{isRecovery ? '다시 설정했어요' : '계정을 만들었어요'}</h1>
+<!--
+  시안 Login(lMode invite): 1단계 「초대 수락 · 비밀번호를 설정해요.」(초대한 계정 상자 · 새 비밀번호 · 확인 · 「계속」),
+  2단계 「인증 앱 등록」(QR 상자 · 인증 코드 · 「수락」 · 「← 처음으로」), 카드 밖 「← 로그인으로」.
+  아이디 칸 · 첫 관리자 · 복구 링크 · 끝난 뒤의 복구 코드는 시안에 없는 기능이라 같은 모양으로 둔다.
+-->
+{#snippet back()}<a href="/login">← 로그인으로</a>{/snippet}
+{#if done !== undefined}
+  <AuthCard title={isRecovery ? '다시 설정했어요' : '계정을 만들었어요'} sub="새 비밀번호로 로그인해요." links={back}>
     {#if done.recoveryCodes !== undefined}<RecoveryCodes codes={done.recoveryCodes} />{/if}
-    <p class="lead">새 비밀번호로 로그인해요.</p>
-    <div><Button variant="primary" href="/login">로그인하러 가기</Button></div>
-  {:else if preview !== undefined}
-    <h1>
-      {#if step === 'totp'}인증 앱 등록
-      {:else if preview.kind === 'bootstrap'}첫 관리자 계정 만들기
-      {:else if isRecovery}계정 다시 설정하기
-      {:else}초대받은 계정 만들기{/if}
-    </h1>
-    <p class="lead">
-      {#if step === 'totp'}인증 앱으로 QR 코드를 찍고, 나온 6자리 코드를 입력해요.
-      {:else if preview.kind === 'bootstrap'}이 설치의 첫 관리자 계정을 만들어요.
-      {:else if isRecovery}<b>{preview.username}</b> 계정의 비밀번호{preview.needsTotp ? '와 인증 앱' : ''}을 다시 정해요.
-      {:else}초대한 계정{#if preview.email !== null} <b>{preview.email}</b>{/if} · <Badge tone="accent" icon={null}>{ROLE_LABEL[preview.role] ?? preview.role}</Badge> 비밀번호를 설정해요.{/if}
-    </p>
+    <div class="full"><Button variant="primary" href="/login">로그인하러 가기</Button></div>
+  </AuthCard>
+{:else if preview !== undefined}
+  <AuthCard links={back}
+    title={step === 'totp' ? '인증 앱 등록' : preview.kind === 'bootstrap' ? '첫 관리자 계정 만들기' : isRecovery ? '계정 다시 설정하기' : '초대 수락'}
+    sub={step === 'totp' ? '인증 앱에 이 계정을 더하고 앱의 6자리 코드를 입력해요.'
+      : preview.kind === 'bootstrap' ? '이 설치의 첫 관리자 계정을 만들어요.'
+      : isRecovery ? `${preview.username} 계정의 비밀번호${preview.needsTotp ? '와 인증 앱' : ''}을 다시 정해요.`
+      : '비밀번호를 설정해요.'}>
     {#if step === 'password'}
-      <form class="std" onsubmit={(e) => { e.preventDefault(); next(); }}>
-        <FormSection stack>
-          {#if !isRecovery}
-            <FormRow label="아이디" for="iv-user" help="영소문자 · 숫자 · . _ - 를 써요. 만든 뒤에는 바꿀 수 없어요.">
-              <TextInput id="iv-user" autocomplete="username" bind:value={username} required />
-            </FormRow>
-          {/if}
-          <FormRow label="비밀번호" for="iv-pass" help={PASSWORD_HELP}>
-            <TextInput id="iv-pass" type="password" autocomplete="new-password" mono={false} bind:value={password} required />
-          </FormRow>
-          <FormRow label="비밀번호 확인" for="iv-conf" error={mismatch ? '비밀번호가 서로 달라요. 같은 값을 두 번 입력해요.' : undefined}>
-            <TextInput id="iv-conf" type="password" autocomplete="new-password" mono={false} bind:value={confirm} invalid={mismatch} required />
-          </FormRow>
-        </FormSection>
-        <Button variant="primary" type="submit" loading={busy} disabled={!passwordsMatch} style="width: 100%">{needsTotp ? '계속' : isRecovery ? '다시 설정' : '수락'}</Button>
-        {#if error !== undefined}<Banner tone="danger">{error}</Banner>{/if}
+      <form class="std" novalidate onsubmit={(e) => { e.preventDefault(); next(); }}>
+        {#if preview.kind === 'invite'}
+          <div class="who"><span class="mute">초대한 계정</span> <b>{preview.email ?? '이메일 없음'}</b> <span class="mute">· {ROLE_LABEL[preview.role] ?? preview.role}</span></div>
+        {/if}
+        {#if !isRecovery}
+          <AuthField label="아이디" for="lg-id" help="영소문자 · 숫자 · . _ - 를 써요. 만든 뒤에는 바꿀 수 없어요.">
+            <TextInput id="lg-id" autocomplete="username" bind:value={username} invalid={local === '아이디를 입력해요.'} oninput={() => { local = undefined; }} />
+          </AuthField>
+        {/if}
+        <AuthField label="새 비밀번호" for="lg-pw" help={PASSWORD_HELP}>
+          <TextInput id="lg-pw" type="password" autocomplete="new-password" mono={false} bind:value={password}
+            invalid={(local !== undefined && local !== '아이디를 입력해요.') || mismatch} oninput={() => { local = undefined; }} />
+        </AuthField>
+        <AuthField label="비밀번호 확인" for="lg-pw2">
+          <TextInput id="lg-pw2" type="password" autocomplete="new-password" mono={false} bind:value={confirm}
+            invalid={(local !== undefined && local !== '아이디를 입력해요.') || mismatch} oninput={() => { local = undefined; }} />
+        </AuthField>
+        {#if local !== undefined}<AuthError>{local}</AuthError>{:else if error !== undefined}<AuthError>{error}</AuthError>{/if}
+        <Button variant="primary" type="submit" loading={busy} style="width: 100%; height: 36px; font-size: 14px">{needsTotp ? '계속' : isRecovery ? '다시 설정' : '수락'}</Button>
       </form>
     {:else if preview.totp !== undefined}
-      <form class="std" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
+      <form class="std" novalidate onsubmit={(e) => { e.preventDefault(); void submit(); }}>
         <TotpSetup secret={preview.totp.secret} uri={preview.totp.uri} bind:code />
-        <Button variant="primary" type="submit" loading={busy} disabled={code.trim() === ''} style="width: 100%">{isRecovery ? '다시 설정' : '수락'}</Button>
-        <Button variant="text" onclick={() => { step = 'password'; error = undefined; }}>← 비밀번호로</Button>
-        {#if error !== undefined}<Banner tone="danger">{error}</Banner>{/if}
+        {#if local !== undefined}<AuthError>{local}</AuthError>{:else if error !== undefined}<AuthError>{error}</AuthError>{/if}
+        <Button variant="primary" type="submit" loading={busy} style="width: 100%; height: 36px; font-size: 14px">{isRecovery ? '다시 설정' : '수락'}</Button>
+        <Button variant="text" onclick={() => { step = 'password'; error = undefined; local = undefined; }} style="width: 100%; height: 28px; color: var(--tx2); font-size: 13px; font-weight: 400">← 처음으로</Button>
       </form>
     {/if}
-  {:else if error !== undefined}
-    <h1>링크를 쓸 수 없어요</h1>
-    <Banner tone="danger">{error}</Banner>
-  {:else}
+  </AuthCard>
+{:else if error !== undefined}
+  <AuthCard title="링크를 쓸 수 없어요" links={back}>
+    <AuthError>{error}</AuthError>
+  </AuthCard>
+{:else}
+  <AuthCard title="초대 수락" links={back}>
     <p class="wait"><Spinner /> 링크를 확인하는 중이에요.</p>
-  {/if}
-</div>
+  </AuthCard>
+{/if}
 
 <style>
-  .std { display: grid; gap: 12px; }
-  h1 { font: var(--t-title); margin: 0; }
-  .lead { margin: 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font: var(--t-body); color: var(--tx2); }
-  .lead b { color: var(--tx); }
-  .wait { margin: 0; display: flex; gap: 8px; align-items: center; font: var(--t-small); color: var(--tx2); }
+  /* 링크 버튼(href)에는 style 이 안 붙는다 — 감싸서 시안의 36px 전체 폭 버튼으로 맞춘다. */
+  .full { display: flex; }
+  .full :global(.btn) { flex: 1; height: 36px; font-size: 14px; }
+  .std { display: flex; flex-direction: column; gap: 14px; }
+  .who { padding: 8px 10px; background: var(--bg-page); border: 1px solid var(--bd); border-radius: var(--r-md); font-size: 13px; }
+  .who b { font-family: var(--mono); }
+  .mute { color: var(--tx3); }
+  .wait { margin: 0; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--tx2); }
 </style>

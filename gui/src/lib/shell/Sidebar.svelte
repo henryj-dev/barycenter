@@ -61,13 +61,13 @@
     <div class="regions" role="group" aria-label="지역">
       <a class="rh" href={regionHref} aria-current={place === 'regions' ? 'page' : undefined}>지역 · {regions.length}곳</a>
       <div class="rl">
-        <button type="button" class="rg" aria-current={aggregate ? 'true' : undefined} title="모든 지역을 합쳐서 봐요"
+        <button type="button" class="rg" aria-current={aggregate ? 'true' : undefined} title="전역 지역으로 이동"
           onclick={() => { if (!aggregate) onwiden?.(); }}>
           <span style:color="var(--info)" aria-hidden="true">◎</span><span class="rn">전역</span><span class="rv">전체 합산</span>
         </button>
         {#each regions as r (r.name)}
           <button type="button" class="rg" aria-current={r.current ? 'true' : undefined} disabled={!r.pickable && !r.current}
-            title={r.pickable || r.current ? `${r.name} 지역만 보기` : `${r.name} — ${r.text}`}
+            title={r.pickable || r.current ? `${r.name} 지역으로 이동` : `${r.name} — ${r.text}`}
             onclick={() => { if (!r.current && r.pickable) onpick?.(r.name); }}>
             <span style:color="var(--{r.tone})" aria-hidden="true">{r.icon}</span><span class="rn">{r.name}</span><span class="rv">{r.text}</span>
           </button>
@@ -88,52 +88,60 @@
 </aside>
 
 <style>
+  /* 값은 시안(Console 셸 · App Shell)의 인라인 style 그대로다. */
   .sb {
     flex: none; width: 240px; background: var(--bg-panel); border-right: 1px solid var(--bd);
     display: flex; flex-direction: column; transition: width var(--dur) var(--ease); overflow: hidden; height: 100vh; position: sticky; top: 0;
   }
   .sb[data-collapsed='true'] { width: 56px; }
   .brand { height: 52px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--bd); }
-  .logo { flex: none; width: 28px; height: 28px; border-radius: var(--r-md); background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font: 700 14px/1 var(--font); }
-  .name { min-width: 0; font: 700 14px/18px var(--font); }
-  .region { font: 400 11px/14px var(--mono); color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px; }
+  .logo { flex: none; width: 28px; height: 28px; border-radius: var(--r-md); background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+  .name { min-width: 0; }
+  .name > div:first-child { font-weight: 700; font-size: 14px; line-height: 18px; }
+  .region { font-family: var(--mono); font-size: 11px; color: var(--tx3); line-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 8px; }
   .group { margin-bottom: 8px; }
-  .gt { padding: 8px 10px 4px; font: 600 11px/14px var(--font); letter-spacing: .5px; color: var(--tx3); }
+  .gt { padding: 8px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .5px; color: var(--tx3); }
   .rule { height: 1px; background: var(--bd); margin: 6px 8px; }
   .item {
-    width: 100%; height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border-radius: var(--r-md);
-    color: var(--tx2); font: 400 13px/1 var(--font); text-decoration: none; position: relative;
+    width: 100%; height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 10px; justify-content: flex-start;
+    border: 0; border-radius: var(--r-md); background: transparent; color: var(--tx2); font-size: 13px; font-weight: 400;
+    position: relative; box-shadow: none; text-decoration: none; white-space: nowrap;
+    transition: background-color var(--dur-fast) var(--ease), filter var(--dur-fast) var(--ease);
   }
   .sb[data-collapsed='true'] .item { justify-content: center; padding: 0; }
-  .item:hover { background: var(--bg-hover); color: var(--tx); text-decoration: none; }
-  .item[aria-current='page'] { background: var(--bg-sel); color: var(--tx); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
+  /* 시안의 버튼 hover — 배경 위에 얇은 막(--hov)을 덮는다. 글자색은 그대로다. */
+  .item:hover { background-image: linear-gradient(var(--hov), var(--hov)); color: var(--tx2); text-decoration: none; }
+  .item:active { filter: brightness(.9); }
+  .item[aria-current='page'] { background-color: var(--bg-sel); color: var(--tx); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
   .ic { flex: none; width: 18px; text-align: center; font-size: 14px; color: var(--tx3); }
   .item[aria-current='page'] .ic { color: var(--accent); }
-  .lb { flex: 1; text-align: left; white-space: nowrap; }
+  .lb { flex: 1; text-align: left; }
   .badge {
-    min-width: 20px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--pending); color: var(--accent-fg);
-    font: 700 11px/18px var(--font); text-align: center;
+    display: block; min-width: 20px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--pending); color: var(--accent-fg);
+    font-size: 11px; font-weight: 700; line-height: 18px; position: static;
   }
-  /* 접으면 아이콘 오른쪽 위 모서리에 작게 — 아이콘을 덮지 않는다 */
-  .sb[data-collapsed='true'] .badge { position: absolute; right: 0; top: 0; min-width: 14px; height: 14px; padding: 0 3px; font-size: 9px; line-height: 14px; }
+  /* 접으면 아이콘 오른쪽 위(2px · 2px) — 크기는 그대로다 */
+  .sb[data-collapsed='true'] .badge { position: absolute; right: 2px; top: 2px; }
   .regions { flex: none; padding: 8px; border-top: 1px solid var(--bd); }
   .regions:not(.mini) { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
-  .rh { font: 400 11px/14px var(--font); color: var(--tx3); text-decoration: none; }
-  .rh:hover, .rh[aria-current='page'] { color: var(--tx); }
+  .rh { font-size: 11px; color: var(--tx3); text-decoration: none; }
+  .rh:hover, .rh[aria-current='page'] { color: var(--tx); text-decoration: none; }
   .rl { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; }
   .rg {
-    width: 100%; display: flex; align-items: center; gap: 8px; font: 400 12px/16px var(--mono); color: var(--tx2);
-    border: 0; background: transparent; padding: 5px 6px; border-radius: var(--r-sm); text-align: left; cursor: pointer;
+    width: 100%; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--tx2); font-weight: 400;
+    border: 0; background: transparent; padding: 5px 6px; border-radius: var(--r-sm); text-align: left; box-shadow: none; white-space: nowrap;
   }
   .rg:hover:not(:disabled) { background: var(--bg-hover); color: var(--tx); }
   .rg[aria-current='true'] { color: var(--tx); font-weight: 700; background: var(--bg-sel); box-shadow: inset 3px 0 0 var(--accent); cursor: default; }
   .rg:disabled { cursor: not-allowed; }
-  .rn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rv { font: 400 11px/14px var(--font); color: var(--tx3); white-space: nowrap; }
-  .ro { font: var(--t-cap); color: var(--tx3); }
-  .foot { flex: none; border-top: 1px solid var(--bd); padding: 8px; display: flex; align-items: center; gap: 8px; }
+  .rn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .rv { font-size: 11px; color: var(--tx3); }
+  .ro { font-size: 12px; line-height: 16px; color: var(--tx3); }
+  .foot { flex: none; border-top: 1px solid var(--bd); padding: 8px; display: flex; align-items: center; gap: 8px; justify-content: flex-start; }
   .sb[data-collapsed='true'] .foot { justify-content: center; }
   .foot button { width: 32px; height: 32px; border: 1px solid var(--bd-strong); background: transparent; color: var(--tx2); border-radius: var(--r-md); font-size: 13px; }
-  .foot span { font: var(--t-cap); color: var(--tx3); }
+  .foot button:hover { background-image: linear-gradient(var(--hov), var(--hov)); }
+  .foot button:active { filter: brightness(.9); }
+  .foot span { font-size: 12px; color: var(--tx3); }
 </style>
