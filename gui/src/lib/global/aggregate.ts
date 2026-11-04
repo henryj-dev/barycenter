@@ -22,7 +22,9 @@ export const REGION_PARAM = 'region';
  * 전체 합산으로 그리는 화면(주소 그대로, 목록만). 여기 없는 자리는 합산에서 지역 고르기(`/regions`)로 보낸다 —
  * 아직 지역 하나만 그릴 줄 아는 화면이 빈 화면을 보이지 않게. **화면을 바꾼 에이전트가 여기에 주소를 더한다.**
  */
-export const AGGREGATE_PATHS: readonly string[] = ['/traffic/listener', '/traffic/backend', '/tls/certificate', '/tls/policy', '/tls/sni'];
+export const AGGREGATE_PATHS: readonly string[] = ['/traffic/listener', '/traffic/backend',
+  '/traffic/pool', '/traffic/address-set', '/traffic/route/http', '/traffic/route/passthrough',
+  '/tls/certificate', '/tls/policy', '/tls/sni'];
 
 /** 이 주소가 합산 화면인가. 끝의 `/` 는 무시한다. 상세(`/traffic/listener/<key>`) · 만들기(`/new`)는 아니다. */
 export const isAggregatePath = (pathname: string): boolean =>
