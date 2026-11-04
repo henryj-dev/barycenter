@@ -17,9 +17,12 @@
   let step = $state<'password' | 'mfa'>('password');
   /** 메일이 켜진 배포에서만 「비밀번호를 잊었다」를 그린다. */
   let mailOn = $state(false);
+  /** OIDC 가 설정된 배포에서만 「IdP로 로그인해요」 를 그린다 — 누르고 나서 「설정되지 않았어요」 를 보이지 않게. */
+  let ssoOn = $state(false);
   onMount(async () => {
     const f = await accountApi.features();
     mailOn = f.ok && f.data.mail;
+    ssoOn = f.ok && f.data.sso;
   });
 
   const signedIn = async (): Promise<void> => {
@@ -38,12 +41,12 @@
     try {
       const r = await fetch('/api/v1/oidc/authorization-request');
       if (!r.ok) {
-        startError = r.status === 404 ? 'OIDC 가 설정되지 않았다' : `authorize ${r.status}`;
+        startError = r.status === 404 ? 'OIDC가 설정되지 않았어요.' : `authorize ${r.status}`;
         return;
       }
       const body = (await r.json()) as { url?: unknown; state?: unknown };
       if (typeof body.url !== 'string' || typeof body.state !== 'string') {
-        startError = 'authorize 응답이 아니다';
+        startError = 'authorize 응답이 아니에요.';
         return;
       }
       window.location.assign(body.url);
@@ -56,7 +59,7 @@
 
   const exchange = async (code: string, state: string): Promise<void> => {
     if (state === '') {
-      startError = 'state 가 없다';
+      startError = 'state가 없어요. 다시 로그인해요.';
       return;
     }
     exchanging = true;
@@ -112,7 +115,7 @@
       const r = await fetch('/api/v1/regions', { headers: { authorization: `Bearer ${desk.token}` } });
       tokenBusy = false;
       if (r.ok) { tokenInput = ''; await goto('/regions'); return; }
-      tokenError = r.status === 401 ? '토큰이 거절됐다' : `regions ${r.status}`;
+      tokenError = r.status === 401 ? '토큰이 거절됐어요.' : `regions ${r.status}`;
       desk.token = '';
       return;
     }
@@ -128,7 +131,7 @@
 <section>
   <!-- 시안: 단계마다 제목과 한 줄 설명. 둘째 단계는 인증 코드만 받는다. -->
   <div class="head">
-    <h2>{step === 'password' ? '계정으로 로그인' : '2단계 인증'}</h2>
+    <h1>{step === 'password' ? '로그인' : '2단계 인증'}</h1>
     <p>{step === 'password' ? '계정으로 콘솔에 로그인해요.' : '인증 앱의 6자리 코드를 입력해요.'}</p>
   </div>
   {#if step === 'password'}
@@ -139,12 +142,15 @@
   {#if mailOn && step === 'password'}<p><a href="/reset">비밀번호 찾기</a></p>{/if}
 </section>
 
+<!-- SSO 콜백을 받는 중이거나 그 오류는 OIDC 설정과 상관없이 보인다. -->
+{#if ssoOn || exchanging || startError !== undefined}
 <section>
   <h2>SSO</h2>
   <div><Button onclick={() => { void startLogin(); }} disabled={starting || exchanging} loading={starting || exchanging}>IdP로 로그인해요</Button></div>
   <p>계정이 없으면 관리자에게 초대를 받아요. 공개 가입은 없어요.</p>
   {#if startError !== undefined}<FieldMessage tone="error">{startError}</FieldMessage>{/if}
 </section>
+{/if}
 
 <section>
   <h2>토큰으로 연결</h2>
@@ -159,6 +165,7 @@
 <style>
   section { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--bd); }
   section:first-of-type { padding-top: 0; border-top: 0; }
+  h1 { font: var(--t-title); margin: 0; }
   h2 { font: var(--t-h); margin: 0; }
   .head { display: grid; gap: 4px; }
   p { margin: 0; color: var(--tx2); font: var(--t-small); }

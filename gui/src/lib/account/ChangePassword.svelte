@@ -2,7 +2,7 @@
   /**
    * 비밀번호 바꾸기. 바꾸면 이 기기 말고 다른 세션은 모두 끊긴다(서버).
    * 시안: 현재 · 새 · 새 확인 세 칸, 칸 아래 오류. 확인 칸은 화면만 본다(오타를 막는다) — 서버에는 전과 같이 둘만 간다.
-   * 규칙(길이 · 종류)은 서버가 진다. 서버가 거절한 문장은 그대로 보인다.
+   * 규칙(길이 · 종류)은 서버가 진다. 서버가 거절한 문장은 그대로 보인다. 성공은 토스트만 띄운다(시안).
    */
   import { Button, Card, FieldMessage, Form, FormRow, FormSection, TextInput, toast } from '#lib/ui';
   import { accountApi } from './api';
@@ -24,8 +24,8 @@
     current = '';
     next = '';
     again = '';
-    note = r.ok ? { ok: true, text: '바꿨어요. 이 기기 말고 다른 세션은 모두 끊겼어요.' } : { ok: false, text: r.message };
-    if (r.ok) toast.ok('비밀번호를 바꿨어요', '다른 세션은 로그아웃했어요.');
+    note = r.ok ? undefined : { ok: false, text: r.message };
+    if (r.ok) toast.ok('비밀번호를 바꿨어요', '이 기기 말고 다른 세션은 모두 로그아웃했어요.');
   };
 </script>
 

@@ -188,4 +188,16 @@ describe('경계', () => {
     expect((await post('/api/v1/invitations', { role: 'auditor' }, { cookie })).status).toBe(403);
     expect((await post('/api/v1/invitations/accept', { token: 'guess', username: 'x', password: 'whatever-pass1' })).status).toBe(404);
   });
+
+  it('초대 다시 보내기는 admin 만 — 새 링크는 응답에 한 번, 옛 링크는 죽는다', async () => {
+    const inv = await accounts.invite({ role: 'auditor' }, 'test');
+    const { cookie } = await operator();
+    expect((await post(`/api/v1/invitations/${inv.id}/resend`, {}, { cookie })).status).toBe(403);
+    const r = await post(`/api/v1/invitations/${inv.id}/resend`, {}, { authorization: `Bearer ${TOKEN}` });
+    expect(r.status).toBe(200);
+    const body = await r.json() as { id: string; token: string; mailed: boolean };
+    expect(body).toMatchObject({ id: inv.id, mailed: false });
+    expect((await post('/api/v1/invitations/preview', { token: inv.token })).status).toBe(404);
+    expect((await post('/api/v1/invitations/preview', { token: body.token })).status).toBe(200);
+  });
 });

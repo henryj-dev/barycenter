@@ -130,7 +130,7 @@
   <main class="solo">
     <div class="solo-brand"><span class="logo" aria-hidden="true">b</span>barycenter</div>
     <div class="solo-card">
-      <PageHeader title={meta.title} desc={meta.desc} />
+      <!-- 혼자 서는 화면은 페이지 머리를 그리지 않는다 — 단계마다 화면이 제목과 한 줄 설명을 그린다(시안 lTitle · lSub). -->
       {#if logoutNote !== undefined}<Banner tone="danger">{logoutNote}</Banner>{/if}
       {@render children()}
     </div>
@@ -144,7 +144,7 @@
     {#if menuOpen}<button type="button" class="scrim" aria-label="메뉴 닫기" onclick={() => { menuOpen = false; }}></button>{/if}
     <div class="main">
       <TopBar {crumbs} {node} head={desk.head} {conn} pending={desk.pendingCount}
-        user={session.me?.username} role={session.me?.role} bind:theme bind:menuOpen onlogout={() => { void logout(); }} ondisconnect={disconnect} />
+        user={session.me?.username} role={session.me?.role} mfa={session.me?.mfa.totp} bind:theme bind:menuOpen onlogout={() => { void logout(); }} ondisconnect={disconnect} />
       {#if scope.mode === 'global' && scope.region !== undefined}
         <div class="strip"><Banner tone="info" icon="◎">전역 화면에서 <b>{scope.region.name}</b> 을 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.</Banner></div>
       {/if}

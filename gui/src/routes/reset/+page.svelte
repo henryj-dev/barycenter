@@ -42,13 +42,16 @@
 </script>
 
 <div class="std">
-  <!-- 시안: 둘째 단계는 제목을 바꾼다. 첫 단계 제목은 페이지 머리(「비밀번호 재설정」)가 한다. -->
-  {#if token !== ''}
-    <div class="head">
-      <h2>새 비밀번호 설정</h2>
+  <!-- 시안: 단계마다 제목과 한 줄 설명 하나. 셸은 혼자 서는 화면에 페이지 머리를 그리지 않는다. -->
+  <div class="head">
+    {#if token !== ''}
+      <h1>새 비밀번호 설정</h1>
       <p>새 비밀번호를 두 번 입력해요.</p>
-    </div>
-  {/if}
+    {:else}
+      <h1>비밀번호 재설정</h1>
+      <p>계정 이메일로 링크를 받아요.</p>
+    {/if}
+  </div>
   {#if token !== ''}
     <form class="std" onsubmit={(e) => { e.preventDefault(); void reset(); }}>
       <FormSection stack>
@@ -79,6 +82,6 @@
   .std { display: grid; gap: 12px; }
   a { color: var(--accent); font: var(--t-small); }
   .head { display: grid; gap: 4px; }
-  h2 { font: var(--t-h); margin: 0; }
+  h1 { font: var(--t-title); margin: 0; }
   .head p { margin: 0; font: var(--t-small); color: var(--tx2); }
 </style>
