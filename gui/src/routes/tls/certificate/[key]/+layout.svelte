@@ -1,8 +1,8 @@
 <script lang="ts">
-  // certificate 상세의 틀 — 탭·경로·수정 버튼. 표는 src/web/resources.ts 의 RESOURCES.
-  import ResourceFrame from '#lib/detail/ResourceFrame.svelte';
+  // certificate 상세의 틀 — 탭·경로·버튼(`ResourceFrame`)에 시안 값(제목 옆 배지 · 메타 줄 · 수정 자리)을 넘긴다(`TlsFrame`).
+  import TlsFrame from '#lib/tls/TlsFrame.svelte';
 
   let { children } = $props();
 </script>
 
-<ResourceFrame kind="certificate">{@render children()}</ResourceFrame>
+<TlsFrame kind="certificate">{@render children()}</TlsFrame>

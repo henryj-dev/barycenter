@@ -1,5 +1,5 @@
 <script lang="ts">
-  import History from '#lib/detail/History.svelte';
+  import TlsHistory from '#lib/tls/TlsHistory.svelte';
 </script>
 
-<History kind="certificate" />
+<TlsHistory kind="certificate" />
