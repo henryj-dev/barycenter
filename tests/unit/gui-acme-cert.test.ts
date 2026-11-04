@@ -54,9 +54,15 @@ describe('ACME 인증서 화면', () => {
   });
 
   it('목록의 만들기 버튼은 모두 「＋ 만들기」 다 (시안)', () => {
-    for (const l of ['Listener', 'HttpRoute', 'PassthroughRoute', 'Pool', 'Backend', 'AddressSet', 'Certificate', 'TlsPolicy', 'SniBinding']) {
+    for (const l of ['Listener', 'Pool', 'Backend', 'AddressSet', 'Certificate', 'TlsPolicy', 'SniBinding']) {
       const src = read(`lists/${l}List.svelte`);
       expect(src, l).toMatch(/variant="primary" href="[^"]+\/new">＋ 만들기<\/Button>/);
+    }
+    // 라우트는 시안 `createItems` — 「＋ 만들기」 가 메뉴(라우트 만들기 · 경로별 묶음으로 만들기)를 연다.
+    for (const l of ['HttpRoute', 'PassthroughRoute']) {
+      const src = read(`lists/${l}List.svelte`);
+      expect(src, l).toMatch(/<Button variant="primary" aria-haspopup="menu"[^>]*>＋ 만들기<\/Button>/);
+      expect(src, l).toContain("{ label: '경로별 묶음으로 만들기', href: '/traffic/route/http/new/group' }");
     }
   });
 

@@ -18,6 +18,7 @@ import {
   HOST_REQUIRED, httpRouteBody, httpRouteStateOf, passthroughBody, passthroughStateOf, poolShareCount, poolShareText,
   priorityError, routeHostsError, routePathsError,
 } from '../../gui/src/lib/forms/route-edit.js';
+import { ROUTE_COLS, actCell, httpRouteFacts, passRouteFacts, routeBadge, routeCells } from '../../gui/src/lib/lists/route-cells.js';
 import { compileHostRoutes } from '../../src/route/compile.js';
 import { validatePathPrefix } from '../../src/validate/strings.js';
 import { decodeModel } from '../../src/model/decode.js';
@@ -174,17 +175,49 @@ describe('화면 배선', () => {
     expect(src).toContain('routeHostsError(hosts)');
   });
 
-  for (const [file, kind] of [['lists/HttpRouteList.svelte', 'httpRoute'], ['lists/PassthroughRouteList.svelte', 'passthroughRoute']] as const) {
-    it(`${file} — 분할 상세 · 메뉴 문구 · reject 배지 ✕`, () => {
+  for (const [file, kind, inline] of [['lists/HttpRouteList.svelte', 'httpRoute', 'HttpRouteInline'], ['lists/PassthroughRouteList.svelte', 'passthroughRoute', 'PassthroughRouteInline']] as const) {
+    it(`${file} — 분할 상세(인라인 수정) · 시안 메뉴(상세 페이지 열기 · 삭제…) · 칸은 시안 cells`, () => {
       const src = read(file);
       expect(src).toContain(`<ListSplit kind="${kind}"`);
+      expect(src).toContain(`{#snippet inline({ key, detailHref, pending })}<${inline} `);
       expect(src).toContain("'상세 페이지 열기'");
-      expect(src).toContain("label: '수정'");
+      expect(src).toContain("label: '삭제…'");
+      // 시안 행 메뉴(라우트)에는 「수정」 이 없다 — 수정은 인라인 수정 · 설정 탭이다.
+      expect(src).not.toContain("label: '수정'");
       expect(src).not.toMatch(/상세를 봐요|수정해요|다시 만들어요/);
       expect(src).not.toContain('⊘');
-      expect(src).toContain('icon="✕"');
+      // 칸은 링크가 아니다(시안 cells).
+      expect(src).not.toMatch(/<a href=\{at\(r/);
+      expect(src).toContain('<RouteSegments current=');
+      expect(src).toContain('toolbar={segments}');
     });
   }
+
+  it('라우트 칸 — 시안 cells(\'routes\') 그대로: m · x · b, reject 는 ✕ 배지, 경로 여럿은 +N, 가려짐은 ▲ 배지', () => {
+    const meta = { ord: new Map([['api', 2]]), shadow: new Map([['api', '/ 가 /api/ 를 가려요']]) };
+    const http = httpRouteFacts({
+      key: 'api', listener: 'web', hosts: ['a.example.com'], pathPrefixes: ['/api/', '/v2/'], priority: 100,
+      action: { kind: 'proxy', pool: 'p', websocket: true, rewritePrefix: '/v1/', requestHeaders: [{ name: 'Host', value: 'x' }] },
+      sourceRules: [{ from: ['10.0.0.0/8'], action: { kind: 'reject', status: 403 } }],
+    }, meta);
+    expect(ROUTE_COLS).toEqual(['이름', '리스너', '호스트(SNI)', '경로 접두사', '우선순위', '동작', '출발지 규칙', '요청 헤더', '평가 순서']);
+    expect(routeCells(http)).toEqual([
+      { kind: 'mono', t: 'api' }, { kind: 'mono', t: 'web' }, { kind: 'mono', t: 'a.example.com' },
+      { kind: 'mono', t: '/api/ +1', title: '/api/\n/v2/' }, { kind: 'mono', t: '100' },
+      { kind: 'text', t: '프록시 → p · WebSocket · /api/, /v2/ → /v1/' },
+      { kind: 'badge', tone: 'info', icon: '↳', t: '출발지 규칙 1' }, { kind: 'badge', tone: 'info', icon: '＋', t: '헤더 1' },
+      { kind: 'badge', tone: 'warn', icon: '▲', t: '#2 · 가려짐', title: '/ 가 /api/ 를 가려요' },
+    ]);
+    expect(routeBadge(http)?.t).toBe('출발지 규칙 1');
+    const rej = httpRouteFacts({ key: 'b', listener: 'web', hosts: ['b'], priority: 0, action: { kind: 'reject', status: 404 } }, { ord: new Map(), shadow: new Map() });
+    expect(actCell(rej)).toEqual({ kind: 'badge', tone: 'danger', icon: '✕', t: 'reject 404' });
+    expect(routeCells(rej)[8]).toEqual({ kind: 'mono', t: '#—' });
+    const red = httpRouteFacts({ key: 'c', listener: 'web', hosts: ['c'], priority: 0, action: { kind: 'redirect', to: 'https://x/', status: 301 } }, { ord: new Map(), shadow: new Map() });
+    expect(actCell(red)).toEqual({ kind: 'text', t: 'redirect → https://x/ · 301' });
+    // 패스스루: 경로 · 규칙 · 헤더는 「—」, 끊기는 「연결을 끊어요」(응답 코드가 없다).
+    const pt = passRouteFacts({ key: 'd', listener: 'sni', snis: ['d.example.com'], priority: 5, action: { kind: 'reject' } }, 1);
+    expect(routeCells(pt).map((c) => c.t)).toEqual(['d', 'sni', 'd.example.com', '—', '5', '연결을 끊어요', '—', '—', '#1']);
+  });
 
   it('HTTP 라우트 분할 상세에 「URL로 다시 만들기」 (풀로 보내는 라우트만)', () => {
     const src = read('lists/HttpRouteList.svelte');

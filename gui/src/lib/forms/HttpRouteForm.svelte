@@ -1,55 +1,64 @@
 <script lang="ts">
   /**
-   * HTTP 라우트 만들기 · 수정 (시안 `fieldsFor('routes')`: 기본 · 동작 · 출발지별 동작). 옛 폼 셋(풀로 보내기 · redirect ·
-   * reject)을 「동작」 하나로 합쳤다. 만들기의 저장 경로는 그대로 셋이다(`insertHttpRoute` · `insertHttpRedirect` ·
-   * `insertHttpReject`).
-   * 경로 바꾸기 · 예시 요청 미리보기 · 이 라우트의 요청 헤더(#109)는 시안처럼 「동작」 안에 있다(풀로 보낼 때).
-   * 경로 접두사 칸은 여럿을 받는다(2026-11-02) — 호스트 칸처럼 쉼표나 공백으로 나눈다.
-   * 「출발지별 동작」(2026-11-02)에 규칙을 위에서부터 둔다 — `SourceRulesField`. 가려진 규칙은 입력 즉시 행 오류다.
+   * HTTP 라우트 만들기 · 수정 — 콘솔 시안 `fieldsFor('routes', v, creating)` 그대로: 「기본」(이름 · 리스너 · 호스트 · 경로 접두사 ·
+   * 우선순위) · 「동작」(동작 · 풀 · 대상 · 응답 코드 · 경로 바꾸기 · 예시 요청 · 이 라우트의 요청 헤더) · 「출발지별 동작」(규칙).
+   * 만들기의 저장 경로는 셋이다(`insertHttpRoute` · `insertHttpRedirect` · `insertHttpReject`). 경로 접두사 칸은 여럿을 받는다
+   * (2026-11-02) — 쉼표나 공백으로 나눈다. 규칙은 `SourceRulesField` 이고, 가려진 규칙은 입력 즉시 그 카드의 오류다.
    *
-   * `edit` 이면 설정 탭의 수정 폼이다(시안: 「수정」 은 설정 탭) — head 값으로 한 번 채우고, 이름은 못 바꾸고, 같은 patch
-   * 빌더로 몸통을 지어 `desk.putResource` 로 저장한다(`route-edit.ts`). 폼이 그리지 못하는 칸이 있으면 저장을 막고 JSON
-   * 수정으로 보낸다.
+   * `edit` 이면 설정 탭의 수정 폼이다(시안 `dpEdit` → 설정 탭, `fieldsFor(…, false, 'form')`) — head 값으로 한 번 채우고,
+   * 이름은 잠그고, 같은 patch 빌더로 몸통을 지어 `desk.putResource` 로 저장한다(`route-edit.ts`). 콘솔 격자(150px · 480px)이고
+   * 아래 줄은 시안 `tSet` 의 안내 · 되돌리기 · 저장이다(`RouteEditFoot`). 폼이 그리지 못하는 칸이 있으면 저장을 막고 JSON 수정으로 보낸다.
    *
    * 호스트 · 경로 · 우선순위는 서버와 같은 판정으로 먼저 본다(`route-edit.ts`) — patch 빌더의 해라체 오류가 사람에게 가지 않게.
+   *
+   * 시안과 다른 곳(실제 동작이 다르다 · 이미 있는 기능):
+   *   · reject 응답 코드는 403 · 404 · 444 다(렌더가 받는 값). 시안의 410 · 503 은 없다.
+   *   · 「WebSocket」 토글은 시안 폼에 없지만 이미 있는 기능이라 「동작」 의 풀 아래에 둔다.
+   *   · 풀이 외부 주소인지(시안 「외부 주소 풀이에요: …」)는 모델에 없어서 말하지 않는다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import { type RedirectStatus, type RejectStatus } from '@web/edit';
-  import { Banner, Button, Form, FormRow, FormSection, KeyValueEditor, Select, Switch, TextInput } from '#lib/ui';
+  import { Banner, Form, FormRow, FormSection, KeyValueEditor, Select, Switch, TextInput, setFormLayout, toast } from '#lib/ui';
   import { itemOf, itemsOf, resourcePath } from '@web/resources';
   import { after } from '#lib/after';
+  import { isPendingResource } from '#lib/pending';
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import CreateForm from './CreateForm.svelte';
+  import RouteEditFoot from './RouteEditFoot.svelte';
   import SourceRulesField, { rulesBlocked, toSourceRules } from './SourceRulesField.svelte';
-  import { KEY_HELP, filled, keyError, words } from './checks';
+  import { filled, keyError, words } from './checks';
   import { fromTokens, setCidrsOf } from './source-rules';
   import { exampleRequest, matchPrefix, rewriteError, rewritePath } from './rewrite';
   import {
-    PRIORITY_HELP, httpRouteBody, httpRouteStateOf, poolShareCount, poolShareText, priorityError, routeHostsError, routePathsError,
-    type HttpAction, type HttpRouteState,
+    NAME_ERROR, PLAIN_HEADER_WARN, PRIORITY_HELP, RULES_HELP, httpRouteBody, httpRouteStateOf, plainHeader, poolShareCount, poolShareText,
+    priorityError, routeHostsError, routePathsError, type HttpAction, type HttpRouteState,
   } from './route-edit';
 
   let { edit = false }: {
     /** 설정 탭의 수정 폼 — 키는 주소의 `[key]` 다. */
     edit?: boolean;
   } = $props();
+  // 설정 탭도 콘솔 격자다(드로어는 Drawer 가 정한다).
+  // svelte-ignore state_referenced_locally
+  if (edit) setFormLayout('compact');
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const listeners = $derived(desk.listeners.rows
     .filter((l) => (l.protocol === 'http' || l.protocol === 'https'))
-    .map((l) => ({ value: l.key, hint: l.protocol })));
+    .map((l) => ({ value: l.key })));
   const pools = $derived(desk.pools.rows.filter((p) => p.protocolClass === 'http').map((p) => ({ value: p.key })));
   const ACTIONS: { value: HttpAction; label: string }[] = [
     { value: 'proxy', label: '풀로 보내기' }, { value: 'redirect', label: 'redirect' }, { value: 'reject', label: 'reject' },
   ];
   const REDIRECT = ['301', '302', '307', '308'].map((v) => ({ value: v }));
-  const REJECT = ['403', '404', '444'].map((v) => ({ value: v, ...(v === '444' ? { hint: '응답 없이 끊어요' } : {}) }));
+  const REJECT = ['403', '404', '444'].map((v) => ({ value: v }));
 
+  // 시안 `newDefaults('routes')`: 경로 / · 우선순위 100 · 풀로 보내기 · redirect 301.
   const blank = (): HttpRouteState => ({
-    listener: undefined, hosts: '', pathPrefix: '', priority: '0', action: 'proxy', pool: undefined, websocket: false,
-    rewritePrefix: '', headers: [], to: '', redirectStatus: '302', rejectStatus: '403', rules: [],
+    listener: undefined, hosts: '', pathPrefix: '/', priority: '100', action: 'proxy', pool: undefined, websocket: false,
+    rewritePrefix: '', headers: [], to: '', redirectStatus: '301', rejectStatus: '403', rules: [],
   });
 
   let name = $state('');
@@ -63,10 +72,12 @@
   const item = $derived(edit ? itemOf(desk.model, 'httpRoute', editKey) : undefined);
   let loaded = $state<string | undefined>();
   let lossy = $state(false);
+  let orig = $state('');
   $effect(() => {
     if (!edit || item === undefined || loaded === editKey) return;
     const s = httpRouteStateOf(item);
     f = s.state;
+    orig = JSON.stringify(s.state);
     lossy = s.lossy;
     exPath = '';
     problem = undefined;
@@ -91,14 +102,16 @@
       : paths.length > 1 ? `경로마다 자기 접두사를 바꿔요. ${paths.map((p) => `${p} → ${rw}`).join(' · ')}`
         : `접두사 ${paths[0]}를 ${rw}로 바꿔 보내요.`);
 
+  const nameErr = $derived(keyError(name) === undefined ? undefined : NAME_ERROR);
   // 호스트는 필수다(서버 `putHttpRoutePatch`). 처음 빈 칸은 「만들기」 만 잠그고, 적었다 지우면 그때 말한다.
   const hostErr = $derived(f.hosts.trim() === '' && !hostTouched && !edit ? undefined : routeHostsError(f.hosts));
   const pathErr = $derived(routePathsError(f.pathPrefix));
-  const pathWarn = $derived(f.pathPrefix.includes('*') ? '▲ * 는 일반 글자로 저장돼요. 접두사에는 쓰지 않아요.' : undefined);
+  const pathWarn = $derived(f.pathPrefix.includes('*') && pathErr === undefined);
   const prioErr = $derived(priorityError(f.priority));
   const shared = $derived(poolShareText(poolShareCount(
     [...itemsOf(desk.model, 'httpRoute'), ...itemsOf(desk.model, 'passthroughRoute')], f.action === 'proxy' ? f.pool : undefined, edit ? editKey : undefined,
   )));
+  const headerWarn = $derived(f.headers.some((h) => plainHeader(h.name)));
   const ready = $derived(
     (edit ? item !== undefined && !lossy : filled(name, keyError)) && f.listener !== undefined
     && routeHostsError(f.hosts) === undefined && pathErr === undefined && prioErr === undefined
@@ -106,6 +119,9 @@
     && (f.action !== 'redirect' || filled(f.to))
     && rwErr === undefined && !rulesBad,
   );
+  // 설정 탭의 아래 줄(시안 `hintTxt`).
+  const dirty = $derived(edit && loaded !== undefined && JSON.stringify(f) !== orig);
+  const pending = $derived(edit && isPendingResource(desk.pendingResources, 'httpRoute', editKey));
 
   const submit = (): void => {
     if (f.listener === undefined) return;
@@ -136,7 +152,8 @@
 
   /** 수정 저장 — 만들기와 같은 patch 빌더로 몸통을 짓고 통째로 갈아 끼운다(`put`). */
   const save = (): void => {
-    if (!ready || desk.editing) return;
+    if (!dirty || desk.editing) return;
+    if (!ready) { toast.fail('입력을 확인해요', '오류가 있는 항목을 고쳐요.'); return; }
     let body: Record<string, unknown>;
     try {
       body = httpRouteBody(editKey, f);
@@ -153,82 +170,88 @@
 {#snippet fields()}
   <FormSection title="기본">
     {#if edit}
-      <FormRow label="이름" help="이름은 바꿀 수 없어요."><TextInput value={editKey} disabled /></FormRow>
+      <FormRow label="이름"><TextInput value={editKey} disabled /></FormRow>
     {:else}
-      <FormRow label="이름" for="hr-key" required error={keyError(name)} help={KEY_HELP}>
-        <TextInput id="hr-key" bind:value={name} invalid={keyError(name) !== undefined} autocomplete="off" placeholder="app" />
+      <FormRow label="이름" for="hr-key" error={nameErr}>
+        <TextInput id="hr-key" bind:value={name} invalid={nameErr !== undefined} autocomplete="off" />
       </FormRow>
     {/if}
-    <FormRow label="리스너" required help={listeners.length === 0 ? 'HTTP · HTTPS 리스너가 없어요. 리스너를 먼저 만들어요.' : undefined}>
+    <FormRow label="리스너" help={listeners.length === 0 ? 'HTTP · HTTPS 리스너가 없어요. 리스너를 먼저 만들어요.' : undefined}>
       <Select label="리스너" bind:value={f.listener} options={listeners} placeholder="리스너를 골라요" width="100%" disabled={listeners.length === 0} />
     </FormRow>
-    <FormRow label="호스트" for="hr-hosts" required error={hostErr} help="정확한 이름이나 *.example.com 형태로 넣어요. 쉼표나 공백으로 여러 개를 넣어요.">
-      <TextInput id="hr-hosts" bind:value={f.hosts} invalid={hostErr !== undefined} autocomplete="off" placeholder="app.example.com" />
+    <FormRow label="호스트" for="hr-hosts" error={hostErr} help="정확한 이름이나 *.example.com 형태로 입력해요.">
+      <TextInput id="hr-hosts" bind:value={f.hosts} invalid={hostErr !== undefined} autocomplete="off" />
     </FormRow>
-    <FormRow label="경로 접두사" for="hr-path" error={pathErr} help={pathWarn ?? '이 접두사로 시작하는 요청과 맞아요. 쉼표나 공백으로 여러 개를 넣으면 같은 동작을 함께 써요. 비우면 모든 경로예요.'}>
-      <TextInput id="hr-path" bind:value={f.pathPrefix} invalid={pathErr !== undefined} autocomplete="off" placeholder="/api/, /v2/" />
+    <FormRow label="경로 접두사" for="hr-path" error={pathErr} help={pathWarn ? undefined : '쉼표나 공백으로 여러 개. 비우면 / 예요. *는 쓰지 않아요.'}>
+      <TextInput id="hr-path" bind:value={f.pathPrefix} invalid={pathErr !== undefined} autocomplete="off"
+        oninput={(e) => { f.pathPrefix = e.currentTarget.value.replace(/\/{2,}/g, '/'); }} />
+      {#if pathWarn}<div class="wn">▲ *는 일반 글자로 저장돼요. 접두사에는 쓰지 않아요.</div>{/if}
     </FormRow>
-    <FormRow label="우선순위" for="hr-prio" required error={prioErr} help={PRIORITY_HELP}>
-      <TextInput id="hr-prio" bind:value={f.priority} invalid={prioErr !== undefined} inputmode="numeric" width="120px" autocomplete="off" />
+    <FormRow label="우선순위" for="hr-prio" error={prioErr} help={PRIORITY_HELP}>
+      <TextInput id="hr-prio" bind:value={f.priority} invalid={prioErr !== undefined} inputmode="numeric" autocomplete="off" />
     </FormRow>
   </FormSection>
 
   <FormSection title="동작">
-    <FormRow label="동작" required>
-      <Select label="동작" bind:value={f.action} options={ACTIONS} mono={false} />
+    <FormRow label="동작">
+      <Select label="동작" bind:value={f.action} options={ACTIONS} mono={false} width="100%" />
     </FormRow>
     {#if f.action === 'proxy'}
-      <FormRow label="풀" required help={pools.length === 0 ? 'HTTP 풀이 없어요. 풀을 먼저 만들어요.' : shared === undefined ? undefined : `▲ ${shared}`}>
+      <FormRow label="풀" help={pools.length === 0 ? 'HTTP 풀이 없어요. 풀을 먼저 만들어요.' : undefined}>
         <Select label="풀" bind:value={f.pool} options={pools} placeholder="풀을 골라요" width="100%" disabled={pools.length === 0} />
+        {#if shared !== undefined}<div class="wn">{shared}</div>{/if}
       </FormRow>
-      <FormRow label="WebSocket" help="켜면 Upgrade 요청을 백엔드로 넘겨요."><Switch bind:checked={f.websocket}>켜요</Switch></FormRow>
-      <FormRow label="경로 바꾸기" for="hr-rw" error={rwErr} help={rw === '' ? '비우면 경로를 그대로 보내요. 끝의 /는 접두사와 같아야 해요.' : '맞은 접두사를 이 값으로 바꿔요.'}>
-        <TextInput id="hr-rw" bind:value={f.rewritePrefix} invalid={rwErr !== undefined} autocomplete="off" placeholder="/v1/" />
-      </FormRow>
-      <FormRow label="예시 요청" for="hr-ex" help={outHelp}>
-        <div class="pv">
-          <TextInput id="hr-ex" bind:value={exPath} autocomplete="off" placeholder={exampleRequest(paths)} />
-          <span class="arrow" aria-hidden="true">→</span>
-          <code class="out" class:miss={out === undefined} aria-label="백엔드로 가는 경로">{out ?? '—'}</code>
-        </div>
-      </FormRow>
-      <FormRow label="이 라우트의 요청 헤더" help="같은 이름이면 리스너의 요청 헤더 대신 이 값을 보내요.">
-        <KeyValueEditor bind:rows={f.headers} ops={[]} namePlaceholder="Host" addLabel="＋ 헤더를 더해요" />
-      </FormRow>
+      <FormRow label="WebSocket" help="켜면 Upgrade 요청을 백엔드로 넘겨요."><Switch bind:checked={f.websocket}>{f.websocket ? '켜짐' : '꺼짐'}</Switch></FormRow>
     {:else if f.action === 'redirect'}
-      <FormRow label="대상" for="hr-to" required help="이 주소로 보내요. 예: https://example.com/">
-        <TextInput id="hr-to" bind:value={f.to} autocomplete="off" placeholder="https://example.com/" />
+      <FormRow label="대상" for="hr-to" error={f.to.trim() === '' ? '대상 URL을 입력해요.' : undefined}>
+        <TextInput id="hr-to" bind:value={f.to} autocomplete="off" />
       </FormRow>
-      <FormRow label="응답 코드" required><Select label="응답 코드" bind:value={f.redirectStatus} options={REDIRECT} width="120px" /></FormRow>
-    {:else}
-      <FormRow label="응답 코드" required><Select label="응답 코드" bind:value={f.rejectStatus} options={REJECT} width="200px" /></FormRow>
+    {/if}
+    {#if f.action === 'redirect'}
+      <FormRow label="응답 코드"><Select label="응답 코드" bind:value={f.redirectStatus} options={REDIRECT} width="100%" /></FormRow>
+    {:else if f.action === 'reject'}
+      <FormRow label="응답 코드"><Select label="응답 코드" bind:value={f.rejectStatus} options={REJECT} width="100%" /></FormRow>
+    {/if}
+    {#if f.action === 'proxy'}
+      <FormRow label="경로 바꾸기" for="hr-rw" error={rwErr} help={rw === '' ? '비우면 경로를 그대로 보내요.' : '맞은 접두사를 이 값으로 바꿔요.'}>
+        <TextInput id="hr-rw" bind:value={f.rewritePrefix} invalid={rwErr !== undefined} autocomplete="off"
+          oninput={(e) => { const v = e.currentTarget.value.replace(/\/{2,}/g, '/'); f.rewritePrefix = v !== '' && !v.startsWith('/') ? `/${v}` : v; }} />
+      </FormRow>
+      <FormRow label="예시 요청" for="hr-ex">
+        <div class="pv">
+          <div class="pvq"><span class="get">GET</span><TextInput id="hr-ex" aria-label="예시 요청 경로" value={req} autocomplete="off" oninput={(e) => { exPath = e.currentTarget.value; }} /></div>
+          <div class="out" class:miss={out === undefined} aria-label="백엔드로 가는 경로">→ {out ?? '—'}</div>
+        </div>
+        <div class="ph" class:warn={out === undefined}>{outHelp}</div>
+      </FormRow>
+      <FormRow label="이 라우트의 요청 헤더" help={headerWarn ? undefined : '같은 이름이면 리스너의 요청 헤더 대신 이 값을 보내요.'}>
+        <KeyValueEditor bind:rows={f.headers} ops={[]} namePlaceholder="Header-Name" addLabel="＋ 행 추가" />
+        {#if headerWarn}<div class="wn">같은 이름이면 리스너의 요청 헤더 대신 이 값을 보내요. {PLAIN_HEADER_WARN}</div>{/if}
+      </FormRow>
     {/if}
   </FormSection>
 
-  <FormSection title="출발지별 동작" hint={f.rules.length === 0 ? '선택' : `규칙 ${f.rules.length}개`} stack>
-    <p class="note">
-      위에서부터 보고 처음 맞는 규칙의 동작을 해요. 맞는 규칙이 없으면 위의 기본 동작을 해요.
-      리스너의 출발지 제한은 누가 붙을 수 있나를 정하고, 이 규칙은 출발지마다 어디로 보내나를 정해요.
-    </p>
-    <SourceRulesField bind:rules={f.rules} {pools} />
+  <FormSection title="출발지별 동작">
+    <FormRow label="규칙" error={f.rules.length > 20 ? '규칙은 20개까지예요.' : rulesBad ? '잘못된 규칙이 있어요. 표시된 행을 고쳐요.' : undefined} help={RULES_HELP}>
+      <SourceRulesField bind:rules={f.rules} {pools} />
+    </FormRow>
   </FormSection>
 {/snippet}
 
 {#if edit}
   {#if item !== undefined}
-    <Writable>
-      <Form note="저장하면 커밋해요. 트래픽은 적용 대기에서 적용해야 바뀌어요." onsubmit={save}>
-        {#if lossy}
-          <Banner tone="warn">출발지 규칙의 동작에 이 폼에 없는 칸(요청 헤더 · 경로 바꾸기)이 있어요. 폼으로 저장하면 그 칸이 사라져요. 아래 JSON으로 고쳐요.</Banner>
-        {/if}
-        {@render fields()}
-        {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}
-        {#snippet actions()}
-          <Button variant="primary" type="submit" loading={desk.editing} disabled={!ready}>{desk.editing ? '저장 중' : '저장'}</Button>
-          <Button onclick={reset} disabled={desk.editing}>되돌리기</Button>
-        {/snippet}
-      </Form>
-    </Writable>
+    <div class="edit">
+      <Writable>
+        <Form onsubmit={save}>
+          {#if lossy}
+            <Banner tone="warn">출발지 규칙의 동작에 이 폼에 없는 칸(요청 헤더 · 경로 바꾸기)이 있어요. 폼으로 저장하면 그 칸이 사라져요. 아래 JSON으로 고쳐요.</Banner>
+          {/if}
+          {@render fields()}
+          {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}
+          <RouteEditFoot {dirty} invalid={dirty && !ready} {pending} saving={desk.editing} onrevert={reset} />
+        </Form>
+      </Writable>
+    </div>
   {/if}
 {:else}
   <CreateForm {ready} onsubmit={submit} cancelHref="/traffic/route/http">
@@ -237,10 +260,14 @@
 {/if}
 
 <style>
-  .note { margin: 0 0 8px; font: var(--t-small); color: var(--tx2); }
-  .pv { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .pv :global(input) { flex: 1 1 200px; min-width: 0; }
-  .arrow { color: var(--tx3); }
-  .out { font-family: var(--mono); font-size: 13px; color: var(--tx); overflow-wrap: anywhere; }
+  .edit { max-width: 760px; }
+  .wn { margin-top: 4px; font-size: 12px; color: var(--warn); }
+  .pv { display: flex; flex-direction: column; gap: 6px; }
+  .pvq { display: flex; align-items: center; gap: 6px; }
+  .pvq :global(input) { flex: 1; min-width: 0; }
+  .get { font-family: var(--mono); font-size: 12px; color: var(--tx3); }
+  .out { font-family: var(--mono); font-size: 13px; color: var(--tx); word-break: break-all; }
   .out.miss { color: var(--warn); }
+  .ph { margin-top: 4px; font-size: 12px; color: var(--tx3); }
+  .ph.warn { color: var(--warn); }
 </style>

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import History from '#lib/detail/History.svelte';
+  // 시안 `tLog` — 시각 · 무엇 · 누가 · 리비전.
+  import RouteHistory from '#lib/route/RouteHistory.svelte';
 </script>
 
-<History kind="httpRoute" />
+<RouteHistory kind="httpRoute" />

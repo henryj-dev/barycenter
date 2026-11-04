@@ -25,7 +25,6 @@ describe('쓸 지역 표시', () => {
     'lib/pool/PoolHealthForm.svelte',
     'lib/detail/BackendSettings.svelte',
     'lib/detail/AddressSetSettings.svelte',
-    'lib/detail/Rebuild.svelte',
     'lib/detail/BackendHealth.svelte',
     'lib/detail/Acme.svelte',
   ])('%s 의 쓰는 폼이 target 을 켠다', (p) => {
@@ -33,6 +32,8 @@ describe('쓸 지역 표시', () => {
   });
 
   it('만들기 화면은 모두 CreateForm 을 거친다 — 빠른 프록시 · 라우트 그룹 포함', () => {
+    // URL로 다시 만들기도 드로어 안의 CreateForm 이다(시안 `rebuild` 드로어).
+    expect(src('lib/detail/Rebuild.svelte')).toContain('<CreateForm');
     for (const f of ['QuickProxyForm', 'RouteGroupForm', 'HttpListenerForm', 'TcpListenerForm', 'UdpListenerForm', 'PassthroughListenerForm',
       'PoolForm', 'BackendForm', 'AddressSetForm', 'HttpRouteForm', 'PassthroughRouteForm', 'CertificateForm', 'TlsPolicyForm', 'SniBindingForm']) {
       expect(src(`lib/forms/${f}.svelte`), f).toContain('<CreateForm');

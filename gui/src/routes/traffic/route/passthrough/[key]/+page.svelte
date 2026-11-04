@@ -1,5 +1,6 @@
 <script lang="ts">
-  import Overview from '#lib/detail/Overview.svelte';
+  // 시안 `tOv` — 목록 열 이름과 칸 글의 격자.
+  import RouteOverview from '#lib/route/RouteOverview.svelte';
 </script>
 
-<Overview kind="passthroughRoute" />
+<RouteOverview kind="passthroughRoute" />
