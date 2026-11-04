@@ -62,6 +62,8 @@ const TITLE: Record<string, string> = {
 };
 
 const APPLY = new Set(['apply', 'apply.membership', 'apply.retry_plan', 'apply.rerender_plan']);
+/** 그 리비전을 트래픽에 건 감사 줄 — 전체 적용과 멤버십만의 적용. (다시 시도 · 다시 렌더는 plan 을 새로 낼 뿐이다.) */
+const TRAFFIC_APPLY = new Set(['apply', 'apply.membership']);
 const ms = (s: string | undefined): number => (s === undefined ? NaN : new Date(s).getTime());
 const revNum = (r: string | undefined): number => (r === undefined ? NaN : Number(r));
 
@@ -96,14 +98,15 @@ export function groupAudit(rows: readonly AuditRow[], pending: readonly string[]
   }
 
   // 적용은 언제나 head 를 건다 — 뒤 리비전이 적용됐으면 앞 리비전도 그때 나갔다.
-  const applied = asc.filter((r) => r.action === 'apply' && r.revision !== undefined).map((r) => revNum(r.revision));
+  // 멤버십만 바뀐 리비전(백엔드 더하기 · 빼기)은 `apply.membership` 으로 적용된다 — 그것도 그 리비전의 적용이다.
+  const applied = asc.filter((r) => TRAFFIC_APPLY.has(r.action) && r.revision !== undefined).map((r) => revNum(r.revision));
   const pend = new Set(pending);
 
   return drafts.map((d): ChangeGroup => {
     const last = d.rows[d.rows.length - 1]!;
     const first = d.rows[0]!;
     const commit = d.rows.find((r) => r.action === 'changeset.commit' || r.action === 'rollback');
-    const apply = d.rows.find((r) => r.action === 'apply');
+    const apply = d.rows.find((r) => TRAFFIC_APPLY.has(r.action));
     const auto = apply?.trigger === 'auto';
     const steps = d.rows.map((r): AuditStep => ({
       ...r, name: STEP[r.action] ?? r.action, ...(auto && r === apply ? { note: '자동 적용' } : {}),

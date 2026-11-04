@@ -2,21 +2,30 @@
   /**
    * 상태 — head · 리더 · 게시 · 미완 전환 · 엔진 · 드라이버 (`/api/v1/status` 의 4-way). 시안대로 카드 여섯 장이다.
    * 미완 전환이 있으면 위에 배너를 띄우고 「이어받기」 를 둔다. 전역 모드면 버튼을 안 그린다(설계 §1).
-   * 클러스터면 노드별 상태로 가는 길을 둔다. 전역이면 지역 요약(`/api/v1/regions`)으로 지역별 표를 그린다.
+   * 클러스터면 노드별 상태로 가는 길을 둔다. 전역에서 지역을 골랐으면(좁혀 보기) 지역 요약(`/api/v1/regions`)으로 지역별 표를 그린다.
+   *
+   * **전체 합산**(전역에서 지역을 안 골랐다, 2026-11-04 · §2.5)이면 지역별 표가 본문이다 — 지역마다 붙은 desk(`useAggregate`)의
+   * 상태 스냅샷으로 한 줄씩. 붙지 않은 지역은 「연락 없음」 등으로 보이고 값을 지어내지 않는다(§2.4).
+   * 미완 전환의 이어받기는 그 지역의 desk 로 보낸다(한 번에 한 지역, §1.1).
    */
   import { getContext } from 'svelte';
   import { viewOfStatus, type StatusFact } from '@web/status-view';
   import { Badge, Banner, Button, Card, DataTable, FieldMessage, Skeleton, type Column, type Tone } from '#lib/ui';
   import type { RegionSummary, Scope } from '#lib/global/scope.svelte.ts';
+  import { useAggregate } from '#lib/global/use-aggregate.svelte.ts';
+  import type { RegionEntry } from '#lib/global/regions.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { loadRegions } from './fetch';
   import { nodeState, type ClusterBody } from './cluster';
+  import { regionBadge } from './aggregate-view';
 
   type StatCard = { label: string; value: string; sub: string; badge?: { tone: Tone; text: string } };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const scope = getContext<Scope | undefined>('scope');
   const ro = $derived(scope?.readOnly === true);
-  const global = $derived(scope?.mode === 'global');
+  const agg = useAggregate();
+  /** 전역에서 지역 하나로 좁혀 본다. 전체 합산(`agg.on`)은 아니다. */
+  const global = $derived(scope?.mode === 'global' && !agg.on);
   const v = $derived(desk.status);
 
   /** 클러스터면 노드별 상태 화면으로 가는 길을 보인다. 전역은 지역마다 다르므로 묻지 않는다. */
@@ -101,14 +110,37 @@
   });
   const unknown = '모름';
   const regColumns: Column<RegRow>[] = [
-    { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
+    { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
     { key: 'head', label: 'head', mono: true, width: '90px', text: (r) => (r.v?.head === undefined ? unknown : `r${r.v.head}`) },
     { key: 'leader', label: '리더', mono: true, text: (r) => (r.v === undefined ? unknown : r.v.leader.isLeader ? r.v.leader.holder : '팔로워가 답했어요') },
     { key: 'gen', label: '게시 세대', mono: true, text: (r) => (r.v === undefined ? unknown : r.v.published.generation ?? '—') },
     { key: 'unf', label: '미완 전환', mono: true, width: '100px', text: (r) => (r.v === undefined ? unknown : r.v.unfinished ? '1' : '0') },
     { key: 'engine', label: '엔진', mono: true, text: (r) => (r.v === undefined ? (r.error ?? '닿지 않아요') : r.v.engine.label) },
   ];
+
+  // ── 전체 합산 — 지역마다 한 줄. 붙은(`ok`) 지역만 값을 쓴다 ──
+  type AggRow = { name: string; entry: RegionEntry; v: typeof desk.status | undefined };
+  const aggRows = $derived<AggRow[]>(agg.entries.map((e) => ({ name: e.name, entry: e, v: e.state === 'ok' ? e.desk.status : undefined })));
+  const dash = '—';
+  const aggColumns: Column<AggRow>[] = [
+    { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
+    { key: 'head', label: 'head', mono: true, width: '90px', text: (r) => (r.v?.head === undefined ? dash : `r${r.v.head}`) },
+    { key: 'leader', label: '리더', mono: true, text: (r) => (r.v === undefined ? dash : r.v.leader.isLeader ? r.v.leader.holder : '팔로워가 답했어요') },
+    { key: 'gen', label: '게시 세대', mono: true, text: (r) => (r.v === undefined ? dash : r.v.published.generation ?? dash) },
+    { key: 'unf', label: '미완 전환', mono: true, width: '100px', text: (r) => (r.v === undefined ? dash : r.v.unfinished ? '1' : '0') },
+    { key: 'engine', label: '엔진', mono: true, text: (r) => (r.v === undefined ? dash : r.v.engine.label) },
+    { key: 'state', label: '상태', width: '130px', sort: (r) => regionBadge(r.entry.state).text },
+  ];
+  const aggUnfinished = $derived(aggRows.filter((r) => r.v?.unfinished === true));
+  const aggPending = $derived(aggRows.reduce((a, r) => a + (r.v?.pending.length ?? 0), 0));
 </script>
+
+{#snippet aggCell(r: AggRow, c: Column<AggRow>)}
+  {#if c.key === 'head'}<span class="acc">{c.text?.(r)}</span>
+  {:else if c.key === 'unf' && r.v?.unfinished}<Badge tone="warn">1건</Badge>
+  {:else if c.key === 'state'}{@const b = regionBadge(r.entry.state)}<Badge tone={b.tone}>{b.text}</Badge>
+  {:else}{c.text?.(r) ?? ''}{/if}
+{/snippet}
 
 {#snippet regCell(r: RegRow, c: Column<RegRow>)}
   {#if c.key === 'head'}<span class="acc">{c.text?.(r)}</span>
@@ -117,7 +149,29 @@
   {:else}{c.text?.(r) ?? ''}{/if}
 {/snippet}
 
-{#if !desk.live}
+{#if agg.on}
+  {#if agg.listState.loading}
+    <Skeleton height="160px" label="지역에 연결하는 중" />
+  {:else}
+    <div class="st">
+      {#each aggUnfinished as r (r.name)}
+        <Banner tone="warn">
+          {r.name} 에 끝나지 않은 전환이 있어요. 복구가 이어받아야 그 지역에서 다음 적용을 할 수 있어요.
+          {#snippet action()}
+            {#if agg.writable(r.name)}<Button size="sm" loading={r.entry.desk.recovering} onclick={() => { void r.entry.desk.recover(); }}>{r.entry.desk.recovering ? '이어받는 중' : `${r.name} 이어받기`}</Button>{/if}
+          {/snippet}
+        </Banner>
+      {/each}
+      <Card title="지역별 상태" padded={false}>
+        <DataTable rows={aggRows} rowKey={(r) => r.name} columns={aggColumns} cell={aggCell}
+          label="지역별 상태" emptyTitle="지역이 없어요" minHeight="0" />
+      </Card>
+      {#if aggPending > 0}
+        <div><Button size="sm" variant="text" href="/change/pending">적용 대기 plan {aggPending}개 — 적용 대기 화면에서 지역마다 영향을 확인해요 →</Button></div>
+      {/if}
+    </div>
+  {/if}
+{:else if !desk.live}
   <Skeleton height="160px" label="연결하는 중" />
 {:else}
   <div class="st">

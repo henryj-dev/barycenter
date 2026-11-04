@@ -4,6 +4,7 @@
    *
    * 기본은 head 다(desk 가 든 값). 머리 줄에서 리비전을 고르면 `GET /config/rendered?revision=` 로 그 리비전을 렌더해 본다.
    * 전역이면 지역도 고른다 — 그 지역의 중계 경로(`/api/v1/regions/<지역>/…`)로 읽기만 한다. 보는 지역(셸)은 안 바꾼다.
+   * 전체 합산(지역을 안 골랐다, §2.5)이면 셸의 desk 가 어디에도 안 붙어 있다 — 닿는 첫 지역을 먼저 보이고, 지역은 여기서 고른다.
    */
   import { getContext } from 'svelte';
   import { viewOfRendered, type RenderedView } from '@web/rendered-view';
@@ -18,23 +19,28 @@
   const scope = getContext<Scope | undefined>('scope');
   const global = $derived(scope?.mode === 'global');
 
-  /** 전역에서 고른 지역 — 처음은 셸이 보는 지역이다. */
+  /** 전체 합산 — 셸의 desk 는 안 붙어 있다. head 도 desk 에서 읽지 않는다. */
+  const aggregate = $derived(scope?.aggregate === true);
+  /** 전역에서 고른 지역 — 처음은 셸이 보는 지역이다(합산이면 닿는 첫 지역). */
   let regionPick = $state<string | undefined>();
-  const region = $derived(regionPick ?? scope?.region?.name);
   let regionNames = $state<string[]>([]);
+  let regionsRead = $state(false);
   $effect(() => {
     if (!global) return;
-    void loadRegions(desk.token).then((rs) => { regionNames = (rs ?? []).filter((r) => r.reachable && r.auth === undefined).map((r) => r.name); });
+    void loadRegions(desk.token).then((rs) => { regionNames = (rs ?? []).filter((r) => r.reachable && r.auth === undefined).map((r) => r.name); regionsRead = true; });
   });
-  /** 셸이 보는 곳과 같은가 — 같고 head 면 desk 의 값을 그대로 쓴다(새로 묻지 않는다). */
-  const own = $derived(!global || region === scope?.region?.name);
+  const region = $derived(regionPick ?? scope?.region?.name ?? (aggregate ? regionNames[0] : undefined));
+  /** 셸이 보는 곳과 같은가 — 같고 head 면 desk 의 값을 그대로 쓴다(새로 묻지 않는다). 합산이면 아니다. */
+  const own = $derived(!global || (!aggregate && region === scope?.region?.name));
+  /** 읽을 곳이 있다 — 셸의 desk 가 붙었거나, 합산에서 지역이 정해졌다. */
+  const ready = $derived(desk.live || (aggregate && region !== undefined));
   const at = (path: string): string => (global ? regionPath(region, path) : path);
 
   let rev = $state<string>(HEAD);
   let revs = $state<Rev[] | undefined>();
   $effect(() => {
     void desk.head;
-    if (!desk.live) return;
+    if (!ready) return;
     const path = at('/api/v1/config/revisions?limit=100');
     void getJson(path, desk.token).then((r) => { revs = Array.isArray(r) ? (r as Rev[]) : []; });
   });
@@ -52,7 +58,7 @@
   let loading = $state(false);
   let seq = 0;
   $effect(() => {
-    if (!desk.live) return;
+    if (!ready) return;
     if (own && rev === HEAD) { seq++; picked = undefined; failed = false; loading = false; return; }
     const q = rev === HEAD ? '' : `?revision=${encodeURIComponent(rev)}`;
     const path = at(`/api/v1/config/rendered${q}`);
@@ -69,7 +75,9 @@
   const headRev = $derived(own ? desk.head : undefined);
 </script>
 
-{#if !desk.live}
+{#if aggregate && regionNames.length === 0 && regionsRead}
+  <FieldMessage tone="error">설정을 읽을 지역이 없어요. 지역 화면에서 연결 상태를 봐요.</FieldMessage>
+{:else if !ready}
   <Skeleton height="320px" label="연결하는 중" />
 {:else}
   <div class="rc">

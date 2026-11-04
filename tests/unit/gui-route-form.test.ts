@@ -189,6 +189,7 @@ describe('화면 배선', () => {
   it('HTTP 라우트 분할 상세에 「URL로 다시 만들기」 (풀로 보내는 라우트만)', () => {
     const src = read('lists/HttpRouteList.svelte');
     expect(src).toContain('actions={rebuild}');
-    expect(src).toMatch(/isProxy\(key\)\}<Button[^>]*rebuild'\)\}>URL로 다시 만들기/);
+    // 합산이면 주소를 그 행의 지역으로 좁힌다(at(r, …)) — 닫는 괄호가 하나 더 붙는다.
+    expect(src).toMatch(/isProxy\(key\)\}<Button[^>]*rebuild'\)\)?\}>URL로 다시 만들기/);
   });
 });

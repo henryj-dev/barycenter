@@ -39,7 +39,7 @@
     return { tone: 'ok', text: `head r${r.status.head ?? '?'}` };
   };
   const columns: Column<RegionSummary>[] = [
-    { key: 'name', label: '지역', mono: true, sort: (r) => r.name },
+    { key: 'name', label: '지역', mono: true, sort: (r) => r.name, text: (r) => r.name },
     { key: 'state', label: '상태', sort: (r) => stateOf(r).text },
     { key: 'build', label: '판', mono: true, text: (r) => r.regionBuild ?? '모름' },
     { key: 'last', label: '마지막 확인', mono: true, muted: true, text: (r) => (r.lastOkAt === undefined || r.lastOkAt === null ? '—' : new Date(r.lastOkAt).toLocaleString()) },
