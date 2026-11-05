@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 121 심볼 · sha256:7a8b21036eb163351424f0f64dafc3a2b6ced098accd8862e2dbd7744f7d8d42
+# 125 심볼 · sha256:518a07fe37172a79ce80336f3c3c38509c0c950dd5840b88f311624ef8324978
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -28,7 +28,18 @@ export type ActivationEvidence = {
 export type AddressSet = {
     key: string;
     cidrs: string[];
-    source?: 'cloudflare';
+    source?: AddressSourceKind;
+    sourceOptions?: AddressSourceOptions;
+};
+── AddressSourceKind
+export type AddressSourceKind = typeof ADDRESS_SOURCE_KINDS[number];
+── AddressSourceOptions
+export type AddressSourceOptions = {
+    family?: 'ipv4' | 'ipv6';
+    services?: string[];
+    regions?: string[];
+    url?: string;
+    jsonPath?: string;
 };
 ── Algorithm
 export type Algorithm = 'round_robin' | 'source_ip_hash' | 'hash' | 'least_conn';
@@ -112,6 +123,8 @@ export type DecodeResult = {
     ok: false;
     issues: ModelIssue[];
 };
+── DiscoverySourceKind
+export type DiscoverySourceKind = typeof DISCOVERY_SOURCE_KINDS[number];
 ── DpRejection
 export declare class DpRejection extends Error {
     readonly kind: RejectionKind;
@@ -501,6 +514,14 @@ export type Pool = {
     sendProxyProtocol?: 'v1';
     healthCheck?: HealthCheck;
     upstreamTls?: UpstreamTls;
+    discovery?: PoolDiscovery;
+};
+── PoolDiscovery
+export type PoolDiscovery = {
+    source: DiscoverySourceKind;
+    query: string;
+    port?: number;
+    emptyMeans?: 'keep' | 'empty';
 };
 ── PreflightResult
 export type PreflightResult = {
