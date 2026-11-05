@@ -32,6 +32,7 @@ import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
 import { Sealer } from '../accounts/seal.js';
 import { AccountService, type AccountServiceOptions } from '../accounts/service.js';
 import { idpMfaKinds, idpMfaProvider } from '../accounts/mfa/registry.js';
+import { DEFAULT_ROLE_MAPPER, roleMapperFactory } from '../accounts/idp-roles/registry.js';
 import { smtpMailer } from '../accounts/mail.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
@@ -318,7 +319,19 @@ async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promis
     db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
     ...(mail === undefined ? {} : mail),
     ...(idpMfa === undefined ? {} : { idpMfa }),
+    roleMapper: roleMapperFromEnv(),
   });
+}
+
+/**
+ * **IdP 권한 위임의 매핑 구현** — `BARY_IDP_ROLES_KIND`(기본 `claims`). 모르는 이름이면 기동을 거부한다(조용히 다른 해석으로
+ * 떨어지지 않게). 무엇을 어떻게 매핑하는지(역할 클레임 · entitlement · 표)는 공급자마다 계정 DB 에 있다(「사람 → SSO 공급자」).
+ */
+function roleMapperFromEnv(): NonNullable<AccountServiceOptions['roleMapper']> {
+  const kind = env('BARY_IDP_ROLES_KIND', DEFAULT_ROLE_MAPPER);
+  const make = roleMapperFactory(kind);
+  if (kind !== DEFAULT_ROLE_MAPPER) log.info('accounts.idp_roles.kind', { kind });
+  return make;
 }
 
 /**

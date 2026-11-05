@@ -68,6 +68,7 @@ import {
   authorizationRequest, exchangeAuthorizationCode, exchangeForClaims, pkceChallenge, pkceVerifier,
   type OidcRpSettings,
 } from './oidc-code.js';
+import { roleProfilesView } from '../accounts/idp-roles/registry.js';
 
 export type ApiOptions = {
   /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
@@ -1167,27 +1168,35 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
     json(c.res, 200, {
       configured: api.oidcRp?.issuer ?? null,
       providers: await accountsOf(api).providers(),
+      // 클레임 자리 프로필(lodestar · keycloak · entra · okta)과 권하는 매핑 — 화면이 「프로필로 채우기」 에 쓴다. 비밀이 아니다.
+      profiles: roleProfilesView(),
     });
   }, { leaderFree: true }),
 
   /**
-   * 공급자 설정 — JIT(관리자가 명시해서 켠다, 켜도 auditor 만)와 역할 클레임·매핑(IdP 권한 정본 계정용, B3).
-   * 둘 중 준 것만 바꾼다.
+   * 공급자 설정 — JIT(관리자가 명시해서 켠다), 권한 매핑(역할 클레임 · 매핑 · entitlement 클레임 · 접두 · 표 · 프로필),
+   * 공급자 기본 IdP 정본(`idpAuthority`). 준 것만 바꾼다. 셋은 따로 저장된다 — 매핑을 먼저 저장해야 기본 정본을 켤 수 있다.
    */
   route<AccountApi>('POST', '/api/v1/sso-providers', 'admin', async (c, api) => {
     const b = (c.body ?? {}) as Record<string, unknown>;
     const issuer = bodyStr(c.body, 'issuer');
     const hasJit = typeof b['jitEnabled'] === 'boolean';
-    const hasRoles = 'roleClaim' in b || 'roleMap' in b;
-    if (!hasJit && !hasRoles) throw new StoreError(400, 'malformed', "본문에 'jitEnabled' 또는 'roleClaim'·'roleMap' 이 필요하다");
-    if (hasJit) await accountsOf(api).setProviderJit(issuer, b['jitEnabled'] as boolean, c.who.name, metaOf(c.req));
-    if (hasRoles) {
-      const claim = b['roleClaim'];
-      const map = b['roleMap'];
-      if (claim !== null && typeof claim !== 'string') throw new StoreError(400, 'malformed', "'roleClaim' 은 문자열 또는 null 이다");
-      if (map === null || typeof map !== 'object' || Array.isArray(map)) throw new StoreError(400, 'malformed', "'roleMap' 은 객체다");
-      await accountsOf(api).setProviderRoles(issuer, claim as string | null, map as Record<string, unknown>, c.who.name, metaOf(c.req));
+    const mappingKeys = ['profile', 'roleClaim', 'roleMap', 'entitlementClaim', 'entitlementPrefix', 'entitlementMap'] as const;
+    const hasMapping = mappingKeys.some((k) => k in b);
+    const hasAuthority = 'idpAuthority' in b;
+    if (!hasJit && !hasMapping && !hasAuthority) {
+      throw new StoreError(400, 'malformed', "본문에 'jitEnabled' · 'idpAuthority' · 매핑('roleClaim' · 'roleMap' · 'entitlement…' · 'profile') 중 하나가 필요하다");
     }
+    if (hasAuthority && typeof b['idpAuthority'] !== 'boolean') throw new StoreError(400, 'malformed', "'idpAuthority' 는 true | false 다");
+    const a = accountsOf(api);
+    if (hasJit) await a.setProviderJit(issuer, b['jitEnabled'] as boolean, c.who.name, metaOf(c.req));
+    if (hasMapping) {
+      const input: Record<string, unknown> = {};
+      for (const k of mappingKeys) if (k in b) input[k] = b[k];
+      await a.setProviderMapping(issuer, input, c.who.name, metaOf(c.req));
+    }
+    // 매핑 다음에 — 같은 요청으로 매핑과 기본 정본을 함께 켤 수 있게.
+    if (hasAuthority) await a.setProviderAuthority(issuer, b['idpAuthority'] as boolean, c.who.name, metaOf(c.req));
     json(c.res, 200, { updated: true });
   }, { leaderFree: true, sensitive: true }),
 

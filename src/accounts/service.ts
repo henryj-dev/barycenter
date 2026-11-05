@@ -13,7 +13,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import { minRole, PERSONAL_TOKEN, roleRank, scopesOfRole, type Principal, type Role } from '../api/auth.js';
+import { ALL_SCOPES, minRole, PERSONAL_TOKEN, roleRank, scopesOfRole, type Principal, type Role, type Scope } from '../api/auth.js';
 import type { Db, Queryable, Row } from '../store/pg.js';
 import { burnPasswordTime, hashPassword, needsRehash, passwordProblem, verifyPassword } from './password.js';
 import { mailText, type Mailer } from './mail.js';
@@ -21,6 +21,11 @@ import type { Sealer } from './seal.js';
 import { base32Encode, newTotpSecret, otpauthUri, verifyTotp } from './totp.js';
 import { localTotp } from './mfa/local.js';
 import type { MfaFailure, MfaMethod, MfaProvider } from './mfa/provider.js';
+import {
+  claimsConfigProblem, claimsMapper, isEntitlementEffect, type ClaimsMapperConfig, type EntitlementEffect,
+} from './idp-roles/claims.js';
+import { effectiveScopes, isScope, normScopes, type IdpAuthority, type RoleMapper, type RoleMapResult } from './idp-roles/mapper.js';
+import { roleProfile } from './idp-roles/registry.js';
 import { log } from '../obs/log.js';
 
 /** 세션 수명 (회원 공통 수치 1차) — 절대 12시간, 요청이 없으면 30분 뒤 끝난다. */
@@ -107,6 +112,80 @@ const str = (r: Row, k: string): string => String(r[k]);
 const opt = (r: Row, k: string): string | null => (r[k] === null || r[k] === undefined ? null : String(r[k]));
 const isRole = (v: unknown): v is Role => typeof v === 'string' && (ROLES as readonly string[]).includes(v);
 
+/**
+ * 「실효 관리자」 — 역할이 admin 이거나 admin 범위를 grant 받았고, admin 범위를 deny 받지 않았다(deny 가 이긴다).
+ * 마지막 관리자 보호 · 관리자 MFA 가 이것으로 잰다. 별칭 `u` 의 users 행에 쓴다.
+ */
+const ADMIN_SQL = `((u.role='admin' OR 'admin' = ANY(u.idp_grant)) AND NOT ('admin' = ANY(u.idp_deny)))`;
+/** 실효 권한 정본이 IdP 인가 — 그 사람의 정본이 idp 이거나, 이어진 공급자가 「이 공급자의 SSO 사용자는 모두 IdP 정본」 이다. */
+const IDP_AUTHORITY_SQL = `(u.role_authority='idp' OR EXISTS (SELECT 1 FROM user_identities pi JOIN sso_providers pp ON pp.issuer=pi.issuer
+  WHERE pi.user_id=u.id AND pp.idp_authority))`;
+/** 공급자 기본 정본 때문에 IdP 정본인가 — 화면이 「왜 손으로 못 바꾸나」 를 말한다. */
+const PROVIDER_AUTHORITY_SQL = `EXISTS (SELECT 1 FROM user_identities pi JOIN sso_providers pp ON pp.issuer=pi.issuer
+  WHERE pi.user_id=u.id AND pp.idp_authority)`;
+const PROVIDER_COLS = `issuer, jit_enabled, jit_role, role_claim, role_map, idp_authority, entitlement_claim, entitlement_prefix,
+  entitlement_map, updated_at, updated_by`;
+
+const scopeList = (v: unknown): Scope[] => (Array.isArray(v) ? normScopes(v.filter(isScope)) : []);
+/** 행의 권한(역할 · grant · deny). 역할이 모르는 값이면 undefined — 호출자가 닫는다. */
+function authorityOfRow(r: Row): IdpAuthority | undefined {
+  const role = r['role'];
+  if (!isRole(role)) return undefined;
+  return { role, grant: scopeList(r['idp_grant']), deny: scopeList(r['idp_deny']) };
+}
+const scopesOfAuthority = (a: IdpAuthority): Scope[] => effectiveScopes(a.role, a.grant, a.deny);
+const sameAuthority = (a: IdpAuthority, b: IdpAuthority): boolean =>
+  a.role === b.role && a.grant.join() === b.grant.join() && a.deny.join() === b.deny.join();
+/** 감사 · 화면에 남길 짧은 모양 — `operator +apply -write`. */
+const authorityText = (a: IdpAuthority): string =>
+  [a.role, ...a.grant.map((g) => `+${g}`), ...a.deny.map((d) => `-${d}`)].join(' ');
+
+/**
+ * 화면에 보일 권한 — 사람의 정본(`roleAuthority`, 손으로 고른 값)과 **실효** 정본(`idpAuthority` — 공급자 기본 정본 포함),
+ * IdP 가 준 grant/deny, 그리고 실효 범위. 행에 `idp_authority` · `by_provider` 칸이 있어야 한다.
+ */
+function authorityView(r: Row): {
+  roleAuthority: string; idpAuthority: boolean; roleAuthorityByProvider: boolean; idpGrant: Scope[]; idpDeny: Scope[]; scopes: Scope[];
+} {
+  const a = authorityOfRow(r);
+  return {
+    roleAuthority: str(r, 'role_authority'),
+    idpAuthority: r['idp_authority'] === true,
+    roleAuthorityByProvider: r['by_provider'] === true,
+    idpGrant: a?.grant ?? [], idpDeny: a?.deny ?? [],
+    scopes: a === undefined ? [] : scopesOfAuthority(a),
+  };
+}
+
+/** 공급자 행 → 매핑 설정. 저장할 때 이미 검사했다 — 여기서는 모양이 틀린 칸을 버린다(닫힘: 버린 값은 아무것도 열지 않는다). */
+function mappingOfRow(r: Row | undefined): ClaimsMapperConfig {
+  const roleMap: Record<string, Role> = {};
+  for (const [k, v] of Object.entries((r?.['role_map'] ?? {}) as Record<string, unknown>)) if (isRole(v)) roleMap[k] = v;
+  const entitlementMap: Record<string, EntitlementEffect> = {};
+  for (const [k, v] of Object.entries((r?.['entitlement_map'] ?? {}) as Record<string, unknown>)) if (isEntitlementEffect(v)) entitlementMap[k] = v;
+  return {
+    roleClaim: r === undefined ? null : opt(r, 'role_claim'),
+    roleMap,
+    entitlementClaim: r === undefined ? null : opt(r, 'entitlement_claim'),
+    entitlementPrefix: r === undefined ? '' : String(r['entitlement_prefix'] ?? ''),
+    entitlementMap,
+  };
+}
+
+/** Role Change SET 이 말한 것 — 서명 · iss · aud · 시각 · 모양은 호출자(`verifyRoleChange`)가 끝냈다. */
+export type RoleChange = { sub: string; jti: string; txn: bigint; exp: number; roles: string[]; entitlements: string[] };
+export type RoleChangeOutcome =
+  /** 반영했다. `sessions` 는 끊은 세션 수(역할을 잃었을 때만 끊는다 — 나머지는 다음 요청이 새 범위로 읽는다). */
+  | { kind: 'applied'; from: string; to: string; sessions: number }
+  /** 이 사람에게는 반영하지 않는다(연결 없음 · IdP 정본 아님 · 로컬 정지). 감사에만 남는다. */
+  | { kind: 'ignored'; why: string }
+  /** 같은 jti 를 이미 받았다. */
+  | { kind: 'replay' }
+  /** 이 사람에게 이미 적용한 것보다 새롭지 않다(늦게 온 옛 스냅숏). */
+  | { kind: 'stale' }
+  /** 안전장치가 막았다(마지막 관리자 · 관리자 MFA). 역할은 그대로다. */
+  | { kind: 'refused'; why: string };
+
 export type AccountServiceOptions = {
   db: Db;
   sealer: Sealer;
@@ -122,6 +201,11 @@ export type AccountServiceOptions = {
    * issuer 는 OIDC 로그인의 issuer 와 같아야 한다 — 연결의 subject 가 IdP 의 사용자 id 다.
    */
   idpMfa?: { issuer: string; provider: MfaProvider };
+  /**
+   * 역할 매핑 구현(`./idp-roles/registry.ts` 의 `roleMapperFactory`). 기본은 일반 클레임 매핑(`claims`).
+   * 공급자 행의 설정(역할 클레임 · 매핑 · entitlement)을 받아 매퍼를 만든다.
+   */
+  roleMapper?: (c: ClaimsMapperConfig) => RoleMapper;
 };
 
 export class AccountService {
@@ -132,8 +216,10 @@ export class AccountService {
   readonly #mail: { mailer: Mailer; base: string } | undefined;
   readonly #localMfa: MfaProvider;
   readonly #idpMfa: { issuer: string; provider: MfaProvider; host: string } | undefined;
+  readonly #roleMapper: (c: ClaimsMapperConfig) => RoleMapper;
 
   constructor(o: AccountServiceOptions) {
+    this.#roleMapper = o.roleMapper ?? claimsMapper;
     this.#db = o.db;
     this.#sealer = o.sealer;
     this.#issuer = o.issuer ?? 'barycenter';
@@ -190,7 +276,7 @@ export class AccountService {
   /** 활성 admin 이 하나도 없을 때만. 호스트 CLI 가 부른다. */
   async bootstrap(by: string): Promise<string> {
     return this.#tx(async (c) => {
-      const admins = (await c.query(`SELECT 1 FROM users WHERE role='admin' AND status='active' LIMIT 1`)).rows;
+      const admins = (await c.query(`SELECT 1 FROM users u WHERE ${ADMIN_SQL} AND u.status='active' LIMIT 1`)).rows;
       if (admins.length > 0) throw new AccountError(409, 'admin_exists', '활성 관리자가 이미 있다 — bootstrap 은 첫 관리자용이다');
       const t = token();
       await c.query(
@@ -523,7 +609,8 @@ export class AccountService {
    * IdP 가 확인해 준 (iss, sub) 로 끝낸다.
    *   login: 연결된 계정 → 로그인. MFA 가 있는 사람(관리자는 필수)은 둘째 인증 단계 — IdP 의 amr/acr 는 믿지 않는다.
    *          둘째 인증은 로컬 TOTP, 또는 IdP OTP 가 켜졌고 그 IdP 와 이어졌으면 IdP OTP(IdP 에 직접 물어 판정받는다).
-   *          연결이 없으면 그 공급자에 JIT 가 켜졌을 때만 auditor 계정을 새로 만들고, 아니면 `not_linked`.
+   *          연결이 없으면 그 공급자에 JIT 가 켜졌을 때만 계정을 새로 만들고(auditor — 공급자 기본 IdP 정본이면 매핑 결과),
+   *          아니면 `not_linked`. 실효 정본이 IdP 면 로그인마다 클레임을 매핑으로 맞춘다(`#syncIdp`).
    *   link : 다른 계정에 이미 묶인 identity 면 거절.
    */
   async completeSso(intent: 'login' | 'link', userIdForLink: string | null, claims: SsoClaims, meta: Meta = {}): Promise<SsoOutcome> {
@@ -543,28 +630,41 @@ export class AccountService {
       });
       return { kind: 'linked' };
     }
-    let row = (await this.#q(
-      `SELECT u.id, u.username, u.role, u.role_authority, u.status, t.confirmed_at AS totp_at
+    const userSql = `SELECT u.id, u.username, u.role, u.idp_grant, u.idp_deny, u.status, t.confirmed_at AS totp_at,
+              ${IDP_AUTHORITY_SQL} AS idp_authority
          FROM user_identities i JOIN users u ON u.id=i.user_id LEFT JOIN mfa_totp t ON t.user_id=u.id
-        WHERE i.issuer=$1 AND i.subject=$2`, [claims.iss, claims.sub],
-    ))[0];
+        WHERE i.issuer=$1 AND i.subject=$2`;
+    let row = (await this.#q(userSql, [claims.iss, claims.sub]))[0];
+    const provider = (await this.#q(`SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1`, [claims.iss]))[0];
+    const mapper = this.#roleMapper(mappingOfRow(provider));
     if (row === undefined) {
-      const p = (await this.#q(`SELECT jit_enabled FROM sso_providers WHERE issuer=$1`, [claims.iss]))[0];
-      if (p === undefined || p['jit_enabled'] !== true) return { kind: 'not_linked' };
-      const userId = await this.#jitCreate(claims, meta);
-      row = { id: userId, username: '', role: 'auditor', role_authority: 'local', status: 'active', totp_at: null };
+      if (provider === undefined || provider['jit_enabled'] !== true) return { kind: 'not_linked' };
+      // 공급자 기본 정본이 켜졌으면 **만들기 전에** 매핑을 본다 — IdP 가 이 앱의 역할을 안 준 사람의 계정을 만들지 않는다.
+      if (provider['idp_authority'] === true) {
+        const pre = mapper.fromClaims(claims.raw ?? {});
+        if (!pre.ok) {
+          await this.#audit(undefined, `sso:${claims.iss}`, 'account.idp_role_refused', null, meta, { why: pre.detail, reason: pre.reason, jit: true });
+          return { kind: 'denied' };
+        }
+      }
+      await this.#jitCreate(claims, meta);
+      row = (await this.#q(userSql, [claims.iss, claims.sub]))[0];
+      if (row === undefined) return { kind: 'denied' };
     }
     // 로컬 정지·삭제가 **언제나 우선**이다 — IdP 가 뭐라 하든.
     if (str(row, 'status') !== 'active') return { kind: 'denied' };
     const userId = str(row, 'id');
+    let current = authorityOfRow(row);
+    if (current === undefined) return { kind: 'denied' };
     const factor = await this.#factorOf(undefined, userId, row['totp_at'] !== null);
-    if (str(row, 'role_authority') === 'idp') {
-      const synced = await this.#syncIdpRole(userId, str(row, 'role') as Role, factor !== undefined, claims, meta);
+    if (row['idp_authority'] === true) {
+      const mapped = mapper.fromClaims(claims.raw ?? {});
+      const synced = await this.#syncIdp(userId, mapped, `sso:${claims.iss}`, meta);
       if (synced === undefined) return { kind: 'denied' };
-      row = { ...row, role: synced };
+      current = synced;
     }
     await this.#q(`UPDATE user_identities SET last_login_at=now() WHERE issuer=$1 AND subject=$2`, [claims.iss, claims.sub]);
-    if (str(row, 'role') === 'admin' && factor === undefined) return { kind: 'denied' };
+    if (scopesOfAuthority(current).includes('admin') && factor === undefined) return { kind: 'denied' };
     if (factor !== undefined) {
       const sid = await this.#newSession(userId, this.#now() + MFA_PENDING_MS, true, ['sso'], meta);
       return { kind: 'mfa', sessionId: sid, maxAgeS: MFA_PENDING_MS / 1000, method: factor };
@@ -575,48 +675,120 @@ export class AccountService {
   }
 
   /**
-   * **IdP 권한 정본 계정의 역할 맞추기** (B3). 공급자의 역할 클레임(문자열 또는 원소 하나짜리 배열)을 매핑으로
-   * 바꿔 계정 역할에 쓴다. 맞출 수 없으면 undefined — 호출자가 **그 로그인을 거부**한다:
-   *   · 공급자에 클레임 이름·매핑이 없다 / 클레임이 없다 / 원소가 둘 이상이다 / 매핑에 없는 값이다
-   *   · 마지막 활성 관리자를 내리려 한다(관리자가 0 이 되지 않게 — 내리지 않고 거부)
-   *   · 관리자로 올리는데 둘째 인증(로컬 TOTP 또는 IdP OTP)이 없다(관리자는 MFA 가 필수)
-   * 맞춘 역할은 그 사람의 **다른 세션에도** 다음 요청부터 보인다(`authenticate` 가 역할을 매번 읽는다).
+   * **IdP 정본 계정의 권한 맞추기** — 로그인 때(클레임)와 Role Change 때(SET) 같은 문이다. 매핑 결과(역할 · grant · deny)를
+   * 계정 행에 쓴다. 맞출 수 없으면 undefined — 호출자가 **그 로그인을 거부**한다(로컬 역할로 떨어지지 않는다):
+   *   · 매핑이 거절했다(클레임 없음 · 매핑에 있는 값 없음 · 모르는 entitlement · 설정 없음)
+   *   · 마지막 실효 관리자의 admin 범위를 빼려 한다(관리자가 0 이 되지 않게 — 빼지 않고 거부)
+   *   · admin 범위를 새로 주는데 둘째 인증(로컬 TOTP 또는 IdP OTP)이 없다(관리자는 MFA 가 필수)
+   * 맞춘 권한은 그 사람의 **다른 세션에도** 다음 요청부터 보인다(`authenticate` 가 매번 읽는다).
    */
-  async #syncIdpRole(userId: string, current: Role, hasMfa: boolean, claims: SsoClaims, meta: Meta): Promise<Role | undefined> {
-    const refuse = async (why: string): Promise<undefined> => {
-      await this.#audit(undefined, `sso:${claims.iss}`, 'account.idp_role_refused', userId, meta, { why });
+  async #syncIdp(userId: string, mapped: RoleMapResult, actor: string, meta: Meta): Promise<IdpAuthority | undefined> {
+    if (!mapped.ok) {
+      await this.#audit(undefined, actor, 'account.idp_role_refused', userId, meta, { why: mapped.detail, reason: mapped.reason });
       return undefined;
+    }
+    const out = await this.#tx((c) => this.#applyIdp(c, userId, mapped.value, actor, meta));
+    return out.ok ? out.value : undefined;
+  }
+
+  /**
+   * 권한을 바꾼다(호출자의 트랜잭션 안). 안전장치는 `#syncIdp` 의 둘. 거부는 감사(`account.idp_role_refused`)에 남긴다.
+   * 실효 관리자 행을 잠근다 — 둘이 동시에 서로를 내려 관리자가 0 이 되는 경합을 막는다(`updateUser` 와 같다).
+   */
+  async #applyIdp(c: Queryable, userId: string, next: IdpAuthority, actor: string, meta: Meta):
+    Promise<{ ok: true; value: IdpAuthority; from: IdpAuthority } | { ok: false; why: string }> {
+    await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
+    const r = (await c.query(
+      `SELECT u.role, u.idp_grant, u.idp_deny, u.status, t.confirmed_at AS totp_at
+         FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u`, [userId],
+    )).rows[0];
+    const cur = r === undefined ? undefined : authorityOfRow(r);
+    if (r === undefined || cur === undefined) return { ok: false, why: '계정이 없다' };
+    if (sameAuthority(cur, next)) return { ok: true, value: cur, from: cur };
+    const refuse = async (why: string): Promise<{ ok: false; why: string }> => {
+      await this.#audit(c, actor, 'account.idp_role_refused', userId, meta, { why, from: authorityText(cur), to: authorityText(next) });
+      return { ok: false, why };
     };
-    const p = (await this.#q(`SELECT role_claim, role_map FROM sso_providers WHERE issuer=$1`, [claims.iss]))[0];
-    if (p === undefined || p['role_claim'] === null) return refuse('공급자에 역할 클레임이 설정되지 않았다');
-    const v = claims.raw?.[str(p, 'role_claim')];
-    const key = typeof v === 'string' ? v : Array.isArray(v) && v.length === 1 && typeof v[0] === 'string' ? v[0] : undefined;
-    if (key === undefined) return refuse('역할 클레임이 없거나 값이 하나가 아니다');
-    const map = (p['role_map'] ?? {}) as Record<string, unknown>;
-    const mapped = map[key];
-    if (!isRole(mapped)) return refuse(`매핑에 없는 역할 값: ${key}`);
-    if (mapped === current) return mapped;
-    if (mapped === 'admin' && !hasMfa) return refuse('관리자로 올리려면 둘째 인증(인증 앱 또는 IdP OTP)이 먼저 있어야 한다');
-    return this.#tx(async (c) => {
-      if (current === 'admin') {
-        await c.query(`SELECT id FROM users WHERE role='admin' AND status='active' FOR UPDATE`);
-        const others = (await c.query(
-          `SELECT count(*) AS n FROM users WHERE role='admin' AND status='active' AND id <> $1`, [userId],
-        )).rows[0]!;
-        if (Number(others['n']) === 0) {
-          await this.#audit(c, `sso:${claims.iss}`, 'account.idp_role_refused', userId, meta, { why: '마지막 활성 관리자를 내리려 했다' });
-          return undefined;
-        }
+    const wasAdmin = scopesOfAuthority(cur).includes('admin');
+    const isAdmin = scopesOfAuthority(next).includes('admin');
+    if (isAdmin && !wasAdmin && (await this.#factorOf(c, userId, r['totp_at'] !== null && r['totp_at'] !== undefined)) === undefined) {
+      return refuse('관리자 범위를 주려면 둘째 인증(인증 앱 또는 IdP OTP)이 먼저 있어야 한다');
+    }
+    if (wasAdmin && !isAdmin && str(r, 'status') === 'active') {
+      const others = (await c.query(
+        `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL} AND u.status='active' AND u.id <> $1`, [userId],
+      )).rows[0]!;
+      if (Number(others['n']) === 0) return refuse('마지막 활성 관리자의 관리자 범위를 빼려 했다');
+    }
+    await c.query(`UPDATE users SET role=$2, idp_grant=$3, idp_deny=$4, updated_at=now() WHERE id=$1`, [userId, next.role, next.grant, next.deny]);
+    await this.#audit(c, actor, 'account.idp_role_sync', userId, meta, { from: authorityText(cur), to: authorityText(next) });
+    return { ok: true, value: next, from: cur };
+  }
+
+  /**
+   * **Role Change 즉시 반영** — IdP 가 push 한 서명된 SET(검증은 호출자가 끝냈다). 다음 로그인을 기다리지 않는다.
+   *
+   * 한 트랜잭션: jti 를 먼저 적고(같은 SET 의 재전송은 replay), 그 사람의 마지막 txn 보다 새로울 때만(늦게 온 옛 스냅숏은 stale)
+   * 로그인과 **같은 매핑 · 같은 안전장치**(`#applyIdp`)로 바꾼다. 열린 세션은 다음 요청부터 새 범위로 읽힌다(`authenticate`).
+   *
+   * IdP 정본이 아닌 사람 · 연결이 없는 sub · 로컬 정지는 **무시**한다(감사만). 매핑이 거절하면(이 앱의 역할이 없어졌다)
+   * 로컬 역할로 떨어지지 않는다 — 모든 범위를 deny 하고 세션을 끊는다(다음 로그인은 매핑이 다시 판정한다).
+   */
+  async applyRoleChange(issuer: string, ch: RoleChange, meta: Meta = {}): Promise<RoleChangeOutcome> {
+    const actor = `sso:${issuer}`;
+    return this.#tx(async (c): Promise<RoleChangeOutcome> => {
+      const fresh = (await c.query(
+        `INSERT INTO idp_set_jti (issuer, jti, expires_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+        [issuer, ch.jti, new Date(ch.exp * 1000)],
+      )).rowCount;
+      if (fresh === 0) return { kind: 'replay' };
+      const i = (await c.query(
+        `SELECT i.user_id, i.role_change_txn::text AS txn, u.status, ${IDP_AUTHORITY_SQL} AS idp_authority
+           FROM user_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF i`,
+        [issuer, ch.sub],
+      )).rows[0];
+      if (i === undefined) {
+        await this.#audit(c, actor, 'account.idp_role_change_ignored', null, meta, { why: '이 sub 와 이어진 계정이 없다', sub: ch.sub });
+        return { kind: 'ignored', why: 'no_identity' };
       }
-      await c.query(`UPDATE users SET role=$2, updated_at=now() WHERE id=$1`, [userId, mapped]);
-      await this.#audit(c, `sso:${claims.iss}`, 'account.idp_role_sync', userId, meta, { from: current, to: mapped });
-      return mapped;
+      const userId = str(i, 'user_id');
+      if (i['txn'] !== null && BigInt(str(i, 'txn')) >= ch.txn) return { kind: 'stale' };
+      await c.query(`UPDATE user_identities SET role_change_txn=$3 WHERE issuer=$1 AND subject=$2`, [issuer, ch.sub, ch.txn.toString()]);
+      const ignore = async (why: string, text: string): Promise<RoleChangeOutcome> => {
+        await this.#audit(c, actor, 'account.idp_role_change_ignored', userId, meta, { why: text });
+        return { kind: 'ignored', why };
+      };
+      if (str(i, 'status') !== 'active') return ignore('not_active', '로컬에서 정지 · 삭제된 계정이다(로컬이 우선)');
+      if (i['idp_authority'] !== true) return ignore('local_authority', '권한 정본이 로컬이다 — IdP 의 역할 변경을 쓰지 않는다');
+      const p = (await c.query(`SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1`, [issuer])).rows[0];
+      const mapped = this.#roleMapper(mappingOfRow(p)).fromLists({ roles: ch.roles, entitlements: ch.entitlements });
+      let next: IdpAuthority;
+      if (mapped.ok) {
+        next = mapped.value;
+      } else {
+        const cur = (await c.query(`SELECT role FROM users WHERE id=$1`, [userId])).rows[0];
+        const role = cur !== undefined && isRole(cur['role']) ? cur['role'] : 'auditor';
+        // 역할을 잃었다 — 로컬 역할로 떨어지지 않게 **모든 범위를 뺀다**. 역할 칸은 그대로 둔다(마지막 관리자 판정이 같은 문을 지난다).
+        next = { role, grant: [], deny: [...ALL_SCOPES] };
+        await this.#audit(c, actor, 'account.idp_role_refused', userId, meta, { why: mapped.detail, reason: mapped.reason, roleChange: true });
+      }
+      const out = await this.#applyIdp(c, userId, next, actor, meta);
+      if (!out.ok) return { kind: 'refused', why: out.why };
+      let sessions = 0;
+      if (!scopesOfAuthority(out.value).includes('read')) {
+        sessions = (await c.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId])).rowCount ?? 0;
+      }
+      const from = authorityText(out.from);
+      const to = authorityText(out.value);
+      await this.#audit(c, actor, 'account.idp_role_change', userId, meta, { from, to, sessions });
+      return { kind: 'applied', from, to, sessions };
     });
   }
 
   /**
-   * JIT — **새 계정만** 만든다(이름·이메일이 같은 기존 계정에 붙이지 않는다). 역할은 auditor 고정, 비밀번호 없음,
-   * 이메일은 안 받는다(IdP 의 이메일을 확인된 주소로 믿지 않는다). 이름이 겹치면 짧은 접미사를 붙인다.
+   * JIT — **새 계정만** 만든다(이름·이메일이 같은 기존 계정에 붙이지 않는다). 처음에는 auditor · 비밀번호 없음 · 이메일 없음
+   * (IdP 의 이메일을 확인된 주소로 믿지 않는다). 공급자 기본 정본이 켜졌으면 바로 이어 매핑 결과로 맞춘다(`completeSso`).
+   * 이름이 겹치면 짧은 접미사를 붙인다.
    */
   async #jitCreate(claims: SsoClaims, meta: Meta): Promise<string> {
     const base = (claims.preferredUsername ?? '').toLowerCase().replace(/[^a-z0-9._-]/g, '').replace(/^[^a-z0-9]+/, '').slice(0, 50)
@@ -646,45 +818,121 @@ export class AccountService {
       if (n === 0) throw new AccountError(404, 'no_identity', '그 연결이 없다');
       // IdP OTP 가 관리자의 유일한 둘째 인증이면 끊지 않는다 — 관리자는 MFA 가 필수다(인증 앱 해제를 막는 것과 같다).
       const u = (await c.query(
-        `SELECT u.role, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`, [userId],
+        `SELECT ${ADMIN_SQL} AS admin, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`, [userId],
       )).rows[0];
-      if (u !== undefined && str(u, 'role') === 'admin'
+      if (u !== undefined && u['admin'] === true
         && (await this.#factorOf(c, userId, u['confirmed_at'] !== null && u['confirmed_at'] !== undefined)) === undefined) {
         throw new AccountError(409, 'admin_needs_mfa', '관리자의 유일한 둘째 인증(IdP OTP)이라 끊을 수 없다 — 먼저 인증 앱을 등록한다');
       }
+      // 공급자 기본 정본으로 IdP 정본이던 사람이 연결을 끊으면 로컬 정본이 된다 — IdP 가 준 grant/deny 를 남기지 않는다.
+      await this.#settleLocal(c, userId);
       await this.#audit(c, `user:${userId}`, 'account.sso_unlink', userId, meta, { issuer });
     });
   }
 
+  /**
+   * 실효 정본이 로컬이면 IdP 가 준 grant/deny 를 지운다(호출자의 트랜잭션 안). 로컬 정본에서는 역할만이 권한이다.
+   * 지우면 범위가 늘 수 있다(deny 가 사라진다) — 그래서 정본을 로컬로 돌리는 것은 관리자만 하는 일이다(`updateUser` ·
+   * 공급자 기본 정본 끄기). 연결 끊기는 그 사람의 역할을 넘지 않는다(역할 범위로 돌아갈 뿐이다).
+   */
+  async #settleLocal(c: Queryable, userId?: string): Promise<void> {
+    await c.query(
+      `UPDATE users u SET idp_grant='{}', idp_deny='{}' WHERE (cardinality(u.idp_grant) > 0 OR cardinality(u.idp_deny) > 0)
+          AND NOT ${IDP_AUTHORITY_SQL} ${userId === undefined ? '' : 'AND u.id=$1'}`,
+      userId === undefined ? [] : [userId],
+    );
+  }
+
   async providers(): Promise<unknown[]> {
-    return (await this.#q(
-      `SELECT issuer, jit_enabled, jit_role, role_claim, role_map, updated_at, updated_by FROM sso_providers ORDER BY issuer`,
-    )).map((r) => ({
-      issuer: str(r, 'issuer'), jitEnabled: r['jit_enabled'] === true, jitRole: str(r, 'jit_role'),
-      roleClaim: opt(r, 'role_claim'), roleMap: r['role_map'] ?? {},
-      updatedAt: iso(r['updated_at']), updatedBy: str(r, 'updated_by'),
-    }));
+    return (await this.#q(`SELECT ${PROVIDER_COLS} FROM sso_providers ORDER BY issuer`)).map((r) => {
+      const m = mappingOfRow(r);
+      return {
+        issuer: str(r, 'issuer'), jitEnabled: r['jit_enabled'] === true, jitRole: str(r, 'jit_role'),
+        roleClaim: m.roleClaim, roleMap: m.roleMap,
+        /** 이 공급자의 SSO 사용자는 모두 IdP 권한 정본이다. */
+        idpAuthority: r['idp_authority'] === true,
+        entitlementClaim: m.entitlementClaim, entitlementPrefix: m.entitlementPrefix, entitlementMap: m.entitlementMap,
+        updatedAt: iso(r['updated_at']), updatedBy: str(r, 'updated_by'),
+      };
+    });
   }
 
   /**
    * 공급자의 역할 클레임·매핑 (B3). 매핑 값은 auditor | operator | admin 만. 클레임을 비우면(null) 그 공급자의
-   * IdP 정본 계정은 로그인이 거부된다 — 맞출 근거가 없으니까.
+   * IdP 정본 계정은 로그인이 거부된다 — 맞출 근거가 없으니까. entitlement 설정은 그대로 둔다.
    */
   async setProviderRoles(issuer: string, roleClaim: string | null, roleMap: Record<string, unknown>, by: string, meta: Meta = {}): Promise<void> {
+    await this.setProviderMapping(issuer, { roleClaim, roleMap }, by, meta);
+  }
+
+  /**
+   * 공급자의 권한 매핑 — 역할 클레임 · 매핑, entitlement 클레임 · 접두 · 표. **준 칸만** 바꾼다. `profile`(lodestar · keycloak ·
+   * entra · okta)을 주면 그 프로필의 클레임 자리로 먼저 채우고, 같이 준 칸이 그 위에 덮는다. 저장 전에 전체 모양을 본다.
+   */
+  async setProviderMapping(issuer: string, input: {
+    profile?: unknown; roleClaim?: unknown; roleMap?: unknown;
+    entitlementClaim?: unknown; entitlementPrefix?: unknown; entitlementMap?: unknown;
+  }, by: string, meta: Meta = {}): Promise<void> {
     if (issuer.trim() === '') throw new AccountError(400, 'malformed', 'issuer 가 비었다');
-    if (roleClaim !== null && !/^[A-Za-z0-9_.:/-]{1,200}$/.test(roleClaim)) throw new AccountError(400, 'malformed', '역할 클레임 이름 모양이 아니다');
-    for (const [k, v] of Object.entries(roleMap)) {
-      if (k === '' || k.length > 200) throw new AccountError(400, 'malformed', '매핑의 IdP 역할 값이 비었거나 너무 길다');
-      if (!isRole(v)) throw new AccountError(400, 'malformed', `매핑 값은 auditor | operator | admin 이다 (${k} → ${String(v)})`);
-    }
+    const bad = (m: string): never => { throw new AccountError(400, 'malformed', m); };
+    const nullableStr = (v: unknown, what: string): string | null =>
+      (v === null || v === '' ? null : typeof v === 'string' ? v.trim() : bad(`'${what}' 은 문자열 또는 null 이다`));
+    const obj = (v: unknown, what: string): Record<string, unknown> =>
+      (v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : bad(`'${what}' 은 객체다`));
     await this.#tx(async (c) => {
+      const cur = mappingOfRow((await c.query(`SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1 FOR UPDATE`, [issuer])).rows[0]);
+      let next: ClaimsMapperConfig = { ...cur };
+      if (input.profile !== undefined) {
+        const p = typeof input.profile === 'string' ? roleProfile(input.profile) : undefined;
+        if (p === undefined) bad(`모르는 프로필: ${String(input.profile)} (lodestar · keycloak · entra · okta)`);
+        next = { ...next, ...p! };
+      }
+      if (input.roleClaim !== undefined) next.roleClaim = nullableStr(input.roleClaim, 'roleClaim');
+      if (input.roleMap !== undefined) next.roleMap = obj(input.roleMap, 'roleMap') as Record<string, Role>;
+      if (input.entitlementClaim !== undefined) next.entitlementClaim = nullableStr(input.entitlementClaim, 'entitlementClaim');
+      if (input.entitlementPrefix !== undefined) {
+        next.entitlementPrefix = typeof input.entitlementPrefix === 'string' ? input.entitlementPrefix.trim() : bad("'entitlementPrefix' 는 문자열이다");
+      }
+      if (input.entitlementMap !== undefined) next.entitlementMap = obj(input.entitlementMap, 'entitlementMap') as Record<string, EntitlementEffect>;
+      const problem = claimsConfigProblem(next);
+      if (problem !== undefined) bad(problem);
       await c.query(
-        `INSERT INTO sso_providers (issuer, role_claim, role_map, updated_by) VALUES ($1,$2,$3,$4)
+        `INSERT INTO sso_providers (issuer, role_claim, role_map, entitlement_claim, entitlement_prefix, entitlement_map, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT (issuer) DO UPDATE SET role_claim=EXCLUDED.role_claim, role_map=EXCLUDED.role_map,
-                                            updated_at=now(), updated_by=EXCLUDED.updated_by`,
-        [issuer, roleClaim, JSON.stringify(roleMap), by],
+           entitlement_claim=EXCLUDED.entitlement_claim, entitlement_prefix=EXCLUDED.entitlement_prefix,
+           entitlement_map=EXCLUDED.entitlement_map, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        [issuer, next.roleClaim, JSON.stringify(next.roleMap), next.entitlementClaim, next.entitlementPrefix,
+          JSON.stringify(next.entitlementMap), by],
       );
-      await this.#audit(c, by, 'account.sso_roles', null, meta, { issuer, roleClaim, keys: Object.keys(roleMap).length });
+      await this.#audit(c, by, 'account.sso_roles', null, meta, {
+        issuer, roleClaim: next.roleClaim, keys: Object.keys(next.roleMap).length,
+        entitlementClaim: next.entitlementClaim, entitlementPrefix: next.entitlementPrefix, entitlements: Object.keys(next.entitlementMap).length,
+      });
+    });
+  }
+
+  /**
+   * 「이 공급자의 SSO 사용자는 모두 IdP 권한 정본」 켬/끔. **켜려면 역할 클레임 · 매핑이 먼저 있어야 한다** — 없이 켜면 그 공급자로
+   * 오는 사람이 모두 로그인 거부된다(관리자 포함). 켜는 순간 역할을 바꾸지 않는다 — 다음 SSO 로그인 · Role Change 가 안전장치를
+   * 지나며 맞춘다. 끄면 그 사람들은 각자의 정본으로 돌아가고, 로컬 정본이 된 사람의 grant/deny 는 지운다(역할만 남는다).
+   */
+  async setProviderAuthority(issuer: string, enabled: boolean, by: string, meta: Meta = {}): Promise<void> {
+    if (issuer.trim() === '') throw new AccountError(400, 'malformed', 'issuer 가 비었다');
+    await this.#tx(async (c) => {
+      if (enabled) {
+        const m = mappingOfRow((await c.query(`SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1`, [issuer])).rows[0]);
+        if (m.roleClaim === null || Object.keys(m.roleMap).length === 0) {
+          throw new AccountError(409, 'roles_not_configured', '역할 클레임과 매핑을 먼저 저장한다 — 없이 켜면 이 공급자로 오는 사람이 모두 로그인을 거부당한다');
+        }
+      }
+      await c.query(
+        `INSERT INTO sso_providers (issuer, idp_authority, updated_by) VALUES ($1,$2,$3)
+         ON CONFLICT (issuer) DO UPDATE SET idp_authority=EXCLUDED.idp_authority, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        [issuer, enabled, by],
+      );
+      if (!enabled) await this.#settleLocal(c);
+      await this.#audit(c, by, 'account.sso_authority', null, meta, { issuer, enabled });
     });
   }
 
@@ -711,7 +959,7 @@ export class AccountService {
     const id = identifier.trim().toLowerCase();
     const u = (await this.#q(
       `SELECT u.id, u.username, u.role, u.status, u.password_hash, u.failed_logins, u.locked_until,
-              t.confirmed_at AS totp_at
+              t.confirmed_at AS totp_at, ${ADMIN_SQL} AS admin
          FROM users u LEFT JOIN mfa_totp t ON t.user_id = u.id
         WHERE (u.username=$1 OR u.email=$1) AND u.status <> 'deleted'`,
       [id],
@@ -736,7 +984,7 @@ export class AccountService {
       await this.#q(`UPDATE users SET password_hash=$2 WHERE id=$1`, [userId, await hashPassword(password)]);
     }
     // admin 인데 MFA 가 없는 상태는 만들지 않지만(수락·승격이 막는다), 만들어졌다면 들이지 않는다.
-    if (str(u, 'role') === 'admin' && factor === undefined) return { kind: 'denied' };
+    if (u['admin'] === true && factor === undefined) return { kind: 'denied' };
     if (factor !== undefined) {
       const sid = await this.#newSession(userId, now + MFA_PENDING_MS, true, ['pwd'], meta);
       return { kind: 'mfa', sessionId: sid, maxAgeS: MFA_PENDING_MS / 1000, method: factor };
@@ -814,6 +1062,8 @@ export class AccountService {
       [new Date(this.#now() - AUDIT_RETENTION_MS)],
     ))[0]!;
     await this.#q(`DELETE FROM auth_throttle WHERE last_failure_at < $1`, [new Date(this.#now() - LOCK_MAX_MS)]);
+    // 수명이 지난 SET 의 jti — 그 뒤의 재전송은 exp 검사가 막는다.
+    await this.#q(`DELETE FROM idp_set_jti WHERE expires_at < $1`, [new Date(this.#now())]);
     return { audit: Number(audit['n']) };
   }
 
@@ -935,6 +1185,7 @@ export class AccountService {
     const r = await this.#q(
       `SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id
         WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending AND u.status='active'
+          AND NOT ('read' = ANY(u.idp_deny))
           AND s.last_seen_at > now() - make_interval(secs => $2::double precision / 1000)`,
       [sessionHash, SESSION_IDLE_MS],
     );
@@ -970,7 +1221,7 @@ export class AccountService {
     if (sessionId === undefined || sessionId === '') return undefined;
     const h = sha(sessionId);
     const r = (await this.#q(
-      `SELECT s.user_id, s.mfa_at, s.last_seen_at, u.username, u.role
+      `SELECT s.user_id, s.mfa_at, s.last_seen_at, u.username, u.role, u.idp_grant, u.idp_deny
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending
           AND s.last_seen_at > now() - make_interval(secs => $2::double precision / 1000)
@@ -978,16 +1229,20 @@ export class AccountService {
       [h, SESSION_IDLE_MS],
     ))[0];
     if (r === undefined) return undefined;
-    const role = str(r, 'role');
-    if (!isRole(role)) return undefined;
+    const a = authorityOfRow(r);
+    if (a === undefined) return undefined;
+    const role = a.role;
+    // **실효 범위** = 역할 범위 ∪ grant − deny (IdP 정본 계정의 grant/deny — 로컬 정본은 비어 있다). 요청마다 읽는다 —
+    // Role Change 가 바꾼 범위가 열린 세션에 다음 요청부터 보인다.
+    const scopes = scopesOfAuthority(a);
     const mfaAt = r['mfa_at'] === null ? undefined : new Date(String(r['mfa_at'])).getTime();
-    // 관리자는 MFA 를 거친 세션만 — 역할이 세션 도중 admin 으로 올라도 그 세션으로는 관리자가 못 된다.
-    if (role === 'admin' && mfaAt === undefined) return undefined;
+    // 관리자 범위는 MFA 를 거친 세션만 — 세션 도중 admin 으로 올라도(역할이든 grant 든) 그 세션으로는 관리자가 못 된다.
+    if (scopes.includes('admin') && mfaAt === undefined) return undefined;
     if (this.#now() - new Date(String(r['last_seen_at'])).getTime() > TOUCH_EVERY_MS) {
       await this.#q(`UPDATE sessions SET last_seen_at=now() WHERE id_hash=$1`, [h]);
     }
     return {
-      name: `user:${str(r, 'username')}`, role, scopes: new Set(scopesOfRole(role)),
+      name: `user:${str(r, 'username')}`, role, scopes: new Set(scopes),
       account: { userId: str(r, 'user_id'), sessionHash: h, ...(mfaAt === undefined ? {} : { mfaAt }) },
     };
   }
@@ -1012,7 +1267,8 @@ export class AccountService {
 
   async me(userId: string): Promise<unknown> {
     const u = (await this.#q(
-      `SELECT u.id, u.username, u.display_name, u.email, u.role, u.role_authority, u.created_at,
+      `SELECT u.id, u.username, u.display_name, u.email, u.role, u.role_authority, u.created_at, u.idp_grant, u.idp_deny,
+              ${IDP_AUTHORITY_SQL} AS idp_authority, ${PROVIDER_AUTHORITY_SQL} AS by_provider,
               t.confirmed_at AS totp_at,
               (SELECT count(*) FROM mfa_recovery_codes c WHERE c.user_id=u.id AND c.used_at IS NULL) AS codes_left
          FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
@@ -1036,7 +1292,7 @@ export class AccountService {
     return {
       identities, hasPassword,
       id: str(u, 'id'), username: str(u, 'username'), displayName: opt(u, 'display_name'),
-      email: opt(u, 'email'), role: str(u, 'role'), roleAuthority: str(u, 'role_authority'),
+      email: opt(u, 'email'), role: str(u, 'role'), ...authorityView(u),
       createdAt: iso(u['created_at']),
       // method: 로그인 · step-up 이 받는 코드. 'idp' 면 그 IdP 의 인증 앱 코드다(로컬 인증 앱이 있어도 쓰지 않는다).
       mfa: {
@@ -1104,8 +1360,8 @@ export class AccountService {
   async removeTotp(userId: string, password: string, meta: Meta = {}): Promise<void> {
     await this.#requirePassword(userId, password);
     await this.#tx(async (c) => {
-      const u = (await c.query(`SELECT role FROM users WHERE id=$1`, [userId])).rows[0];
-      if (u !== undefined && str(u, 'role') === 'admin') throw new AccountError(409, 'admin_needs_mfa', '관리자는 인증 앱을 해제할 수 없다');
+      const u = (await c.query(`SELECT ${ADMIN_SQL} AS admin FROM users u WHERE u.id=$1`, [userId])).rows[0];
+      if (u !== undefined && u['admin'] === true) throw new AccountError(409, 'admin_needs_mfa', '관리자는 인증 앱을 해제할 수 없다');
       await c.query('DELETE FROM mfa_totp WHERE user_id=$1', [userId]);
       await c.query('DELETE FROM mfa_recovery_codes WHERE user_id=$1', [userId]);
       await this.#audit(c, `user:${userId}`, 'account.totp_disable', userId, meta);
@@ -1228,7 +1484,7 @@ export class AccountService {
     if (m === null) return undefined;
     const r = (await this.#q(
       `SELECT t.id, t.user_id, t.name, t.role AS token_role, t.token_hash, t.expires_at, t.revoked_at, t.last_used_at,
-              u.username, u.role AS user_role, u.status
+              u.username, u.role AS user_role, u.idp_grant, u.idp_deny, u.status
          FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.lookup=$1`, [m[1]],
     ))[0];
     if (r === undefined) return undefined;
@@ -1242,6 +1498,10 @@ export class AccountService {
     const ownerRole = str(r, 'user_role');
     if (!isRole(tokenRole) || !isRole(ownerRole)) return undefined;
     const role = minRole(tokenRole, ownerRole);
+    // 토큰은 주인의 **실효 범위**를 넘지 못한다 — 역할 범위와 주인의 지금 범위(grant/deny 반영)의 교집합. grant 는 토큰으로
+    // 옮겨 가지 않고(토큰 역할이 정한다), deny 는 옮겨 간다.
+    const owner = new Set(scopesOfAuthority({ role: ownerRole, grant: scopeList(r['idp_grant']), deny: scopeList(r['idp_deny']) }));
+    const scopes = scopesOfRole(role).filter((x) => owner.has(x));
     const last = r['last_used_at'] === null ? undefined : new Date(String(r['last_used_at'])).getTime();
     if (last === undefined || now - last >= TOUCH_EVERY_MS) {
       await this.#q(
@@ -1250,7 +1510,7 @@ export class AccountService {
       );
     }
     return {
-      name: `user:${str(r, 'username')}/token:${str(r, 'name')}`, role, scopes: new Set(scopesOfRole(role)),
+      name: `user:${str(r, 'username')}/token:${str(r, 'name')}`, role, scopes: new Set(scopes),
       token: { id: str(r, 'id'), userId: str(r, 'user_id') },
     };
   }
@@ -1272,7 +1532,7 @@ export class AccountService {
     if (!UUID.test(tokenId)) return false;
     const r = await this.#q(
       `SELECT 1 FROM api_tokens t JOIN users u ON u.id=t.user_id
-        WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at > $2 AND u.status='active'`,
+        WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at > $2 AND u.status='active' AND NOT ('read' = ANY(u.idp_deny))`,
       [tokenId, new Date(this.#now())],
     );
     return r.length > 0;
@@ -1283,13 +1543,14 @@ export class AccountService {
   async listUsers(): Promise<unknown[]> {
     return (await this.#q(
       `SELECT u.id, u.username, u.display_name, u.email, u.role, u.role_authority, u.status, u.created_at,
-              u.locked_until, u.last_login_at, t.confirmed_at IS NOT NULL AS totp,
+              u.locked_until, u.last_login_at, t.confirmed_at IS NOT NULL AS totp, u.idp_grant, u.idp_deny,
+              ${IDP_AUTHORITY_SQL} AS idp_authority, ${PROVIDER_AUTHORITY_SQL} AS by_provider,
               (SELECT count(*) FROM api_tokens k WHERE k.user_id=u.id AND k.revoked_at IS NULL AND k.expires_at > $1) AS tokens
          FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.status <> 'deleted' ORDER BY u.username`,
       [new Date(this.#now())],
     )).map((u) => ({
       id: str(u, 'id'), username: str(u, 'username'), displayName: opt(u, 'display_name'), email: opt(u, 'email'),
-      role: str(u, 'role'), roleAuthority: str(u, 'role_authority'), status: str(u, 'status'),
+      role: str(u, 'role'), ...authorityView(u), status: str(u, 'status'),
       createdAt: iso(u['created_at']), lockedUntil: isoOpt(u['locked_until']), totp: u['totp'] === true,
       lastLoginAt: isoOpt(u['last_login_at']),
       /** 철회되지 않고 만료되지 않은 개인 API 토큰 수. */
@@ -1310,32 +1571,47 @@ export class AccountService {
       throw new AccountError(400, 'malformed', '상태는 active | suspended 다 (삭제는 따로)');
     }
     await this.#tx(async (c) => {
-      // admin 행을 잠근다 — 둘이 동시에 서로를 강등해 관리자가 0 이 되는 경합을 막는다.
-      await c.query(`SELECT id FROM users WHERE role='admin' AND status='active' FOR UPDATE`);
+      // 실효 관리자 행을 잠근다 — 둘이 동시에 서로를 강등해 관리자가 0 이 되는 경합을 막는다.
+      await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
       const u = (await c.query(
-        `SELECT u.role, u.status, u.role_authority, t.confirmed_at,
-                EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id=u.id) AS has_identity
+        `SELECT u.role, u.status, u.role_authority, u.idp_grant, u.idp_deny, t.confirmed_at,
+                EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id=u.id) AS has_identity,
+                ${PROVIDER_AUTHORITY_SQL} AS by_provider
            FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u`,
         [userId],
       )).rows[0];
       if (u === undefined || str(u, 'status') === 'deleted') throw new AccountError(404, 'no_user', '그런 계정이 없다');
+      const cur = authorityOfRow(u);
+      if (cur === undefined) throw new AccountError(409, 'bad_role', '계정의 역할 값을 읽을 수 없다');
       const authority = patch.roleAuthority ?? str(u, 'role_authority');
-      // IdP 가 정본이면 역할은 SSO 로그인이 맞춘다 — 관리자가 손으로 바꾸면 다음 로그인에 덮인다. 그러니 막는다.
-      if (authority === 'idp' && patch.role !== undefined) {
-        throw new AccountError(409, 'role_from_idp', '이 계정의 역할은 IdP 가 정한다 — 먼저 권한 정본을 local 로 바꾼다');
+      const byProvider = u['by_provider'] === true;
+      const idpRules = authority === 'idp' || byProvider;
+      // IdP 가 정본이면 역할은 SSO 로그인 · Role Change 가 맞춘다 — 관리자가 손으로 바꾸면 다음에 덮인다. 그러니 막는다.
+      if (idpRules && patch.role !== undefined) {
+        throw new AccountError(409, 'role_from_idp', byProvider
+          ? '이 계정의 역할은 IdP 가 정한다(공급자 기본 정본) — 먼저 「사람 → SSO 공급자」 에서 공급자 기본 IdP 정본을 끈다'
+          : '이 계정의 역할은 IdP 가 정한다 — 먼저 권한 정본을 local 로 바꾼다');
       }
       if (authority === 'idp' && u['has_identity'] !== true) {
         throw new AccountError(409, 'no_identity', 'SSO 가 연결되지 않은 계정은 IdP 를 권한 정본으로 둘 수 없다');
       }
       const role = patch.role ?? str(u, 'role');
       const status = patch.status ?? str(u, 'status');
-      if (str(u, 'role') === 'admin' && str(u, 'status') === 'active' && (role !== 'admin' || status !== 'active')) {
+      if (!isRole(role)) throw new AccountError(409, 'bad_role', '계정의 역할 값을 읽을 수 없다');
+      // 로컬 정본이 되면 IdP 가 준 grant/deny 는 지운다 — 역할만이 권한이다.
+      const next: IdpAuthority = idpRules ? { role, grant: cur.grant, deny: cur.deny } : { role, grant: [], deny: [] };
+      const wasAdmin = scopesOfAuthority(cur).includes('admin');
+      const isAdmin = scopesOfAuthority(next).includes('admin');
+      if (wasAdmin && str(u, 'status') === 'active' && (!isAdmin || status !== 'active')) {
         await this.#guardLastAdmin(c, userId);
       }
-      if (role === 'admin' && str(u, 'role') !== 'admin' && (await this.#factorOf(c, userId, u['confirmed_at'] !== null)) === undefined) {
+      if (isAdmin && !wasAdmin && (await this.#factorOf(c, userId, u['confirmed_at'] !== null)) === undefined) {
         throw new AccountError(409, 'admin_needs_mfa', '관리자로 올리려면 그 사람이 먼저 인증 앱을 등록(또는 IdP OTP 의 IdP 와 연결)해야 한다');
       }
-      await c.query(`UPDATE users SET role=$2, status=$3, role_authority=$4, updated_at=now() WHERE id=$1`, [userId, role, status, authority]);
+      await c.query(
+        `UPDATE users SET role=$2, status=$3, role_authority=$4, idp_grant=$5, idp_deny=$6, updated_at=now() WHERE id=$1`,
+        [userId, role, status, authority, next.grant, next.deny],
+      );
       if (status === 'suspended') {
         await c.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId]);
       }
@@ -1353,10 +1629,10 @@ export class AccountService {
    */
   async deleteUser(userId: string, by: string, meta: Meta = {}): Promise<void> {
     await this.#tx(async (c) => {
-      await c.query(`SELECT id FROM users WHERE role='admin' AND status='active' FOR UPDATE`);
-      const u = (await c.query(`SELECT role, status FROM users WHERE id=$1 FOR UPDATE`, [userId])).rows[0];
+      await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
+      const u = (await c.query(`SELECT u.status, ${ADMIN_SQL} AS admin FROM users u WHERE u.id=$1 FOR UPDATE`, [userId])).rows[0];
       if (u === undefined || str(u, 'status') === 'deleted') throw new AccountError(404, 'no_user', '그런 계정이 없다');
-      if (str(u, 'role') === 'admin' && str(u, 'status') === 'active') await this.#guardLastAdmin(c, userId);
+      if (u['admin'] === true && str(u, 'status') === 'active') await this.#guardLastAdmin(c, userId);
       await c.query(
         `UPDATE users SET status='deleted', email=NULL, password_hash=NULL, display_name=NULL,
                           deleted_at=now(), updated_at=now() WHERE id=$1`,
@@ -1380,7 +1656,7 @@ export class AccountService {
 
   async #guardLastAdmin(c: Queryable, exceptUserId: string): Promise<void> {
     const others = (await c.query(
-      `SELECT count(*) AS n FROM users WHERE role='admin' AND status='active' AND id <> $1`, [exceptUserId],
+      `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL} AND u.status='active' AND u.id <> $1`, [exceptUserId],
     )).rows[0]!;
     if (Number(others['n']) === 0) {
       throw new AccountError(409, 'last_admin', '마지막 활성 관리자는 강등·정지·삭제할 수 없다');

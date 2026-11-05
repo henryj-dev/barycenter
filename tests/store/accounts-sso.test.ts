@@ -250,17 +250,26 @@ describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
     expect(me.role).toBe('operator');
   });
 
-  it('**클레임 없음·값 둘·매핑에 없는 값은 로그인 거부** — 로컬 역할로 떨어지지 않는다', async () => {
+  it('**클레임 없음·모양 틀림·매핑에 없는 값은 로그인 거부** — 로컬 역할로 떨어지지 않는다', async () => {
     const base = await serve();
     await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator' }, 'test');
     const id = await idpUser(base);
-    for (const claims of [{}, { roles: ['ops', 'x'] }, { roles: ['nope'] }, { roles: 'nope' }]) {
+    for (const claims of [{}, { roles: ['ops', 7] }, { roles: ['nope'] }, { roles: 'nope' }]) {
       who = { sub: 'idp-1', ...claims };
       expect((await sso(base)).status).toBe(401);
     }
     expect(await roleOf(id)).toBe('operator');
     const refused = (await db.query(`SELECT count(*) AS n FROM account_audit WHERE action='account.idp_role_refused'`)).rows[0]!['n'];
     expect(Number(refused)).toBe(4);
+  });
+
+  it('**역할 값이 여럿이면 매핑에 있는 것만, 그중 가장 높은 역할** (A안 — 다른 앱의 역할이 섞여 와도 된다)', async () => {
+    const base = await serve();
+    await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator', view: 'auditor' }, 'test');
+    const id = await idpUser(base);
+    who = { sub: 'idp-1', roles: ['view', 'other-app', 'ops'] };
+    expect((await sso(base)).status).toBe(200);
+    expect(await roleOf(id)).toBe('operator');
   });
 
   it('**로컬 정지가 우선** — IdP 가 멀쩡하다고 해도', async () => {
