@@ -2199,7 +2199,10 @@ async function handle(
       // 크게 남긴다 — 거절된 역할 변경은 「권한 축소가 반영되지 않았다」 는 뜻일 수 있고, 그 사실은 이 줄에만 있다. 토큰은 남기지 않는다.
       log.warn('oidc.role_change.refused', { reason: verdict.reason, ip: ipOf(req) });
       // 서명을 못 지난 것은 인증 실패로 센다(같은 IP 제한) — 아무나 이 문으로 서명 검증을 무한히 돌리지 못하게.
-      const retryAfter = verdict.status === 401 ? authFailures.record(`role-change:${ipOf(req) ?? 'unknown'}`) : undefined;
+      // `record` 는 비동기 결과다(실패 제한 저장소, #206) — 기다리지 않으면 Promise 가 늘 「막힘」 으로 읽혀 모든 거절이 429 가 된다.
+      // 저장소에 닿지 못하면(pg 장애) 막지 않고 거절 이유 그대로 답한다 — 이 문은 어차피 거절이다.
+      const limit = verdict.status === 401 ? await authFailures.record(`role-change:${ipOf(req) ?? 'unknown'}`) : undefined;
+      const retryAfter = limit?.ok === true ? limit.retryAfterS : undefined;
       if (retryAfter !== undefined) {
         json(res, 429, { code: 'rate_limited', message: '거절이 너무 많다 — 잠시 뒤 다시 보낸다' }, { 'retry-after': String(retryAfter) });
         return;
