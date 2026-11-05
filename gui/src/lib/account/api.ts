@@ -14,11 +14,21 @@ export type Role = 'auditor' | 'operator' | 'admin';
 export type Me = {
   id: string; username: string; displayName: string | null; email: string | null;
   role: Role; roleAuthority: string; createdAt: string;
-  mfa: { totp: boolean; recoveryCodesLeft: number };
+  /**
+   * `method` — 로그인 · step-up 이 받는 코드. 'idp' 면 `idp`(IdP 호스트)의 인증 앱 코드다(IdP OTP — 로컬 인증 앱은 필수가 아니다).
+   * IdP OTP 를 모르는 옛 서버는 보내지 않는다 — 없으면 'totp' 로 읽는다.
+   */
+  mfa: { totp: boolean; recoveryCodesLeft: number; method?: 'totp' | 'idp'; idp?: string };
   sessions: { createdAt: string; lastSeenAt: string; expiresAt: string; methods: string[]; ip: string | null; userAgent: string | null }[];
   identities: { issuer: string; subject: string; linkedAt: string; lastLoginAt: string | null }[];
   hasPassword: boolean;
 };
+
+/** 둘째 인증이 있는가 — 로컬 인증 앱 또는 IdP OTP. 민감 작업(step-up)을 할 수 있다. */
+export const hasMfa = (me: Me): boolean => me.mfa.totp || me.mfa.method === 'idp';
+
+/** 둘째 인증 단계의 답 — IdP OTP 대상이면 `method: 'idp'` 와 IdP 호스트가 붙는다. */
+export type MfaRequired = { status: 'mfa_required'; method?: 'idp'; idp?: string };
 
 export type SsoProvider = { issuer: string; jitEnabled: boolean; jitRole: string; roleClaim: string | null; roleMap: Record<string, Role> };
 export type SsoProviders = { configured: string | null; providers: SsoProvider[] };
@@ -76,7 +86,7 @@ async function call<T>(method: string, path: string, body?: unknown, retried = f
 
 export const accountApi = {
   login: (username: string, password: string) =>
-    call<{ status: 'ok' | 'mfa_required' }>('POST', '/api/v1/session/login', { username, password }),
+    call<{ status: 'ok' } | MfaRequired>('POST', '/api/v1/session/login', { username, password }),
   mfa: (code: string) => call<{ status: 'ok' }>('POST', '/api/v1/session/mfa', { code }),
   logout: () => call<undefined>('POST', '/api/v1/session/logout', {}),
   features: () => call<{ accounts: boolean; mail: boolean; sso: boolean }>('GET', '/api/v1/account/features'),

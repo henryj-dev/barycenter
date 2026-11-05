@@ -7,6 +7,9 @@
  * 던지고, 서버는 그 요청을 거부한다 — 캐시로 넘기지 않는다.
  *
  * A 단계에 **없는 것**: SSO 연결·JIT·IdP 권한 정본·IdP MFA·메일 재설정(B 단계).
+ *
+ * 둘째 인증 수단은 어댑터다(`./mfa/`). 기본은 로컬 TOTP, IdP OTP 를 켜면(`idpMfa`) 그 IdP 와 이어진 사람은
+ * IdP 의 OTP 로 통과한다. 복구 코드는 언제나 로컬이다.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
@@ -16,6 +19,9 @@ import { burnPasswordTime, hashPassword, needsRehash, passwordProblem, verifyPas
 import { mailText, type Mailer } from './mail.js';
 import type { Sealer } from './sealer/provider.js';
 import { base32Encode, newTotpSecret, otpauthUri, verifyTotp } from './totp.js';
+import { localTotp } from './mfa/local.js';
+import type { MfaFailure, MfaMethod, MfaProvider } from './mfa/provider.js';
+import { log } from '../obs/log.js';
 
 /** 세션 수명 (회원 공통 수치 1차) — 절대 12시간, 요청이 없으면 30분 뒤 끝난다. */
 export const SESSION_MAX_MS = 12 * 60 * 60 * 1000;
@@ -72,8 +78,11 @@ export class AccountError extends Error {
 export type Meta = { ip?: string; userAgent?: string };
 export type LoginOutcome =
   | { kind: 'session'; sessionId: string; maxAgeS: number }
-  | { kind: 'mfa'; sessionId: string; maxAgeS: number }
+  | { kind: 'mfa'; sessionId: string; maxAgeS: number; method: SecondFactorKind }
   | { kind: 'denied' };
+
+/** 그 사람의 둘째 인증이 어느 쪽인가 — 화면이 「어느 코드를 넣는가」를 말한다. */
+export type SecondFactorKind = 'totp' | 'idp';
 
 /** IdP 가 서명한 클레임 중 우리가 쓰는 것. 검증은 호출자(`verifiedIdClaims`)가 끝냈다. */
 export type SsoClaims = {
@@ -108,6 +117,11 @@ export type AccountServiceOptions = {
   mailer?: Mailer;
   /** 메일 속 링크의 앞부분(`BARY_PUBLIC_URL`). 메일을 켜려면 같이 있어야 한다. */
   publicUrl?: string;
+  /**
+   * IdP OTP. 켜면 `user_identities` 에서 **이 issuer** 와 이어진 사람의 둘째 인증이 IdP OTP 다(로컬 TOTP 대신).
+   * issuer 는 OIDC 로그인의 issuer 와 같아야 한다 — 연결의 subject 가 IdP 의 사용자 id 다.
+   */
+  idpMfa?: { issuer: string; provider: MfaProvider };
 };
 
 export class AccountService {
@@ -116,12 +130,16 @@ export class AccountService {
   readonly #issuer: string;
   readonly #now: () => number;
   readonly #mail: { mailer: Mailer; base: string } | undefined;
+  readonly #localMfa: MfaProvider;
+  readonly #idpMfa: { issuer: string; provider: MfaProvider; host: string } | undefined;
 
   constructor(o: AccountServiceOptions) {
     this.#db = o.db;
     this.#sealer = o.sealer;
     this.#issuer = o.issuer ?? 'barycenter';
     this.#now = o.now ?? Date.now;
+    this.#localMfa = localTotp({ sealer: this.#sealer, now: () => this.#now() });
+    this.#idpMfa = o.idpMfa === undefined ? undefined : { ...o.idpMfa, host: hostOf(o.idpMfa.issuer) };
     this.#mail = o.mailer !== undefined && o.publicUrl !== undefined && o.publicUrl !== ''
       ? { mailer: o.mailer, base: o.publicUrl.replace(/\/+$/, '') } : undefined;
   }
@@ -143,6 +161,11 @@ export class AccountService {
     const r = await this.#sealer.open(sealed, aad);
     if (!r.ok) throw new Error(`봉인 열기 실패 (${r.reason}): ${r.detail}`);
     return r.plain;
+  }
+
+  /** IdP OTP 가 켜졌으면 화면에 보일 IdP 이름(issuer 의 호스트). 비밀이 아니다. */
+  idpMfaHost(): string | undefined {
+    return this.#idpMfa?.host;
   }
 
   // ── 저장소 접근 — 실패는 전부 「못 물었다」 ─────────────────────────────
@@ -512,7 +535,8 @@ export class AccountService {
 
   /**
    * IdP 가 확인해 준 (iss, sub) 로 끝낸다.
-   *   login: 연결된 계정 → 로그인(관리자·인증 앱 등록자는 **로컬 TOTP** 단계 — IdP MFA 는 인정하지 않는다).
+   *   login: 연결된 계정 → 로그인. MFA 가 있는 사람(관리자는 필수)은 둘째 인증 단계 — IdP 의 amr/acr 는 믿지 않는다.
+   *          둘째 인증은 로컬 TOTP, 또는 IdP OTP 가 켜졌고 그 IdP 와 이어졌으면 IdP OTP(IdP 에 직접 물어 판정받는다).
    *          연결이 없으면 그 공급자에 JIT 가 켜졌을 때만 auditor 계정을 새로 만들고, 아니면 `not_linked`.
    *   link : 다른 계정에 이미 묶인 identity 면 거절.
    */
@@ -547,17 +571,17 @@ export class AccountService {
     // 로컬 정지·삭제가 **언제나 우선**이다 — IdP 가 뭐라 하든.
     if (str(row, 'status') !== 'active') return { kind: 'denied' };
     const userId = str(row, 'id');
+    const factor = await this.#factorOf(undefined, userId, row['totp_at'] !== null);
     if (str(row, 'role_authority') === 'idp') {
-      const synced = await this.#syncIdpRole(userId, str(row, 'role') as Role, row['totp_at'] !== null, claims, meta);
+      const synced = await this.#syncIdpRole(userId, str(row, 'role') as Role, factor !== undefined, claims, meta);
       if (synced === undefined) return { kind: 'denied' };
       row = { ...row, role: synced };
     }
     await this.#q(`UPDATE user_identities SET last_login_at=now() WHERE issuer=$1 AND subject=$2`, [claims.iss, claims.sub]);
-    const hasTotp = row['totp_at'] !== null;
-    if (str(row, 'role') === 'admin' && !hasTotp) return { kind: 'denied' };
-    if (hasTotp) {
+    if (str(row, 'role') === 'admin' && factor === undefined) return { kind: 'denied' };
+    if (factor !== undefined) {
       const sid = await this.#newSession(userId, this.#now() + MFA_PENDING_MS, true, ['sso'], meta);
-      return { kind: 'mfa', sessionId: sid, maxAgeS: MFA_PENDING_MS / 1000 };
+      return { kind: 'mfa', sessionId: sid, maxAgeS: MFA_PENDING_MS / 1000, method: factor };
     }
     const sid = await this.#newSession(userId, this.#now() + SESSION_MAX_MS, false, ['sso'], meta);
     await this.#audit(undefined, `user:${userId}`, 'session.login', userId, meta, { sso: claims.iss });
@@ -569,10 +593,10 @@ export class AccountService {
    * 바꿔 계정 역할에 쓴다. 맞출 수 없으면 undefined — 호출자가 **그 로그인을 거부**한다:
    *   · 공급자에 클레임 이름·매핑이 없다 / 클레임이 없다 / 원소가 둘 이상이다 / 매핑에 없는 값이다
    *   · 마지막 활성 관리자를 내리려 한다(관리자가 0 이 되지 않게 — 내리지 않고 거부)
-   *   · 관리자로 올리는데 인증 앱(TOTP)이 없다(관리자는 로컬 MFA 가 필수)
+   *   · 관리자로 올리는데 둘째 인증(로컬 TOTP 또는 IdP OTP)이 없다(관리자는 MFA 가 필수)
    * 맞춘 역할은 그 사람의 **다른 세션에도** 다음 요청부터 보인다(`authenticate` 가 역할을 매번 읽는다).
    */
-  async #syncIdpRole(userId: string, current: Role, hasTotp: boolean, claims: SsoClaims, meta: Meta): Promise<Role | undefined> {
+  async #syncIdpRole(userId: string, current: Role, hasMfa: boolean, claims: SsoClaims, meta: Meta): Promise<Role | undefined> {
     const refuse = async (why: string): Promise<undefined> => {
       await this.#audit(undefined, `sso:${claims.iss}`, 'account.idp_role_refused', userId, meta, { why });
       return undefined;
@@ -586,7 +610,7 @@ export class AccountService {
     const mapped = map[key];
     if (!isRole(mapped)) return refuse(`매핑에 없는 역할 값: ${key}`);
     if (mapped === current) return mapped;
-    if (mapped === 'admin' && !hasTotp) return refuse('관리자로 올리려면 인증 앱이 먼저 있어야 한다');
+    if (mapped === 'admin' && !hasMfa) return refuse('관리자로 올리려면 둘째 인증(인증 앱 또는 IdP OTP)이 먼저 있어야 한다');
     return this.#tx(async (c) => {
       if (current === 'admin') {
         await c.query(`SELECT id FROM users WHERE role='admin' AND status='active' FOR UPDATE`);
@@ -634,6 +658,14 @@ export class AccountService {
     await this.#tx(async (c) => {
       const n = (await c.query(`DELETE FROM user_identities WHERE issuer=$1 AND subject=$2 AND user_id=$3`, [issuer, subject, userId])).rowCount;
       if (n === 0) throw new AccountError(404, 'no_identity', '그 연결이 없다');
+      // IdP OTP 가 관리자의 유일한 둘째 인증이면 끊지 않는다 — 관리자는 MFA 가 필수다(인증 앱 해제를 막는 것과 같다).
+      const u = (await c.query(
+        `SELECT u.role, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`, [userId],
+      )).rows[0];
+      if (u !== undefined && str(u, 'role') === 'admin'
+        && (await this.#factorOf(c, userId, u['confirmed_at'] !== null && u['confirmed_at'] !== undefined)) === undefined) {
+        throw new AccountError(409, 'admin_needs_mfa', '관리자의 유일한 둘째 인증(IdP OTP)이라 끊을 수 없다 — 먼저 인증 앱을 등록한다');
+      }
       await this.#audit(c, `user:${userId}`, 'account.sso_unlink', userId, meta, { issuer });
     });
   }
@@ -710,18 +742,18 @@ export class AccountService {
       if (!ok) await this.#failed(userId, Number(u['failed_logins']), meta);
       return { kind: 'denied' };
     }
-    const hasTotp = u['totp_at'] !== null;
-    // **인증 앱이 있으면 여기서 실패 계수를 지우지 않는다** — 비밀번호를 아는 상대가 로그인을 되풀이해
+    const factor = await this.#factorOf(undefined, userId, u['totp_at'] !== null);
+    // **둘째 인증이 있으면 여기서 실패 계수를 지우지 않는다** — 비밀번호를 아는 상대가 로그인을 되풀이해
     // 계수를 지우며 인증 코드를 무한히 넣을 수 있다. 지우는 것은 MFA 단계가 성공했을 때다.
-    if (!hasTotp) await this.#q(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
+    if (factor === undefined) await this.#q(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
     if (needsRehash(str(u, 'password_hash'))) {
       await this.#q(`UPDATE users SET password_hash=$2 WHERE id=$1`, [userId, await hashPassword(password)]);
     }
-    // admin 인데 TOTP 가 없는 상태는 만들지 않지만(수락·승격이 막는다), 만들어졌다면 들이지 않는다.
-    if (str(u, 'role') === 'admin' && !hasTotp) return { kind: 'denied' };
-    if (hasTotp) {
+    // admin 인데 MFA 가 없는 상태는 만들지 않지만(수락·승격이 막는다), 만들어졌다면 들이지 않는다.
+    if (str(u, 'role') === 'admin' && factor === undefined) return { kind: 'denied' };
+    if (factor !== undefined) {
       const sid = await this.#newSession(userId, now + MFA_PENDING_MS, true, ['pwd'], meta);
-      return { kind: 'mfa', sessionId: sid, maxAgeS: MFA_PENDING_MS / 1000 };
+      return { kind: 'mfa', sessionId: sid, maxAgeS: MFA_PENDING_MS / 1000, method: factor };
     }
     const sid = await this.#newSession(userId, now + SESSION_MAX_MS, false, ['pwd'], meta);
     await this.#audit(undefined, `user:${str(u, 'username')}`, 'session.login', userId, meta);
@@ -808,8 +840,8 @@ export class AccountService {
     const now = this.#now();
     return this.#tx(async (c) => {
       const s = (await c.query(
-        `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.locked_until, u.status, t.secret_sealed, t.last_step
-           FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN mfa_totp t ON t.user_id = s.user_id
+        `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.locked_until, u.status
+           FROM sessions s JOIN users u ON u.id = s.user_id
           WHERE s.id_hash=$1 AND s.mfa_pending AND s.revoked_at IS NULL AND s.expires_at > now()
           FOR UPDATE OF s, u`,
         [sha(pendingId)],
@@ -818,11 +850,14 @@ export class AccountService {
       const userId = str(s, 'user_id');
       // 인증 코드도 같은 계정 잠금에 걸린다 — 비밀번호를 아는 상대가 코드를 무작정 넣는 길을 막는다.
       if (this.#locked(s['locked_until'], now)) return { kind: 'denied' } as const;
-      const method = await this.#secondFactor(c, userId, code, s['secret_sealed'] === null ? null : str(s, 'secret_sealed'), Number(s['last_step']));
-      if (method === undefined) {
+      const f = await this.#secondFactor(c, userId, code);
+      if (!f.ok) {
+        // 틀린 코드만 계정 잠금에 센다. IdP 에 못 물었다 · IdP 가 막았다는 사람 말로 거절한다 — 닫힘이다.
+        if (f.reason !== 'wrong-code') throw idpMfaRefusal(f.reason);
         await this.#failed(userId, Number(s['failed_logins']), meta, c);
         return { kind: 'denied' } as const;
       }
+      const method = f.method;
       await c.query(`UPDATE sessions SET revoked_at=now() WHERE id_hash=$1`, [sha(pendingId)]);
       const sid = token();
       await c.query(
@@ -838,47 +873,68 @@ export class AccountService {
   }
 
   /**
-   * 둘째 인증 수단 하나 — TOTP 또는 복구 코드. 로그인 MFA 와 step-up 이 같은 문을 쓴다.
-   * 성공한 수단 이름, 아니면 undefined.
+   * 둘째 인증 수단 하나 — 그 사람의 제공자(로컬 TOTP 또는 IdP OTP) 또는 복구 코드. **로그인 MFA 와 step-up 이
+   * 이 문 하나를 쓴다.** 복구 코드(xxxx-xxxx)는 언제나 로컬이고, OTP 와 모양이 겹치지 않아 IdP 에 보내지 않는다.
+   * IdP 의 실패(unavailable 등)는 그대로 돌려준다 — 로컬 TOTP 로 몰래 넘어가지 않는다.
    */
-  async #secondFactor(c: Queryable, userId: string, code: string, sealed: string | null, lastStep: number): Promise<string | undefined> {
-    if (sealed !== null) {
-      const step = verifyTotp(await this.#open(sealed, `totp:${userId}`), code, this.#now(), lastStep);
-      if (step !== undefined) {
-        // 조건부 갱신 — 같은 창의 코드가 동시에 두 번 와도 한쪽만 이긴다.
-        const won = (await c.query(`UPDATE mfa_totp SET last_step=$2 WHERE user_id=$1 AND last_step < $2`, [userId, step])).rowCount;
-        if (won === 1) return 'totp';
-      }
-    }
+  async #secondFactor(c: Queryable, userId: string, code: string):
+  Promise<{ ok: true; method: MfaMethod | 'recovery' } | { ok: false; reason: MfaFailure; detail: string }> {
     if (/^[a-z0-9]{4}-[a-z0-9]{4}$/i.test(code.trim())) {
       const used = (await c.query(
         `UPDATE mfa_recovery_codes SET used_at=now() WHERE user_id=$1 AND code_hash=$2 AND used_at IS NULL`,
         [userId, sha(code.trim().toLowerCase())],
       )).rowCount;
-      if (used === 1) return 'recovery';
+      return used === 1 ? { ok: true, method: 'recovery' } : { ok: false, reason: 'wrong-code', detail: '복구 코드가 맞지 않는다' };
     }
-    return undefined;
+    const subject = await this.#idpSubject(c, userId);
+    const provider = subject !== undefined && this.#idpMfa !== undefined ? this.#idpMfa.provider : this.#localMfa;
+    const r = await provider.verify({ userId, subject, code, db: c });
+    if (r.ok) return { ok: true, method: provider.method };
+    if (r.reason !== 'wrong-code') {
+      // 운영자가 원인을 찾게 남긴다. 코드 · 서비스 토큰은 detail 에도 없다.
+      log.warn('accounts.mfa_idp_failed', { reason: r.reason, detail: r.detail, user: userId });
+    }
+    return r;
+  }
+
+  /** 그 사람의 IdP 주체 — IdP OTP 가 켜졌고 **같은 issuer** 와 이어졌을 때만. 연결이 여럿이면 먼저 이은 것. */
+  async #idpSubject(c: Queryable | undefined, userId: string): Promise<string | undefined> {
+    if (this.#idpMfa === undefined) return undefined;
+    const q = `SELECT subject FROM user_identities WHERE user_id=$1 AND issuer=$2 ORDER BY linked_at LIMIT 1`;
+    const v = [userId, this.#idpMfa.issuer];
+    const r = (c !== undefined ? (await c.query(q, v)).rows : await this.#q(q, v))[0];
+    return r === undefined ? undefined : str(r, 'subject');
+  }
+
+  /** 「MFA 가 있다」 판정 — 있으면 그 종류(IdP OTP 연결이 앞선다), 없으면 undefined. */
+  async #factorOf(c: Queryable | undefined, userId: string, hasTotp: boolean): Promise<SecondFactorKind | undefined> {
+    if ((await this.#idpSubject(c, userId)) !== undefined) return 'idp';
+    return hasTotp ? 'totp' : undefined;
   }
 
   /**
    * **민감 작업 앞의 재확인** (step-up). 지금 세션에 MFA 시각을 새로 찍는다 — 세션을 새로 만들지 않는다.
-   * 인증 앱이 없으면 할 수 없다(먼저 등록한다).
+   * 둘째 인증(인증 앱 또는 IdP OTP 연결)이 없으면 할 수 없다(먼저 등록한다).
    */
   async stepUp(sessionHash: string, userId: string, code: string, meta: Meta = {}): Promise<void> {
     await this.#tx(async (c) => {
       const t = (await c.query(
-        `SELECT t.secret_sealed, t.last_step FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL FOR UPDATE`, [userId],
+        `SELECT 1 FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL FOR UPDATE`, [userId],
       )).rows[0];
-      if (t === undefined) throw new AccountError(409, 'no_totp', '인증 앱을 먼저 등록한다 — 민감 작업은 MFA 가 필요하다');
+      if ((await this.#factorOf(c, userId, t !== undefined)) === undefined) {
+        throw new AccountError(409, 'no_totp', '인증 앱을 먼저 등록한다 — 민감 작업은 MFA 가 필요하다');
+      }
       const u = (await c.query(`SELECT failed_logins, locked_until FROM users WHERE id=$1 FOR UPDATE`, [userId])).rows[0]!;
       if (this.#locked(u['locked_until'], this.#now())) {
         throw new AccountError(429, 'locked', '실패가 너무 많다 — 잠시 뒤 다시 한다');
       }
-      const method = await this.#secondFactor(c, userId, code, str(t, 'secret_sealed'), Number(t['last_step']));
-      if (method === undefined) {
+      const f = await this.#secondFactor(c, userId, code);
+      if (!f.ok) {
+        if (f.reason !== 'wrong-code') throw idpMfaRefusal(f.reason);
         await this.#failed(userId, Number(u['failed_logins']), meta, c);
         throw new AccountError(403, 'step_up_failed', '인증 코드가 맞지 않는다');
       }
+      const method = f.method;
       await c.query(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
       await c.query(
         `UPDATE sessions SET mfa_at=now(), auth_methods = array_append(auth_methods, $2)
@@ -990,12 +1046,17 @@ export class AccountService {
       `SELECT issuer, subject, linked_at, last_login_at FROM user_identities WHERE user_id=$1 ORDER BY linked_at`, [userId],
     )).map((i) => ({ issuer: str(i, 'issuer'), subject: str(i, 'subject'), linkedAt: iso(i['linked_at']), lastLoginAt: isoOpt(i['last_login_at']) }));
     const hasPassword = (await this.#q(`SELECT password_hash IS NOT NULL AS p FROM users WHERE id=$1`, [userId]))[0]?.['p'] === true;
+    const idp = this.#idpMfa !== undefined && (await this.#idpSubject(undefined, userId)) !== undefined ? this.#idpMfa.host : undefined;
     return {
       identities, hasPassword,
       id: str(u, 'id'), username: str(u, 'username'), displayName: opt(u, 'display_name'),
       email: opt(u, 'email'), role: str(u, 'role'), roleAuthority: str(u, 'role_authority'),
       createdAt: iso(u['created_at']),
-      mfa: { totp: u['totp_at'] !== null, recoveryCodesLeft: Number(u['codes_left']) },
+      // method: 로그인 · step-up 이 받는 코드. 'idp' 면 그 IdP 의 인증 앱 코드다(로컬 인증 앱이 있어도 쓰지 않는다).
+      mfa: {
+        totp: u['totp_at'] !== null, recoveryCodesLeft: Number(u['codes_left']),
+        method: idp === undefined ? 'totp' : 'idp', ...(idp === undefined ? {} : { idp }),
+      },
       sessions,
     };
   }
@@ -1285,8 +1346,8 @@ export class AccountService {
       if (str(u, 'role') === 'admin' && str(u, 'status') === 'active' && (role !== 'admin' || status !== 'active')) {
         await this.#guardLastAdmin(c, userId);
       }
-      if (role === 'admin' && str(u, 'role') !== 'admin' && u['confirmed_at'] === null) {
-        throw new AccountError(409, 'admin_needs_mfa', '관리자로 올리려면 그 사람이 먼저 인증 앱을 등록해야 한다');
+      if (role === 'admin' && str(u, 'role') !== 'admin' && (await this.#factorOf(c, userId, u['confirmed_at'] !== null)) === undefined) {
+        throw new AccountError(409, 'admin_needs_mfa', '관리자로 올리려면 그 사람이 먼저 인증 앱을 등록(또는 IdP OTP 의 IdP 와 연결)해야 한다');
       }
       await c.query(`UPDATE users SET role=$2, status=$3, role_authority=$4, updated_at=now() WHERE id=$1`, [userId, role, status, authority]);
       if (status === 'suspended') {
@@ -1400,3 +1461,27 @@ const iso = (v: unknown): string => new Date(String(v)).toISOString();
 const isoOpt = (v: unknown): string | null => (v === null || v === undefined ? null : iso(v));
 /** 밀리초까지 — `String(Date)` 를 거치면 초 아래가 잘린다. 토큰의 만료는 발급 응답과 목록·감사가 같은 값이어야 한다. */
 const isoAt = (v: unknown): string => (v instanceof Date ? v : new Date(String(v))).toISOString();
+
+/** 화면에 보일 IdP 이름 — issuer 의 호스트. URL 이 아니면 그대로. */
+function hostOf(issuer: string): string {
+  try {
+    return new URL(issuer).host || issuer;
+  } catch {
+    return issuer;
+  }
+}
+
+/**
+ * 둘째 인증의 「틀린 코드가 아닌」 실패 → 사람 말의 거절. **모두 닫힌다** — 다른 수단으로 넘어가지 않는다.
+ * 서비스 토큰 거절과 닿지 못함은 둘 다 이 배포의 문제라 503 이다(코드를 다시 넣어 봐야 소용없다).
+ */
+function idpMfaRefusal(reason: Exclude<MfaFailure, 'wrong-code'>): AccountError {
+  switch (reason) {
+    case 'rate-limited': return new AccountError(429, 'mfa_idp_rate_limited', 'IdP 가 시도를 잠시 막았어요 — 잠시 뒤 다시 해요');
+    case 'account-inactive': return new AccountError(403, 'mfa_idp_inactive', 'IdP 에서 이 계정이 활성이 아니에요');
+    case 'not-enrolled': return new AccountError(404, 'mfa_idp_not_enrolled', 'IdP 에 OTP 가 없어요 — IdP 에서 먼저 인증 앱을 등록해요');
+    case 'service-token':
+    case 'unavailable':
+      return new AccountError(503, 'mfa_idp_unavailable', 'IdP 에 물을 수 없어요 — 잠시 뒤 다시 해요');
+  }
+}

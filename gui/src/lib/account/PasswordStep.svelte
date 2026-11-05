@@ -10,7 +10,8 @@
   import AuthError from '#lib/shell/AuthError.svelte';
   import { accountApi } from './api';
 
-  let { onDone }: { onDone: (next: 'ok' | 'mfa') => void } = $props();
+  /** `idp` — 둘째 인증이 IdP OTP 면 그 IdP 호스트(다음 단계의 안내 문구). */
+  let { onDone }: { onDone: (next: 'ok' | 'mfa', idp?: string) => void } = $props();
 
   let username = $state('');
   let password = $state('');
@@ -31,7 +32,8 @@
       error = r.message;
       return;
     }
-    onDone(r.data.status === 'mfa_required' ? 'mfa' : 'ok');
+    if (r.data.status === 'mfa_required') onDone('mfa', r.data.method === 'idp' ? r.data.idp : undefined);
+    else onDone('ok');
   };
   const clear = (): void => { error = undefined; missing = false; };
 </script>
