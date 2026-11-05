@@ -37,6 +37,7 @@ import { smtpMailer } from '../accounts/mail.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
 import { JwksCache } from '../api/jwks.js';
+import { discoverOidc, discoveryUrlFor, withDiscovered, type Discovered } from '../api/oidc-discovery.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore, type SecretStore } from '../dp/secrets.js';
 import { resolveKek } from '../dp/kek-source.js';
@@ -445,7 +446,12 @@ async function authFromEnv(oidcJwksMs: number): Promise<{
    * 자리라, 재조회를 넣으면 아무나 임의 `kid` 로 우리 아웃바운드를 흔들 수 있다.
    * 당기는 것은 아래 타이머의 몫이다.
    */
-  const jwksUrl = env('BARY_OIDC_JWKS_URL', '');
+  // discovery 는 손으로 준 주소의 **빈칸만** 채운다(`withDiscovered`) — 손으로 준 값이 이긴다.
+  const ends = withDiscovered({
+    authorizationEndpoint: env('BARY_OIDC_AUTHORIZATION', ''), tokenEndpoint: env('BARY_OIDC_TOKEN', ''),
+    jwksUri: env('BARY_OIDC_JWKS_URL', ''),
+  }, await discoveryFromEnv(oidcIss));
+  const jwksUrl = ends.jwksUri;
   const jwks = jwksUrl === '' ? undefined : new JwksCache(jwksUrl);
   let stopJwks = (): void => {};
   if (jwks !== undefined) {
@@ -505,8 +511,8 @@ async function authFromEnv(oidcJwksMs: number): Promise<{
       });
     }
   });
-  const oidcAuthz = env('BARY_OIDC_AUTHORIZATION', '');
-  const oidcToken = env('BARY_OIDC_TOKEN', '');
+  const oidcAuthz = ends.authorizationEndpoint;
+  const oidcToken = ends.tokenEndpoint;
   const oidcClient = env('BARY_OIDC_CLIENT_ID', '');
   const oidcRedirect = env('BARY_OIDC_REDIRECT_URI', '');
   const oidcSecret = env('BARY_OIDC_CLIENT_SECRET', '');
@@ -523,6 +529,35 @@ async function authFromEnv(oidcJwksMs: number): Promise<{
     : undefined;
 
   return { auth, oidcRp, stopJwks, oidcRoleChange: roleChangeFromEnv(oidcRp, jwks) };
+}
+
+/**
+ * **OIDC discovery** — `BARY_OIDC_DISCOVERY_URL`(문서 주소) 또는 `BARY_OIDC_DISCOVERY=1`(issuer 의 `/.well-known/openid-configuration`).
+ * 둘 다 없으면 읽지 않는다(지금 동작 — 주소를 손으로 준다). authorization · token · jwks 의 **빈칸만** 채운다.
+ *
+ * 기동 때 한 번 읽는다. **닿지 못하면 기동을 거부하지 않고 크게 경고한다** — IdP 가 잠깐 죽었다고 컨트롤 플레인이 안 뜨면 그게
+ * 더 넓은 장애다(JWKS 의 첫 갱신과 같은 태도). 그동안 손으로 주지 않은 주소는 비어, SSO 로그인이 꺼진 채 뜬다 — IdP 가 돌아오면
+ * 다시 시작한다(또는 주소를 손으로 줘 두면 이 경우에도 켜진다). **issuer 불일치 · 문서 모양 틀림 · https 아님은 거부한다**(설정 문제).
+ */
+async function discoveryFromEnv(issuer: string): Promise<Discovered | undefined> {
+  const explicit = env('BARY_OIDC_DISCOVERY_URL', '');
+  const on = env('BARY_OIDC_DISCOVERY', '');
+  if (explicit === '' && on === '') return undefined;
+  if (on !== '' && on !== '1' && on !== '0') throw new Error(`BARY_OIDC_DISCOVERY 는 1 | 0 이다 (${on})`);
+  if (explicit === '' && on === '0') return undefined;
+  if (issuer === '') throw new Error('OIDC discovery 는 BARY_OIDC_ISSUER 가 있어야 한다 — 문서의 issuer 와 맞춰 본다');
+  const url = explicit !== '' ? explicit : discoveryUrlFor(issuer);
+  const r = await discoverOidc(url, issuer);
+  if (r.ok) {
+    log.info('oidc.discovery.loaded', { url, authorization: r.doc.authorizationEndpoint, token: r.doc.tokenEndpoint, jwks: r.doc.jwksUri });
+    return r.doc;
+  }
+  if (r.reason !== 'unavailable') throw new Error(`OIDC discovery 거부 (${url}): ${r.detail}`);
+  log.warn('oidc.discovery.unavailable', {
+    url, detail: r.detail,
+    reason: '손으로 주지 않은 OIDC 주소가 비었다 — SSO 로그인 · JWKS 검증이 꺼진 채 떴다. IdP 가 돌아오면 다시 시작한다',
+  });
+  return undefined;
 }
 
 /**
