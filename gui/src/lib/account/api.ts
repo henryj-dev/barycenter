@@ -10,10 +10,21 @@ import { needsStepUp, stepUp } from './step-up.svelte';
 export type Result<T> = { ok: true; data: T } | { ok: false; status: number; code?: string; message: string };
 
 export type Role = 'auditor' | 'operator' | 'admin';
+export type Scope = 'read' | 'write' | 'apply' | 'admin';
 
-export type Me = {
+/**
+ * 권한의 모양 — 사람 표 · 내 계정이 같이 쓴다. `scopes` 는 **실효 범위**(역할 범위 ∪ IdP grant − IdP deny, 서버가 계산한다).
+ * `idpAuthority` 는 실효 정본이 IdP 인가(사람의 정본이 idp 이거나 공급자 기본 정본). 옛 서버는 보내지 않는다 — 없으면 역할만 본다.
+ */
+export type Authority = {
+  roleAuthority: string;
+  idpAuthority?: boolean; roleAuthorityByProvider?: boolean;
+  idpGrant?: Scope[]; idpDeny?: Scope[]; scopes?: Scope[];
+};
+
+export type Me = Authority & {
   id: string; username: string; displayName: string | null; email: string | null;
-  role: Role; roleAuthority: string; createdAt: string;
+  role: Role; createdAt: string;
   /**
    * `method` — 로그인 · step-up 이 받는 코드. 'idp' 면 `idp`(IdP 호스트)의 인증 앱 코드다(IdP OTP — 로컬 인증 앱은 필수가 아니다).
    * IdP OTP 를 모르는 옛 서버는 보내지 않는다 — 없으면 'totp' 로 읽는다.
@@ -30,17 +41,33 @@ export const hasMfa = (me: Me): boolean => me.mfa.totp || me.mfa.method === 'idp
 /** 둘째 인증 단계의 답 — IdP OTP 대상이면 `method: 'idp'` 와 IdP 호스트가 붙는다. */
 export type MfaRequired = { status: 'mfa_required'; method?: 'idp'; idp?: string };
 
-export type SsoProvider = { issuer: string; jitEnabled: boolean; jitRole: string; roleClaim: string | null; roleMap: Record<string, Role> };
-export type SsoProviders = { configured: string | null; providers: SsoProvider[] };
+/** entitlement 효과 — `grant:apply` 는 apply 를 더하고 `deny:apply` 는 뺀다. */
+export type EntitlementEffect = `${'grant' | 'deny'}:${Scope}`;
+export type SsoProvider = {
+  issuer: string; jitEnabled: boolean; jitRole: string; roleClaim: string | null; roleMap: Record<string, Role>;
+  /** 이 공급자의 SSO 사용자는 모두 IdP 권한 정본. 옛 서버는 보내지 않는다. */
+  idpAuthority?: boolean;
+  entitlementClaim?: string | null; entitlementPrefix?: string; entitlementMap?: Record<string, EntitlementEffect>;
+};
+/** 클레임 자리 프로필(lodestar · keycloak · entra · okta)과 권하는 매핑. */
+export type RoleProfile = {
+  name: string; roleClaim: string | null; entitlementClaim: string | null; entitlementPrefix: string;
+  entitlementMap: Record<string, EntitlementEffect>; roleMap: Record<string, Role>;
+};
+export type SsoProviders = { configured: string | null; providers: SsoProvider[]; profiles?: RoleProfile[] };
+export type SsoMapping = {
+  roleClaim: string | null; roleMap: Record<string, string>;
+  entitlementClaim: string | null; entitlementPrefix: string; entitlementMap: Record<string, string>;
+};
 
 export type LinkPreview = {
   kind: 'invite' | 'bootstrap' | 'recovery'; role: Role; email: string | null; username?: string;
   needsTotp: boolean; totp?: { secret: string; uri: string };
 };
 
-export type UserRow = {
+export type UserRow = Authority & {
   id: string; username: string; displayName: string | null; email: string | null; role: Role;
-  roleAuthority: string; status: 'active' | 'suspended'; createdAt: string; lockedUntil: string | null; totp: boolean;
+  status: 'active' | 'suspended'; createdAt: string; lockedUntil: string | null; totp: boolean;
   /** 마지막으로 쓸 수 있는 세션이 생긴 시각(MFA 까지 끝난 로그인). 한 번도 없으면 null. */
   lastLoginAt: string | null;
   /** 철회되지 않고 만료되지 않은 개인 API 토큰 수. */
@@ -95,8 +122,9 @@ export const accountApi = {
     call<{ unlinked: true }>('POST', '/api/v1/me/identities/unlink', { issuer, subject, password }),
   ssoProviders: () => call<SsoProviders>('GET', '/api/v1/sso-providers'),
   setJit: (issuer: string, jitEnabled: boolean) => call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, jitEnabled }),
-  setRoles: (issuer: string, roleClaim: string | null, roleMap: Record<string, string>) =>
-    call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, roleClaim, roleMap }),
+  setMapping: (issuer: string, m: SsoMapping) => call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, ...m }),
+  setIdpAuthority: (issuer: string, idpAuthority: boolean) =>
+    call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, idpAuthority }),
   stepUp: (code: string) => call<{ stepUp: true }>('POST', '/api/v1/session/step-up', { code }, true),
   requestReset: (email: string) => call<{ accepted: true }>('POST', '/api/v1/account/password-reset', { email }),
   confirmReset: (token: string, password: string) => call<{ reset: true }>('POST', '/api/v1/account/password-reset/confirm', { token, password }),

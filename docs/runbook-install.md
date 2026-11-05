@@ -92,6 +92,18 @@ sudo deploy/install.sh --with-postgres \
 것**이다 — KMS 키, 그 키에 대한 권한, 암호문 파일. 그 셋 중 하나라도 잃으면 결과는
 KEK 를 잃은 것과 같다.
 
+### 사람 계정의 키와 공유 실패 제한 — 설정 표
+
+사람 계정(`BARY_ACCOUNTS_DSN`)을 켰다면. 자세한 뜻 · 실패 · 옮기는 절차는 `docs/runbook-accounts.md` 「켜기」.
+
+| env | 기본 | 뜻 |
+|---|---|---|
+| `BARY_ACCOUNTS_KEK` | — | TOTP 비밀을 감싸는 키(32 바이트 base64). 설치 스크립트가 만든다 |
+| `BARY_ACCOUNTS_KEK_FILE` | — | 같은 키를 파일에서. 위와 **하나만** |
+| `BARY_ACCOUNTS_KEK_CMD` | — | 같은 키를 명령 stdout 으로(`systemd-creds cat …`). 위와 **하나만**. 상한 `…_CMD_TIMEOUT_MS`(10초) |
+| `BARY_ACCOUNTS_SEAL_KIND` | `local` | `vault-transit` 이면 `BARY_ACCOUNTS_VAULT_ADDR` · `_KEY` · `_TOKEN_FILE` 이 모두 필요 |
+| `BARY_AUTH_LIMIT_STORE` | `memory` | `pg` 면 API 인증 실패를 계정 PG(`auth_throttle`)에서 노드가 함께 센다 |
+
 ### 리스너와 TLS
 
 기본 `127.0.0.1:8088` 은 **루프백**이다. 넓은 인터페이스로 옮기려면 TLS 를 같이 준다 —
