@@ -29,7 +29,7 @@ import {
   type ApiOptions, type BuildInfo, type GlobalApiOptions,
 } from '../api/server.js';
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
-import { Sealer } from '../accounts/seal.js';
+import { sealerFromEnv } from '../accounts/sealer/registry.js';
 import { AccountService } from '../accounts/service.js';
 import { smtpMailer } from '../accounts/mail.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
@@ -285,13 +285,14 @@ function tidyAccounts(accounts: AccountService): void {
  * 사람 계정 (공통 회원정책 1차 · 계획 A). `BARY_ACCOUNTS_DSN` 이 있을 때만 켠다.
  *
  * **키 없이 켜지 않는다.** TOTP 비밀을 감쌀 `BARY_ACCOUNTS_KEK` 가 없으면 기동을 거부한다 — 계정은
- * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다.
+ * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다. 키는 값 · 파일(`_FILE`) · 명령(`_CMD`) 중 하나로 받고,
+ * 봉인 방식은 `BARY_ACCOUNTS_SEAL_KIND`(`local` 기본 · `vault-transit`)가 고른다(`accounts/sealer/registry.ts`).
  */
 async function accountsFromEnv(): Promise<AccountService | undefined> {
   const dsn = env('BARY_ACCOUNTS_DSN', '');
   if (dsn === '') return undefined;
-  const kek = env('BARY_ACCOUNTS_KEK', '');
-  if (kek === '') throw new Error('BARY_ACCOUNTS_DSN 을 켰으면 BARY_ACCOUNTS_KEK(32바이트 base64)도 필요하다');
+  const sealing = await sealerFromEnv(process.env);
+  log.info('accounts.sealer', { kind: sealing.kind, opens: sealing.openers });
   const adb = new Db(dsn);
   const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
   if (applied.length > 0) log.info('accounts.migrate.applied', { migrations: applied });
@@ -311,7 +312,7 @@ async function accountsFromEnv(): Promise<AccountService | undefined> {
     log.info('accounts.mail.enabled', { from });
   }
   return new AccountService({
-    db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
+    db: adb, sealer: sealing.sealer, issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
     ...(mail === undefined ? {} : mail),
   });
 }

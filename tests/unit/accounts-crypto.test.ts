@@ -104,14 +104,14 @@ describe('봉인 (AES-256-GCM)', () => {
 
   it('같은 행 표시로만 열린다 — 다른 사람 행에 옮겨 붙이면 안 풀린다', () => {
     const s = new Sealer(key);
-    const sealed = s.seal(Buffer.from('totp-secret'), 'totp:alice');
-    expect(s.open(sealed, 'totp:alice').toString()).toBe('totp-secret');
-    expect(() => s.open(sealed, 'totp:bob')).toThrow();
+    const sealed = s.sealSync(Buffer.from('totp-secret'), 'totp:alice');
+    expect(s.openSync(sealed, 'totp:alice').toString()).toBe('totp-secret');
+    expect(() => s.openSync(sealed, 'totp:bob')).toThrow();
   });
 
   it('다른 키로는 안 열린다, 키 길이가 틀리면 기동하지 않는다', () => {
-    const sealed = new Sealer(key).seal(Buffer.from('x'), 'a');
-    expect(() => new Sealer(randomBytes(32).toString('base64')).open(sealed, 'a')).toThrow();
+    const sealed = new Sealer(key).sealSync(Buffer.from('x'), 'a');
+    expect(() => new Sealer(randomBytes(32).toString('base64')).openSync(sealed, 'a')).toThrow();
     expect(() => new Sealer(randomBytes(16).toString('base64'))).toThrow();
   });
 });

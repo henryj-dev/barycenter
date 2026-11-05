@@ -14,7 +14,7 @@ import { minRole, PERSONAL_TOKEN, roleRank, scopesOfRole, type Principal, type R
 import type { Db, Queryable, Row } from '../store/pg.js';
 import { burnPasswordTime, hashPassword, needsRehash, passwordProblem, verifyPassword } from './password.js';
 import { mailText, type Mailer } from './mail.js';
-import type { Sealer } from './seal.js';
+import type { Sealer } from './sealer/provider.js';
 import { base32Encode, newTotpSecret, otpauthUri, verifyTotp } from './totp.js';
 
 /** 세션 수명 (회원 공통 수치 1차) — 절대 12시간, 요청이 없으면 30분 뒤 끝난다. */
@@ -129,6 +129,20 @@ export class AccountService {
   /** 화면이 「비밀번호를 잊었다」를 그릴지 고른다. 비밀이 아니다. */
   features(): { mail: boolean } {
     return { mail: this.#mail !== undefined };
+  }
+
+  // ── 봉인 — 실패는 던진다(트랜잭션 안에서는 `#tx` 가 「못 물었다」 503 으로 접는다 — 예전과 같다) ──────
+
+  async #seal(plain: Buffer, aad: string): Promise<string> {
+    const r = await this.#sealer.seal(plain, aad);
+    if (!r.ok) throw new Error(`봉인 실패 (${this.#sealer.kind} · ${r.reason}): ${r.detail}`);
+    return r.sealed;
+  }
+
+  async #open(sealed: string, aad: string): Promise<Buffer> {
+    const r = await this.#sealer.open(sealed, aad);
+    if (!r.ok) throw new Error(`봉인 열기 실패 (${r.reason}): ${r.detail}`);
+    return r.plain;
   }
 
   // ── 저장소 접근 — 실패는 전부 「못 물었다」 ─────────────────────────────
@@ -398,13 +412,13 @@ export class AccountService {
       const inv = await this.#usableLink(c, input.token);
       const kind = str(inv, 'kind');
       const role = str(inv, 'role') as Role;
-      let totp: { sealedFor: (uid: string) => string; step: number } | undefined;
+      let totp: { sealedFor: (uid: string) => Promise<string>; step: number } | undefined;
       if (input.totp !== undefined || role === 'admin') {
         if (input.totp === undefined) throw new AccountError(400, 'totp_required', '관리자는 인증 앱(TOTP) 등록이 필요하다');
         const secret = base32Decode(input.totp.secret);
         const step = verifyTotp(secret, input.totp.code, this.#now(), 0);
         if (step === undefined) throw new AccountError(400, 'totp_mismatch', '인증 앱의 코드가 맞지 않는다');
-        totp = { sealedFor: (uid) => this.#sealer.seal(secret, `totp:${uid}`), step };
+        totp = { sealedFor: (uid) => this.#seal(secret, `totp:${uid}`), step };
       }
       let userId: string;
       if (kind === 'recovery') {
@@ -433,7 +447,7 @@ export class AccountService {
       if (totp !== undefined) {
         await c.query(
           `INSERT INTO mfa_totp (user_id, secret_sealed, last_step, confirmed_at) VALUES ($1,$2,$3,now())`,
-          [userId, totp.sealedFor(userId), totp.step],
+          [userId, await totp.sealedFor(userId), totp.step],
         );
         codes = await this.#newRecoveryCodes(c, userId);
       }
@@ -829,7 +843,7 @@ export class AccountService {
    */
   async #secondFactor(c: Queryable, userId: string, code: string, sealed: string | null, lastStep: number): Promise<string | undefined> {
     if (sealed !== null) {
-      const step = verifyTotp(this.#sealer.open(sealed, `totp:${userId}`), code, this.#now(), lastStep);
+      const step = verifyTotp(await this.#open(sealed, `totp:${userId}`), code, this.#now(), lastStep);
       if (step !== undefined) {
         // 조건부 갱신 — 같은 창의 코드가 동시에 두 번 와도 한쪽만 이긴다.
         const won = (await c.query(`UPDATE mfa_totp SET last_step=$2 WHERE user_id=$1 AND last_step < $2`, [userId, step])).rowCount;
@@ -1017,7 +1031,7 @@ export class AccountService {
       await c.query(
         `INSERT INTO mfa_totp (user_id, secret_sealed, created_at) VALUES ($1,$2,$3)
          ON CONFLICT (user_id) DO UPDATE SET secret_sealed=EXCLUDED.secret_sealed, last_step=0, created_at=EXCLUDED.created_at`,
-        [userId, this.#sealer.seal(secret, `totp:${userId}`), new Date(this.#now())],
+        [userId, await this.#seal(secret, `totp:${userId}`), new Date(this.#now())],
       );
     });
     return { secret: base32Encode(secret), uri: otpauthUri(secret, username, this.#issuer) };
@@ -1030,7 +1044,7 @@ export class AccountService {
       if (new Date(String(t['created_at'])).getTime() + TOTP_SETUP_TTL_MS < this.#now()) {
         throw new AccountError(410, 'totp_setup_expired', '인증 앱 등록이 만료됐다(24시간) — 처음부터 다시 등록한다');
       }
-      const step = verifyTotp(this.#sealer.open(str(t, 'secret_sealed'), `totp:${userId}`), code, this.#now(), 0);
+      const step = verifyTotp(await this.#open(str(t, 'secret_sealed'), `totp:${userId}`), code, this.#now(), 0);
       if (step === undefined) throw new AccountError(400, 'totp_mismatch', '인증 앱의 코드가 맞지 않는다');
       await c.query(`UPDATE mfa_totp SET confirmed_at=now(), last_step=$2 WHERE user_id=$1`, [userId, step]);
       const codes = await this.#newRecoveryCodes(c, userId);
