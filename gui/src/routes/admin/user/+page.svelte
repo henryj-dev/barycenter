@@ -17,7 +17,7 @@
   import { ago } from '#lib/detail/facts';
   import { accountApi, linkFor, type InvitationRow, type Role, type UserRow } from '#lib/account/api';
   import type { Session } from '#lib/account/session.svelte.ts';
-  import { ROLE_LABEL } from '#lib/account/text';
+  import { authorityLabel, ROLE_LABEL } from '#lib/account/text';
   import SsoJit from '#lib/account/SsoJit.svelte';
   import UserTokens from '#lib/account/UserTokens.svelte';
   import { usePageActions } from '#lib/shell/page-actions.svelte.ts';
@@ -121,6 +121,8 @@
   const userCols: Column<UserRow>[] = [
     { key: 'username', label: '이름', mono: true, sort: (r) => r.username },
     { key: 'role', label: '역할', width: '170px', hideable: false, sort: (r) => r.role },
+    // 실효 범위 — 역할 범위 ∪ IdP grant − IdP deny. 역할의 기본과 다를 때만 덧붙인다(「운영자 · 적용 더함」).
+    { key: 'scopes', label: '실효 범위', width: '200px', text: (r) => authorityLabel(r), sort: (r) => (r.scopes ?? []).length },
     { key: 'status', label: '상태', width: '130px', hideable: false, sort: (r) => r.status },
     { key: 'totp', label: 'MFA', width: '110px', hideable: false, sort: (r) => (r.totp ? 1 : 0) },
     { key: 'login', label: '마지막 로그인', mono: true, muted: true, width: '140px', hideable: false,
@@ -128,7 +130,9 @@
     { key: 'act', label: '', align: 'right', width: '130px', hideable: false },
   ];
   const userMenu = (u: UserRow): MenuItem[] => [
-    { label: u.roleAuthority === 'idp' ? '역할 정본을 로컬로' : '역할 정본을 IdP 로', onselect: () => { void accountApi.updateUser(u.id, { roleAuthority: u.roleAuthority === 'idp' ? 'local' : 'idp' }).then(act); } },
+    { label: u.roleAuthority === 'idp' ? '역할 정본을 로컬로' : '역할 정본을 IdP 로', onselect: () => { void accountApi.updateUser(u.id, { roleAuthority: u.roleAuthority === 'idp' ? 'local' : 'idp' }).then(act); },
+      // 공급자 기본 정본이면 사람마다 고른 값과 무관하게 IdP 정본이다 — 「SSO 공급자」 에서 끈다.
+      disabled: u.roleAuthorityByProvider === true },
     { label: u.status === 'active' ? '비활성화' : '활성화', onselect: () => { setStatus(u); } },
     { label: '세션 끊기', onselect: () => { void accountApi.revokeSessions(u.id).then(act); } },
     { label: `API 토큰 보기 · ${u.tokens}`, onselect: () => { tokensOf = u.id; } },
@@ -152,8 +156,10 @@
     <code>{u.username}</code>{#if u.lockedUntil !== null} <Badge tone="warn">잠김</Badge>{/if}
   {:else if c.key === 'role'}
     <!-- IdP 가 정본이면 역할은 SSO 로그인이 맞춘다 — 손으로 못 바꾼다 -->
-    <Select label={`${u.username} 역할`} size="sm" value={u.role} options={ROLES} width="140px" mono={false} disabled={u.roleAuthority === 'idp'}
+    <Select label={`${u.username} 역할`} size="sm" value={u.role} options={ROLES} width="140px" mono={false} disabled={u.roleAuthority === 'idp' || u.idpAuthority === true}
       onchange={(v) => { setRole(u, v); }} />
+  {:else if c.key === 'scopes'}
+    <span title={(u.scopes ?? []).join(' · ')}>{c.text?.(u) ?? ''}</span>{#if u.idpAuthority === true} <Badge tone="info" icon={null}>{u.roleAuthorityByProvider === true ? 'IdP · 공급자' : 'IdP'}</Badge>{/if}
   {:else if c.key === 'status'}
     {#if u.status === 'active'}<Badge tone="ok" icon="●">활성</Badge>{:else}<Badge tone="neutral" icon="○">비활성</Badge>{/if}
   {:else if c.key === 'login'}
