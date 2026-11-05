@@ -55,7 +55,8 @@ import { newEcKey } from '../acme/der.js';
 import { PATH_SEGMENT_RULE, PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
-import { AuthFailureLimiter } from './auth-rate-limit.js';
+import { memoryRateLimit } from './auth-limit/memory.js';
+import type { RateLimitStore } from './auth-limit/store.js';
 import { clientAddress, type TrustedProxies } from './client-address.js';
 import { RELAY_PATHS, RELAY_WRITES, type Credential, type RegionRelay } from '../global/relay.js';
 import type { HostAddressFacts } from '../engine/host-addresses.js';
@@ -70,6 +71,8 @@ import {
 export type ApiOptions = {
   /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
   trustedProxies?: TrustedProxies;
+  /** 인증 실패 제한 저장소 (`BARY_AUTH_LIMIT_STORE`). 없으면 인스턴스 메모리 — 지금과 같다. */
+  authLimit?: RateLimitStore;
   /**
    * 클러스터 모드 (ADR-CLUSTER, #118). 없으면 이 인스턴스는 클러스터가 아니다.
    * `node` 는 이 노드의 이름, `staleAfterMs` 를 넘긴 신호는 「연락 없음」이다.
@@ -167,6 +170,8 @@ export function parseBuildInfo(text: string): BuildInfo | null {
 export type GlobalApiOptions = {
   /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
   trustedProxies?: TrustedProxies;
+  /** 인증 실패 제한 저장소 (`BARY_AUTH_LIMIT_STORE`). 없으면 인스턴스 메모리 — 지금과 같다. */
+  authLimit?: RateLimitStore;
   global: RegionRelay;
   auth: TokenAuth;
   maxBodyBytes?: number;
@@ -1474,7 +1479,8 @@ const ipOf = (req: IncomingMessage): string | undefined => CLIENT_IP.get(req) ??
 
 export function apiHandler(api: AnyApi): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
-  const authFailures = new AuthFailureLimiter();
+  // 전역 화면도 **같은 저장소**로 센다(아래 `handle` 에 같은 것을 넘긴다).
+  const authFailures = api.authLimit ?? memoryRateLimit();
   api.sessions ??= new BrowserSessions();
   const globalApi = isGlobal(api) ? undefined : globalViewOf(api);
   const globalHost = isGlobal(api) ? undefined : api.globalSurface?.host;
@@ -1924,7 +1930,7 @@ async function dispatch<A>(
 
 async function handle(
   req: IncomingMessage, res: ServerResponse, api: AnyApi, max: number,
-  authFailures: AuthFailureLimiter,
+  authFailures: RateLimitStore,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -2311,7 +2317,21 @@ async function handle(
     if (stale.length > 0) res.setHeader('set-cookie', stale);
     const key = ipOf(req) ?? 'unknown';
     count('bary_auth_failures_total');
-    const retryAfter = authFailures.record(key);
+    const limit = await authFailures.record(key);
+    /**
+     * **저장소에 닿지 못하면 메모리로 떨어지지 않는다**(`BARY_AUTH_LIMIT_STORE=pg`). 이 요청은 이미 실패한 인증이다 —
+     * 503 으로 답해 「세지 못했다」를 드러낸다. 맞는 자격(파일 토큰 · 인증서)은 이 자리에 오지 않으므로 그대로 들어간다:
+     * 계정 PG 장애가 API 토큰까지 막는 전체 장애가 되지 않는다(`accountStoreDown` 과 같은 정책).
+     */
+    if (!limit.ok) {
+      count('bary_auth_limit_store_errors_total');
+      json(res, 503, {
+        code: 'auth_limit_unavailable',
+        message: '인증 실패를 셀 저장소에 닿지 못했다 — 잠시 뒤 다시 시도하라',
+      }, { 'retry-after': '5' });
+      return;
+    }
+    const retryAfter = limit.retryAfterS;
     if (retryAfter !== undefined) {
       json(res, 429, {
         code: 'rate_limited', message: '인증 실패가 너무 많다 — 잠시 뒤 다시 시도하라',
@@ -2322,7 +2342,13 @@ async function handle(
     }
     return;
   }
-  authFailures.clear(ipOf(req) ?? 'unknown');
+  /**
+   * 성공은 계수를 지운다. **기다리지 않는다** — 공유 저장소가 느리거나 죽어도 맞는 자격의 요청이 그 때문에 늦거나
+   * 막히지 않는다. 메모리 구현은 부르는 순간 지운다(지금과 같은 순서).
+   */
+  void authFailures.clear(ipOf(req) ?? 'unknown').then((r) => {
+    if (!r.ok) count('bary_auth_limit_store_errors_total');
+  });
 
   if (isGlobal(api)) {
     await dispatch(req, res, url, who, api, [...GLOBAL_ROUTES, ...ACCOUNT_ROUTES as Route<GlobalApiOptions>[]], max, {

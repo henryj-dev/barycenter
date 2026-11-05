@@ -30,6 +30,8 @@ import {
 } from '../api/server.js';
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
 import { sealerFromEnv } from '../accounts/sealer/registry.js';
+import { rateLimitStore } from '../api/auth-limit/registry.js';
+import type { RateLimitStore } from '../api/auth-limit/store.js';
 import { AccountService } from '../accounts/service.js';
 import { smtpMailer } from '../accounts/mail.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
@@ -472,6 +474,19 @@ async function authFromEnv(oidcJwksMs: number): Promise<{
   return { auth, oidcRp, stopJwks };
 }
 
+/**
+ * **인증 실패 제한 저장소** (`BARY_AUTH_LIMIT_STORE`). 없으면 `undefined` — 서버가 인스턴스 메모리로 센다(지금과 같다).
+ * `pg` 는 사람 계정 PG(`BARY_ACCOUNTS_DSN`)의 `auth_throttle` 에서 노드가 함께 센다. 모르는 이름 · DSN 없음은 기동 거부.
+ */
+function authLimitFromEnv(): RateLimitStore | undefined {
+  const kind = env('BARY_AUTH_LIMIT_STORE', '').trim();
+  if (kind === '' || kind === 'memory') return undefined;
+  const dsn = env('BARY_ACCOUNTS_DSN', '');
+  const store = rateLimitStore(kind, dsn === '' ? {} : { accountsDb: new Db(dsn) });
+  log.info('auth.limit_store', { kind: store.kind });
+  return store;
+}
+
 /** 화면(GUI) 산출물 자리. 명시했는데 없으면 기동 거부, 기본 자리에 없으면 API 만 연다. */
 function guiRootFromEnv(): string | undefined {
   const explicitGui = process.env['BARY_GUI'];
@@ -511,6 +526,8 @@ async function listenApi(
   const trustedRaw = env('BARY_TRUSTED_PROXIES', '');
   const trustedProxies = parseTrustedProxies(trustedRaw);
   if (trustedProxies !== undefined) apiOpts.trustedProxies = trustedProxies;
+  const authLimit = authLimitFromEnv();
+  if (authLimit !== undefined) apiOpts.authLimit = authLimit;
   const server = tlsOn
     ? createHttpsServer(
         apiTlsOptions({
