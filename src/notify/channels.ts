@@ -8,7 +8,7 @@ import { createHmac } from 'node:crypto';
 
 import type { Mailer } from '../accounts/mail.js';
 import { excerpt, httpRequest, type HttpResult } from '../outbound/http.js';
-import { notifyStatus, plainText, type Notifier, type NotifyEvent, type NotifyResult } from './notifier.js';
+import { notifyStatus, plainText, type Notifier, type NotifyResult } from './notifier.js';
 
 const MAX_BYTES = 16 * 1024;
 
