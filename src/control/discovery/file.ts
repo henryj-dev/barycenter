@@ -6,7 +6,7 @@
  *
  * 모양: `[{"host":"10.0.0.1","port":8080}, …]` 또는 `{"endpoints":[…]}`. 없는 파일은 `not-found`.
  */
-import { readFile, stat } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { DiscoveredAddress, DiscoverySource } from './source.js';
@@ -24,11 +24,22 @@ export function fileSource(o: FileSourceOptions): DiscoverySource {
       const path = join(o.dir, query);
       let text: string;
       try {
-        const st = await stat(path);
-        if (st.size > MAX_DISCOVERY_RESPONSE_BYTES) {
-          return { ok: false, reason: 'too-large', detail: `${query} 가 ${MAX_DISCOVERY_RESPONSE_BYTES}바이트를 넘는다` };
+        // 한 번 연 핸들로 크기를 보고 읽는다 — 확인과 읽기 사이에 파일이 바뀌어도 같은 파일이다.
+        const fh = await open(path, 'r');
+        try {
+          const st = await fh.stat();
+          if (st.size > MAX_DISCOVERY_RESPONSE_BYTES) {
+            return { ok: false, reason: 'too-large', detail: `${query} 가 ${MAX_DISCOVERY_RESPONSE_BYTES}바이트를 넘는다` };
+          }
+          const buf = Buffer.alloc(MAX_DISCOVERY_RESPONSE_BYTES + 1);
+          const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+          if (bytesRead > MAX_DISCOVERY_RESPONSE_BYTES) {
+            return { ok: false, reason: 'too-large', detail: `${query} 가 ${MAX_DISCOVERY_RESPONSE_BYTES}바이트를 넘는다` };
+          }
+          text = buf.subarray(0, bytesRead).toString('utf8');
+        } finally {
+          await fh.close();
         }
-        text = await readFile(path, 'utf8');
       } catch (e) {
         const code = String((e as { code?: unknown }).code ?? '');
         if (code === 'ENOENT') return { ok: false, reason: 'not-found', detail: `${query} 가 없다` };

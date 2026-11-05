@@ -763,7 +763,8 @@ const ROUTES: Route[] = [
     eventsOf(api).publish('address_set', { key, outcome: out.outcome });
     if (out.outcome === 'failed') {
       log.warn('address_set.refresh_failed', { key, reason: out.reason, detail: out.detail, by: c.who.name });
-      json(c.res, 502, { error: 'address_source_failed', reason: out.reason, message: out.detail });
+      // 응답에는 사유의 정해진 말만 — 출처가 준 오류 문장(예외 메시지가 섞일 수 있다)은 로그에만 둔다.
+      json(c.res, 502, { error: 'address_source_failed', reason: out.reason, message: `출처에서 목록을 받지 못했다 (${out.reason}) — 자세한 내용은 데몬 로그 address_set.refresh_failed` });
       return;
     }
     if (out.outcome === 'committed') eventsOf(api).publish('revision', { revision: out.revision, addressSet: key });

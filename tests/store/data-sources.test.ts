@@ -192,7 +192,8 @@ describe('API', () => {
 
     answer = { ok: false, reason: 'unavailable', detail: '닿지 못했다' };
     const failed = await req('POST', '/api/v1/address-sets/cf/refresh', {});
-    expect(failed).toEqual({ status: 502, body: { error: 'address_source_failed', reason: 'unavailable', message: '닿지 못했다' } });
+    expect(failed).toEqual({ status: 502, body: { error: 'address_source_failed', reason: 'unavailable', message: '출처에서 목록을 받지 못했다 (unavailable) — 자세한 내용은 데몬 로그 address_set.refresh_failed' } });
+    // 출처가 준 오류 문장(「닿지 못했다」)은 응답에 나가지 않는다 — 로그에만.
     expect((await req('POST', '/api/v1/address-sets/manual/refresh', {})).status).toBe(409);
     expect((await req('POST', '/api/v1/address-sets/none/refresh', {})).status).toBe(404);
 
