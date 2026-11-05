@@ -37,6 +37,9 @@ import {
   deadlineExceededKeys, drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
 } from '../control/drain.js';
 import { healthRows } from '../control/health.js';
+import type { DiscoveryPoolView } from '../control/discovery/runner.js';
+import { addressSources, type AddressSources } from '../control/address-sources/registry.js';
+import { refreshAddressSet, refreshRows } from '../control/address-sources/refresh.js';
 import { count, render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
@@ -137,6 +140,19 @@ export type ApiOptions = {
    * 그러면 GUI 는 바인드를 손으로 받는다.
    */
   hostAddresses?: () => HostAddressFacts;
+  /**
+   * 풀의 백엔드 출처 (2026-11-05). 데몬의 러너가 든 것을 보인다. 없으면 `/discovery` 가 「꺼짐」 을 말한다 —
+   * 출처 상태는 운영 상태라 이 노드의 러너가 본 것이다(노드마다 따로 묻는다).
+   */
+  discovery?: {
+    enabled: boolean;
+    reason?: string;
+    intervalMs?: number;
+    views(): DiscoveryPoolView[];
+    view(pool: string): DiscoveryPoolView | undefined;
+  };
+  /** 주소 집합 출처 (2026-11-05). 없으면 전역 fetch 로 받는다 — 시험이 주입한다. */
+  addressSources?: AddressSources;
 };
 
 export type BuildInfo = { commit?: string; describe?: string; installedAt?: string };
@@ -715,6 +731,77 @@ const ROUTES: Route[] = [
   // 주소 집합 (#114). 없으면 빈 배열이다 — 집합이 없는 모델에는 필드가 없다.
   route('GET', '/api/v1/address-sets', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).addressSets ?? []);
+  }),
+  /**
+   * 주소 집합 「마지막 갱신」 (2026-11-05). 출처에서 다시 받은 기록 — 마지막으로 물은 때 · 성공했나 · 실패의 뜻 ·
+   * 마지막 성공(`refreshedAt`). 지금 head 에 있는 집합만이다.
+   */
+  route('GET', '/api/v1/address-sets/refresh-status', 'read', async (c, api) => {
+    const sets = (await api.store.modelAt((await api.store.head()).revision)).addressSets ?? [];
+    json(c.res, 200, await refreshRows(api.db, sets.map((s) => s.key)));
+  }),
+  /**
+   * 「목록 다시 받기」 (2026-11-05). 출처에서 받아 바뀌었으면 **커밋까지** 한다 — CLI `--cloudflare` 와 같이 적용은
+   * 사람이 영향을 보고 한다. 같으면 아무것도 안 쓴다(`unchanged`). 받기가 실패하면 집합은 그대로이고 502 다.
+   */
+  route('POST', '/api/v1/address-sets/:id/refresh', 'write', async (c, api) => {
+    const key = c.params['id'] ?? '';
+    const set = ((await api.store.modelAt((await api.store.head()).revision)).addressSets ?? []).find((s) => s.key === key);
+    if (set === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `주소 집합 '${key}' 가 없다` });
+      return;
+    }
+    if (set.source === undefined) {
+      json(c.res, 409, { error: 'no_source', message: `주소 집합 '${key}' 는 손으로 적은 집합이다 — 다시 받을 출처가 없다` });
+      return;
+    }
+    const out = await refreshAddressSet({
+      db: api.db, store: api.store, sources: api.addressSources ?? addressSources(), by: c.who.name,
+    }, key);
+    eventsOf(api).publish('address_set', { key, outcome: out.outcome });
+    if (out.outcome === 'failed') {
+      log.warn('address_set.refresh_failed', { key, reason: out.reason, detail: out.detail, by: c.who.name });
+      json(c.res, 502, { error: 'address_source_failed', reason: out.reason, message: out.detail });
+      return;
+    }
+    if (out.outcome === 'committed') eventsOf(api).publish('revision', { revision: out.revision, addressSet: key });
+    json(c.res, 200, out);
+  }),
+  /**
+   * 풀의 백엔드 출처 (2026-11-05) — 이 노드의 러너가 든 것. 출처의 목록을 쓰는지(`advertised`) · 그 목록 ·
+   * 마지막 갱신 · 오류.
+   */
+  route('GET', '/api/v1/discovery', 'read', async (c, api) => {
+    const d = api.discovery;
+    json(c.res, 200, d === undefined
+      ? { enabled: false, reason: '이 데몬에 디스커버리 러너가 없다', pools: [] }
+      : {
+        enabled: d.enabled,
+        ...(d.reason === undefined ? {} : { reason: d.reason }),
+        ...(d.intervalMs === undefined ? {} : { intervalMs: d.intervalMs }),
+        pools: d.views(),
+      });
+  }),
+  route('GET', '/api/v1/pools/:id/discovery', 'read', async (c, api) => {
+    const key = c.params['id'] ?? '';
+    const pool = (await api.store.modelAt((await api.store.head()).revision)).pools.find((p) => p.key === key);
+    if (pool === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `풀 '${key}' 가 없다` });
+      return;
+    }
+    if (pool.discovery === undefined) {
+      json(c.res, 200, { pool: key, source: null });
+      return;
+    }
+    // 러너가 아직 그 풀을 안 돌았으면(방금 커밋했다 · 러너가 없다) 「기다림」 이다 — 정적 백엔드를 쓴다.
+    json(c.res, 200, api.discovery?.view(key) ?? {
+      pool: key, source: pool.discovery.source, query: pool.discovery.query,
+      state: api.discovery?.enabled === false || api.discovery === undefined ? 'unconfigured' : 'pending',
+      advertised: false, endpoints: [],
+      ...(api.discovery?.enabled === false || api.discovery === undefined
+        ? { error: { reason: 'unconfigured', detail: api.discovery?.reason ?? '이 데몬에 디스커버리 러너가 없다' } }
+        : {}),
+    });
   }),
   route('GET', '/api/v1/sni-bindings', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).sniBindings);

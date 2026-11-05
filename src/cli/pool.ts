@@ -12,7 +12,9 @@ import {
   type ProtocolClass, type UpstreamTlsInput,
 } from '../web/edit.js';
 
-import { changesetNew, changesetPatch, changesetPlan, commitByPlan, commitPatch, type Http } from './flow.js';
+import { poolBodyWithDiscovery, type DiscoveryForm } from '../web/discovery.js';
+
+import { changesetNew, changesetPatch, changesetPlan, commitByPlan, commitPatch, unwrap, type Http } from './flow.js';
 
 export type PoolCreateInput = {
   name: string;
@@ -115,4 +117,17 @@ export async function poolDelete(
   const patch = poolDeletePatch(key);
   if (patch === undefined) throw new Error('풀 키가 비어 있다');
   return commitPatch(http, patch);
+}
+
+/**
+ * 풀의 백엔드 출처를 켜고 끈다 (2026-11-05). head 의 그 풀을 바탕으로 `discovery` 만 바꾼다 — 다른 칸은 그대로다.
+ * `discovery` 가 undefined 면 끈다(정적으로 돌아간다). commit 까지. apply 는 아니다.
+ */
+export async function poolDiscoverySet(
+  http: Http, name: string, discovery: DiscoveryForm,
+): Promise<{ revision: string; planId: string }> {
+  const pools = unwrap(await http('GET', '/api/v1/pools'), 'pools') as Record<string, unknown>[];
+  const pool = pools.find((p) => p['key'] === name);
+  if (pool === undefined) throw new Error(`풀 '${name}' 가 없다`);
+  return commitPatch(http, [{ op: 'put', kind: 'pool', key: name, body: poolBodyWithDiscovery(pool, discovery) }]);
 }

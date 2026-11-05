@@ -69,6 +69,7 @@ import { dataplaneCapabilitiesOf } from '../engine/native-dns.js';
 import { probeEngine } from '../engine/probe.js';
 import { hostAddresses } from '../engine/host-addresses.js';
 import { renderCapsOf } from '../engine/render-caps.js';
+import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '../control/data-sources-boot.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
@@ -670,6 +671,8 @@ export async function main(): Promise<void> {
    * 마이그레이션까지 돌리고 나서 죽는 것은 아무에게도 이롭지 않다.
    */
   const t = readTimings();
+  // 데이터 공급 (2026-11-05) — 풀의 백엔드 출처 · 주소 집합 주기 갱신. 반만 설정되면 여기서 기동을 거부한다.
+  const dataSourcesCfg = dataSourcesConfigFromEnv();
 
   const dsn = env('BARY_DSN');
   const db = new Db(dsn);
@@ -845,8 +848,10 @@ export async function main(): Promise<void> {
   }, t.electionMs);
   retry.unref();
 
+  const dataSources = createDataSources(dataSourcesCfg, renderCaps.httpLua === true || renderCaps.streamLua === true);
   const control = new ControlPlane(db, store, driver, election,
-    { prefix, adminSocket, streamAdminSocket, renderCaps, engine: engineInfo, driver: driverBoot, secrets });
+    { prefix, adminSocket, streamAdminSocket, renderCaps, engine: engineInfo, driver: driverBoot, secrets,
+      discovery: dataSources.intake });
 
   // **기동 시 멤버십을 되돌려 놓는다** (§6.4). shared dict 는 프로세스 수명이라 엔진이
   // 재시작하면 슬롯이 통째로 빈다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.
@@ -904,6 +909,11 @@ export async function main(): Promise<void> {
     clusterNode.start(clusterSyncMs);
     log.info('cluster.started', { node: nodeName, intervalMs: clusterSyncMs });
   }
+
+  // 데이터 공급 (2026-11-05). 러너는 모든 노드, 투영은 리더 · 클러스터 팔로워, 주소 집합 갱신은 리더만.
+  const stopDataSources = startDataSources(dataSourcesCfg, dataSources, {
+    db, store, control, events, isLeader: () => election.state.isLeader, clusterOn,
+  });
 
   /**
    * **DB 보존** (검수 B-08 · 제안#10).
@@ -1153,6 +1163,7 @@ export async function main(): Promise<void> {
   }
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
+    discovery: dataSources.api,
     ...dispatch,
     ...sessionDomainFromEnv(),
     // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.
@@ -1223,6 +1234,7 @@ export async function main(): Promise<void> {
       stopSecretFacts();
       stopJwks();
       clusterNode?.stop();
+      stopDataSources();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은
       // 주인을 가려내는 `/proc` 폴백에 기댄다 — 그 파일을 못 읽는 플랫폼에서는
       // `stillHolding` 이 안전한 쪽(살아 있다)으로 틀려 기동이 막힌다.
