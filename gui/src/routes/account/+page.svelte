@@ -12,7 +12,8 @@
   import ChangeEmail from '#lib/account/ChangeEmail.svelte';
   import SsoIdentities from '#lib/account/SsoIdentities.svelte';
   import ApiTokens from '#lib/account/ApiTokens.svelte';
-  import { Button, Card, FieldMessage, Skeleton } from '#lib/ui';
+  import { authorityLabel } from '#lib/account/text';
+  import { Badge, Button, Card, FieldMessage, Skeleton } from '#lib/ui';
 
   const session = getContext<Session>('session');
   let note = $state<{ ok: boolean; text: string } | undefined>();
@@ -45,7 +46,15 @@
 {:else}
   {@const me = session.me}
   <div class="acct">
-    <!-- 시안 내 계정은 비밀번호 카드부터다 — 이름 · 역할은 상단 사용자 메뉴가 말한다. -->
+    <!-- 시안 내 계정은 비밀번호 카드부터다 — 이름 · 역할은 상단 사용자 메뉴가 말한다. 「권한」 은 시안에 없는 카드다:
+         IdP 가 범위를 더하고 뺄 수 있어(grant · deny) 역할 이름만으로는 무엇을 할 수 있는지 알 수 없다. -->
+    <Card title="권한">
+      <div class="who">
+        <span class="lbl">{authorityLabel(me)}</span>
+        {#if me.idpAuthority === true}<Badge tone="info" icon={null}>IdP 가 정해요</Badge>{:else}<Badge tone="neutral" icon={null}>로컬</Badge>{/if}
+      </div>
+      <div class="s">범위: {(me.scopes ?? []).join(' · ') || '없음'}{#if me.idpAuthority === true} — SSO 로그인이나 IdP 의 역할 변경 알림에 맞춰 바뀌어요.{/if}</div>
+    </Card>
     {#if me.hasPassword}<ChangePassword />{/if}
     <TotpManage {me} onChanged={session.refresh} />
     {#if ssoOn}<SsoIdentities {me} onChanged={session.refresh} />{/if}
@@ -75,6 +84,7 @@
   .t { font-weight: 600; font-size: 14px; }
   .s { font-size: 12px; color: var(--tx3); }
   .pad { margin-top: 12px; }
+  .who { display: flex; gap: 8px; align-items: center; font-size: 14px; font-weight: 500; margin-bottom: 4px; }
   /* 시안의 카드 표 — 머리 행 --bg-hover 32px · 행 --row-h · 위 테두리 */
   .th, .tr { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1.6fr; gap: 12px; padding: 0 16px; align-items: center; }
   .th { height: 32px; background: var(--bg-hover); font-size: 12px; font-weight: 600; color: var(--tx2); }

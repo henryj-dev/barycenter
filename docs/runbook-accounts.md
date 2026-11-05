@@ -278,7 +278,8 @@ IdP 에게 묻는다. 역할은 계정이 정하고, IdP 의 역할 클레임·M
 
 **OIDC 클라이언트 하나를 지역·전역이 함께 쓴다** (2026-10-18 공통 정책 1차). lodestar 에 클라이언트 하나,
 redirect URI 둘(정확 일치): `https://dev-icn-vtr.barycenter.tinyuniver.se:8443/login`, `https://barycenter.tinyuniver.se/login`(전역 화면 — 같은 데몬이 호스트만 바꿔 쓴다).
-각 인스턴스의 `BARY_OIDC_REDIRECT_URI` 는 자기 주소다. 로그아웃·role-change 통지 URI 는 쓰지 않는다(철회는 계정 PG 가 판단).
+각 인스턴스의 `BARY_OIDC_REDIRECT_URI` 는 자기 주소다. 로그아웃 통지 URI 는 쓰지 않는다(철회는 계정 PG 가 판단).
+Role Change URI 는 IdP 권한 정본을 쓸 때만 등록한다(아래 「IdP 권한 정본」).
 ⚠️ **클라이언트 비밀이 하나다.** 한 호스트에서 새면 지역·전역 모두 영향을 받는다 — 새어 나간 의심이 들면 lodestar 에서
 비밀을 바꾸고 **모든** 지역·전역의 `/etc/barycenter/env`(0640) `BARY_OIDC_CLIENT_SECRET` 을 같은 값으로 바꾼 뒤 재시작한다
 (지역은 재시작 동안 데이터 플레인이 몇 초 끊기므로 하나씩). 비밀은 그 파일에만 두고 메시지·로그·티켓에 적지 않는다.
@@ -286,21 +287,104 @@ redirect URI 둘(정확 일치): `https://dev-icn-vtr.barycenter.tinyuniver.se:8
 **기존 OIDC 사용자 이전**: 계정을 켜면 역할 클레임으로 들어오던 옛 경로는 닫힌다. 관리자가 초대하고, 초대받은
 사람이 계정을 만든 뒤 SSO 를 잇는다(또는 JIT 를 켜서 auditor 로 들인 뒤 역할을 올린다).
 
-## IdP 권한 정본 (B3 — 지연을 감수하고 지원, 2026-10-18 사용자 결정)
+## IdP 권한 정본 (B3 · A안 권한 위임, 2026-11-05)
 
-계정마다 관리자가 권한 정본을 고른다(「사람」 표의 「로컬 → IdP」). IdP 정본 계정은 **SSO 로그인 때마다** 공급자의
-역할 클레임을 매핑으로 바꿔 역할을 맞춘다.
+IdP 정본인 사람은 **IdP 가 권한을 정한다** — 역할 하나와, 범위 하나씩의 더하기(grant) · 빼기(deny). 반영은 SSO 로그인 때마다,
+그리고 IdP 가 Role Change(서명된 SET)를 push 하면 **그때 바로**(열린 세션도 다음 요청부터)다.
 
-1. 「사람 → SSO 공급자」에서 역할 클레임 이름(lodestar 는 `roles`)과 매핑(`viewer = auditor` …)을 저장한다.
-   lodestar 의 `roles` 는 원소 하나짜리 배열이고, 표시명 `roles_label` 은 권한에 쓰지 않는다.
-2. 그 사람에게 SSO 가 이어져 있어야 IdP 정본으로 돌릴 수 있다.
+**실효 범위 = 역할 범위 ∪ grant − deny. deny 가 이긴다.** 역할 범위는 auditor `read` · operator `read write` · admin
+`read write apply admin`. 개인 API 토큰은 min(토큰 역할, 주인 역할) 범위와 주인의 실효 범위의 교집합이다(deny 는 토큰에도
+걸리고, grant 는 토큰으로 옮겨 가지 않는다). 「사람」 표의 「실효 범위」 열과 「내 계정 → 권한」 이 그 값을 보인다(「운영자 · 적용 더함」).
 
-**받아들인 한계**: IdP 쪽에서 역할을 내리거나 사용자를 끄면 **그 사람의 다음 SSO 로그인 때** 반영된다 — 그 사이는
-열린 세션의 수명(최대 12시간, 30분 쉬면 끝)만큼 늦다. 급하면 barycenter 에서 **정지**한다(다음 요청부터 막힌다 — 로컬 정지가 언제나 우선).
+**누가 IdP 정본인가**: 「사람」 표에서 그 사람의 정본을 「IdP」 로 돌렸거나(SSO 연결 필요), 「사람 → SSO 공급자」 에서
+**「이 공급자의 SSO 사용자는 모두 IdP 가 권한을 정해요」** 를 켠 공급자와 이어진 사람(공급자 기본 정본). 공급자 기본 정본을 켜면
+JIT 로 처음 오는 사람도 auditor 가 아니라 **매핑 결과 역할**로 만든다(매핑이 거절하면 계정을 만들지 않는다). 매핑을 먼저 저장해야
+켜진다(409 `roles_not_configured`). 끄거나 정본을 로컬로 돌리면 IdP 가 준 grant/deny 는 지워지고 역할만 남는다.
 
-거부되는 로그인(로컬 역할로 떨어지지 않는다, 계정 감사에 `account.idp_role_refused`):
-클레임 없음 · 값이 둘 이상 · 매핑에 없는 값 · 인증 앱 없는 사람을 관리자로 올리려 함 · **마지막 활성 관리자를 내리려 함**
-(관리자가 0 이 되지 않게 내리지 않고 거부한다). 「인증 앱 없는 사람」은 IdP OTP 연결도 없는 사람이다.
+**lodestar 의 클레임** (lodestar 안내: groups 는 조직 소속 — **인가 금지**. 인가는 entitlements. roles 는 「이 사람은 무엇인가」):
+
+| 칸 | lodestar 값 | 뜻 |
+|---|---|---|
+| 역할 클레임 | `roles` | 문자열 배열. 매핑에 있는 값만 고르고, 둘 이상이면 **가장 높은 역할**. 하나도 없으면 로그인 거부. `roles_label` 은 표시명 — 쓰지 않는다 |
+| entitlement 클레임 | `entitlements` | 문자열 배열. 접두가 붙은 것만 본다. 없으면 빈 목록(IdP 는 빈 entitlements 를 빼고 보낸다) |
+| 접두 | `barycenter.` | 이 앱의 entitlement 표식. entitlement 를 읽으면 비울 수 없다(다른 앱의 것까지 권한이 되지 않게) |
+
+「프로필로 채우기」 의 lodestar 가 위 셋과 기본 표 · 권하는 역할 매핑을 채운다(저장해야 바뀐다). 다른 IdP 는 클레임 자리만 다르다 —
+Keycloak `realm_access.roles`(점 경로), Entra ID `roles`, Okta `groups`(그 IdP 에서는 그룹이 인가 수단이다).
+
+**lodestar 에 등록할 이름** — 역할 (클라이언트 역할, 사람에게 하나):
+
+| lodestar role | barycenter 역할 |
+|---|---|
+| `barycenter-admins` | admin (둘째 인증 필수) |
+| `barycenter-operators` | operator |
+| `barycenter-auditors` | auditor |
+
+entitlement (기본 표 — 「접두 뒤 이름 = 효과」, 표는 「SSO 공급자」 에서 고칠 수 있다):
+
+| lodestar entitlement | 효과 | 쓰임 |
+|---|---|---|
+| `barycenter.apply` | grant apply | 운영자에게 적용(트래픽에 걸기)까지 |
+| `barycenter.write` | grant write | 감사자에게 설정 고치기 |
+| `barycenter.admin` | grant admin | 관리 범위(둘째 인증 · 마지막 관리자 규칙을 그대로 지난다) |
+| `barycenter.no_apply` | deny apply | 관리자라도 적용 없음 |
+| `barycenter.no_write` | deny write | 읽기만 |
+| `barycenter.no_admin` | deny admin | 관리 범위 빼기 |
+
+**접두가 붙었는데 표에 없는 entitlement 는 로그인 거부**다(`unknown-entitlement`) — 모르는 deny 를 조용히 버리면 막으려던 권한이
+열린다. lodestar 에 새 `barycenter.*` 를 만들기 **전에** 표에 먼저 넣는다.
+
+**Role Change (즉시 반영)** — lodestar 클라이언트 등록의 「Role Change URI」:
+
+- `https://util-icn-vtr.barycenter.tinyuniver.se/api/v1/oidc/role-change`
+- `https://barycenter.tinyuniver.se/api/v1/oidc/role-change` (전역 화면 — 같은 데몬)
+
+계정 PG 가 하나라 **한 곳에 닿으면 모든 지역 · 전역에 반영**된다. 둘 다 받게 하면 두 번째는 409(같은 jti)로 버려진다 — 해롭지 않다.
+켜기(`/etc/barycenter/env`): `BARY_OIDC_ROLE_CHANGE_EVENT=<lodestar 가 정한 events 키 URI>` — 기본값은 없다(틀린 기본값은 서명은 맞는데
+이벤트가 없다며 모든 변경을 조용히 버린다). heliopause 의 `HELIOPAUSE_OIDC_ROLE_CHANGE_EVENT` 와 같은 값이다. 서명은 **IdP 공개키로만**
+본다 — `BARY_OIDC_JWKS_URL`(또는 discovery) 또는 PEM 공개키가 있어야 한다. OIDC 로그인 · 사람 계정 · 비대칭 키 중 하나라도 없이 켜면
+기동 거부. 켜지면 기동 로그에 `oidc.role_change.enabled`.
+
+받는 규칙(heliopause `src/set.ts` 와 같다): 본문 `role_change_token=<SET>`(form). 서명 · `typ: secevent+jwt` · nonce 없음(ID Token 거절) ·
+iss · aud(우리 client_id) · iat(미래 60초까지) · exp · 수명 1시간 이하 · jti(한 번만, 계정 PG) · sub · **txn**(그 사람에게 마지막으로
+적용한 것보다 새로워야 — 늦게 온 옛 스냅숏이 철회를 되돌리지 않게) · `events[키] = { roles: [], entitlements: [] }`.
+
+| 답 | 뜻 · 할 일 |
+|---|---|
+| 204 | 반영했다 — 또는 이 사람에게는 반영하지 않는다(IdP 정본 아님 · 연결 없는 sub · 로컬 정지 — 감사 `account.idp_role_change_ignored`) |
+| 400 | 모양(본문 · events 키 · 배열). events 키가 다르면 `BARY_OIDC_ROLE_CHANGE_EVENT` 를 lodestar 의 값과 맞춘다 |
+| 401 | 서명 · iss · aud · 시각 · jti/txn 없음. 위조이거나 키 회전 직후(JWKS 갱신 주기만큼). 같은 IP 의 401 이 쌓이면 429 |
+| 409 `role_change_replayed` | 같은 SET 을 이미 받았다(두 주소로 보낸 두 번째 등) |
+| 409 `role_change_stale` | 그 사람에게 더 새로운 변경을 이미 적용했다 |
+| 409 `role_change_guarded` | 마지막 관리자의 관리 범위를 빼려 했거나, 둘째 인증 없는 사람에게 관리 범위를 주려 했다 — 바꾸지 않았다 |
+| 503 | 계정 PG 를 못 물었다. IdP 는 다시 보내지 않는다 — 그 사람의 다음 SSO 로그인이 맞추거나, 급하면 barycenter 에서 정지한다 |
+
+거부는 데몬 로그 `oidc.role_change.refused`(사유 · IP — 토큰은 없다)에 남는다. **거절된 역할 변경은 권한 축소가 반영되지 않았다는
+뜻일 수 있다** — 보이면 그 사람의 실효 범위를 「사람」 표에서 확인한다.
+
+**IdP 가 이 앱의 역할을 거두면**(Role Change 의 roles 에 매핑된 값이 없음): 로컬 역할로 떨어지지 않는다 — **모든 범위를 deny** 하고
+그 사람의 세션을 끊는다(개인 토큰도 범위 0). IdP 가 다시 주면 돌아온다. 마지막 관리자라면 409 로 그대로 둔다.
+
+거부되는 로그인(로컬 역할로 떨어지지 않는다, 계정 감사 `account.idp_role_refused` — detail 에 사유):
+클레임 없음 · 문자열 배열이 아님 · 매핑에 있는 값 없음 · 표에 없는 접두 entitlement · 공급자 설정 없음 · 둘째 인증 없는 사람에게 관리 범위 ·
+**마지막 활성 관리자의 관리 범위를 빼려 함**(역할 강등이든 `no_admin` 이든 — 빼지 않고 거부). 「둘째 인증」 은 로컬 인증 앱 또는 IdP OTP 연결이다.
+마지막 관리자 판정은 「실효 관리자」(admin 역할 또는 admin grant, admin deny 없음)로 센다. 로컬 정지 · 삭제는 언제나 우선이다.
+
+**매핑 구현 고르기**: `BARY_IDP_ROLES_KIND`(기본 `claims` — 지금은 이것 하나). 모르는 이름이면 기동 거부.
+
+## OIDC discovery (2026-11-05)
+
+`BARY_OIDC_DISCOVERY=1` 이면 `BARY_OIDC_ISSUER` 의 `/.well-known/openid-configuration` 을, `BARY_OIDC_DISCOVERY_URL=<주소>` 면 그 주소를
+기동 때 한 번 읽어 `BARY_OIDC_AUTHORIZATION` · `BARY_OIDC_TOKEN` · `BARY_OIDC_JWKS_URL` 의 **빈칸만** 채운다 — **손으로 준 값이 이긴다**.
+둘 다 없으면 읽지 않는다(지금처럼 손으로 준다). lodestar: `BARY_OIDC_ISSUER=https://idp.tinyuniver.se` + `BARY_OIDC_DISCOVERY=1`.
+
+- **issuer 불일치는 기동 거부**(문서의 `issuer` 가 `BARY_OIDC_ISSUER` 와 문자 그대로 달라야 — 끝의 `/` 도 다르다). 문서가 JSON 이 아님 ·
+  주소 없음 · https 아님도 거부(설정 문제).
+- **닿지 못하면 기동을 거부하지 않는다** — 크게 경고(`oidc.discovery.unavailable`)하고 뜬다. 그때 손으로 주지 않은 주소는 비어 SSO
+  로그인 · JWKS 검증이 꺼진 채다. IdP 가 돌아오면 재시작한다. 이 창을 없애려면 세 주소를 손으로도 줘 둔다(discovery 는 빈칸만 채운다).
+  ⚠️ IdP OTP(`BARY_MFA_IDP_*`) · Role Change 는 OIDC 로그인이 켜져 있어야 하므로, discovery 로만 주소를 받는 배포에서 기동 때 IdP 가
+  죽어 있으면 **기동이 거부된다** — 그런 배포는 주소를 손으로도 준다.
+- https 만 · 리다이렉트 안 따라감 · 8초 · 256KiB 상한. 읽으면 기동 로그 `oidc.discovery.loaded`(세 주소).
 
 ## IdP OTP (둘째 인증 어댑터, 2026-11-05 사용자 요구)
 
