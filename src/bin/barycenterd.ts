@@ -49,7 +49,7 @@ import { httpAdminConf, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
-import { FileDns01 } from '../control/dns01.js';
+import { dns01FromEnv } from '../control/dns-providers/registry.js';
 import { publishIssued } from '../control/acme-publish.js';
 import { collectSecretRoots } from '../control/secret-roots.js';
 import { sweepSecrets } from '../dp/secret-gc.js';
@@ -987,12 +987,14 @@ export async function main(): Promise<void> {
   let stopSecretGc = (): void => {};
   let stopOrphans = (): void => {};
   const acmeStore = new AcmeStore(db);
-  const dnsDir = env('BARY_DNS01_DIR', '');
+  // dns-01 공급자 — `BARY_DNS01_KIND`(없으면 `BARY_DNS01_DIR` 의 file, 그것도 없으면 끔). 반만 설정이면 던진다.
+  const dns01 = dns01FromEnv();
+  if (dns01 !== undefined) log.info('acme.dns01.enabled', { provider: dns01.kind, propagationS: (dns01.propagation?.timeoutMs ?? 0) / 1000 });
   const acmeRunner = new AcmeRunner({
     store: acmeStore,
     secrets,
     placer: new HttpChallengePlacer(adminFetch(adminSocket)),
-    ...(dnsDir === '' ? {} : { dnsPlacer: new FileDns01(dnsDir) }),
+    ...(dns01 === undefined ? {} : { dnsPlacer: dns01.placer }),
     renewBeforeDays: t.acmeRenewDays,
     // 화면이 주문 진행을 따라가게 — 스트림의 `acme` 이벤트.
     onAdvance: (e) => { events.publish('acme', e); },

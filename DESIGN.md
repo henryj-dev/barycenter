@@ -2307,6 +2307,8 @@ v1 은 "숫자 priority 를 와일드카드 정규식화로 완전 구현"한다
   `BARY_DNS01_DIR/_acme-challenge.<domain>` 에 TXT 값을 한 줄로 쓰고, cleanup 때
   같은 파일을 지운다. 운영 배포는 이 디렉터리를 감시해 `nsupdate` 또는 외부 DNS 훅으로
   전파하고, ACME 검증이 끝난 뒤에도 파일 정본을 임의로 지우거나 덮어쓰지 않는다.
+  API 공급자(Cloudflare · PowerDNS · Route 53 · RFC 2136)는 `BARY_DNS01_KIND` 로 고른다 —
+  `src/control/dns-providers/`, 런북 `docs/runbook-dns01.md`.
   GUI 로 수명주기를 **조작**하는 것은 없다.
 
   **사실은 설정이 아니라 바이트에서 온다.** changeset 으로 받으면 클라이언트가 만료일을

@@ -37,7 +37,11 @@ import { count } from '../obs/metrics.js';
 export interface ChallengePlacer {
   readonly type: 'http-01' | 'dns-01';
   place(domain: string, token: string, value: string): Promise<void>;
-  remove(domain: string, token: string): Promise<void>;
+  /**
+   * `value` 는 놓았던 값이다. dns-01 공급자는 같은 이름에 TXT 가 둘 설 수 있어서(`a.test` 와 `*.a.test`)
+   * **그 값만** 지우는 데 쓴다. http-01 · 파일 배치기는 토큰으로 충분해서 안 본다.
+   */
+  remove(domain: string, token: string, value?: string): Promise<void>;
 }
 
 export type AcmeRunnerOptions = {
@@ -389,7 +393,7 @@ export class AcmeRunner {
   async cleanupOrder(orderId: string): Promise<number> {
     return cleanupPlacedChallenges(
       await this.#o.store.challenges(orderId),
-      (row) => this.#placer(row.type).remove(row.domain, row.token),
+      (row) => this.#placer(row.type).remove(row.domain, row.token, row.value),
       (id) => this.#o.store.markCleaned(id),
     );
   }
@@ -403,7 +407,7 @@ export class AcmeRunner {
   async cleanup(olderThanSeconds = 3600): Promise<number> {
     return cleanupPlacedChallenges(
       await this.#o.store.orphans(olderThanSeconds),
-      (row) => this.#placer(row.type).remove(row.domain, row.token),
+      (row) => this.#placer(row.type).remove(row.domain, row.token, row.value),
       (id) => this.#o.store.markCleaned(id),
     );
   }
