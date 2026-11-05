@@ -77,7 +77,12 @@ export function verifyRoleChange(token: string, o: RoleChangeSettings): RoleChan
   const events = p['events'];
   if (events === null || typeof events !== 'object' || Array.isArray(events)) return no(400, 'events 가 없다');
   const ev = Object.hasOwn(events, o.eventKey) ? (events as Record<string, unknown>)[o.eventKey] : undefined;
-  if (ev === null || typeof ev !== 'object' || Array.isArray(ev)) return no(400, '역할 변경 이벤트가 없다(events 키가 설정과 다르다)');
+  if (ev === null || typeof ev !== 'object' || Array.isArray(ev)) {
+    // 받은 키를 말한다 — IdP 가 정한 키를 운영자가 모를 때 이 한 줄로 찾는다(`BARY_OIDC_ROLE_CHANGE_EVENT`).
+    // 여기는 서명 · iss · aud · 시각을 이미 지난 자리다 — 위조가 아닌 IdP 의 SET 만 이 말을 남긴다. 키는 공개된 URI 다.
+    const got = Object.keys(events).slice(0, 5).map((k) => JSON.stringify(k.slice(0, 200))).join(', ');
+    return no(400, `역할 변경 이벤트가 없다(events 키가 설정과 다르다) — 받은 키: ${got === '' ? '없음' : got}`);
+  }
   // 두 배열은 SET 에 **언제나** 있다 — 빈 배열은 「모두 철회」 다. 없는 키를 「안 바뀜」 으로 읽지 않는다.
   const e = ev as Record<string, unknown>;
   const roles = e['roles'];

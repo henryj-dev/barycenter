@@ -81,6 +81,15 @@ describe('Role Change SET 검증', () => {
     expect(verify(sign(good({ events: { [EVENT]: { roles: [1], entitlements: [] } } })))).toMatchObject({ ok: false, status: 400 });
   });
 
+  it('events 키가 다르면 받은 키를 말한다 — 운영자가 IdP 의 키를 찾는다', () => {
+    const r = verify(sign(good({ events: { 'https://idp.test/event/role-change-v2': { roles: [], entitlements: [] } } })));
+    expect(r).toMatchObject({ ok: false, status: 400 });
+    expect(r.ok ? '' : r.reason).toContain('받은 키: "https://idp.test/event/role-change-v2"');
+    // 위조 SET 에는 이 말이 나오지 않는다 — 서명이 먼저다
+    const forged = verify(sign(good({ events: { 'https://evil/x': {} } }), {}, other.privateKey));
+    expect(forged.ok ? '' : forged.reason).not.toContain('받은 키');
+  });
+
   it('빈 배열은 「모두 철회」 로 그대로 온다', () => {
     expect(verify(sign(good({ events: { [EVENT]: { roles: [], entitlements: [] } } })))).toMatchObject({ ok: true, change: { roles: [], entitlements: [] } });
   });
