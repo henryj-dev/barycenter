@@ -5,6 +5,7 @@
  * 메서드×경로 ALLOW/DENY 는 WAF 다. 여기 없다.
  */
 import { routePaths } from '../model/route-paths.js';
+import type { AddressSourceKind, AddressSourceOptions } from '../model/provisional.js';
 import { parseHashKey } from '../validate/strings.js';
 import { addressSetRef, cidrVersion } from '../validate/ip.js';
 
@@ -278,11 +279,15 @@ export type PutAddressSetOp = {
   op: 'put';
   kind: 'addressSet';
   key: string;
-  body: { cidrs: string[]; source?: 'cloudflare' };
+  body: { cidrs: string[]; source?: AddressSourceKind; sourceOptions?: AddressSourceOptions };
 };
 
+/**
+ * 주소 집합 put. `source` 는 출처 레지스트리의 이름이다(옛 `cloudflare` 도 그 하나). 옵션은 출처가 있을 때만 싣는다.
+ */
 export function putAddressSetPatch(
-  key: string, input: { cidrs: string | readonly string[]; source?: 'cloudflare' },
+  key: string,
+  input: { cidrs: string | readonly string[]; source?: AddressSourceKind; sourceOptions?: AddressSourceOptions },
 ): PutAddressSetOp[] {
   if (key.trim() === '') throw new Error('이름이 비어 있다');
   const cidrs = parseSourceAllow(input.cidrs) ?? [];
@@ -291,7 +296,11 @@ export function putAddressSetPatch(
   if (ref !== undefined) throw new Error(`집합은 다른 집합(${ref})을 참조하지 않는다 — 대역을 직접 넣는다`);
   return [{
     op: 'put', kind: 'addressSet', key: key.trim(),
-    body: { cidrs, ...(input.source === undefined ? {} : { source: input.source }) },
+    body: {
+      cidrs,
+      ...(input.source === undefined ? {} : { source: input.source }),
+      ...(input.source === undefined || input.sourceOptions === undefined ? {} : { sourceOptions: input.sourceOptions }),
+    },
   }];
 }
 

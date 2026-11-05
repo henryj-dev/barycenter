@@ -44,6 +44,33 @@ export type StatusSnap = {
 /**
  * @param scope 전역 모드면 읽기 경로를 고른 지역의 중계 경로로 바꾼다(`lib/global/scope`). 지역 인스턴스면 그대로다.
  */
+/** 풀 하나의 백엔드 출처 상태 — `GET /api/v1/pools/:id/discovery` (2026-11-05). */
+export type DiscoveryPoolView = {
+  pool: string;
+  source: string;
+  query: string;
+  state: 'pending' | 'ok' | 'error' | 'unconfigured';
+  /** 거짓이면 정적 백엔드를 쓰는 중이다. */
+  advertised: boolean;
+  endpoints: { host: string; port: number }[];
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  error?: { reason: string; detail: string };
+  keptEmpty?: boolean;
+};
+
+/** 주소 집합을 다시 받은 기록 한 줄 — `GET /api/v1/address-sets/refresh-status` (2026-11-05). */
+export type AddressSetRefreshRow = {
+  key: string;
+  checkedAt: string;
+  ok: boolean;
+  reason?: string;
+  detail?: string;
+  refreshedAt?: string;
+  revision?: string;
+  by: string;
+};
+
 /** 바인드할 수 있는 주소 — `GET /api/v1/system/addresses`. */
 export type HostAddressFacts = {
   addresses: { address: string; family: 'v4' | 'v6'; interface: string; internal: boolean }[];
@@ -372,7 +399,9 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
           } else if (frame.event === 'acme') {
             // 주문이 한 걸음 갔다(대기 → 검증 중 → 발급됨 · 실패). 인증서와 주문만 다시 읽는다.
             await refreshCerts();
-          } else if (frame.event === 'revision' || frame.event === 'apply') {
+          } else if (frame.event === 'revision' || frame.event === 'apply'
+            || (frame.event === 'address_set' && (frame.data as { outcome?: unknown } | null)?.outcome === 'committed')) {
+            // 주소 집합을 데몬이 다시 받아 커밋했다(2026-11-05) — 새 리비전과 같다.
             const st = await fetch(api('/api/v1/status'), { headers: auth() });
             if (st.ok) await onStatus((await st.json()) as StatusSnap);
           }
@@ -687,6 +716,50 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     if (!r.ok) return undefined;
     const body = (await r.json()) as HostAddressFacts & { available?: boolean };
     return body.available === true ? { addresses: body.addresses, nonlocalBind: body.nonlocalBind } : undefined;
+  };
+  /** 풀 하나의 백엔드 출처 상태 — `GET /api/v1/pools/:id/discovery` (2026-11-05). 못 읽으면 undefined. */
+  const poolDiscovery = async (key: string): Promise<DiscoveryPoolView | { pool: string; source: null } | undefined> => {
+    const r = await fetch(api(`/api/v1/pools/${encodeURIComponent(key)}/discovery`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    return (await r.json().catch(() => undefined)) as DiscoveryPoolView | { pool: string; source: null } | undefined;
+  };
+  /** 주소 집합을 다시 받은 기록 — `GET /api/v1/address-sets/refresh-status`. 못 읽으면 undefined. */
+  const addressSetRefreshStatus = async (): Promise<AddressSetRefreshRow[] | undefined> => {
+    const r = await fetch(api('/api/v1/address-sets/refresh-status'), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    const body: unknown = await r.json().catch(() => undefined);
+    return Array.isArray(body) ? body as AddressSetRefreshRow[] : undefined;
+  };
+  /**
+   * 「목록 다시 받기」 — `POST /api/v1/address-sets/:id/refresh`. 커밋까지이고 적용은 안 한다.
+   * 커밋했으면 head 를 다시 읽는다(다른 커밋과 같이).
+   */
+  const refreshAddressSet = async (key: string): Promise<
+    | { ok: true; outcome: 'unchanged' | 'committed'; count: number; revision?: string }
+    | { ok: false; message: string }
+  > => {
+    editing = true;
+    try {
+      const r = await call('POST', `/api/v1/address-sets/${encodeURIComponent(key)}/refresh`);
+      if (!r.ok) {
+        const msg = r.body['message'];
+        return { ok: false, message: typeof msg === 'string' ? msg : `다시 받기 ${r.status}` };
+      }
+      const outcome = r.body['outcome'] === 'committed' ? 'committed' : 'unchanged';
+      if (outcome === 'committed') {
+        noteCommit(false);
+        const st = await fetch(api('/api/v1/status'), { headers: auth() }).catch(() => undefined);
+        if (st !== undefined && st.ok) await onStatus((await st.json()) as StatusSnap);
+      }
+      return {
+        ok: true, outcome, count: Number(r.body['count'] ?? 0),
+        ...(typeof r.body['revision'] === 'string' ? { revision: r.body['revision'] } : {}),
+      };
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    } finally {
+      editing = false;
+    }
   };
   const createAcmeAccount = async (input: { key: string; directoryUrl: string; contact: string[] }): Promise<boolean> => {
     editing = true;
@@ -1156,6 +1229,9 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     putResource,
     acmeAccounts,
     hostAddresses,
+    poolDiscovery,
+    addressSetRefreshStatus,
+    refreshAddressSet,
     createAcmeAccount,
     historyOf,
     changeset,

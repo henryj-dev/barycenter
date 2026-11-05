@@ -2,7 +2,8 @@
   /**
    * 주소 집합 목록 — 콘솔 시안 `colsOf('sets')` · `cells('sets', r)` 그대로(`traffic-cells.ts`).
    * 이름 · 대역 수 · 출처 · 마지막 갱신 · 사용하는 리스너. 칸은 평문이다(링크 없음). 리스너의 출발지 제한 · 신뢰 대역과
-   * 라우트 출발지 규칙이 `@이름` 으로 참조한다(#114). 마지막 갱신 시각은 모델에 없어서 「—」 다.
+   * 라우트 출발지 규칙이 `@이름` 으로 참조한다(#114). 마지막 갱신은 다시 받은 기록(`/address-sets/refresh-status`, 2026-11-05)이다 —
+   * 지역 인스턴스 · 좁혀 보기에서만 읽는다(합산은 「—」).
    * 행을 누르면 아래에 분할 상세가 열리고 그 자리에서 대역 목록을 고친다(시안 `INL.sets`). 공개 목록에서 받은 집합은 잠긴다.
    * 행 메뉴는 시안 `actsOf`: 상세 페이지 열기 · 삭제…. 이름 칸 뒤의 「◐ 적용 대기」 는 시안에 없지만 있던 것이다(#198).
    *
@@ -20,7 +21,7 @@
   import RegionNotices from '#lib/global/RegionNotices.svelte';
   import { regionColumn, useAggregate } from '#lib/global/use-aggregate.svelte.ts';
   import { withRegionColumn, type RegionRow } from '#lib/global/aggregate.ts';
-  import type { createDesk } from '#lib/desk.svelte.ts';
+  import type { AddressSetRefreshRow, createDesk } from '#lib/desk.svelte.ts';
   import ListSplit from '#lib/detail/ListSplit.svelte';
   import AddressSetInline from '#lib/detail/AddressSetInline.svelte';
   import DeleteConfirm from './DeleteConfirm.svelte';
@@ -43,7 +44,14 @@
   let del = $state<{ kind: 'addressSet'; key: string; region: string } | undefined>();
   let selected = $state<string[]>([]);
 
-  const rowsOf = (desk: Desk): AddressSetRow[] => addressSetRowsOf(desk);
+  let refresh = $state<ReadonlyMap<string, AddressSetRefreshRow> | undefined>();
+  // head 가 움직이면 다시 읽는다 — 데몬이 받아 커밋하면 새 리비전이 온다.
+  $effect(() => {
+    if (agg.on) return;
+    void desk.head;
+    void desk.addressSetRefreshStatus().then((rows) => { refresh = rows === undefined ? undefined : new Map(rows.map((x) => [x.key, x])); });
+  });
+  const rowsOf = (d: Desk): AddressSetRow[] => addressSetRowsOf(d, agg.on ? undefined : refresh);
   const rows = $derived<AggRow[]>(agg.on ? agg.rows(rowsOf, (r) => r.key) : rowsOf(desk).map((r) => ({ ...r, region: '', rid: r.key })));
   const columns = addressSetColumns<AggRow>();
   /** 합산이면 「지역」 열을 맨 끝에(시안 `lcols`). */
@@ -66,7 +74,7 @@
 {#if agg.on}<RegionNotices notices={agg.notices} />{:else}<WriteNote spaced />{/if}
 <DataTable label="주소 집합 목록" {rows} rowKey={(r) => r.rid} columns={shownColumns} {...(agg.on ? agg.listState : listState(desk))} bind:selected fill
   search={{ placeholder: '이름·주소로 찾기' }}
-  emptyTitle="주소 집합이 없어요" emptyBody="리스너의 출발지 제한에서 @이름 으로 써요. CLI 의 bary address-set create --cloudflare 로도 만들어요."
+  emptyTitle="주소 집합이 없어요" emptyBody="리스너의 출발지 제한에서 @이름 으로 써요. 출처(Cloudflare · AWS · …)를 고르면 목록을 받아 와요."
   onopen={(r) => { void goto(at(r, resourcePath('addressSet', r.key))); }} rowMenu={menu}>
   {#snippet cell(r, c)}
     {#if c.key === 'key'}{r.key}{#if agg.on}{@const e = agg.entry(r.region)}{#if e !== undefined}<InRegion entry={e}><PendingMark kind="addressSet" key={r.key} /></InRegion>{/if}{:else}<PendingMark kind="addressSet" key={r.key} />{/if}{/if}

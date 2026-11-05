@@ -14,10 +14,10 @@ import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
 import { adminFetch, adminTalk } from './admin-client.js';
-import { type DiscoveryIntake } from './discovery.js';
+import { eligibleWithDiscovery, type DiscoveryIntake } from './discovery.js';
 import { drainKeys, observationPeerOf, observePeerFromAdmin, observeStreamPeer } from './drain.js';
 import { backendStatusRows, type BackendStatusRow } from './backend-status.js';
-import { currentHealth, eligibleCountForPlane, healthRows, reduceMembership, shouldPushMembership } from './health.js';
+import { currentHealth, eligibleCountForPlane, healthRows, shouldPushMembership } from './health.js';
 import {
   assertAdminSocket, attrsOf, httpAdminConf, routedPools, slotsForEligible, streamAdminConf,
 } from './membership.js';
@@ -1045,8 +1045,15 @@ export class ControlPlane {
     });
   }
 
+  /**
+   * 적격 = (모델 + 발견한 엔드포인트) ∩ 헬스 ∩ 드레인.
+   *
+   * **발견을 먼저 얹는다** (2026-11-05). 전에는 정적 모델만 줄였으므로, 슬롯이 발견한 peer 를 내도 「적격이 아니다」 로
+   * 걸러져 빈 슬롯이 됐다 — 출처를 켜면 그 풀이 죽었다. 발견한 peer 는 프로버가 재지 않으므로 헬스가 `unknown` 이고,
+   * `unknown` 은 빼지 않는다(§6.6).
+   */
   private async eligible(model: Model): Promise<Model> {
-    return reduceMembership(model, await currentHealth(this.db), await drainKeys(this.db));
+    return eligibleWithDiscovery(model, await currentHealth(this.db), await drainKeys(this.db), this.discoveryOf());
   }
 
   private discoveryOf(): DiscoveryIntake | undefined {
