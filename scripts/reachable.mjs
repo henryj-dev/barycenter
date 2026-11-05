@@ -82,6 +82,7 @@ const ALLOW = new Map([
   ['src/dp/apply.ts:FaultStore', '저장소 실패를 주입하는 이음새'],
   ['src/obs/log.ts:setSink', '로그 sink 주입 — 테스트가 한 줄씩 읽는다'],
   ['src/obs/metrics.ts:counterSnapshot', '카운터 관측 — 테스트가 증가를 잰다'],
+  ['src/notify/hub.ts:NotifyHub.queued', '알림 큐 깊이 관측 — 테스트가 큐 상한을 잰다'],
   ['src/obs/metrics.ts:resetCounters', '카운터 되돌리기 — 테스트 간 격리'],
 
   // **동결 게이트의 중복.** `scripts/freeze-b.mjs` 가 같은 것을 정규식으로 다시 짰다 —

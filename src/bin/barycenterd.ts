@@ -35,7 +35,10 @@ import type { RateLimitStore } from '../api/auth-limit/store.js';
 import { AccountService, type AccountServiceOptions } from '../accounts/service.js';
 import { idpMfaKinds, idpMfaProvider } from '../accounts/mfa/registry.js';
 import { DEFAULT_ROLE_MAPPER, roleMapperFactory } from '../accounts/idp-roles/registry.js';
-import { smtpMailer } from '../accounts/mail.js';
+import type { Mailer } from '../accounts/mail.js';
+import { mailFromEnv } from '../accounts/mail-transport/registry.js';
+import { acmeFailure, notifyFromEnv } from '../notify/registry.js';
+import { NotifyWatch } from '../notify/watch.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
 import { JwksCache } from '../api/jwks.js';
@@ -54,7 +57,7 @@ import { httpAdminConf, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
-import { FileDns01 } from '../control/dns01.js';
+import { dns01FromEnv } from '../control/dns-providers/registry.js';
 import { publishIssued } from '../control/acme-publish.js';
 import { collectSecretRoots } from '../control/secret-roots.js';
 import { sweepSecrets } from '../dp/secret-gc.js';
@@ -309,16 +312,16 @@ async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promis
    * 메일(초대·재설정·이메일 변경). **셋 다 있어야 켠다** — 링크 앞부분(`BARY_PUBLIC_URL`)이 없으면 메일 속
    * 링크를 못 만들고, 보내는 주소가 없으면 받는 쪽이 스팸으로 버린다. 반만 켜면 조용히 안 가는 메일이 된다.
    */
-  const smtp = env('BARY_SMTP_URL', '');
-  const from = env('BARY_MAIL_FROM', '');
+  // 전송은 `BARY_MAIL_KIND`(없으면 지금처럼 smtp) — `src/accounts/mail-transport/registry.ts`. 반만 설정이면 던진다.
+  const transport = mailFromEnv();
   const publicUrl = env('BARY_PUBLIC_URL', '');
-  let mail: { mailer: ReturnType<typeof smtpMailer>; publicUrl: string } | undefined;
-  if (smtp !== '' || from !== '') {
-    if (smtp === '' || from === '' || publicUrl === '') {
-      throw new Error('메일을 켜려면 BARY_SMTP_URL · BARY_MAIL_FROM · BARY_PUBLIC_URL 이 모두 필요하다');
+  let mail: { mailer: Mailer; publicUrl: string } | undefined;
+  if (transport !== undefined) {
+    if (publicUrl === '') {
+      throw new Error('메일을 켜려면 BARY_PUBLIC_URL 도 필요하다(메일 속 링크의 앞부분)');
     }
-    mail = { mailer: smtpMailer(smtp, from), publicUrl };
-    log.info('accounts.mail.enabled', { from });
+    mail = { mailer: transport.mailer, publicUrl };
+    log.info('accounts.mail.enabled', { from: transport.from, transport: transport.kind });
   }
   return new AccountService({
     db: adb, sealer: sealing.sealer, issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
@@ -1112,6 +1115,13 @@ export async function main(): Promise<void> {
   }
 
   /**
+   * 알림 (`BARY_NOTIFY=webhook,slack,mail`) — `src/notify/`. 없으면 끈다(지금과 같다). 반만 설정이면 던진다.
+   * 보내기는 본 동작을 막지 않는다 — 허브가 큐로 따로 보낸다.
+   */
+  const notify = notifyFromEnv(nodeName, process.env, { mail: () => mailFromEnv() });
+  if (notify !== undefined) log.info('notify.enabled', { notifiers: notify.hub.kinds, certDays: notify.certDays });
+
+  /**
    * ACME 갱신 러너 (§8.2 · ADR-ACME).
    *
    * **`httpLua` 가 있어야 돈다.** 챌린지는 shared dict 에서 서빙되고(ADR-ACME ①), 그게
@@ -1125,15 +1135,21 @@ export async function main(): Promise<void> {
   let stopSecretGc = (): void => {};
   let stopOrphans = (): void => {};
   const acmeStore = new AcmeStore(db);
-  const dnsDir = env('BARY_DNS01_DIR', '');
+  // dns-01 공급자 — `BARY_DNS01_KIND`(없으면 `BARY_DNS01_DIR` 의 file, 그것도 없으면 끔). 반만 설정이면 던진다.
+  const dns01 = dns01FromEnv();
+  if (dns01 !== undefined) log.info('acme.dns01.enabled', { provider: dns01.kind, propagationS: (dns01.propagation?.timeoutMs ?? 0) / 1000 });
   const acmeRunner = new AcmeRunner({
     store: acmeStore,
     secrets,
     placer: new HttpChallengePlacer(adminFetch(adminSocket)),
-    ...(dnsDir === '' ? {} : { dnsPlacer: new FileDns01(dnsDir) }),
+    ...(dns01 === undefined ? {} : { dnsPlacer: dns01.placer }),
     renewBeforeDays: t.acmeRenewDays,
     // 화면이 주문 진행을 따라가게 — 스트림의 `acme` 이벤트.
-    onAdvance: (e) => { events.publish('acme', e); },
+    onAdvance: (e) => {
+      events.publish('acme', e);
+      const n = acmeFailure(e);
+      if (n !== undefined) notify?.hub.emit(n);
+    },
   });
   if (acmeOn) {
     acmeRunner.start(
@@ -1292,6 +1308,31 @@ export async function main(): Promise<void> {
       reason: 'BARY_GLOBAL_HOST 와 SSO 가 켜졌는데 계정(BARY_ACCOUNTS_DSN)이 꺼졌다 — 노드가 여럿이면 SSO 로그인이 끊긴다',
     });
   }
+  /**
+   * 알림의 상태 보기 — 리더 교체 · 적용 실패 · 미완 전환 · 인증서 만료 임박 · 지역 연락 끊김(`src/notify/watch.ts`).
+   * 읽기만 한다. 리더 교체 말고는 리더만 본다.
+   */
+  let stopNotify = (): void => {};
+  if (notify !== undefined) {
+    const relay = dispatch.globalSurface?.relay;
+    const watch = new NotifyWatch(notify.hub, {
+      isLeader: () => election.state.isLeader,
+      failedApply: () => store.failedHead(),
+      unfinished: async () => (await driver.status()).unfinished,
+      certificates: async () => {
+        const head = await store.head();
+        const model = await store.modelAt(head.revision);
+        return model.certificates.flatMap((c) => {
+          const facts = c.materialRef === undefined ? undefined : secrets.facts(c.materialRef);
+          return facts === undefined ? [] : [{ key: c.key, notAfter: facts.notAfter }];
+        });
+      },
+      ...(relay === undefined ? {} : { regions: () => relay.summary() }),
+    }, { certDays: notify.certDays, graceMs: 2 * notify.intervalMs });
+    watch.start(notify.intervalMs);
+    stopNotify = (): void => watch.stop();
+  }
+
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
     discovery: dataSources.api,
@@ -1365,6 +1406,7 @@ export async function main(): Promise<void> {
       stopDbRetention();
       stopSecretFacts();
       stopJwks();
+      stopNotify();
       clusterNode?.stop();
       stopDataSources();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은

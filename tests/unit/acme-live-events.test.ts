@@ -58,7 +58,8 @@ describe('ACME 진행 알림', () => {
 
   it('데몬이 acme · revision 이벤트로 내고, GUI 가 받는다', () => {
     const bin = readFileSync(join(root, 'src/bin/barycenterd.ts'), 'utf8');
-    expect(bin).toMatch(/onAdvance: \(e\) => \{ events\.publish\('acme', e\); \}/);
+    // 진행은 스트림으로, 실패는 알림(Notifier)으로도 — 스트림 발행이 첫 줄이다.
+    expect(bin).toMatch(/onAdvance: \(e\) => \{\s*events\.publish\('acme', e\);/);
     expect(bin).toMatch(/const published = await publishIssued\(/);
     expect(bin).toMatch(/events\.publish\('revision', \{ revision: p\.revision/);
     const desk = readFileSync(join(root, 'gui/src/lib/desk.svelte.ts'), 'utf8');
