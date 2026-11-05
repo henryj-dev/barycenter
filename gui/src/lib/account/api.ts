@@ -122,8 +122,6 @@ export const accountApi = {
     call<{ unlinked: true }>('POST', '/api/v1/me/identities/unlink', { issuer, subject, password }),
   ssoProviders: () => call<SsoProviders>('GET', '/api/v1/sso-providers'),
   setJit: (issuer: string, jitEnabled: boolean) => call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, jitEnabled }),
-  setRoles: (issuer: string, roleClaim: string | null, roleMap: Record<string, string>) =>
-    call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, roleClaim, roleMap }),
   setMapping: (issuer: string, m: SsoMapping) => call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, ...m }),
   setIdpAuthority: (issuer: string, idpAuthority: boolean) =>
     call<{ updated: true }>('POST', '/api/v1/sso-providers', { issuer, idpAuthority }),

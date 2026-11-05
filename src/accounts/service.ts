@@ -857,14 +857,6 @@ export class AccountService {
   }
 
   /**
-   * 공급자의 역할 클레임·매핑 (B3). 매핑 값은 auditor | operator | admin 만. 클레임을 비우면(null) 그 공급자의
-   * IdP 정본 계정은 로그인이 거부된다 — 맞출 근거가 없으니까. entitlement 설정은 그대로 둔다.
-   */
-  async setProviderRoles(issuer: string, roleClaim: string | null, roleMap: Record<string, unknown>, by: string, meta: Meta = {}): Promise<void> {
-    await this.setProviderMapping(issuer, { roleClaim, roleMap }, by, meta);
-  }
-
-  /**
    * 공급자의 권한 매핑 — 역할 클레임 · 매핑, entitlement 클레임 · 접두 · 표. **준 칸만** 바꾼다. `profile`(lodestar · keycloak ·
    * entra · okta)을 주면 그 프로필의 클레임 자리로 먼저 채우고, 같이 준 칸이 그 위에 덮는다. 저장 전에 전체 모양을 본다.
    */

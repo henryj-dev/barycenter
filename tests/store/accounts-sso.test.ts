@@ -235,7 +235,7 @@ describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
 
   it('**로그인 때마다 IdP 역할 클레임을 매핑으로 맞춘다** (lodestar 의 roles 배열)', async () => {
     const base = await serve();
-    await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator', view: 'auditor' }, 'test');
+    await accounts.setProviderMapping(ISS, { roleClaim: 'roles', roleMap: { ops: 'operator', view: 'auditor' } }, 'test');
     const id = await idpUser(base);
     who = { sub: 'idp-1', roles: ['view'], roles_label: ['운영자'] };
     const first = await sso(base);
@@ -252,7 +252,7 @@ describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
 
   it('**클레임 없음·모양 틀림·매핑에 없는 값은 로그인 거부** — 로컬 역할로 떨어지지 않는다', async () => {
     const base = await serve();
-    await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator' }, 'test');
+    await accounts.setProviderMapping(ISS, { roleClaim: 'roles', roleMap: { ops: 'operator' } }, 'test');
     const id = await idpUser(base);
     for (const claims of [{}, { roles: ['ops', 7] }, { roles: ['nope'] }, { roles: 'nope' }]) {
       who = { sub: 'idp-1', ...claims };
@@ -265,7 +265,7 @@ describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
 
   it('**역할 값이 여럿이면 매핑에 있는 것만, 그중 가장 높은 역할** (A안 — 다른 앱의 역할이 섞여 와도 된다)', async () => {
     const base = await serve();
-    await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator', view: 'auditor' }, 'test');
+    await accounts.setProviderMapping(ISS, { roleClaim: 'roles', roleMap: { ops: 'operator', view: 'auditor' } }, 'test');
     const id = await idpUser(base);
     who = { sub: 'idp-1', roles: ['view', 'other-app', 'ops'] };
     expect((await sso(base)).status).toBe(200);
@@ -274,7 +274,7 @@ describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
 
   it('**로컬 정지가 우선** — IdP 가 멀쩡하다고 해도', async () => {
     const base = await serve();
-    await accounts.setProviderRoles(ISS, 'roles', { ops: 'operator' }, 'test');
+    await accounts.setProviderMapping(ISS, { roleClaim: 'roles', roleMap: { ops: 'operator' } }, 'test');
     const id = await idpUser(base);
     await accounts.updateUser(id, { status: 'suspended' }, 'test');
     who = { sub: 'idp-1', roles: ['ops'] };
@@ -283,7 +283,7 @@ describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
 
   it('인증 앱 없는 사람을 IdP 가 관리자로 올리면 거부한다', async () => {
     const base = await serve();
-    await accounts.setProviderRoles(ISS, 'roles', { boss: 'admin' }, 'test');
+    await accounts.setProviderMapping(ISS, { roleClaim: 'roles', roleMap: { boss: 'admin' } }, 'test');
     const id = await idpUser(base);
     who = { sub: 'idp-1', roles: ['boss'] };
     expect((await sso(base)).status).toBe(401);
@@ -292,7 +292,7 @@ describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
 
   it('**마지막 활성 관리자는 IdP 가 내려도 안 내려간다** — 그 로그인만 거부', async () => {
     const base = await serve();
-    await accounts.setProviderRoles(ISS, 'roles', { boss: 'admin', view: 'auditor' }, 'test');
+    await accounts.setProviderMapping(ISS, { roleClaim: 'roles', roleMap: { boss: 'admin', view: 'auditor' } }, 'test');
     const t = await accounts.bootstrap('cli');
     const p = await accounts.previewLink(t);
     const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -316,7 +316,7 @@ describe('IdP 권한 정본 (B3 — 지연을 감수하고 지원)', () => {
   });
 
   it('매핑 값은 역할만 받는다', async () => {
-    await expect(accounts.setProviderRoles(ISS, 'roles', { x: 'root' }, 't')).rejects.toMatchObject({ code: 'malformed' });
-    await expect(accounts.setProviderRoles(ISS, 'bad claim!', {}, 't')).rejects.toMatchObject({ code: 'malformed' });
+    await expect(accounts.setProviderMapping(ISS, { roleClaim: 'roles', roleMap: { x: 'root' } }, 't')).rejects.toMatchObject({ code: 'malformed' });
+    await expect(accounts.setProviderMapping(ISS, { roleClaim: 'bad claim!', roleMap: {} }, 't')).rejects.toMatchObject({ code: 'malformed' });
   });
 });
