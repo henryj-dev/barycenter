@@ -171,7 +171,8 @@ sudo deploy/install.sh ... \
 
 다음은 **최근 10분 안에 인증 앱 확인**이 필요하다(사람 세션만 — 토큰은 MFA 가 없다): 사람·초대 관리
 (역할·정지·삭제·세션 끊기·복구 링크·초대 만들기/취소), `/restore`, 인증서 개인키 올리기. 화면은 코드를 한 번
-묻고 이어서 한다(`POST /api/v1/session/step-up`). **인증 앱이 없는 사람은 민감 작업을 못 한다** — 먼저 등록한다.
+묻고 이어서 한다(`POST /api/v1/session/step-up`). **인증 앱이 없는 사람은 민감 작업을 못 한다** — 먼저 등록한다
+(IdP OTP 를 켰으면 그 IdP 와 이어진 사람은 IdP 의 인증 앱 코드로 확인한다 — 아래 「IdP OTP」).
 
 열린 실시간 스트림(SSE)도 하트비트(15초)마다 세션을 확인해, 로그아웃·정지된 세션의 스트림을 닫는다.
 이미 보낸 데이터는 되돌릴 수 없다.
@@ -185,7 +186,8 @@ IdP 에게 묻는다. 역할은 계정이 정하고, IdP 의 역할 클레임·M
   (비밀번호 재확인)로 잇는다. 이름·이메일이 같다고 저절로 이어지지 않는다.
 - **JIT 는 기본 꺼짐.** 관리자가 「사람 → SSO 자동 계정」에서 켜면 연결 없는 SSO 사용자가 처음 올 때
   **auditor** 계정이 새로 생긴다(비밀번호 없음, 이메일 없음). 역할 올리기는 관리자가 한다.
-- 관리자·인증 앱 등록자는 SSO 로 와도 **로컬 인증 앱 코드**를 한 번 더 넣는다.
+- 관리자·인증 앱 등록자는 SSO 로 와도 **둘째 인증 코드**를 한 번 더 넣는다. 기본은 로컬 인증 앱 코드이고,
+  IdP OTP 를 켰으면 그 IdP 와 이어진 사람은 IdP 의 인증 앱 코드다(아래 「IdP OTP」). IdP 토큰의 `amr`·`acr` 는 믿지 않는다.
 - 끊기는 비밀번호 재확인 뒤, 다른 로그인 수단(비밀번호)이 남을 때만. 삭제된 계정의 연결은 함께 지운다.
 
 **OIDC 클라이언트 하나를 지역·전역이 함께 쓴다** (2026-10-18 공통 정책 1차). lodestar 에 클라이언트 하나,
@@ -212,4 +214,53 @@ redirect URI 둘(정확 일치): `https://dev-icn-vtr.barycenter.tinyuniver.se:8
 
 거부되는 로그인(로컬 역할로 떨어지지 않는다, 계정 감사에 `account.idp_role_refused`):
 클레임 없음 · 값이 둘 이상 · 매핑에 없는 값 · 인증 앱 없는 사람을 관리자로 올리려 함 · **마지막 활성 관리자를 내리려 함**
-(관리자가 0 이 되지 않게 내리지 않고 거부한다). IdP 의 MFA 는 여전히 인정하지 않는다 — 관리자는 로컬 인증 앱 코드다.
+(관리자가 0 이 되지 않게 내리지 않고 거부한다). 「인증 앱 없는 사람」은 IdP OTP 연결도 없는 사람이다.
+
+## IdP OTP (둘째 인증 어댑터, 2026-11-05 사용자 요구)
+
+lodestar 에 OTP 를 이미 등록한 사람이 barycenter 에 인증 앱을 또 등록하지 않게 한다. barycenter 는 **비밀을 갖지 않는다** —
+사람이 넣은 6자리를 `POST {IdP}/api/totp/verify` 로 보내 판정만 받는다(heliopause 와 같은 계약). 재사용 방지 · 시도 제한은 IdP 가 한다.
+
+**누가 대상인가**: IdP OTP 를 켠 배포에서, `BARY_OIDC_ISSUER` 와 **같은 issuer** 로 SSO 가 이어진 사람(「내 계정 → SSO 계정 잇기」 또는 JIT).
+그 사람의 로그인 MFA 단계와 민감 작업 확인(step-up)은 **IdP 의 인증 앱 코드**를 받는다 — 로컬 인증 앱이 있어도 그 코드는 받지 않는다.
+연결이 없는 사람은 지금처럼 로컬 인증 앱이다. **복구 코드는 언제나 로컬**이다(IdP 에 보내지 않는다 — IdP 가 죽어도 쓴다).
+
+- IdP OTP 연결은 「MFA 가 있다」로 센다: 관리자 로그인 · 관리자 승격(손 · IdP 역할) · 민감 작업이 받아들인다. 그래서 로컬 인증 앱 없는
+  관리자도 있을 수 있다. 그런 관리자는 그 SSO 연결을 끊을 수 없다(409 `admin_needs_mfa` — 먼저 인증 앱을 등록한다).
+- **관리자 초대 · 첫 관리자 · 복구 링크 수락은 그대로 로컬 인증 앱을 맞춘다** — 수락 때는 아직 SSO 가 이어지지 않았다.
+- **연결이 있는 operator·auditor 도 MFA 단계가 생긴다** (켜기 전에는 인증 앱이 없으면 비밀번호 · SSO 만으로 들어왔다). 그 사람이 lodestar 에
+  OTP 를 등록하지 않았으면 404 「IdP 에 OTP 가 없어요」로 막힌다 — 켜기 전에 연결된 사람들의 lodestar OTP 등록을 확인한다.
+- 감사(`account_audit`)의 `session.login` · `session.step_up` 에 통과한 수단이 남는다: `totp` · `idp_otp` · `recovery`.
+
+**켜기** (`/etc/barycenter/env`):
+
+```
+BARY_MFA_IDP_KIND=lodestar
+BARY_MFA_IDP_TOKEN_FILE=/etc/barycenter/mfa-idp-token     # 0640 root:barycenter, 토큰 한 줄
+# BARY_MFA_IDP_URL=https://idp.tinyuniver.se              # 없으면 BARY_OIDC_ISSUER
+```
+
+- OIDC 로그인(`BARY_OIDC_*` — 인가 · 토큰 주소 · 클라이언트 · redirect 까지)과 사람 계정(`BARY_ACCOUNTS_DSN`)이 켜져 있어야 한다.
+- **반만 있으면 기동을 거부한다** (KIND 나 TOKEN_FILE 만 있음 · 모르는 KIND · https 가 아닌 주소 · 빈 토큰 파일 · OIDC 꺼짐).
+  조용히 로컬 인증 앱으로 남지 않는다. 서비스 토큰을 env 값(`BARY_MFA_IDP_TOKEN`)으로 주면 그것도 기동 거부다 — **파일로만** 준다.
+- 켜지면 기동 로그에 `accounts.mfa_idp.enabled`(kind · url · issuer — 토큰은 없다)가 찍힌다.
+
+**서비스 토큰 발급 (lodestar 쪽)**: lodestar 관리자가 barycenter 용 서비스 토큰을 **따로** 하나 발급한다(heliopause 와 같은 토큰을
+나눠 쓰지 않는다 — 한쪽이 새면 다른 쪽도 바꿔야 한다). 권한은 `/api/totp/verify` 한 호출만. 값은 각 호스트의 토큰 파일에만 두고
+메시지 · 로그 · 티켓에 적지 않는다. 바꿀 때는 lodestar 에서 새 토큰을 발급 → **모든** 지역 · 전역의 토큰 파일을 바꾸고 재시작 →
+옛 토큰을 폐기한다(지역은 재시작 동안 데이터 플레인이 몇 초 끊기므로 하나씩).
+
+**실패의 뜻** (모두 닫힌다 — 로컬 인증 앱으로 넘어가지 않는다):
+
+| IdP 의 답 | 화면 | 뜻 · 할 일 |
+|---|---|---|
+| 401 `{"ok":false}` | 401(로그인) · 403 `step_up_failed` | 코드가 틀렸거나 이미 썼다. 계정 잠금에 센다 |
+| 429 | 429 `mfa_idp_rate_limited` | IdP 가 그 사람의 시도를 막았다. 잠시 뒤 |
+| 403 | 403 `mfa_idp_inactive` | IdP 에서 그 계정이 비활성 · 잠김이다. lodestar 에서 확인 |
+| 404 | 404 `mfa_idp_not_enrolled` | IdP 에 OTP 가 없다. 그 사람이 lodestar 에서 OTP 를 등록한다 |
+| 401(본문 없음) | 503 `mfa_idp_unavailable` | **서비스 토큰 거절** — 배포 문제. 토큰 파일 · lodestar 의 토큰 상태를 본다 |
+| 닿지 못함 · 타임아웃(8초) · 그 밖 · 200 인데 `ok:true` 아님 · 64KiB 넘는 답 | 503 `mfa_idp_unavailable` | IdP 장애 또는 중간 프록시 |
+
+503 일 때 데몬 로그의 `accounts.mfa_idp_failed`(reason · detail · user id — 코드 · 토큰은 없다)가 `service-token` 인지 `unavailable` 인지 가른다.
+IdP 가 오래 죽어 관리자가 들어와야 하면: 복구 코드로 들어오거나, 데몬의 `BARY_MFA_IDP_*` 를 지우고 재시작한다(그러면 로컬 인증 앱이 있는
+사람만 MFA 단계를 지난다 — 로컬 인증 앱이 없는 관리자는 복구 링크다).

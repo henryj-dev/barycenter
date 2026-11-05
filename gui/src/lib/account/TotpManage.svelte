@@ -14,6 +14,8 @@
   import RecoveryCodes from './RecoveryCodes.svelte';
 
   let { me, onChanged }: { me: Me; onChanged: () => Promise<void> } = $props();
+  /** IdP OTP 대상이면 IdP 호스트 — 그때 로컬 인증 앱은 필수가 아니다. */
+  const idp = $derived(me.mfa.method === 'idp' ? (me.mfa.idp ?? 'IdP') : undefined);
 
   let pending = $state<{ secret: string; uri: string } | undefined>();
   let code = $state('');
@@ -69,8 +71,14 @@
 <Card>
   <div class="tm">
     <div class="row">
-      <div class="tx"><div class="t">인증 앱</div><div class="s">로그인할 때 6자리 코드를 써요.{#if me.mfa.totp && me.role === 'admin'}{' '}관리자는 인증 앱을 풀 수 없어요.{/if}</div></div>
-      {#if me.mfa.totp}<Badge tone="ok" icon="●">등록됨</Badge>{:else}<Badge tone="warn" icon="▲">등록 안 됨</Badge>{/if}
+      {#if idp !== undefined}
+        <!-- IdP OTP 대상 — 로그인 · 확인은 IdP 의 인증 앱 코드다. 여기 등록은 막지 않되 필수가 아니라고 말한다. -->
+        <div class="tx"><div class="t">인증 앱</div><div class="s">로그인할 때 {idp} 에 등록한 인증 앱의 코드를 써요. 여기 인증 앱은 등록하지 않아도 돼요.{#if me.mfa.totp && me.role === 'admin'}{' '}관리자는 인증 앱을 풀 수 없어요.{/if}</div></div>
+        <Badge tone="ok" icon="●">IdP 인증 앱 사용 중 · {idp}</Badge>
+      {:else}
+        <div class="tx"><div class="t">인증 앱</div><div class="s">로그인할 때 6자리 코드를 써요.{#if me.mfa.totp && me.role === 'admin'}{' '}관리자는 인증 앱을 풀 수 없어요.{/if}</div></div>
+        {#if me.mfa.totp}<Badge tone="ok" icon="●">등록됨</Badge>{:else}<Badge tone="warn" icon="▲">등록 안 됨</Badge>{/if}
+      {/if}
       {#if me.mfa.totp}
         {#if me.role !== 'admin'}<Button onclick={() => { removing = !removing; error = undefined; password = ''; }}>등록 해제…</Button>{/if}
       {:else if pending === undefined}
