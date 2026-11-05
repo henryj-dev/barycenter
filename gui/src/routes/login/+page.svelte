@@ -18,6 +18,8 @@
   const scope = getContext<Scope>('scope');
   /** 자체 로그인 단계 — 비밀번호 → (필요하면) 인증 코드. */
   let step = $state<'password' | 'mfa'>('password');
+  /** 둘째 인증이 IdP OTP 면 그 IdP 호스트 — 안내 문구가 어느 코드인지 말한다. */
+  let mfaIdp = $state<string | undefined>();
   /** 「토큰으로 연결」 을 눌러 토큰 칸을 열었다. */
   let tokenOpen = $state(false);
   /** 메일이 켜진 배포에서만 「비밀번호를 잊었다」를 그린다. */
@@ -75,15 +77,20 @@
         credentials: 'same-origin',
         body: JSON.stringify({ code, state }),
       });
-      const body = (await r.json()) as { authenticated?: unknown; status?: unknown; message?: unknown };
+      const body = (await r.json()) as { authenticated?: unknown; status?: unknown; message?: unknown; method?: unknown; idp?: unknown };
       // 콜백 주소에서 code·state 를 지운다 — 한 번 쓴 값이 기록·공유 화면에 남지 않게.
       history.replaceState(null, '', '/login');
       if (!r.ok) {
         startError = typeof body.message === 'string' ? body.message : `token ${r.status}`;
         return;
       }
-      // 사람 계정: SSO 뒤에도 관리자·인증 앱 등록자는 로컬 코드 단계다(IdP 의 MFA 는 인정하지 않는다).
-      if (body.status === 'mfa_required') { step = 'mfa'; return; }
+      // 사람 계정: SSO 뒤에도 관리자·인증 앱 등록자는 코드 단계다(IdP 의 amr 은 믿지 않는다).
+      // IdP OTP 대상이면 그 IdP 의 인증 앱 코드를 받는다 — 서버가 IdP 에 직접 물어 판정한다.
+      if (body.status === 'mfa_required') {
+        mfaIdp = body.method === 'idp' && typeof body.idp === 'string' ? body.idp : undefined;
+        step = 'mfa';
+        return;
+      }
       if (body.status === 'linked') { await goto('/account'); return; }
       if (body.authenticated !== true) {
         startError = `token ${r.status}`;
@@ -137,11 +144,12 @@
   시안 Login(lMode login): 카드 — 단계마다 제목과 한 줄 설명, 그 아래 폼. 카드 밖 아래에 「비밀번호 찾기」 · 「초대 수락」.
   SSO 와 토큰 연결은 시안에 없는 기능이라 같은 카드 안, 폼 아래에 같은 모양(라벨 13 · 칸 36 · 버튼 36)으로 둔다.
 -->
-<AuthCard title={step === 'password' ? '로그인' : '2단계 인증'} sub={step === 'password' ? '계정으로 콘솔에 로그인해요.' : '인증 앱의 6자리 코드를 입력해요.'}>
+<AuthCard title={step === 'password' ? '로그인' : '2단계 인증'} sub={step === 'password' ? '계정으로 콘솔에 로그인해요.'
+  : mfaIdp !== undefined ? `${mfaIdp} 의 인증 앱 코드를 입력해요.` : '인증 앱의 6자리 코드를 입력해요.'}>
   {#if step === 'password'}
-    <PasswordStep onDone={(next) => { if (next === 'mfa') step = 'mfa'; else void signedIn(); }} />
+    <PasswordStep onDone={(next, idp) => { if (next === 'mfa') { mfaIdp = idp; step = 'mfa'; } else void signedIn(); }} />
   {:else}
-    <MfaStep onDone={() => { void signedIn(); }} onRestart={() => { step = 'password'; }} />
+    <MfaStep idp={mfaIdp} onDone={() => { void signedIn(); }} onRestart={() => { step = 'password'; mfaIdp = undefined; }} />
   {/if}
 
   <!-- SSO 콜백을 받는 중이거나 그 오류는 OIDC 설정과 상관없이 보인다. -->

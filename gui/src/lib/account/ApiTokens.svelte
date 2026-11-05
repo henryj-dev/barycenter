@@ -13,7 +13,7 @@
   import { onMount } from 'svelte';
   import { ago } from '#lib/detail/facts';
   import { Badge, Button, Card, FieldMessage, NumberInput, Select, Skeleton, TextInput, toast } from '#lib/ui';
-  import { accountApi, type ApiToken, type Me, type Role } from './api';
+  import { accountApi, hasMfa, type ApiToken, type Me, type Role } from './api';
   import { ROLE_LABEL, ROLE_SCOPES, TOKEN_NAME, TOKEN_NAME_HELP } from './text';
 
   let { me }: { me: Me } = $props();
@@ -74,9 +74,9 @@
 
 <Card title="토큰 · {tokens.length}" sub="자동화용 API 토큰이에요. 사람 계정이 아니에요." padded={false}>
   {#snippet actions()}
-    {#if me.mfa.totp}<Button size="sm" onclick={toggle}>＋ 토큰 만들기</Button>{/if}
+    {#if hasMfa(me)}<Button size="sm" onclick={toggle}>＋ 토큰 만들기</Button>{/if}
   {/snippet}
-  {#if !me.mfa.totp}
+  {#if !hasMfa(me)}
     <div class="band"><FieldMessage>토큰을 만들고 폐기하려면 인증 앱을 먼저 등록해요. 민감한 작업이라 인증 코드를 다시 물어요.</FieldMessage></div>
   {/if}
   {#if formOpen}

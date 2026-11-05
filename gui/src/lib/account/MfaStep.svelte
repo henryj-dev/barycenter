@@ -9,7 +9,11 @@
   import AuthError from '#lib/shell/AuthError.svelte';
   import { accountApi } from './api';
 
-  let { onDone, onRestart }: { onDone: () => void; onRestart: () => void } = $props();
+  /** `idp` — IdP OTP 대상이면 IdP 호스트. 그 IdP 에 등록한 인증 앱의 코드를 받는다(복구 코드는 그대로 여기 것). */
+  let { onDone, onRestart, idp }: { onDone: () => void; onRestart: () => void; idp?: string | undefined } = $props();
+  const help = $derived(idp === undefined
+    ? '인증 앱의 코드를 입력해요. 앱이 없으면 복구 코드를 넣어요.'
+    : `${idp} 에 등록한 인증 앱의 코드를 입력해요. 앱이 없으면 복구 코드를 넣어요.`);
 
   let code = $state('');
   let busy = $state(false);
@@ -31,7 +35,7 @@
 </script>
 
 <form class="step" novalidate onsubmit={(e) => { e.preventDefault(); void submit(); }}>
-  <AuthField label="인증 코드 6자리" for="lg-code" code help="인증 앱의 코드를 입력해요. 앱이 없으면 복구 코드를 넣어요.">
+  <AuthField label="인증 코드 6자리" for="lg-code" code {help}>
     <TextInput id="lg-code" inputmode="numeric" autocomplete="one-time-code" bind:value={code}
       invalid={error !== undefined} oninput={() => { error = undefined; }} />
   </AuthField>
