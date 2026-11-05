@@ -31,7 +31,8 @@ import {
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
 import { Sealer } from '../accounts/seal.js';
 import { AccountService } from '../accounts/service.js';
-import { smtpMailer } from '../accounts/mail.js';
+import type { Mailer } from '../accounts/mail.js';
+import { mailFromEnv } from '../accounts/mail-transport/registry.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
 import { JwksCache } from '../api/jwks.js';
@@ -299,16 +300,16 @@ async function accountsFromEnv(): Promise<AccountService | undefined> {
    * 메일(초대·재설정·이메일 변경). **셋 다 있어야 켠다** — 링크 앞부분(`BARY_PUBLIC_URL`)이 없으면 메일 속
    * 링크를 못 만들고, 보내는 주소가 없으면 받는 쪽이 스팸으로 버린다. 반만 켜면 조용히 안 가는 메일이 된다.
    */
-  const smtp = env('BARY_SMTP_URL', '');
-  const from = env('BARY_MAIL_FROM', '');
+  // 전송은 `BARY_MAIL_KIND`(없으면 지금처럼 smtp) — `src/accounts/mail-transport/registry.ts`. 반만 설정이면 던진다.
+  const transport = mailFromEnv();
   const publicUrl = env('BARY_PUBLIC_URL', '');
-  let mail: { mailer: ReturnType<typeof smtpMailer>; publicUrl: string } | undefined;
-  if (smtp !== '' || from !== '') {
-    if (smtp === '' || from === '' || publicUrl === '') {
-      throw new Error('메일을 켜려면 BARY_SMTP_URL · BARY_MAIL_FROM · BARY_PUBLIC_URL 이 모두 필요하다');
+  let mail: { mailer: Mailer; publicUrl: string } | undefined;
+  if (transport !== undefined) {
+    if (publicUrl === '') {
+      throw new Error('메일을 켜려면 BARY_PUBLIC_URL 도 필요하다(메일 속 링크의 앞부분)');
     }
-    mail = { mailer: smtpMailer(smtp, from), publicUrl };
-    log.info('accounts.mail.enabled', { from });
+    mail = { mailer: transport.mailer, publicUrl };
+    log.info('accounts.mail.enabled', { from: transport.from, transport: transport.kind });
   }
   return new AccountService({
     db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),

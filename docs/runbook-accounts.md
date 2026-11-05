@@ -163,6 +163,27 @@ sudo deploy/install.sh ... \
   --env BARY_PUBLIC_URL='https://dev-icn-vtr.barycenter.example.com'
 ```
 
+### 전송 고르기 — `BARY_MAIL_KIND`
+
+받는 사람 · 제목 · 본문은 그대로이고 **보내는 방법만** 고른다. 없으면 지금처럼 `smtp` 다. 비밀은 파일로만 받는다.
+`BARY_MAIL_FROM` · `BARY_PUBLIC_URL` 은 어느 종류든 필요하다.
+
+| 종류 | 변수 | 비고 |
+|---|---|---|
+| `smtp`(기본) | `BARY_SMTP_URL` 또는 `BARY_SMTP_URL_FILE` | 비밀번호가 URL 에 들면 `_FILE` 을 쓴다. 둘 다 주면 거부 |
+| `ses` | `BARY_MAIL_SES_REGION` · `BARY_MAIL_AWS_ACCESS_KEY_ID` · `BARY_MAIL_AWS_SECRET_ACCESS_KEY_FILE` | SES v2, SigV4 를 직접 서명. 보내는 주소가 SES 에서 인증돼 있어야 한다. IAM `ses:SendEmail` |
+| `mailgun` | `BARY_MAIL_MAILGUN_DOMAIN` · `BARY_MAIL_MAILGUN_API_KEY_FILE` · `BARY_MAIL_MAILGUN_REGION`(`us`\|`eu`, 기본 us) | 그 도메인의 Sending API 키 |
+| `sendgrid` | `BARY_MAIL_SENDGRID_API_KEY_FILE` | 「Mail Send」 권한만 준 키 |
+| `log` | (없음) | **개발용.** 보내지 않고 `mail.log.delivered {to(가림), subject, hasLink, bytes}` 만 남긴다 — 링크 · 본문은 남기지 않는다. 링크가 필요하면 `barycenterd account recovery-link` |
+
+**반만 설정하면 기동을 거부한다** — 종류를 안 골랐는데 전송 변수만 있다 · 필요한 값이 없다 · 다른 전송의 변수가 섞였다 ·
+키 파일이 없거나 비었다.
+
+보내기가 실패해도 초대 · 재설정 자체는 만들어진다(지금과 같다). 실패하면 로그
+`mail.send_failed {transport, to(가림), reason, detail}` 와 계측 `bary_mail_total{transport,outcome}` 이 남는다.
+사유: `auth`(키 거절 — 키 · 권한) · `rejected`(보내는 주소 미인증 · 형식) · `rate-limited` · `unavailable`(닿지 못함 · 5xx) ·
+`invalid-message`(받는 사람 · 제목에 줄바꿈 — 보내지 않았다). SMTP 실패는 nodemailer 의 오류 그대로다(로그 없음, 지금과 같다).
+
 - 재설정 요청은 **언제나 같은 답**이다(주소에 계정이 있는지 말하지 않는다). 같은 사람에게 5분에 한 번만 보낸다.
 - **재설정은 인증 앱을 풀지 않는다.** 메일함을 가진 사람이 곧 관리자가 되지 않게 — 인증 앱을 잃었으면 복구 링크다.
 - 이메일은 새 주소에서 확인해야 바뀌고, 옛 주소에는 요청이 왔다는 알림이 간다.
