@@ -30,7 +30,8 @@ import {
 } from '../api/server.js';
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
 import { Sealer } from '../accounts/seal.js';
-import { AccountService } from '../accounts/service.js';
+import { AccountService, type AccountServiceOptions } from '../accounts/service.js';
+import { idpMfaKinds, idpMfaProvider } from '../accounts/mfa/registry.js';
 import { smtpMailer } from '../accounts/mail.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
@@ -288,9 +289,12 @@ function tidyAccounts(accounts: AccountService): void {
  * **키 없이 켜지 않는다.** TOTP 비밀을 감쌀 `BARY_ACCOUNTS_KEK` 가 없으면 기동을 거부한다 — 계정은
  * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다.
  */
-async function accountsFromEnv(): Promise<AccountService | undefined> {
+async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promise<AccountService | undefined> {
   const dsn = env('BARY_ACCOUNTS_DSN', '');
-  if (dsn === '') return undefined;
+  if (dsn === '') {
+    if (idpMfa !== undefined) throw new Error('BARY_MFA_IDP_* 는 사람 계정(BARY_ACCOUNTS_DSN)이 켜져 있을 때만 쓴다');
+    return undefined;
+  }
   const kek = env('BARY_ACCOUNTS_KEK', '');
   if (kek === '') throw new Error('BARY_ACCOUNTS_DSN 을 켰으면 BARY_ACCOUNTS_KEK(32바이트 base64)도 필요하다');
   const adb = new Db(dsn);
@@ -314,7 +318,44 @@ async function accountsFromEnv(): Promise<AccountService | undefined> {
   return new AccountService({
     db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
     ...(mail === undefined ? {} : mail),
+    ...(idpMfa === undefined ? {} : { idpMfa }),
   });
+}
+
+/**
+ * **IdP OTP** — SSO 로 이어진 사람의 둘째 인증을 IdP(lodestar …)의 OTP 로 받는다. `BARY_MFA_IDP_KIND` 가 켠다.
+ *
+ *   BARY_MFA_IDP_KIND        제공자 이름(`lodestar`)
+ *   BARY_MFA_IDP_URL         IdP 주소(https). 기본은 `BARY_OIDC_ISSUER`
+ *   BARY_MFA_IDP_TOKEN_FILE  서비스 토큰 **파일**. env 값으로는 받지 않는다 — env 는 `/proc/<pid>/environ` ·
+ *                            덤프 · 환경을 찍는 도구에 보인다
+ *
+ * **반만 있으면 기동을 거부한다** — 조용히 로컬 TOTP 로 남으면, 켰다고 믿는 배포가 실제로는 안 켠 상태로 돈다.
+ * OIDC 로그인이 켜져 있어야 한다(사람의 IdP 주체가 그 issuer 와의 연결이다).
+ */
+function idpMfaFromEnv(oidcRp: OidcRpSettings | undefined): AccountServiceOptions['idpMfa'] {
+  if (process.env['BARY_MFA_IDP_TOKEN'] !== undefined) {
+    throw new Error('BARY_MFA_IDP_TOKEN 은 받지 않는다 — 서비스 토큰은 BARY_MFA_IDP_TOKEN_FILE(파일)로만 준다');
+  }
+  const kind = env('BARY_MFA_IDP_KIND', '');
+  const url = env('BARY_MFA_IDP_URL', '');
+  const tokenFile = env('BARY_MFA_IDP_TOKEN_FILE', '');
+  if (kind === '' && url === '' && tokenFile === '') return undefined;
+  if (kind === '' || tokenFile === '') {
+    throw new Error('IdP OTP 를 켜려면 BARY_MFA_IDP_KIND 와 BARY_MFA_IDP_TOKEN_FILE 이 모두 필요하다 (BARY_MFA_IDP_URL 은 기본이 OIDC issuer)');
+  }
+  if (!idpMfaKinds().includes(kind)) {
+    throw new Error(`BARY_MFA_IDP_KIND=${kind} 를 모른다 (쓸 수 있는 것: ${idpMfaKinds().join(', ')})`);
+  }
+  if (oidcRp === undefined) {
+    throw new Error('IdP OTP 는 OIDC 로그인(BARY_OIDC_ISSUER · _AUD · 키 · _AUTHORIZATION · _TOKEN · _CLIENT_ID · _REDIRECT_URI)이 켜져 있어야 쓴다');
+  }
+  const baseUrl = url !== '' ? url : oidcRp.issuer;
+  if (!baseUrl.startsWith('https://')) throw new Error(`IdP OTP 주소는 https 여야 한다 (${baseUrl})`);
+  const serviceToken = readFileSync(tokenFile, 'utf8').trim();
+  if (serviceToken === '') throw new Error(`BARY_MFA_IDP_TOKEN_FILE (${tokenFile}) 이 비었다`);
+  log.info('accounts.mfa_idp.enabled', { kind, url: baseUrl, issuer: oidcRp.issuer });
+  return { issuer: oidcRp.issuer, provider: idpMfaProvider(kind, { baseUrl, serviceToken }) };
 }
 
 /**
@@ -1145,7 +1186,7 @@ export async function main(): Promise<void> {
 
   const serveRoot = guiRootFromEnv();
 
-  const accounts = await accountsFromEnv();
+  const accounts = await accountsFromEnv(idpMfaFromEnv(oidcRp));
   if (accounts !== undefined) {
     log.info('accounts.enabled', {});
     tidyAccounts(accounts);

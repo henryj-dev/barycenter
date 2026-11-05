@@ -44,7 +44,9 @@ import { count, render as renderMetrics, type LabeledGauge } from '../obs/metric
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
 import { ConfigStore, isHistoryKind, StoreError, type PatchOp } from '../store/config-store.js';
-import { AccountError, AccountStoreUnavailable, STEP_UP_MAX_AGE_MS, type AccountService, type Meta as AccountMeta } from '../accounts/service.js';
+import {
+  AccountError, AccountStoreUnavailable, STEP_UP_MAX_AGE_MS, type AccountService, type Meta as AccountMeta, type SecondFactorKind,
+} from '../accounts/service.js';
 import type { Db } from '../store/pg.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
@@ -1770,6 +1772,14 @@ const PASSWORD_BODY_MAX = 64 * 1024;
 const throttleKey = (use: 'login' | 'reset', req: IncomingMessage): string => `${use}:${ipOf(req) ?? 'unknown'}`;
 const MFA_PATH = '/api/v1/session/mfa';
 
+/**
+ * 둘째 인증 단계로 넘어간다는 답. IdP OTP 대상이면 어느 IdP 의 코드인지 붙인다(화면 안내 문구) — 로컬 TOTP 면 전과 같다.
+ */
+function mfaRequiredBody(out: { method: SecondFactorKind }, accounts: AccountService): Record<string, unknown> {
+  const idp = accounts.idpMfaHost();
+  return out.method === 'idp' && idp !== undefined ? { status: 'mfa_required', method: 'idp', idp } : { status: 'mfa_required' };
+}
+
 function accountsOf(api: { accounts?: AccountService }): AccountService {
   if (api.accounts === undefined) {
     throw new StoreError(404, 'accounts_disabled', '이 배포에는 사람 계정이 켜져 있지 않다 (BARY_ACCOUNTS_DSN)');
@@ -1845,7 +1855,7 @@ async function finishAccountSso(
       return;
     case 'mfa':
       res.setHeader('set-cookie', [clearFlow, mfaCookie(out.sessionId, secure, out.maxAgeS)]);
-      json(res, 200, { status: 'mfa_required' });
+      json(res, 200, mfaRequiredBody(out, accounts));
       return;
     case 'linked':
       res.setHeader('set-cookie', clearFlow);
@@ -2186,7 +2196,7 @@ async function handle(
       }
       if (out.kind === 'mfa') {
         res.setHeader('set-cookie', mfaCookie(out.sessionId, secure, out.maxAgeS));
-        json(res, 200, { status: 'mfa_required' });
+        json(res, 200, mfaRequiredBody(out, accounts));
         return;
       }
       res.setHeader('set-cookie', [

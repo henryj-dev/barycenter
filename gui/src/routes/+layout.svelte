@@ -15,6 +15,7 @@
   import { createDesk } from '#lib/desk.svelte.ts';
   import { createSession } from '#lib/account/session.svelte.ts';
   import StepUpDialog from '#lib/account/StepUpDialog.svelte';
+  import { hasMfa } from '#lib/account/api';
   import { LOST_LABEL, createScope, type RegionSummary } from '#lib/global/scope.svelte.ts';
   import { createRegionDesks } from '#lib/global/regions.svelte.ts';
   import { REGION_PARAM, aggregateFallback, isAggregatePath } from '#lib/global/aggregate.ts';
@@ -314,7 +315,7 @@
     </div>
     <div class="main">
       <TopBar {crumbs} monoLast={detail} {node} {standby} head={aggregateOn ? undefined : desk.head} {conn} pending={pendingTotal}
-        user={session.me?.username} role={session.me?.role} mfa={session.me?.mfa.totp} bind:theme onlogout={() => { void logout(); }} ondisconnect={disconnect} />
+        user={session.me?.username} role={session.me?.role} mfa={session.me === undefined ? undefined : hasMfa(session.me)} bind:theme onlogout={() => { void logout(); }} ondisconnect={disconnect} />
       <!-- 배너 줄 — 시안 Pending banner 의 모양(상단 바 바로 아래 한 줄, 아래 테두리). 좁혀 보기 · 연결 끊김 줄은 시안에 없는 기능이라 같은 모양으로 둔다. -->
       {#if narrowShown}
         <div class="bn" data-tone="info" role="status">
