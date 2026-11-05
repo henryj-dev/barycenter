@@ -27,7 +27,7 @@ import {
 } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { createSecureContext, type SecureContextOptions } from 'node:tls';
-import { createHash, randomBytes, randomUUID, X509Certificate } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, X509Certificate, type KeyObject } from 'node:crypto';
 
 import { currentLeader, listClusterNodes, nodeHistory } from '../control/cluster.js';
 import type { ControlPlane } from '../control/plane.js';
@@ -69,6 +69,10 @@ import {
   type OidcRpSettings,
 } from './oidc-code.js';
 import { roleProfilesView } from '../accounts/idp-roles/registry.js';
+import { MAX_SET_BYTES, verifyRoleChange } from '../accounts/idp-roles/role-change.js';
+
+/** Role Change 를 받는 설정 — `events` 키와 SET 서명 검증 키(JWKS). */
+export type OidcRoleChange = { eventKey: string; keyFor: (kid: string | undefined) => KeyObject | undefined };
 
 export type ApiOptions = {
   /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
@@ -104,6 +108,11 @@ export type ApiOptions = {
   oidcRp?: OidcRpSettings;
   /** 테스트가 Token Endpoint 응답을 주입할 때. 없으면 전역 fetch. */
   oidcFetch?: typeof fetch;
+  /**
+   * **Role Change 수신** (`POST /api/v1/oidc/role-change`). 없으면 404. 사람 계정과 `oidcRp`(issuer · client_id)가 함께 있어야
+   * 뜻이 있다. 인증은 SET 서명(공급자 JWKS)으로만 한다 — Bearer · 쿠키를 보지 않는다.
+   */
+  oidcRoleChange?: OidcRoleChange;
   /** 외부 주소에 TLS 없이 바인딩된 상태. 인증된 metrics 에만 노출한다. */
   plaintextExposed?: boolean;
   /** GUI 로그인 세션. 없으면 API 인스턴스마다 하나를 만든다. */
@@ -176,6 +185,7 @@ export type GlobalApiOptions = {
   guiRoot?: string;
   oidcRp?: OidcRpSettings;
   oidcFetch?: typeof fetch;
+  oidcRoleChange?: OidcRoleChange;
   plaintextExposed?: boolean;
   sessions?: BrowserSessions;
   sessionSecure?: boolean;
@@ -1412,6 +1422,19 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
 ];
 
 
+/** 본문을 그대로(문자열) — 상한을 넘으면 즉시 끊는다(413). */
+async function readRaw(req: IncomingMessage, max: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const b = chunk as Buffer;
+    size += b.length;
+    if (size > max) throw new StoreError(413, 'body_too_large', `본문이 ${max} 바이트를 넘는다`);
+    chunks.push(b);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -1469,6 +1492,7 @@ function globalViewOf(api: ApiOptions): GlobalApiOptions | undefined {
     ...(api.guiRoot === undefined ? {} : { guiRoot: api.guiRoot }),
     ...(api.oidcRp === undefined ? {} : { oidcRp: { ...api.oidcRp, redirectUri: onHost(api.oidcRp.redirectUri, g.host) } }),
     ...(api.oidcFetch === undefined ? {} : { oidcFetch: api.oidcFetch }),
+    ...(api.oidcRoleChange === undefined ? {} : { oidcRoleChange: api.oidcRoleChange }),
     ...(api.plaintextExposed === undefined ? {} : { plaintextExposed: api.plaintextExposed }),
     ...(api.sessions === undefined ? {} : { sessions: api.sessions }),
     ...(api.sessionSecure === undefined ? {} : { sessionSecure: api.sessionSecure }),
@@ -2135,6 +2159,78 @@ async function handle(
       throw e;
     }
     return;
+  }
+
+  /**
+   * **Role Change** — IdP 가 사람의 역할 · entitlement 가 바뀌면 서명된 SET 을 push 한다(lodestar 「Role Change URI」).
+   * 다음 SSO 로그인을 기다리지 않고 그 사람의 권한을 바로 맞춘다 — 열린 세션은 다음 요청부터 새 범위다.
+   *
+   * **인증은 SET 서명으로만** — IdP 는 세션도 Bearer 도 없다. 그래서 같은 출처 검사도 하지 않는다(쿠키를 보지 않는다).
+   * 본문은 `application/x-www-form-urlencoded` 의 `role_change_token`(heliopause `/auth/role-change` 와 같다).
+   * IdP 는 다시 보내지 않는다 — 거절 사유는 IdP 의 전달 기록을 읽는 사람을 위한 것이고, 여기 로그에도 크게 남긴다.
+   *   204 반영했다 · 이 사람에게는 반영하지 않는다(IdP 정본 아님 등 — 감사에만)
+   *   400 모양 · 401 서명 · iss · aud · 시각 · 409 이미 받았다(jti) · 더 새로운 것을 이미 적용했다(txn) · 안전장치가 막았다
+   */
+  if (req.method === 'POST' && url.pathname === '/api/v1/oidc/role-change') {
+    const rc = api.oidcRoleChange;
+    const rp = api.oidcRp;
+    const accounts = api.accounts;
+    if (rc === undefined || rp === undefined || accounts === undefined) {
+      json(res, 404, { code: 'role_change_not_configured', message: 'Role Change 수신이 설정되지 않았다' });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readRaw(req, MAX_SET_BYTES + 1024);
+    } catch (e) {
+      if (e instanceof StoreError) { json(res, e.status, { code: e.code, message: e.message }); return; }
+      throw e;
+    }
+    const verdict = verifyRoleChange(new URLSearchParams(raw).get('role_change_token') ?? '', {
+      issuer: rp.issuer, clientId: rp.clientId, eventKey: rc.eventKey, keyFor: rc.keyFor,
+    });
+    if (!verdict.ok) {
+      // 크게 남긴다 — 거절된 역할 변경은 「권한 축소가 반영되지 않았다」 는 뜻일 수 있고, 그 사실은 이 줄에만 있다. 토큰은 남기지 않는다.
+      log.warn('oidc.role_change.refused', { reason: verdict.reason, ip: ipOf(req) });
+      // 서명을 못 지난 것은 인증 실패로 센다(같은 IP 제한) — 아무나 이 문으로 서명 검증을 무한히 돌리지 못하게.
+      const retryAfter = verdict.status === 401 ? authFailures.record(`role-change:${ipOf(req) ?? 'unknown'}`) : undefined;
+      if (retryAfter !== undefined) {
+        json(res, 429, { code: 'rate_limited', message: '거절이 너무 많다 — 잠시 뒤 다시 보낸다' }, { 'retry-after': String(retryAfter) });
+        return;
+      }
+      json(res, verdict.status, { code: 'role_change_refused', message: verdict.reason });
+      return;
+    }
+    let out;
+    try {
+      out = await accounts.applyRoleChange(rp.issuer, verdict.change, metaOf(req));
+    } catch (e) {
+      if (e instanceof AccountStoreUnavailable) {
+        log.error('oidc.role_change.store_unavailable', { sub: verdict.change.sub });
+        accountStoreDown(res);
+        return;
+      }
+      throw e;
+    }
+    log.info('oidc.role_change', { sub: verdict.change.sub, outcome: out.kind, ...('why' in out ? { why: out.why } : {}),
+      ...(out.kind === 'applied' ? { from: out.from, to: out.to, sessions: out.sessions } : {}) });
+    switch (out.kind) {
+      case 'applied':
+      case 'ignored':
+        res.writeHead(204, { 'cache-control': 'no-store' });
+        res.end();
+        return;
+      case 'replay':
+        json(res, 409, { code: 'role_change_replayed', message: '이미 받은 SET 이다(jti)' });
+        return;
+      case 'stale':
+        json(res, 409, { code: 'role_change_stale', message: '이 사람에게 더 새로운 역할 변경을 이미 적용했다(txn)' });
+        return;
+      case 'refused':
+        log.warn('oidc.role_change.guarded', { sub: verdict.change.sub, why: out.why });
+        json(res, 409, { code: 'role_change_guarded', message: out.why });
+        return;
+    }
   }
 
   // Authorization Code 시작·교환. 아직 Bearer 가 없다. 스코프 표에 안 올린다.

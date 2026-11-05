@@ -260,29 +260,44 @@ function verifyJwtSig(
 }
 
 /**
+ * JWS 의 **서명만** 확인하고 헤더 · 페이로드를 돌려준다. 클레임(iss · aud · 시각 …)은 하나도 보지 않는다 — 호출자가 그 토큰의
+ * 종류에 맞게 본다(ID Token 은 `verifiedIdClaims`, Role Change SET 은 `accounts/idp-roles/role-change.ts`).
+ * 알고리즘은 키가 정한다(`verifyJwtSig`). 키를 못 고르면 · 모양이 틀리면 · 서명이 안 맞으면 undefined.
+ */
+export function verifiedJws(token: string, keyFor: (kid: string | undefined) => string | KeyObject | undefined):
+  { header: Record<string, unknown>; payload: Record<string, unknown> } | undefined {
+  const parts = token.split('.');
+  if (parts.length !== 3) return undefined;
+  const headerB64 = parts[0] ?? '';
+  const payloadB64 = parts[1] ?? '';
+  const sigB64 = parts[2] ?? '';
+  let header: Record<string, unknown>;
+  let payload: Record<string, unknown>;
+  try {
+    header = JSON.parse(b64urlDecode(headerB64).toString()) as Record<string, unknown>;
+    payload = JSON.parse(b64urlDecode(payloadB64).toString()) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  if (header === null || typeof header !== 'object' || payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const key = keyFor(typeof header['kid'] === 'string' ? header['kid'] : undefined);
+  if (key === undefined) return undefined;
+  const alg = typeof header['alg'] === 'string' ? header['alg'] : undefined;
+  if (!verifyJwtSig(alg, `${headerB64}.${payloadB64}`, sigB64, key)) return undefined;
+  return { header, payload };
+}
+
+/**
  * OpenID Connect Core — 서명 · iss · aud · azp · exp · sub · nonce 를 지난 **클레임**. 역할은 보지 않는다.
  *
  * 사람 계정의 SSO(로컬 권한 정본)는 여기까지만 쓴다 — 누구인지(iss, sub)만 IdP 에게 묻고, 무엇을 할 수
  * 있는지는 계정이 정한다. 역할 클레임까지 읽는 것은 `principalFromIdToken`(계정이 꺼진 배포의 현행 경로)이다.
  */
 export function verifiedIdClaims(token: string, oidc: OidcSettings): Record<string, unknown> | undefined {
-  const parts = token.split('.');
-  if (parts.length !== 3) return undefined;
-  const headerB64 = parts[0] ?? '';
-  const payloadB64 = parts[1] ?? '';
-  const sigB64 = parts[2] ?? '';
-  let header: { alg?: string; kid?: string };
-  let payload: Record<string, unknown>;
-  try {
-    header = JSON.parse(b64urlDecode(headerB64).toString()) as { alg?: string; kid?: string };
-    payload = JSON.parse(b64urlDecode(payloadB64).toString()) as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
   // JWKS 를 켰으면 `kid` 로 고른다. 못 고르면 거절 — 고정 키로 안 떨어진다.
-  const key = oidc.keys === undefined ? oidc.key : oidc.keys(header.kid);
-  if (key === undefined) return undefined;
-  if (!verifyJwtSig(header.alg, `${headerB64}.${payloadB64}`, sigB64, key)) return undefined;
+  const jws = verifiedJws(token, (kid) => (oidc.keys === undefined ? oidc.key : oidc.keys(kid)));
+  if (jws === undefined) return undefined;
+  const payload = jws.payload;
   const now = oidc.now?.() ?? Math.floor(Date.now() / 1000);
   if (payload['iss'] !== oidc.issuer) return undefined;
   const aud = payload['aud'];

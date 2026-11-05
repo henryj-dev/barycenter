@@ -7,7 +7,7 @@
  *   · **실효 범위로 쓰기가 막힌다**(deny) · grant 가 범위를 연다 · deny 가 이긴다 · 개인 토큰도 주인의 deny 를 넘지 못한다
  *   · 마지막 관리자의 admin 범위는 deny 로도 안 빠진다 · admin grant 는 둘째 인증이 있어야 한다
  */
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -34,6 +34,25 @@ const sealer = new Sealer(randomBytes(32).toString('base64'));
 let who: Record<string, unknown> = {};
 let lastNonce = '';
 
+/** Role Change SET 서명 — IdP 의 JWKS 키 하나(RS256). 실행 중에 만든다. */
+const setKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const forger = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const EVENT = 'https://idp.test/events/role-change';
+let jtiSeq = 0;
+let txnSeq = 1_800_000_000_000n;
+function set(sub: string, roles: string[], entitlements: string[], o: { jti?: string; txn?: bigint; key?: typeof setKeys.privateKey } = {}): string {
+  const now = Math.floor(Date.now() / 1000);
+  const h = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'secevent+jwt', kid: 'k1' })).toString('base64url');
+  const p = Buffer.from(JSON.stringify({
+    iss: ISS, aud: 'bary', iat: now, exp: now + 300, jti: o.jti ?? `j-${++jtiSeq}`, sub,
+    txn: String(o.txn ?? (txnSeq += 1n)), events: { [EVENT]: { roles, entitlements } },
+  })).toString('base64url');
+  return `${h}.${p}.${createSign('RSA-SHA256').update(`${h}.${p}`).sign(o.key ?? setKeys.privateKey).toString('base64url')}`;
+}
+const push = (base: string, token: string): Promise<Response> => fetch(`${base}/api/v1/oidc/role-change`, {
+  method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ role_change_token: token }).toString(),
+});
+
 const LODESTAR_MAP = { 'barycenter-admins': 'admin', 'barycenter-operators': 'operator', 'barycenter-auditors': 'auditor' };
 
 const b64 = (b: Buffer): string => b.toString('base64url');
@@ -54,6 +73,7 @@ async function serve(): Promise<string> {
       authorizationEndpoint: `${ISS}/authorize`, tokenEndpoint: `${ISS}/token`, clientId: 'bary', redirectUri: 'https://bary.test/login',
     },
     oidcFetch: async () => new Response(JSON.stringify({ id_token: idToken(who) }), { status: 200 }),
+    oidcRoleChange: { eventKey: EVENT, keyFor: (kid: string | undefined) => (kid === 'k1' ? setKeys.publicKey : undefined) },
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   servers.push(server);
@@ -259,5 +279,106 @@ describe('관리자 안전장치', () => {
     expect((await row(id)).idp_grant).toEqual(['admin']);
     await accounts.updateUser(root, { role: 'operator' }, 'test');
     expect((await row(root)).role).toBe('operator');
+  });
+});
+
+describe('Role Change 즉시 반영 (서명된 SET push)', () => {
+  /** IdP 정본 operator 하나와 그 사람의 열린 세션. */
+  async function idpSession(base: string, sub = 'rc-1'): Promise<{ id: string; sid: string }> {
+    const id = await linkedOperator(sub);
+    await accounts.setProviderMapping(ISS, { profile: 'lodestar', roleMap: LODESTAR_MAP }, 'test');
+    await accounts.updateUser(id, { roleAuthority: 'idp' }, 'test');
+    who = { sub, roles: ['barycenter-operators'] };
+    const r = await sso(base);
+    expect(r.status).toBe(200);
+    return { id, sid: cookie(r, 'bary_sid') };
+  }
+
+  it('**열린 세션의 범위가 바로 바뀐다** — 다음 로그인을 기다리지 않는다', async () => {
+    const base = await serve();
+    const { id, sid } = await idpSession(base);
+    expect((await me(base, sid)).scopes).toEqual(['read', 'write']);
+    const r = await push(base, set('rc-1', ['barycenter-operators'], ['barycenter.no_write']));
+    expect(r.status).toBe(204);
+    expect((await me(base, sid)).scopes).toEqual(['read']);
+    expect(await row(id)).toMatchObject({ role: 'operator', idp_deny: ['write'] });
+    const w = await fetch(`${base}/api/v1/changesets`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base, cookie: sid }, body: '{}' });
+    expect(w.status).toBe(403);
+    // 역할도 바꾼다
+    expect((await push(base, set('rc-1', ['barycenter-auditors'], []))).status).toBe(204);
+    expect(await me(base, sid)).toMatchObject({ role: 'auditor', scopes: ['read'] });
+  });
+
+  it('**위조 SET 은 거절**(401) — 아무것도 바뀌지 않는다', async () => {
+    const base = await serve();
+    const { id } = await idpSession(base);
+    const r = await push(base, set('rc-1', ['barycenter-admins'], [], { key: forger.privateKey }));
+    expect(r.status).toBe(401);
+    expect((await row(id)).role).toBe('operator');
+    // ID Token(typ JWT · nonce)도 역할 변경이 아니다
+    expect((await push(base, idToken({ sub: 'rc-1', roles: ['barycenter-auditors'] }))).status).toBe(401);
+    expect((await push(base, '')).status).toBe(400);
+  });
+
+  it('**jti 재사용은 거절**(409) · 늦게 온 옛 스냅숏(txn)도 거절 — 철회가 되돌아가지 않는다', async () => {
+    const base = await serve();
+    const { id } = await idpSession(base);
+    const grant = set('rc-1', ['barycenter-operators'], ['barycenter.apply'], { txn: 1_900_000_000_001n });
+    const revoke = set('rc-1', ['barycenter-operators'], [], { txn: 1_900_000_000_002n });
+    expect((await push(base, revoke)).status).toBe(204);
+    expect((await push(base, revoke)).status).toBe(409);
+    const late = await push(base, grant);
+    expect(late.status).toBe(409);
+    expect((await late.json() as { code: string }).code).toBe('role_change_stale');
+    expect((await row(id)).idp_grant).toEqual([]);
+    // jti 는 여러 인스턴스가 같이 본다 — 다른 서버로 다시 보내도 409
+    const other = await serve();
+    expect((await push(other, revoke)).status).toBe(409);
+  });
+
+  it('IdP 정본이 아닌 사람은 **무시**(204 · 감사만)', async () => {
+    const base = await serve();
+    const id = await linkedOperator('local-1');
+    await accounts.setProviderMapping(ISS, { profile: 'lodestar', roleMap: LODESTAR_MAP }, 'test');
+    expect((await push(base, set('local-1', ['barycenter-auditors'], []))).status).toBe(204);
+    expect((await row(id)).role).toBe('operator');
+    const a = (await db.query(`SELECT detail FROM account_audit WHERE action='account.idp_role_change_ignored' AND subject_user=$1`, [id])).rows;
+    expect(a).toHaveLength(1);
+    // 연결 없는 sub 도 무시한다
+    expect((await push(base, set('nobody', ['barycenter-admins'], []))).status).toBe(204);
+  });
+
+  it('**역할을 잃으면 로컬 역할로 떨어지지 않는다** — 모든 범위를 빼고 세션을 끊는다', async () => {
+    const base = await serve();
+    const { id, sid } = await idpSession(base);
+    const t = await accounts.issueToken(id, { name: 'ci', role: 'operator' }, 'test');
+    expect((await push(base, set('rc-1', ['heliopause-operators'], []))).status).toBe(204);
+    expect((await row(id)).idp_deny).toEqual(['read', 'write', 'apply', 'admin']);
+    expect((await fetch(`${base}/api/v1/me`, { headers: { cookie: sid } })).status).toBe(401);
+    expect([...(await accounts.authenticateToken(t.token))!.scopes]).toEqual([]);
+    // IdP 가 다시 주면 돌아온다
+    expect((await push(base, set('rc-1', ['barycenter-operators'], []))).status).toBe(204);
+    expect([...(await accounts.authenticateToken(t.token))!.scopes]).toEqual(['read', 'write']);
+  });
+
+  it('**마지막 관리자 보호** — Role Change 로도 마지막 관리자의 admin 범위를 빼지 않는다(409)', async () => {
+    const base = await serve();
+    await accounts.setProviderMapping(ISS, { profile: 'lodestar', roleMap: LODESTAR_MAP }, 'test');
+    const { userId } = await bootstrapAdmin('root-sub');
+    await accounts.updateUser(userId, { roleAuthority: 'idp' }, 'test');
+    for (const [roles, ents] of [[['barycenter-operators'], []], [['barycenter-admins'], ['barycenter.no_admin']], [[], []]] as const) {
+      const r = await push(base, set('root-sub', [...roles], [...ents]));
+      expect(r.status).toBe(409);
+      expect((await r.json() as { code: string }).code).toBe('role_change_guarded');
+    }
+    expect(await row(userId)).toMatchObject({ role: 'admin', idp_grant: [], idp_deny: [] });
+  });
+
+  it('로컬 정지가 우선 — 정지된 사람의 SET 은 무시', async () => {
+    const base = await serve();
+    const { id } = await idpSession(base);
+    await accounts.updateUser(id, { status: 'suspended' }, 'test');
+    expect((await push(base, set('rc-1', ['barycenter-admins'], []))).status).toBe(204);
+    expect((await row(id)).role).toBe('operator');
   });
 });

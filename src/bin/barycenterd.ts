@@ -26,7 +26,7 @@ import { promisify } from 'node:util';
 
 import {
   apiHandler, apiTlsOptions, createApi, parseBuildInfo, reloadApiTls,
-  type ApiOptions, type BuildInfo, type GlobalApiOptions,
+  type ApiOptions, type BuildInfo, type GlobalApiOptions, type OidcRoleChange,
 } from '../api/server.js';
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
 import { Sealer } from '../accounts/seal.js';
@@ -417,7 +417,7 @@ async function accountCli(args: string[]): Promise<void> {
  * 토큰·OIDC (지역·전역 공통). 둘이 따로 들고 있으면 한쪽만 고쳐지는 날이 온다 — 그래서 한 자리다.
  */
 async function authFromEnv(oidcJwksMs: number): Promise<{
-  auth: TokenAuth; oidcRp: OidcRpSettings | undefined; stopJwks: () => void;
+  auth: TokenAuth; oidcRp: OidcRpSettings | undefined; stopJwks: () => void; oidcRoleChange: OidcRoleChange | undefined;
 }> {
   const oidcIss = env('BARY_OIDC_ISSUER', '');
   const oidcAud = env('BARY_OIDC_AUD', '');
@@ -522,7 +522,28 @@ async function authFromEnv(oidcJwksMs: number): Promise<{
       }
     : undefined;
 
-  return { auth, oidcRp, stopJwks };
+  return { auth, oidcRp, stopJwks, oidcRoleChange: roleChangeFromEnv(oidcRp, jwks) };
+}
+
+/**
+ * **Role Change 수신** — `BARY_OIDC_ROLE_CHANGE_EVENT`(SET 의 `events` 키, IdP 가 정한 URI)가 켠다. 안 주면 수신 경로가 404 다
+ * (지금 동작). 기본값은 없다 — 틀린 기본값은 서명은 맞는데 이벤트가 없다며 모든 역할 변경을 조용히 버린다.
+ *
+ * **반만 있으면 기동을 거부한다:** OIDC 로그인(issuer · client_id)이 없거나, 서명 키가 공유 비밀(HS256)뿐이면 IdP 의 서명을
+ * 증명할 수 없다 — JWKS(`BARY_OIDC_JWKS_URL` 또는 discovery) 또는 PEM 공개키가 있어야 한다. 사람 계정은 `main` 이 확인한다.
+ */
+function roleChangeFromEnv(oidcRp: OidcRpSettings | undefined, jwks: JwksCache | undefined): OidcRoleChange | undefined {
+  const eventKey = env('BARY_OIDC_ROLE_CHANGE_EVENT', '');
+  if (eventKey === '') return undefined;
+  if (oidcRp === undefined) {
+    throw new Error('BARY_OIDC_ROLE_CHANGE_EVENT 는 OIDC 로그인(BARY_OIDC_ISSUER · _AUD · 키 · _AUTHORIZATION · _TOKEN · _CLIENT_ID · _REDIRECT_URI)이 켜져 있어야 쓴다');
+  }
+  const fixed = typeof oidcRp.key === 'string' ? undefined : oidcRp.key;
+  if (jwks === undefined && fixed === undefined) {
+    throw new Error('Role Change 는 IdP 의 공개키로만 검증한다 — BARY_OIDC_JWKS_URL(또는 discovery) 또는 PEM 공개키(BARY_OIDC_KEY_FILE)가 필요하다');
+  }
+  log.info('oidc.role_change.enabled', { issuer: oidcRp.issuer, eventKey, keys: jwks === undefined ? 'pem' : 'jwks' });
+  return { eventKey, keyFor: (kid) => (jwks !== undefined ? jwks.keyFor(kid) : fixed) };
 }
 
 /** 화면(GUI) 산출물 자리. 명시했는데 없으면 기동 거부, 기본 자리에 없으면 API 만 연다. */
@@ -1185,7 +1206,7 @@ export async function main(): Promise<void> {
     });
   }
 
-  const { auth, oidcRp, stopJwks } = await authFromEnv(t.oidcJwksMs);
+  const { auth, oidcRp, stopJwks, oidcRoleChange } = await authFromEnv(t.oidcJwksMs);
 
   const serveRoot = guiRootFromEnv();
 
@@ -1193,6 +1214,9 @@ export async function main(): Promise<void> {
   if (accounts !== undefined) {
     log.info('accounts.enabled', {});
     tidyAccounts(accounts);
+  }
+  if (oidcRoleChange !== undefined && accounts === undefined) {
+    throw new Error('BARY_OIDC_ROLE_CHANGE_EVENT 는 사람 계정(BARY_ACCOUNTS_DSN)이 켜져 있을 때만 쓴다 — 바꿀 계정이 없다');
   }
   const build = readBuildInfo(prefix);
   const dispatch = hostDispatchFromEnv(process.env, build?.commit);
@@ -1217,6 +1241,7 @@ export async function main(): Promise<void> {
     sessionSecure: false,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
     ...(oidcRp === undefined ? {} : { oidcRp }),
+    ...(oidcRoleChange === undefined ? {} : { oidcRoleChange }),
   };
 
   /**

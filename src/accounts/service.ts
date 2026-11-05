@@ -26,6 +26,7 @@ import {
 } from './idp-roles/claims.js';
 import { effectiveScopes, isScope, normScopes, type IdpAuthority, type RoleMapper, type RoleMapResult } from './idp-roles/mapper.js';
 import { roleProfile } from './idp-roles/registry.js';
+import type { RoleChange } from './idp-roles/role-change.js';
 import { log } from '../obs/log.js';
 
 /** 세션 수명 (회원 공통 수치 1차) — 절대 12시간, 요청이 없으면 30분 뒤 끝난다. */
@@ -172,8 +173,6 @@ function mappingOfRow(r: Row | undefined): ClaimsMapperConfig {
   };
 }
 
-/** Role Change SET 이 말한 것 — 서명 · iss · aud · 시각 · 모양은 호출자(`verifyRoleChange`)가 끝냈다. */
-export type RoleChange = { sub: string; jti: string; txn: bigint; exp: number; roles: string[]; entitlements: string[] };
 export type RoleChangeOutcome =
   /** 반영했다. `sessions` 는 끊은 세션 수(역할을 잃었을 때만 끊는다 — 나머지는 다음 요청이 새 범위로 읽는다). */
   | { kind: 'applied'; from: string; to: string; sessions: number }
