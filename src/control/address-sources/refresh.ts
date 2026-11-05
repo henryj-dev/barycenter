@@ -153,7 +153,8 @@ export async function refreshRows(db: Queryable, keys: readonly string[]): Promi
     checkedAt: iso(r['checked_at']),
     ok: r['ok'] === true,
     ...(r['reason'] === null ? {} : { reason: String(r['reason']) }),
-    ...(r['detail'] === null ? {} : { detail: String(r['detail']) }),
+    // 저장된 문장(예외 메시지가 섞일 수 있다)은 API 로 내보내지 않는다 — 사유와 정해진 말만. 원문은 로그 address_set.refresh_failed.
+    ...(r['detail'] === null ? {} : { detail: `출처에서 목록을 받지 못했다 (${r['reason'] === null ? '알 수 없음' : String(r['reason'])}) — 자세한 내용은 데몬 로그` }),
     ...(r['refreshed_at'] === null ? {} : { refreshedAt: iso(r['refreshed_at']) }),
     ...(r['revision'] === null ? {} : { revision: String(r['revision']) }),
     by: String(r['by_actor']),

@@ -177,7 +177,8 @@ describe('다시 받기는 바뀐 때만 커밋한다', () => {
     expect(out).toEqual({ key: 'cf', outcome: 'failed', reason: 'unavailable', detail: '503' });
     expect((await store.head()).revision).toBe(rev);
     const [after] = await refreshRows(db, ['cf']);
-    expect(after).toMatchObject({ ok: false, reason: 'unavailable', detail: '503', refreshedAt: before?.refreshedAt });
+    // 기록의 원문(「503」)은 API 로 나가지 않는다 — 사유와 정해진 말만(CodeQL js/stack-trace-exposure).
+    expect(after).toMatchObject({ ok: false, reason: 'unavailable', detail: '출처에서 목록을 받지 못했다 (unavailable) — 자세한 내용은 데몬 로그', refreshedAt: before?.refreshedAt });
   });
 });
 

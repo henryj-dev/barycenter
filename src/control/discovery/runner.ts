@@ -64,9 +64,26 @@ const specOf = (d: PoolDiscovery): string => JSON.stringify([d.source, d.query, 
 const sameList = (a: readonly DiscoveredAddress[], b: readonly DiscoveredAddress[]): boolean =>
   a.length === b.length && a.every((x, i) => x.host === b[i]?.host && x.port === b[i]?.port);
 
+/**
+ * 밖(API · 화면)에 보이는 모양. 오류는 **사유와 정해진 말만** — 출처가 준 문장에는 예외 메시지가 섞일 수 있어
+ * (파일 경로 · 연결 오류 · 내부 상태) 데몬 로그 `discovery.source_failed` 에만 남긴다.
+ */
+const PUBLIC_DETAIL: Record<string, string> = {
+  unconfigured: '이 데몬에 그 출처가 설정되지 않았다 — 정적 백엔드를 쓴다',
+  unavailable: '출처에 닿지 못했다 — 마지막 성공 값을 쓴다',
+  invalid: '출처의 답이 이상하다 — 마지막 성공 값을 쓴다',
+  'not-found': '출처에 그 이름이 없다 — 마지막 성공 값을 쓴다',
+  'too-large': '출처의 답이 너무 크다 — 마지막 성공 값을 쓴다',
+};
 const viewOf = (s: PoolState): DiscoveryPoolView => {
-  const { spec: _spec, ...view } = s;
-  return { ...view, endpoints: [...view.endpoints] };
+  const { spec: _spec, error, ...view } = s;
+  return {
+    ...view,
+    endpoints: [...view.endpoints],
+    ...(error === undefined ? {} : {
+      error: { reason: error.reason, detail: `${PUBLIC_DETAIL[error.reason] ?? '출처에서 받지 못했다'} (자세한 내용은 데몬 로그 discovery.source_failed)` },
+    }),
+  };
 };
 
 export class DiscoveryRunner {
@@ -119,7 +136,7 @@ export class DiscoveryRunner {
           r = await source.resolve(d.query);
         } catch (e) {
           // 어댑터는 던지지 않게 썼다. 그래도 빠져나온 것은 실패로 닫는다 — 마지막 값을 지킨다.
-          r = { ok: false, reason: 'unavailable', detail: e instanceof Error ? e.message : String(e) };
+          r = { ok: false, reason: 'unavailable', detail: `출처 어댑터가 예외를 냈다: ${e instanceof Error ? e.message : String(e)}` };
         }
         if (!r.ok) {
           // **마지막 성공 값을 그대로 둔다.** `advertised` · `endpoints` 를 건드리지 않는다.
