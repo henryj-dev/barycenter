@@ -33,6 +33,8 @@ import { Sealer } from '../accounts/seal.js';
 import { AccountService } from '../accounts/service.js';
 import type { Mailer } from '../accounts/mail.js';
 import { mailFromEnv } from '../accounts/mail-transport/registry.js';
+import { acmeFailure, notifyFromEnv } from '../notify/registry.js';
+import { NotifyWatch } from '../notify/watch.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
 import { JwksCache } from '../api/jwks.js';
@@ -975,6 +977,13 @@ export async function main(): Promise<void> {
   }
 
   /**
+   * 알림 (`BARY_NOTIFY=webhook,slack,mail`) — `src/notify/`. 없으면 끈다(지금과 같다). 반만 설정이면 던진다.
+   * 보내기는 본 동작을 막지 않는다 — 허브가 큐로 따로 보낸다.
+   */
+  const notify = notifyFromEnv(nodeName, process.env, { mail: () => mailFromEnv() });
+  if (notify !== undefined) log.info('notify.enabled', { notifiers: notify.hub.kinds, certDays: notify.certDays });
+
+  /**
    * ACME 갱신 러너 (§8.2 · ADR-ACME).
    *
    * **`httpLua` 가 있어야 돈다.** 챌린지는 shared dict 에서 서빙되고(ADR-ACME ①), 그게
@@ -998,7 +1007,11 @@ export async function main(): Promise<void> {
     ...(dns01 === undefined ? {} : { dnsPlacer: dns01.placer }),
     renewBeforeDays: t.acmeRenewDays,
     // 화면이 주문 진행을 따라가게 — 스트림의 `acme` 이벤트.
-    onAdvance: (e) => { events.publish('acme', e); },
+    onAdvance: (e) => {
+      events.publish('acme', e);
+      const n = acmeFailure(e);
+      if (n !== undefined) notify?.hub.emit(n);
+    },
   });
   if (acmeOn) {
     acmeRunner.start(
@@ -1154,6 +1167,31 @@ export async function main(): Promise<void> {
       reason: 'BARY_GLOBAL_HOST 와 SSO 가 켜졌는데 계정(BARY_ACCOUNTS_DSN)이 꺼졌다 — 노드가 여럿이면 SSO 로그인이 끊긴다',
     });
   }
+  /**
+   * 알림의 상태 보기 — 리더 교체 · 적용 실패 · 미완 전환 · 인증서 만료 임박 · 지역 연락 끊김(`src/notify/watch.ts`).
+   * 읽기만 한다. 리더 교체 말고는 리더만 본다.
+   */
+  let stopNotify = (): void => {};
+  if (notify !== undefined) {
+    const relay = dispatch.globalSurface?.relay;
+    const watch = new NotifyWatch(notify.hub, {
+      isLeader: () => election.state.isLeader,
+      failedApply: () => store.failedHead(),
+      unfinished: async () => (await driver.status()).unfinished,
+      certificates: async () => {
+        const head = await store.head();
+        const model = await store.modelAt(head.revision);
+        return model.certificates.flatMap((c) => {
+          const facts = c.materialRef === undefined ? undefined : secrets.facts(c.materialRef);
+          return facts === undefined ? [] : [{ key: c.key, notAfter: facts.notAfter }];
+        });
+      },
+      ...(relay === undefined ? {} : { regions: () => relay.summary() }),
+    }, { certDays: notify.certDays, graceMs: 2 * notify.intervalMs });
+    watch.start(notify.intervalMs);
+    stopNotify = (): void => watch.stop();
+  }
+
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
     ...dispatch,
@@ -1225,6 +1263,7 @@ export async function main(): Promise<void> {
       stopDbRetention();
       stopSecretFacts();
       stopJwks();
+      stopNotify();
       clusterNode?.stop();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은
       // 주인을 가려내는 `/proc` 폴백에 기댄다 — 그 파일을 못 읽는 플랫폼에서는
