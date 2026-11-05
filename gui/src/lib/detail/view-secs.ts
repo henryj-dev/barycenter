@@ -69,6 +69,7 @@ export function sourceAllowSummary(model: ModelLike, allow: readonly string[]): 
   const direct = allow.filter((s) => !s.startsWith('@') && s.trim() !== '').length;
   const info = (n: string): Record<string, unknown> | undefined => itemOf(model, 'addressSet', n);
   const label = (n: string): string => (info(n)?.['source'] === 'cloudflare' ? 'Cloudflare' : n);
+  // 다른 출처(AWS · …)는 이름을 그대로 쓴다 — 같은 출처에서 거른 집합이 여럿일 수 있다.
   const count = (n: string): number => { const c = info(n)?.['cidrs']; return Array.isArray(c) ? c.length : 0; };
   const ranges = direct + sets.reduce((a, n) => a + count(n), 0);
   const t = direct === 0 && sets.length === 1 ? `${label(sets[0]!)}만 (대역 ${count(sets[0]!)}개)`

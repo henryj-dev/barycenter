@@ -9,7 +9,8 @@
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
-  import { itemsOf, resourcePath } from '@web/resources';
+  import { itemOf, itemsOf, resourcePath } from '@web/resources';
+  import PoolDiscovered from './PoolDiscovered.svelte';
   import { Badge } from '#lib/ui';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import { inRegion } from '#lib/global/aggregate.ts';
@@ -21,12 +22,18 @@
   const scope = getContext<Scope | undefined>('scope');
   const link = (path: string): string => (scope?.fixed === true && scope.region !== undefined ? inRegion(path, scope.region.name) : path);
   const key = $derived(pool ?? page.params['key'] ?? '');
+  /** 백엔드 출처(2026-11-05). 있으면 표 위에 「출처에서 받은 백엔드」 를 둔다. */
+  const disc = $derived(((): { source: string; query: string } | undefined => {
+    const d = itemOf(desk.model, 'pool', key)?.['discovery'] as Record<string, unknown> | undefined;
+    return d !== undefined && typeof d['source'] === 'string' ? { source: d['source'], query: String(d['query'] ?? '') } : undefined;
+  })());
   const members = $derived(itemsOf(desk.model, 'backend').filter((b) => b['pool'] === key).map((b) => {
     const k = String(b['key']);
     return { n: k, hp: `${String(b['host'])}:${String(b['port'])}`, w: String(b['weight'] ?? 1), m: backendDraining(desk, k) ? DRAIN_MARK : HEALTH_MARK[backendHealth(desk, k)] };
   }));
 </script>
 
+{#if disc !== undefined}<PoolDiscovered pool={key} source={disc.source} query={disc.query} />{/if}
 <div class="tbl" role="table" aria-label="소속 백엔드">
   <div class="tr th" role="row"><span role="columnheader">이름</span><span role="columnheader">호스트:포트</span><span role="columnheader">가중치</span><span role="columnheader">헬스</span></div>
   {#each members as b (b.n)}
