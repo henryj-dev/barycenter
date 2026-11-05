@@ -784,7 +784,14 @@ const ROUTES: Route[] = [
       return;
     }
     if (out.outcome === 'committed') eventsOf(api).publish('revision', { revision: out.revision, addressSet: key });
-    json(c.res, 200, out);
+    // 응답은 칸을 골라 만든다 — 결과 객체를 통째로 내보내면 실패 갈래의 `detail`(예외 문장)이 흐를 길이 남는다.
+    json(c.res, 200, out.outcome === 'unchanged'
+      ? { key: out.key, outcome: out.outcome, count: out.count }
+      : {
+          key: out.key, outcome: out.outcome, count: out.count, revision: out.revision, planId: out.planId,
+          ...(out.operation === undefined ? {} : { operation: out.operation }),
+          ...(out.held === undefined ? {} : { held: [...out.held] }),
+        });
   }),
   /**
    * 풀의 백엔드 출처 (2026-11-05) — 이 노드의 러너가 든 것. 출처의 목록을 쓰는지(`advertised`) · 그 목록 ·
