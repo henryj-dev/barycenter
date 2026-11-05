@@ -29,7 +29,9 @@ import {
   type ApiOptions, type BuildInfo, type GlobalApiOptions, type OidcRoleChange,
 } from '../api/server.js';
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
-import { Sealer } from '../accounts/seal.js';
+import { sealerFromEnv } from '../accounts/sealer/registry.js';
+import { rateLimitStore } from '../api/auth-limit/registry.js';
+import type { RateLimitStore } from '../api/auth-limit/store.js';
 import { AccountService, type AccountServiceOptions } from '../accounts/service.js';
 import { idpMfaKinds, idpMfaProvider } from '../accounts/mfa/registry.js';
 import { DEFAULT_ROLE_MAPPER, roleMapperFactory } from '../accounts/idp-roles/registry.js';
@@ -288,7 +290,8 @@ function tidyAccounts(accounts: AccountService): void {
  * 사람 계정 (공통 회원정책 1차 · 계획 A). `BARY_ACCOUNTS_DSN` 이 있을 때만 켠다.
  *
  * **키 없이 켜지 않는다.** TOTP 비밀을 감쌀 `BARY_ACCOUNTS_KEK` 가 없으면 기동을 거부한다 — 계정은
- * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다.
+ * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다. 키는 값 · 파일(`_FILE`) · 명령(`_CMD`) 중 하나로 받고,
+ * 봉인 방식은 `BARY_ACCOUNTS_SEAL_KIND`(`local` 기본 · `vault-transit`)가 고른다(`accounts/sealer/registry.ts`).
  */
 async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promise<AccountService | undefined> {
   const dsn = env('BARY_ACCOUNTS_DSN', '');
@@ -296,8 +299,8 @@ async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promis
     if (idpMfa !== undefined) throw new Error('BARY_MFA_IDP_* 는 사람 계정(BARY_ACCOUNTS_DSN)이 켜져 있을 때만 쓴다');
     return undefined;
   }
-  const kek = env('BARY_ACCOUNTS_KEK', '');
-  if (kek === '') throw new Error('BARY_ACCOUNTS_DSN 을 켰으면 BARY_ACCOUNTS_KEK(32바이트 base64)도 필요하다');
+  const sealing = await sealerFromEnv(process.env);
+  log.info('accounts.sealer', { kind: sealing.kind, opens: sealing.openers });
   const adb = new Db(dsn);
   const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
   if (applied.length > 0) log.info('accounts.migrate.applied', { migrations: applied });
@@ -317,7 +320,7 @@ async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promis
     log.info('accounts.mail.enabled', { from });
   }
   return new AccountService({
-    db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
+    db: adb, sealer: sealing.sealer, issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
     ...(mail === undefined ? {} : mail),
     ...(idpMfa === undefined ? {} : { idpMfa }),
     roleMapper: roleMapperFromEnv(),
@@ -581,6 +584,19 @@ function roleChangeFromEnv(oidcRp: OidcRpSettings | undefined, jwks: JwksCache |
   return { eventKey, keyFor: (kid) => (jwks !== undefined ? jwks.keyFor(kid) : fixed) };
 }
 
+/**
+ * **인증 실패 제한 저장소** (`BARY_AUTH_LIMIT_STORE`). 없으면 `undefined` — 서버가 인스턴스 메모리로 센다(지금과 같다).
+ * `pg` 는 사람 계정 PG(`BARY_ACCOUNTS_DSN`)의 `auth_throttle` 에서 노드가 함께 센다. 모르는 이름 · DSN 없음은 기동 거부.
+ */
+function authLimitFromEnv(): RateLimitStore | undefined {
+  const kind = env('BARY_AUTH_LIMIT_STORE', '').trim();
+  if (kind === '' || kind === 'memory') return undefined;
+  const dsn = env('BARY_ACCOUNTS_DSN', '');
+  const store = rateLimitStore(kind, dsn === '' ? {} : { accountsDb: new Db(dsn) });
+  log.info('auth.limit_store', { kind: store.kind });
+  return store;
+}
+
 /** 화면(GUI) 산출물 자리. 명시했는데 없으면 기동 거부, 기본 자리에 없으면 API 만 연다. */
 function guiRootFromEnv(): string | undefined {
   const explicitGui = process.env['BARY_GUI'];
@@ -620,6 +636,8 @@ async function listenApi(
   const trustedRaw = env('BARY_TRUSTED_PROXIES', '');
   const trustedProxies = parseTrustedProxies(trustedRaw);
   if (trustedProxies !== undefined) apiOpts.trustedProxies = trustedProxies;
+  const authLimit = authLimitFromEnv();
+  if (authLimit !== undefined) apiOpts.authLimit = authLimit;
   const server = tlsOn
     ? createHttpsServer(
         apiTlsOptions({

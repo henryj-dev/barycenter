@@ -17,20 +17,106 @@
 | 복구 코드 | 10개, 일회용, 해시 저장, 재발급하면 전부 폐기 |
 | 보존 | 감사 1년(데몬이 하루마다 정리), 탈퇴하면 개인정보 즉시 삭제 — username 묘비와 SSO (iss, sub) 는 재사용 방지로 남는다. **백업 30일** — 탈퇴한 사람의 개인정보는 최대 30일 뒤 백업에서도 사라진다 |
 
-기계 토큰(`tokens.json`)의 인증 실패 제한은 사람 계정이 아니라서 지금처럼 인스턴스 메모리에서 센다.
+기계 토큰(`tokens.json`) · API 인증 실패 제한은 기본으로 인스턴스 메모리에서 센다. 여러 노드가 함께 세게 하려면
+`BARY_AUTH_LIMIT_STORE=pg` — 아래 「API 인증 실패 제한을 함께 세기」.
 
 ## 켜기
 
 | env | 뜻 |
 |---|---|
 | `BARY_ACCOUNTS_DSN` | 공용 계정 PG. **모든 지역·전역 인스턴스가 같은 값**을 쓴다. 없으면 계정이 꺼진다(현행 OIDC 메모리 세션만) |
-| `BARY_ACCOUNTS_KEK` | TOTP 비밀을 감싸는 키, 32바이트 base64. **계정 PG 에 두지 않는다.** 없으면 기동 거부 |
+| `BARY_ACCOUNTS_KEK` | TOTP 비밀을 감싸는 키, 32바이트 base64. **계정 PG 에 두지 않는다.** 아래 셋 중 **하나만** 준다. 없으면 기동 거부 |
+| `BARY_ACCOUNTS_KEK_FILE` | 같은 키를 **파일**에서 읽는다(한 줄, 64 KiB 상한). env 파일에 키가 안 남는다 |
+| `BARY_ACCOUNTS_KEK_CMD` | 같은 키를 **명령**의 stdout 으로 받는다(`systemd-creds cat` · `vault read` · KMS). 기동 때 한 번, 메모리에만. 상한 `BARY_ACCOUNTS_KEK_CMD_TIMEOUT_MS`(기본 10초) |
+| `BARY_ACCOUNTS_SEAL_KIND` | 봉인 방식. `local`(기본, 위 키로 AES-256-GCM) · `vault-transit`(아래 「Vault transit 봉인」) |
 | `BARY_ACCOUNTS_ISSUER` | 인증 앱에 보이는 이름 (기본 `barycenter`) |
 | `BARY_PUBLIC_URL` | CLI 가 링크를 온전한 주소로 적을 때 쓴다 |
 
 키 만들기: `node -e 'console.log(require("crypto").randomBytes(32).toString("base64"))'`.
 **키를 잃으면 모든 사람의 TOTP 가 못 쓰게 된다** — 복구 링크로 다시 등록해야 한다. 키는 env 파일과 같은
 무게로 백업한다.
+
+### KEK 출처 — 값 · 파일 · 명령
+
+계정 KEK 는 인증서 저장소 KEK(`BARY_SECRET_KEK` · `_CMD`, `docs/runbook-install.md`)와 **같은 코드**로 읽는다
+(`src/dp/kek-source.ts` 의 `resolveKeyFrom`). 규칙도 같다.
+
+- **셋 중 둘 이상 주면 안 뜬다.** 어느 쪽이 이기는지가 곧 사고다.
+- 명령이 실패하면 오류에 **종료 코드와 stderr 만** 실린다. 명령 문자열 · stdout 은 안 실린다. 명령은 키를 stdout 으로만 낸다.
+- 값을 읽는 규칙은 **예전 그대로**다(base64 를 풀어 32 바이트). 운영에 적힌 값은 바꾸지 않아도 된다.
+
+실패의 뜻:
+
+| 기동 오류 | 뜻 · 할 일 |
+|---|---|
+| `… 중 하나가 필요하다` | DSN 은 있는데 키가 없다. 셋 중 하나를 준다 |
+| `… 를 둘 다 줬다` | 출처가 둘 이상이다. 하나만 남긴다 |
+| `BARY_ACCOUNTS_KEK_FILE (<경로>) 을 읽지 못했다 (ENOENT · EACCES …)` | 파일이 없거나 `bary` 가 못 읽는다. 소유 · 권한(0400 · 0600)을 본다 |
+| `BARY_ACCOUNTS_KEK_CMD 가 실패했다 (종료 코드 …)` | 명령이 죽었다. 실린 stderr 를 본다 |
+| `BARY_ACCOUNTS_KEK 는 32바이트를 base64 로 적은 값이어야 한다` | 값 · 파일 · 명령이 낸 것이 키가 아니다 |
+
+### env 값에서 파일 · 명령으로 옮기기
+
+운영(web-01)은 지금 `BARY_ACCOUNTS_KEK` env 값이다. 그대로 둬도 된다. 옮길 때(**키 자체는 바꾸지 않는다** — 봉인값이
+그 키로 묶여 있다):
+
+1. 같은 값을 파일로 둔다: `install -o bary -g bary -m 0400 /dev/null /etc/barycenter/accounts-kek` 뒤
+   그 파일에 env 의 값을 한 줄로 적는다(셸 기록에 남지 않게 편집기로). 또는 `systemd-creds encrypt` 로 자격을 만든다.
+2. env 파일에서 `BARY_ACCOUNTS_KEK=` 줄을 지우고 `BARY_ACCOUNTS_KEK_FILE=/etc/barycenter/accounts-kek`
+   (또는 `BARY_ACCOUNTS_KEK_CMD='systemd-creds cat accounts-kek'`)를 넣는다. **둘을 같이 두면 안 뜬다.**
+3. 데몬을 다시 띄우고 `accounts.sealer` 로그(`kind: local`)를 본다. 인증 앱이 있는 계정으로 한 번 로그인해 본다.
+4. 되돌리기: 2 를 거꾸로 한다. 키가 같으므로 봉인값은 그대로 열린다.
+
+모든 지역 · 전역 인스턴스가 **같은 키**를 써야 한다(같은 계정 PG 의 봉인값을 연다). 옮길 때 값이 바뀌지 않았는지
+`sha256sum` 으로 대조한다(값을 화면에 내지 않는다).
+
+### Vault transit 봉인 (`BARY_ACCOUNTS_SEAL_KIND=vault-transit`)
+
+키가 barycenter 밖(Vault)에만 있다. barycenter 는 평문을 보내 `vault:v1:…` 을 받고, 그 값이 그대로 봉인값이다.
+**열 때는 값의 앞머리로 방식을 고른다** — `v1.` 는 로컬 키, `vault:` 는 Vault. 그래서 바꿔도 옛 값이 열린다.
+
+| env | 뜻 |
+|---|---|
+| `BARY_ACCOUNTS_VAULT_ADDR` | `https://…` (https 가 아니면 기동 거부) |
+| `BARY_ACCOUNTS_VAULT_KEY` | transit 키 이름. **`derived=true` 로 만든다** — 행(사용자)에 묶기를 context 로 한다 |
+| `BARY_ACCOUNTS_VAULT_TOKEN_FILE` | 토큰 **파일**. 매 호출 읽는다(Vault Agent 가 갱신해 쓰는 파일). env 값 `BARY_ACCOUNTS_VAULT_TOKEN` 은 거절 |
+| `BARY_ACCOUNTS_VAULT_MOUNT` | 기본 `transit` |
+| `BARY_ACCOUNTS_VAULT_NAMESPACE` | Enterprise 네임스페이스(선택) |
+
+- Vault 쪽: `vault write -f transit/keys/<이름> derived=true`, 정책은 `transit/encrypt/<이름>` · `transit/decrypt/<이름>` 에 `update`.
+- **기동 때 잰다(probe)**: 무작위 값을 context A 로 봉인해 A 로 열리고 B 로 안 열리는지 본다. 키가 파생형이 아니면
+  기동 거부(`derived=true 로 만든 키가 필요하다`). 그래서 Vault 가 기동 때 닿아야 한다.
+- **반만 주면 기동 거부.** `vault-transit` 인데 `ADDR · KEY · TOKEN_FILE` 중 빠진 것이 있으면 그 이름을 말한다.
+- **옛 `v1.` 값을 열려면 계정 KEK 를 남겨 둔다.** KEK 가 없으면 그 값은 `no-sealer` 로 못 연다 — 그 사람은 복구 링크로
+  다시 등록해야 한다. 새로 등록 · 재등록하는 TOTP 만 `vault:` 로 봉인된다. 옛 값을 한꺼번에 다시 봉인하는 도구는 아직 없다.
+- `local` 로 두고 `BARY_ACCOUNTS_VAULT_*` 를 다 주면 Vault 는 **열기 전용**이다(되돌릴 때 `vault:` 값을 계속 연다).
+
+열기 · 봉인 실패는 로그인에서 **503 `account_store_unavailable`** 이 된다(예전 키 불일치와 같다). 로그의 사유:
+
+| 사유 | 뜻 |
+|---|---|
+| `integrity` | 다른 키 · 다른 행의 값이다(로컬 KEK 가 바뀌었거나 Vault 키가 다르다). 다시 해도 같다 |
+| `denied` | Vault 가 토큰 · 정책을 거절했다(401 · 403), 토큰 파일이 없거나 비었다 |
+| `unavailable` | Vault 에 닿지 못했다 · 5xx · 봉인됨(sealed) · 답이 64 KiB 를 넘었다 · 시간 상한 5초 |
+| `no-sealer` | 그 앞머리의 방식이 설정에 없다 |
+| `malformed` | 봉인값의 모양이 아니다 |
+
+### API 인증 실패 제한을 함께 세기 (`BARY_AUTH_LIMIT_STORE`)
+
+틀린 토큰 · 낡은 세션 쿠키 · 매핑 없는 인증서를 IP 마다 센다(5번째부터 429, 1초에서 두 배씩 60초까지, 마지막 실패 뒤
+10분이면 처음부터, 맞는 자격이 오면 지운다). 기본(`memory`)은 인스턴스마다 따로 센다 — 클러스터 · 전역+지역이면
+노드 수만큼 더 시도할 수 있다.
+
+`BARY_AUTH_LIMIT_STORE=pg` 면 사람 계정 PG 의 **`auth_throttle`**(마이그레이션 005, 새 표 없음)에서 함께 센다. 키는
+`api:<IP>` 다 — 사람 로그인의 `login:` · `reset:` 과 따로 센다. 오래된 행은 계정 정리(`purgeExpired`)가 지운다.
+`BARY_ACCOUNTS_DSN` 이 없으면 기동 거부, 모르는 이름도 기동 거부.
+
+**계정 PG 가 죽으면**(메모리로 떨어지지 않는다):
+
+- 실패한 인증은 **503 `auth_limit_unavailable`**(`retry-after: 5`) — 「세지 못했다」를 드러낸다. 지표 `bary_auth_limit_store_errors_total`.
+- **맞는 자격(파일 토큰 · mTLS)은 그대로 들어간다.** 성공의 「지우기」는 기다리지 않는다. 계정 PG 장애가 API 토큰까지
+  막는 전체 장애가 되지 않게 한 판단이다(「계정 PG 가 죽으면」의 비상 경로를 지킨다). 그 동안 파일 토큰은 맞혀 보기를
+  셀 수 없다 — 파일 토큰은 맞혀 볼 수 없을 만큼 긴 무작위 값으로 둔다(사람이 지은 짧은 값을 쓰지 않는다).
 
 ## 첫 관리자
 
