@@ -3171,6 +3171,14 @@ capability 패키지이지 apply 구현이 아니다.
 
 `BackendDiscovery` 소비자는 멤버십 슬롯이다. 표면에는 아직 올리지 않는다.
 
+**출처가 생겼다 (2026-11-05).** 풀의 `discovery: {source, query, port?, emptyMeans?}` 가 풀 단위로 켠다.
+`src/control/discovery/` 의 레지스트리(`dns-srv` · `consul` · `kubernetes` · `file`)와 러너가 마지막 성공 값을
+들고, `DiscoveryIntake.pools` 가 그 풀의 정적 백엔드만 바꾼다(`pools` 가 없으면 옛 계약 — 통째 교체). 출처 오류면
+값을 지키고, 정상 빈 목록은 `emptyMeans`(기본 keep)가 정한다. 적격은 발견을 얹은 뒤 헬스 · 드레인으로 줄인다
+(`eligibleWithDiscovery`) — 전에는 정적만 줄여 발견한 peer 가 슬롯에서 빠졌다. 반영은 헬스와 같은 투영
+(`projectHealth`)이다. 주소 집합의 `source` 도 레지스트리 이름(`cloudflare` · `aws` · `gcp` · `fastly` · `url`)이
+됐다. 운영은 [`docs/runbook-data-sources.md`](docs/runbook-data-sources.md).
+
 ---
 
 ## 10. Web GUI
