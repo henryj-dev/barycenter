@@ -1,10 +1,10 @@
 /**
- * PostgreSQL 연결과 마이그레이션 (DESIGN.md §11.2)
+ * PostgreSQL 연결과 마이그레이션 (DESIGN.md §11.2 · docs/adr-multi-db.md)
  *
- * **v0 는 PostgreSQL 하나만.** 격리 수준·advisory lock·제약 표현·크래시 시맨틱이 달라
- * 리더 선출과 그래프 스냅샷 구현이 갈린다. SQLite 는 *같은 불변식 스위트 통과* 를 완료
- * 조건으로 하는 별도 과제다 — "추상화해 두면 나중에 갈아 끼울 수 있다" 는 여기서 거짓이다.
- * 그래서 추상 레이어를 두지 않고 pg 를 직접 쓴다.
+ * **`Database` 경계(`./db.ts`)의 PG 구현이다.** 격리 수준·advisory lock·제약 표현·크래시
+ * 시맨틱이 달라 리더 선출과 그래프 스냅샷 구현이 갈린다 — "SQL 을 추상해 두면 나중에 갈아
+ * 끼울 수 있다" 는 여기서 거짓이다. 그래서 경계는 연결·트랜잭션·잠금만 감싸고 SQL 은 감싸지
+ * 않는다. 다른 방언은 *같은 불변식 스위트 통과* 를 완료 조건으로 저장소 함수 단위로 더한다(ADR).
  *
  * `pg` 는 이 저장소의 **첫 런타임 의존성**이다. 지금까지 stdlib 뿐이었다. 와이어 프로토콜을
  * 직접 구현할 이유가 없어서 받아들였고, 대신 여기 한 파일에 가둔다.
@@ -16,6 +16,9 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 import { log } from '../obs/log.js';
+import { DIALECTS, type Database, type Dialect, type MigrationSet, type Queryable, type Row } from './db.js';
+
+export type { MigrationSet, Queryable, Row } from './db.js';
 
 /**
  * `bigint`(OID 20)를 **문자열로** 받는다.
@@ -26,24 +29,10 @@ import { log } from '../obs/log.js';
  */
 pg.types.setTypeParser(20, (v) => v);
 
-export type Row = Record<string, unknown>;
-
-export interface Queryable {
-  query(text: string, values?: readonly unknown[]): Promise<{ rows: Row[]; rowCount: number | null }>;
-}
-
 const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 
-/**
- * 마이그레이션 계열. 설정 DB 가 기본이고, 계정 DB(`account-migrations`)가 둘째 계열이다.
- *
- * **계열마다 기록 테이블과 잠금 키가 다르다.** 같은 PG 서버의 다른 DB 에 두는 것이 권장이지만
- * 같은 DB 에 둬도 섞이지 않아야 한다 — 기록 테이블을 나누지 않으면 한쪽의 `001_…` 이
- * 다른 쪽의 `001_…` 을 「이미 했다」로 건너뛴다.
- */
-export type MigrationSet = { dir: string; table: string; lock: readonly [number, number] };
-
-export class Db {
+export class Db implements Database {
+  readonly dialect: Dialect = DIALECTS.postgres;
   readonly #pool: pg.Pool;
 
   constructor(connectionString: string) {
