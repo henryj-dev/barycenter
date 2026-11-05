@@ -9,8 +9,9 @@
  *
  * 오류에 DSN 을 싣지 않는다 — 비밀번호가 들어 있다. 스킴만 말한다.
  */
-import { dbKindOf, type Database, type DbKind } from './db.js';
+import { dbKindOf, type Database, type DbKind, type LeaderLock } from './db.js';
 import { Db } from './pg.js';
+import { PgLeaderLock } from './pg-leader.js';
 
 /** 이 빌드가 열 수 있는 종류. */
 export const SUPPORTED_DB_KINDS: readonly DbKind[] = ['postgres'];
@@ -34,6 +35,15 @@ export function openDb(dsn: string, label = 'DSN'): Database {
   const kind = assertSupportedDsn(dsn, label);
   switch (kind) {
     case 'postgres': return new Db(dsn);
+    default: throw new UnsupportedDb(kind, label);
+  }
+}
+
+/** 리더 잠금. 설정 DB 의 DSN 으로 연다 — 선출은 설정 DB 를 공유하는 인스턴스 사이의 일이다. */
+export function openLeaderLock(dsn: string, label = 'DSN'): LeaderLock {
+  const kind = assertSupportedDsn(dsn, label);
+  switch (kind) {
+    case 'postgres': return new PgLeaderLock(dsn);
     default: throw new UnsupportedDb(kind, label);
   }
 }

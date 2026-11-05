@@ -21,13 +21,15 @@
  * 요청은 신임이 fence 를 지난 뒤 전부 거부된다. **막는 것이 아니라 무해하게 만드는 것**이
  * 설계의 답이었다(§3.5 · 8차 검수).
  *
- * ── 세션 하나를 통째로 쓴다 ─────────────────────────────────────────────
+ * ── 잠금은 저장소 경계 뒤에 있다 ───────────────────────────────────────
  *
- * advisory lock 은 **세션 스코프**다. 풀에서 커넥션을 빌려 잡으면 반납하는 순간 다른
- * 요청이 그 커넥션을 쓰고, 풀이 커넥션을 재활용하거나 끊으면 락이 조용히 풀린다.
- * 그래서 전용 `Client` 하나를 잡고 프로세스 수명 동안 들고 있는다.
+ * 잠금을 잡고 토큰을 발급하는 손발은 `LeaderLock`(`src/store/db.ts`)이다. PG 구현은
+ * advisory lock 과 `leader_token_seq` 다(`src/store/pg-leader.ts`). 여기 남는 것은 방언과
+ * 무관한 판단 — 지금 리더인가, 끊기면 왜 아닌가, 물러나면 무엇을 적는가 — 이다
+ * (docs/adr-multi-db.md 「리더 선출」).
  */
-import pg from 'pg';
+import type { LeaderLock, LeaderSession } from '../store/db.js';
+import { openLeaderLock } from '../store/open.js';
 
 export type Leadership = {
   isLeader: boolean;
@@ -39,81 +41,51 @@ export type Leadership = {
   reason: string | undefined;
 };
 
-/**
- * advisory lock 키.
- *
- * `hashtext()` 로 문자열에서 뽑고 싶어지는데, 그 함수는 **버전 간 안정성이 보장되지
- * 않는다.** PG 를 올린 뒤 키가 바뀌면 옛 리더와 새 리더가 서로 다른 락을 잡고 둘 다
- * 자기가 리더라고 믿는다 — 선출이 있는데 없는 것보다 나쁜 상태다. 상수로 박는다.
- */
-const LOCK_KEY_HI = 0x62_61 as const;   // 'ba'
-const LOCK_KEY_LO = 0x72_79 as const;   // 'ry'
-
 export class LeaderElection {
-  #client: pg.Client | undefined;
+  readonly #lock: LeaderLock;
+  #session: LeaderSession | undefined;
   #token: string | undefined;
   #since: string | undefined;
   #reason: string | undefined = '아직 선출을 시도하지 않았다';
   #lost = false;
 
+  /** `source` 가 문자열이면 DSN 이다 — 그 스킴의 잠금 구현을 고른다. */
   constructor(
-    private readonly dsn: string,
+    source: string | LeaderLock,
     readonly holder: string,
-  ) {}
+  ) {
+    this.#lock = typeof source === 'string' ? openLeaderLock(source) : source;
+  }
 
   /**
    * 리더가 되기를 **한 번** 시도한다. 못 되면 조용히 false.
    *
-   * 기다리는 형태(`pg_advisory_lock`)를 안 쓴다. 블로킹으로 잡으면 기동이 무한정 멈추고,
+   * 기다리는 형태를 안 쓴다. 블로킹으로 잡으면 기동이 무한정 멈추고,
    * 그동안 이 프로세스는 살아 있지도 죽지도 않은 상태가 된다 — 스탠바이는 **읽기로
    * 서비스하면서** 대기해야 한다.
    */
   async tryAcquire(): Promise<boolean> {
-    if (this.#client !== undefined && !this.#lost) return true;
-    const client = new pg.Client({ connectionString: this.dsn });
-    try {
-      await client.connect();
-      const r = await client.query(
-        'SELECT pg_try_advisory_lock($1::int, $2::int) AS got', [LOCK_KEY_HI, LOCK_KEY_LO],
-      );
-      if (r.rows[0]?.got !== true) {
-        await client.end().catch(() => undefined);
-        this.#reason = '다른 인스턴스가 리더다 (advisory lock 을 못 잡았다)';
-        return false;
-      }
-
-      // **락을 잡은 뒤에 토큰을 뽑는다.** 순서가 반대면 락을 못 잡은 인스턴스도 시퀀스를
-      // 소모하고, 그러면 토큰이 "리더가 몇 번 바뀌었나" 를 뜻하지 않게 된다.
-      const t = await client.query(`SELECT nextval('leader_token_seq')::text AS token`);
-      const token = String(t.rows[0]?.token);
-      const ins = await client.query(
-        `INSERT INTO leadership (token, holder) VALUES ($1,$2) RETURNING acquired_at`,
-        [token, this.holder],
-      );
-
-      // **끊기면 리더가 아니다.** advisory lock 은 세션이 죽으면 풀리므로, 커넥션이
-      // 끊긴 순간부터 이 프로세스는 리더가 아니다. 그걸 안 보면 "PG 와의 연결은 끊겼는데
-      // 자기는 리더라고 믿는" 프로세스가 부작용을 계속 낸다.
-      client.on('error', (e) => {
-        this.#lost = true;
-        this.#reason = `리더 세션이 끊겼다: ${e.message}`;
-      });
-      client.on('end', () => {
-        this.#lost = true;
-        this.#reason ??= '리더 세션이 닫혔다';
-      });
-
-      this.#client = client;
-      this.#token = token;
-      this.#since = new Date(String(ins.rows[0]?.acquired_at)).toISOString();
-      this.#reason = undefined;
-      this.#lost = false;
-      return true;
-    } catch (e) {
-      await client.end().catch(() => undefined);
-      this.#reason = `선출 시도가 실패했다: ${String(e)}`;
+    if (this.#session !== undefined && !this.#lost) return true;
+    const r = await this.#lock.tryAcquire(this.holder);
+    if (!r.ok) {
+      this.#reason = r.reason;
       return false;
     }
+    const session = r.session;
+    // **끊기면 리더가 아니다.** 잠금은 세션이 죽으면 풀리므로, 세션이 끊긴 순간부터 이
+    // 프로세스는 리더가 아니다. 오류의 사유가 닫힘의 사유보다 앞선다(닫힘은 덮지 않는다).
+    session.onLost((kind, reason) => {
+      this.#lost = true;
+      if (kind === 'error') this.#reason = reason;
+      else this.#reason ??= reason;
+    });
+
+    this.#session = session;
+    this.#token = session.token;
+    this.#since = session.since;
+    this.#reason = undefined;
+    this.#lost = false;
+    return true;
   }
 
   /**
@@ -123,7 +95,7 @@ export class LeaderElection {
    * 락은 이미 풀렸고 다른 인스턴스가 신임 토큰으로 fence 를 지났을 수 있다.
    */
   get state(): Leadership {
-    const ok = this.#client !== undefined && !this.#lost;
+    const ok = this.#session !== undefined && !this.#lost;
     return {
       isLeader: ok,
       token: ok ? this.#token : undefined,
@@ -149,18 +121,10 @@ export class LeaderElection {
    * 물러난 것과 죽은 것을 나중에 구분할 수 있어야 한다.
    */
   async release(): Promise<void> {
-    const client = this.#client;
-    this.#client = undefined;
-    if (client === undefined) return;
-    try {
-      if (this.#token !== undefined) {
-        await client.query('UPDATE leadership SET released_at = now() WHERE token = $1',
-          [this.#token]);
-      }
-    } catch {
-      /* 물러나는 길에 못 적어도 락은 세션 종료로 풀린다 */
-    }
-    await client.end().catch(() => undefined);
+    const session = this.#session;
+    this.#session = undefined;
+    if (session === undefined) return;
+    await session.release();
     this.#token = undefined;
     this.#reason = '스스로 물러났다';
   }
