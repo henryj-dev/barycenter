@@ -154,6 +154,8 @@ export async function reset(db: Db): Promise<void> {
                            -- 앞 테스트의 번호와 PK 로 충돌했다. engine_settings 때와
                            -- 같은 누락이다. (표 이름에 백틱을 쓰면 이 템플릿이 끊긴다.)
                            health_events, health_cursor,
+                           -- 주소 집합과 그 다시 받기 기록 (027 · 033). CASCADE 가 안 데려간다.
+                           address_sets, address_set_refresh,
                            leadership, config_head, config_revisions
                   RESTART IDENTITY CASCADE`);
   // 커서는 **단일 행 표**다 — 비웠으면 다시 넣어야 한다. 행이 없으면 `emit()` 의

@@ -319,7 +319,7 @@ const list = (r: Row, k: string): string[] => (Array.isArray(r[k]) ? (r[k] as st
 async function readModel(c: Queryable): Promise<Model> {
   const pools = (await c.query(
     `SELECT key, protocol_class, algorithm, hash_key, send_proxy_protocol, health_check,
-            upstream_tls
+            upstream_tls, discovery
        FROM pools ORDER BY key`,
   )).rows.map((r): Pool => ({
     key: text(r, 'key'),
@@ -337,6 +337,10 @@ async function readModel(c: Queryable): Promise<Model> {
     ...(r['upstream_tls'] === null || r['upstream_tls'] === undefined
       ? {}
       : { upstreamTls: r['upstream_tls'] as NonNullable<Pool['upstreamTls']> }),
+    // 033. 없으면 정적 — 이 칸 전의 풀과 같은 모양이다.
+    ...(r['discovery'] === null || r['discovery'] === undefined
+      ? {}
+      : { discovery: r['discovery'] as NonNullable<Pool['discovery']> }),
   }));
 
   const backends = (await c.query(
@@ -608,11 +612,15 @@ async function readModel(c: Queryable): Promise<Model> {
 
   // 주소 집합 (027). **없으면 키를 안 만든다** — 이 기능 전의 모델과 같은 모양이 된다.
   const addressSets = (await c.query(
-    `SELECT key, cidrs, source FROM address_sets ORDER BY key`,
+    `SELECT key, cidrs, source, source_options FROM address_sets ORDER BY key`,
   )).rows.map((r): AddressSet => ({
     key: text(r, 'key'),
     cidrs: r['cidrs'] as string[],
-    ...(maybeText(r, 'source') === undefined ? {} : { source: text(r, 'source') as 'cloudflare' }),
+    ...(maybeText(r, 'source') === undefined ? {} : { source: text(r, 'source') as NonNullable<AddressSet['source']> }),
+    // 033. 옵션이 없는 행(옛 `cloudflare` 포함)은 키를 안 만든다 — 그 전의 모델과 같은 모양이다.
+    ...(r['source_options'] === null || r['source_options'] === undefined
+      ? {}
+      : { sourceOptions: r['source_options'] as NonNullable<AddressSet['sourceOptions']> }),
   }));
 
   return {
@@ -685,21 +693,24 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
     case 'pool':
       await c.query(
         `INSERT INTO pools (id,key,name,protocol_class,algorithm,hash_key,send_proxy_protocol,
-                            health_check,upstream_tls,created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$9,$10,$7,$7,$8)
+                            health_check,upstream_tls,discovery,created_by,updated_by,revision)
+         VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$9,$10,$11,$7,$7,$8)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol_class=EXCLUDED.protocol_class,
            algorithm=EXCLUDED.algorithm, hash_key=EXCLUDED.hash_key,
            send_proxy_protocol=EXCLUDED.send_proxy_protocol,
            health_check=EXCLUDED.health_check,
            upstream_tls=EXCLUDED.upstream_tls,
+           discovery=EXCLUDED.discovery,
            version=pools.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
         [op.key, b['name'] ?? op.key, b['protocolClass'], b['algorithm'],
           b['hashKey'] ?? null, b['sendProxyProtocol'] ?? null, by, revision,
           b['healthCheck'] === undefined ? null : JSON.stringify(b['healthCheck']),
           // $10 — §4.3. udp 는 DB 도 같은 CHECK 을 건다.
-          b['upstreamTls'] === undefined ? null : JSON.stringify(b['upstreamTls'])],
+          b['upstreamTls'] === undefined ? null : JSON.stringify(b['upstreamTls']),
+          // $11 — 033. 백엔드 출처.
+          b['discovery'] === undefined ? null : JSON.stringify(b['discovery'])],
       );
       return;
 
@@ -948,13 +959,14 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
 
     case 'addressSet': {
       await c.query(
-        `INSERT INTO address_sets (id,key,cidrs,source,created_by,updated_by,revision)
-         VALUES (gen_random_uuid(),$1,$2,$3,$4,$4,$5)
+        `INSERT INTO address_sets (id,key,cidrs,source,source_options,created_by,updated_by,revision)
+         VALUES (gen_random_uuid(),$1,$2,$3,$6,$4,$4,$5)
          ON CONFLICT (key) DO UPDATE SET
-           cidrs=EXCLUDED.cidrs, source=EXCLUDED.source,
+           cidrs=EXCLUDED.cidrs, source=EXCLUDED.source, source_options=EXCLUDED.source_options,
            version=address_sets.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`,
-        [op.key, b['cidrs'], b['source'] ?? null, by, revision],
+        [op.key, b['cidrs'], b['source'] ?? null, by, revision,
+          b['sourceOptions'] === undefined ? null : JSON.stringify(b['sourceOptions'])],
       );
       return;
     }

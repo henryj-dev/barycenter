@@ -24,6 +24,7 @@ import { addressSetRef, cidrVersion } from '../validate/ip.js';
 import type {
   AcmeIntent,
   AddressSet,
+  AddressSourceOptions,
   EngineSettings,
   InboundProxyProtocol,
   InboundRealIpHeader,
@@ -42,6 +43,7 @@ import type {
   PassthroughAction,
   PassthroughRoute,
   Pool,
+  PoolDiscovery,
   HealthCheck,
   HstsPolicy,
   SniCertificateBinding,
@@ -50,6 +52,7 @@ import type {
   TlsVersion,
   UpstreamTls,
 } from './provisional.js';
+import { ADDRESS_SOURCE_KINDS, DISCOVERY_SOURCE_KINDS } from './provisional.js';
 import { validateModel, type ModelIssue, type ValidationCapabilities } from '../validate/model.js';
 
 export type DecodeResult =
@@ -684,7 +687,7 @@ function decodePool(iss: Issues, v: unknown, path: string): Pool | undefined {
   }
   noExtraKeys(iss, v, path,
     ['key', 'protocolClass', 'algorithm', 'hashKey', 'sendProxyProtocol', 'healthCheck',
-      'upstreamTls']);
+      'upstreamTls', 'discovery']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
   const protocolClass = required(iss, v, 'protocolClass', path, () =>
     oneOf(iss, v['protocolClass'], `${path}.protocolClass`, PROTOCOL_CLASSES));
@@ -697,6 +700,8 @@ function decodePool(iss: Issues, v: unknown, path: string): Pool | undefined {
     decodeHealthCheck(iss, v['healthCheck'], `${path}.healthCheck`));
   const upstreamTls = optional(v['upstreamTls'], () =>
     decodeUpstreamTls(iss, v['upstreamTls'], `${path}.upstreamTls`));
+  const discovery = optional(v['discovery'], () =>
+    decodePoolDiscovery(iss, v['discovery'], `${path}.discovery`));
   if (key === undefined || protocolClass === undefined || algorithm === undefined) return undefined;
   return {
     key, protocolClass, algorithm,
@@ -704,6 +709,46 @@ function decodePool(iss: Issues, v: unknown, path: string): Pool | undefined {
     ...(send === undefined ? {} : { sendProxyProtocol: send }),
     ...(healthCheck === undefined ? {} : { healthCheck }),
     ...(upstreamTls === undefined ? {} : { upstreamTls }),
+    ...(discovery === undefined ? {} : { discovery }),
+  };
+}
+
+/**
+ * 출처마다 `query` 의 모양 (2026-11-05). 출처에 묻기 전에 막는다 — 모양이 틀린 이름으로 출처를 두드리지 않고,
+ * `file` 은 **디렉터리를 벗어나지 못하게**(이름만, `/` · `..` 없이) 한다.
+ */
+const DISCOVERY_QUERY: Readonly<Record<PoolDiscovery['source'], { re: RegExp; shape: string }>> = {
+  'dns-srv': { re: /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}$/, shape: 'SRV 이름 (예: _http._tcp.api.internal)' },
+  consul: { re: /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/, shape: '서비스 이름 (예: api)' },
+  kubernetes: {
+    re: /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\/[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/,
+    shape: '네임스페이스/서비스 (예: prod/api)',
+  },
+  file: { re: /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/, shape: '파일 이름 (예: api.json — 경로 없이)' },
+};
+
+function decodePoolDiscovery(iss: Issues, v: unknown, path: string): PoolDiscovery | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['source', 'query', 'port', 'emptyMeans']);
+  const source = required(iss, v, 'source', path, () =>
+    oneOf(iss, v['source'], `${path}.source`, DISCOVERY_SOURCE_KINDS));
+  const query = required(iss, v, 'query', path, () => str(iss, v['query'], `${path}.query`));
+  const port = optional(v['port'], () => int(iss, v['port'], `${path}.port`, PORT_MIN, PORT_MAX));
+  const emptyMeans = optional(v['emptyMeans'], () =>
+    oneOf(iss, v['emptyMeans'], `${path}.emptyMeans`, ['keep', 'empty'] as const));
+  if (source === undefined || query === undefined) return undefined;
+  const rule = DISCOVERY_QUERY[source];
+  if (!rule.re.test(query)) {
+    iss.add('invalid_value', `${path}.query`, `${source} 의 query 는 ${rule.shape} 다 (받은 것: ${JSON.stringify(query)})`);
+    return undefined;
+  }
+  return {
+    source, query,
+    ...(port === undefined ? {} : { port }),
+    ...(emptyMeans === undefined ? {} : { emptyMeans }),
   };
 }
 
@@ -1146,9 +1191,18 @@ function decodeAddressSet(iss: Issues, v: unknown, path: string): AddressSet | u
     iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
     return undefined;
   }
-  noExtraKeys(iss, v, path, ['key', 'cidrs', 'source']);
+  noExtraKeys(iss, v, path, ['key', 'cidrs', 'source', 'sourceOptions']);
   const key = required(iss, v, 'key', path, () => str(iss, v['key'], `${path}.key`));
-  const source = optional(v['source'], () => oneOf(iss, v['source'], `${path}.source`, ['cloudflare'] as const));
+  // 옛 저장값 `cloudflare` 는 이 목록의 첫 이름이다 — 열거가 레지스트리 이름이 되어도 그대로 읽힌다.
+  const source = optional(v['source'], () => oneOf(iss, v['source'], `${path}.source`, ADDRESS_SOURCE_KINDS));
+  const sourceOptions = optional(v['sourceOptions'], () =>
+    decodeAddressSourceOptions(iss, v['sourceOptions'], `${path}.sourceOptions`, source));
+  if (v['sourceOptions'] !== undefined && v['source'] === undefined) {
+    iss.add('invalid_value', `${path}.sourceOptions`, 'source 가 없는데 sourceOptions 가 있다 — 손으로 적은 집합에는 출처 옵션이 없다');
+  }
+  if (source === 'url' && sourceOptions?.url === undefined) {
+    iss.add('invalid_value', `${path}.sourceOptions.url`, 'url 출처는 sourceOptions.url 이 필요하다');
+  }
   const raw = v['cidrs'];
   const cidrs = arrayOf(iss, raw, `${path}.cidrs`, (item, at) => {
     const c = str(iss, item, at);
@@ -1170,7 +1224,84 @@ function decodeAddressSet(iss: Issues, v: unknown, path: string): AddressSet | u
     seen.add(c);
   });
   if (key === undefined) return undefined;
-  return { key, cidrs, ...(source === undefined ? {} : { source }) };
+  return {
+    key, cidrs,
+    ...(source === undefined ? {} : { source }),
+    ...(sourceOptions === undefined || source === undefined ? {} : { sourceOptions }),
+  };
+}
+
+/** 출처마다 받는 옵션. 안 받는 칸은 오류다 — 조용히 버리면 「거른 줄 알았다」가 된다. */
+const ADDRESS_SOURCE_OPTION_KEYS: Readonly<Record<string, readonly (keyof AddressSourceOptions)[]>> = {
+  cloudflare: ['family'],
+  aws: ['family', 'services', 'regions'],
+  gcp: ['family', 'services', 'regions'],
+  fastly: ['family'],
+  url: ['family', 'url', 'jsonPath'],
+};
+
+function decodeAddressSourceOptions(
+  iss: Issues, v: unknown, path: string, source: string | undefined,
+): AddressSourceOptions | undefined {
+  if (!isObject(v)) {
+    iss.add('invalid_type', path, `객체여야 한다 (받은 것: ${typeName(v)})`);
+    return undefined;
+  }
+  noExtraKeys(iss, v, path, ['family', 'services', 'regions', 'url', 'jsonPath']);
+  const allowed = source === undefined ? undefined : ADDRESS_SOURCE_OPTION_KEYS[source];
+  if (allowed !== undefined) {
+    for (const k of Object.keys(v)) {
+      if (!(allowed as readonly string[]).includes(k)) {
+        iss.add('option_not_supported', `${path}.${k}`, `${source} 출처는 '${k}' 를 받지 않는다 (받는 것: ${allowed.join(', ')})`);
+      }
+    }
+  }
+  const names = (k: 'services' | 'regions'): string[] | undefined => optional(v[k], () => {
+    const out = arrayOf(iss, v[k], `${path}.${k}`, (item, at) => {
+      const t = str(iss, item, at);
+      if (t === undefined) return undefined;
+      if (!/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/.test(t)) {
+        iss.add('invalid_value', at, `이름의 모양이 아니다: ${JSON.stringify(t)}`);
+        return undefined;
+      }
+      return t;
+    });
+    if (Array.isArray(v[k]) && (v[k] as unknown[]).length === 0) {
+      iss.add('out_of_range', `${path}.${k}`, '비어 있을 수 없다 — 거르지 않으려면 칸을 지운다');
+    }
+    return out;
+  });
+  const family = optional(v['family'], () => oneOf(iss, v['family'], `${path}.family`, ['ipv4', 'ipv6'] as const));
+  const services = names('services');
+  const regions = names('regions');
+  const url = optional(v['url'], () => {
+    const u = str(iss, v['url'], `${path}.url`);
+    if (u === undefined) return undefined;
+    // **https 만** — 목록이 곧 「누구를 믿는가」라 평문으로 받으면 길 위의 누구나 그것을 바꾼다.
+    let ok = false;
+    try { ok = new URL(u).protocol === 'https:' && u.length <= 2048; } catch { ok = false; }
+    if (!ok) {
+      iss.add('invalid_value', `${path}.url`, `https 주소여야 한다 (받은 것: ${JSON.stringify(u)})`);
+      return undefined;
+    }
+    return u;
+  });
+  const jsonPath = optional(v['jsonPath'], () => {
+    const j = str(iss, v['jsonPath'], `${path}.jsonPath`);
+    if (j === undefined) return undefined;
+    if (!/^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(j)) {
+      iss.add('invalid_value', `${path}.jsonPath`, `점으로 이은 이름이어야 한다 (예: prefixes.ip_prefix — 받은 것: ${JSON.stringify(j)})`);
+      return undefined;
+    }
+    return j;
+  });
+  return {
+    ...(family === undefined ? {} : { family }),
+    ...(services === undefined ? {} : { services }),
+    ...(regions === undefined ? {} : { regions }),
+    ...(url === undefined ? {} : { url }),
+    ...(jsonPath === undefined ? {} : { jsonPath }),
+  };
 }
 
 function decodeEngineSettings(iss: Issues, v: unknown, path: string): EngineSettings | undefined {

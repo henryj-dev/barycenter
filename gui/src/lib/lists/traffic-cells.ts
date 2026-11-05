@@ -12,7 +12,9 @@ import { itemOf, itemsOf, relationsOf } from '@web/resources';
 import { trafficMarkOf } from '@web/pools-view';
 import type { Column } from '#lib/ui';
 import { b, m, x, type Cell } from '#lib/ui/cells.ts';
-import type { createDesk } from '#lib/desk.svelte.ts';
+import type { AddressSetRefreshRow, createDesk } from '#lib/desk.svelte.ts';
+import { addressSourceLabel } from '@web/address-source';
+import { whenText } from '#lib/ops/audit';
 import { isPendingResource } from '#lib/pending';
 import { HEALTH_MARK, ago, backendHealth, poolMark, sourceAllowSummary, hcText, type HealthKind } from '#lib/detail/facts';
 import type { ListenerMark } from '@web/listeners-view';
@@ -144,17 +146,28 @@ export const poolColumns = <T extends PoolRow>(): Column<T>[] => [
 
 // ── 주소 집합 ────────────────────────────────────────────────────────────────
 
-export type AddressSetRow = { key: string; count: number; source: string; cloudflare: boolean; listeners: number };
+export type AddressSetRow = {
+  key: string; count: number; source: string; cloudflare: boolean; listeners: number;
+  /** 다시 받은 기록(2026-11-05) — 없으면 「—」. */
+  refresh?: AddressSetRefreshRow;
+};
 
-/** 출처 — 시안 「Cloudflare 공개 목록」 · 「직접 입력」. */
-export const setSourceText = (s: Obj | undefined): string => (s?.['source'] === 'cloudflare' ? 'Cloudflare 공개 목록' : '직접 입력');
+/** 출처 — 시안 「Cloudflare 공개 목록」 · 「직접 입력」. 다른 출처는 레지스트리의 사람 이름이다(2026-11-05). */
+export const setSourceText = (s: Obj | undefined): string => {
+  const src = s?.['source'];
+  if (src === 'cloudflare') return 'Cloudflare 공개 목록';
+  return typeof src === 'string' ? addressSourceLabel(src) : '직접 입력';
+};
 
-export const addressSetRowsOf = (desk: Desk): AddressSetRow[] => itemsOf(desk.model, 'addressSet').map((s) => {
+export const addressSetRowsOf = (
+  desk: Desk, refresh?: ReadonlyMap<string, AddressSetRefreshRow>,
+): AddressSetRow[] => itemsOf(desk.model, 'addressSet').map((s) => {
   const key = String(s['key']);
   // 시안 「사용하는 리스너」 — 출발지 제한 · 신뢰 대역으로 이 집합을 쓰는 리스너 수. 라우트 출발지 규칙은 연결된 리소스 탭이 보인다.
   const listeners = new Set(relationsOf(desk.model, { kind: 'addressSet', key }).usedBy.filter((e) => e.from.kind === 'listener').map((e) => e.from.key)).size;
   return {
     key, count: Array.isArray(s['cidrs']) ? s['cidrs'].length : 0, source: setSourceText(s), cloudflare: s['source'] === 'cloudflare', listeners,
+    ...(refresh?.get(key) === undefined ? {} : { refresh: refresh.get(key)! }),
   };
 });
 
@@ -162,8 +175,12 @@ export const addressSetColumns = <T extends AddressSetRow>(): Column<T>[] => [
   { key: 'key', label: '이름', mono: true, text: (r) => r.key, sort: (r) => r.key, hideable: false },
   { key: 'count', label: '대역 수', value: (r) => x(`${r.count}개`), sort: (r) => r.count },
   { key: 'source', label: '출처', value: (r) => x(r.source), sort: true },
-  // 마지막 갱신 시각은 모델에 없다 — 「—」(지어내지 않는다).
-  { key: 'updated', label: '마지막 갱신', value: () => x('—') },
+  // 마지막 갱신 — 다시 받은 기록(`/address-sets/refresh-status`)의 마지막 성공. 기록이 없으면 「—」(지어내지 않는다).
+  // 마지막 시도가 실패했으면 그 사실을 배지로 — 목록은 마지막 성공 값 그대로다.
+  { key: 'updated', label: '마지막 갱신', value: (r) => (r.refresh !== undefined && !r.refresh.ok
+    ? b('warn', '▲', `${whenText(r.refresh.refreshedAt)} · 받기 실패`, r.refresh.detail ?? r.refresh.reason)
+    : x(r.refresh?.refreshedAt === undefined ? '—' : whenText(r.refresh.refreshedAt))),
+  sort: (r) => r.refresh?.refreshedAt ?? '' },
   { key: 'listeners', label: '사용하는 리스너', value: (r) => x(`${r.listeners}개`), sort: (r) => r.listeners },
 ];
 

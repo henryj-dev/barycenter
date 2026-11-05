@@ -331,6 +331,50 @@
         }
       }
     },
+    "/api/v1/address-sets/refresh-status": {
+      "get": {
+        "operationId": "GET:/api/v1/address-sets/refresh-status",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/address-sets/{id}/refresh": {
+      "post": {
+        "operationId": "POST:/api/v1/address-sets/:id/refresh",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/discovery": {
+      "get": {
+        "operationId": "GET:/api/v1/discovery",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/pools/{id}/discovery": {
+      "get": {
+        "operationId": "GET:/api/v1/pools/:id/discovery",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/sni-bindings": {
       "get": {
         "operationId": "GET:/api/v1/sni-bindings",

@@ -26,12 +26,15 @@ import { promisify } from 'node:util';
 
 import {
   apiHandler, apiTlsOptions, createApi, parseBuildInfo, reloadApiTls,
-  type ApiOptions, type BuildInfo, type GlobalApiOptions,
+  type ApiOptions, type BuildInfo, type GlobalApiOptions, type OidcRoleChange,
 } from '../api/server.js';
 import { ACCOUNT_MIGRATIONS } from '../accounts/migrations.js';
-import { Sealer } from '../accounts/seal.js';
+import { sealerFromEnv } from '../accounts/sealer/registry.js';
+import { rateLimitStore } from '../api/auth-limit/registry.js';
+import type { RateLimitStore } from '../api/auth-limit/store.js';
 import { AccountService, type AccountServiceOptions } from '../accounts/service.js';
 import { idpMfaKinds, idpMfaProvider } from '../accounts/mfa/registry.js';
+import { DEFAULT_ROLE_MAPPER, roleMapperFactory } from '../accounts/idp-roles/registry.js';
 import type { Mailer } from '../accounts/mail.js';
 import { mailFromEnv } from '../accounts/mail-transport/registry.js';
 import { acmeFailure, notifyFromEnv } from '../notify/registry.js';
@@ -39,6 +42,7 @@ import { NotifyWatch } from '../notify/watch.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
 import { JwksCache } from '../api/jwks.js';
+import { discoverOidc, discoveryUrlFor, withDiscovered, type Discovered } from '../api/oidc-discovery.js';
 import { EventHub } from '../api/events.js';
 import { FsSecretStore, type SecretStore } from '../dp/secrets.js';
 import { resolveKek } from '../dp/kek-source.js';
@@ -73,6 +77,7 @@ import { dataplaneCapabilitiesOf } from '../engine/native-dns.js';
 import { probeEngine } from '../engine/probe.js';
 import { hostAddresses } from '../engine/host-addresses.js';
 import { renderCapsOf } from '../engine/render-caps.js';
+import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '../control/data-sources-boot.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
 import { Db } from '../store/pg.js';
@@ -289,7 +294,8 @@ function tidyAccounts(accounts: AccountService): void {
  * 사람 계정 (공통 회원정책 1차 · 계획 A). `BARY_ACCOUNTS_DSN` 이 있을 때만 켠다.
  *
  * **키 없이 켜지 않는다.** TOTP 비밀을 감쌀 `BARY_ACCOUNTS_KEK` 가 없으면 기동을 거부한다 — 계정은
- * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다.
+ * 켰는데 MFA 를 저장할 수 없는 상태를 만들지 않는다. 키는 값 · 파일(`_FILE`) · 명령(`_CMD`) 중 하나로 받고,
+ * 봉인 방식은 `BARY_ACCOUNTS_SEAL_KIND`(`local` 기본 · `vault-transit`)가 고른다(`accounts/sealer/registry.ts`).
  */
 async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promise<AccountService | undefined> {
   const dsn = env('BARY_ACCOUNTS_DSN', '');
@@ -297,8 +303,8 @@ async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promis
     if (idpMfa !== undefined) throw new Error('BARY_MFA_IDP_* 는 사람 계정(BARY_ACCOUNTS_DSN)이 켜져 있을 때만 쓴다');
     return undefined;
   }
-  const kek = env('BARY_ACCOUNTS_KEK', '');
-  if (kek === '') throw new Error('BARY_ACCOUNTS_DSN 을 켰으면 BARY_ACCOUNTS_KEK(32바이트 base64)도 필요하다');
+  const sealing = await sealerFromEnv(process.env);
+  log.info('accounts.sealer', { kind: sealing.kind, opens: sealing.openers });
   const adb = new Db(dsn);
   const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
   if (applied.length > 0) log.info('accounts.migrate.applied', { migrations: applied });
@@ -318,10 +324,22 @@ async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promis
     log.info('accounts.mail.enabled', { from: transport.from, transport: transport.kind });
   }
   return new AccountService({
-    db: adb, sealer: new Sealer(kek), issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
+    db: adb, sealer: sealing.sealer, issuer: env('BARY_ACCOUNTS_ISSUER', 'barycenter'),
     ...(mail === undefined ? {} : mail),
     ...(idpMfa === undefined ? {} : { idpMfa }),
+    roleMapper: roleMapperFromEnv(),
   });
+}
+
+/**
+ * **IdP 권한 위임의 매핑 구현** — `BARY_IDP_ROLES_KIND`(기본 `claims`). 모르는 이름이면 기동을 거부한다(조용히 다른 해석으로
+ * 떨어지지 않게). 무엇을 어떻게 매핑하는지(역할 클레임 · entitlement · 표)는 공급자마다 계정 DB 에 있다(「사람 → SSO 공급자」).
+ */
+function roleMapperFromEnv(): NonNullable<AccountServiceOptions['roleMapper']> {
+  const kind = env('BARY_IDP_ROLES_KIND', DEFAULT_ROLE_MAPPER);
+  const make = roleMapperFactory(kind);
+  if (kind !== DEFAULT_ROLE_MAPPER) log.info('accounts.idp_roles.kind', { kind });
+  return make;
 }
 
 /**
@@ -407,7 +425,7 @@ async function accountCli(args: string[]): Promise<void> {
  * 토큰·OIDC (지역·전역 공통). 둘이 따로 들고 있으면 한쪽만 고쳐지는 날이 온다 — 그래서 한 자리다.
  */
 async function authFromEnv(oidcJwksMs: number): Promise<{
-  auth: TokenAuth; oidcRp: OidcRpSettings | undefined; stopJwks: () => void;
+  auth: TokenAuth; oidcRp: OidcRpSettings | undefined; stopJwks: () => void; oidcRoleChange: OidcRoleChange | undefined;
 }> {
   const oidcIss = env('BARY_OIDC_ISSUER', '');
   const oidcAud = env('BARY_OIDC_AUD', '');
@@ -435,7 +453,12 @@ async function authFromEnv(oidcJwksMs: number): Promise<{
    * 자리라, 재조회를 넣으면 아무나 임의 `kid` 로 우리 아웃바운드를 흔들 수 있다.
    * 당기는 것은 아래 타이머의 몫이다.
    */
-  const jwksUrl = env('BARY_OIDC_JWKS_URL', '');
+  // discovery 는 손으로 준 주소의 **빈칸만** 채운다(`withDiscovered`) — 손으로 준 값이 이긴다.
+  const ends = withDiscovered({
+    authorizationEndpoint: env('BARY_OIDC_AUTHORIZATION', ''), tokenEndpoint: env('BARY_OIDC_TOKEN', ''),
+    jwksUri: env('BARY_OIDC_JWKS_URL', ''),
+  }, await discoveryFromEnv(oidcIss));
+  const jwksUrl = ends.jwksUri;
   const jwks = jwksUrl === '' ? undefined : new JwksCache(jwksUrl);
   let stopJwks = (): void => {};
   if (jwks !== undefined) {
@@ -495,8 +518,8 @@ async function authFromEnv(oidcJwksMs: number): Promise<{
       });
     }
   });
-  const oidcAuthz = env('BARY_OIDC_AUTHORIZATION', '');
-  const oidcToken = env('BARY_OIDC_TOKEN', '');
+  const oidcAuthz = ends.authorizationEndpoint;
+  const oidcToken = ends.tokenEndpoint;
   const oidcClient = env('BARY_OIDC_CLIENT_ID', '');
   const oidcRedirect = env('BARY_OIDC_REDIRECT_URI', '');
   const oidcSecret = env('BARY_OIDC_CLIENT_SECRET', '');
@@ -512,7 +535,70 @@ async function authFromEnv(oidcJwksMs: number): Promise<{
       }
     : undefined;
 
-  return { auth, oidcRp, stopJwks };
+  return { auth, oidcRp, stopJwks, oidcRoleChange: roleChangeFromEnv(oidcRp, jwks) };
+}
+
+/**
+ * **OIDC discovery** — `BARY_OIDC_DISCOVERY_URL`(문서 주소) 또는 `BARY_OIDC_DISCOVERY=1`(issuer 의 `/.well-known/openid-configuration`).
+ * 둘 다 없으면 읽지 않는다(지금 동작 — 주소를 손으로 준다). authorization · token · jwks 의 **빈칸만** 채운다.
+ *
+ * 기동 때 한 번 읽는다. **닿지 못하면 기동을 거부하지 않고 크게 경고한다** — IdP 가 잠깐 죽었다고 컨트롤 플레인이 안 뜨면 그게
+ * 더 넓은 장애다(JWKS 의 첫 갱신과 같은 태도). 그동안 손으로 주지 않은 주소는 비어, SSO 로그인이 꺼진 채 뜬다 — IdP 가 돌아오면
+ * 다시 시작한다(또는 주소를 손으로 줘 두면 이 경우에도 켜진다). **issuer 불일치 · 문서 모양 틀림 · https 아님은 거부한다**(설정 문제).
+ */
+async function discoveryFromEnv(issuer: string): Promise<Discovered | undefined> {
+  const explicit = env('BARY_OIDC_DISCOVERY_URL', '');
+  const on = env('BARY_OIDC_DISCOVERY', '');
+  if (explicit === '' && on === '') return undefined;
+  if (on !== '' && on !== '1' && on !== '0') throw new Error(`BARY_OIDC_DISCOVERY 는 1 | 0 이다 (${on})`);
+  if (explicit === '' && on === '0') return undefined;
+  if (issuer === '') throw new Error('OIDC discovery 는 BARY_OIDC_ISSUER 가 있어야 한다 — 문서의 issuer 와 맞춰 본다');
+  const url = explicit !== '' ? explicit : discoveryUrlFor(issuer);
+  const r = await discoverOidc(url, issuer);
+  if (r.ok) {
+    log.info('oidc.discovery.loaded', { url, authorization: r.doc.authorizationEndpoint, token: r.doc.tokenEndpoint, jwks: r.doc.jwksUri });
+    return r.doc;
+  }
+  if (r.reason !== 'unavailable') throw new Error(`OIDC discovery 거부 (${url}): ${r.detail}`);
+  log.warn('oidc.discovery.unavailable', {
+    url, detail: r.detail,
+    reason: '손으로 주지 않은 OIDC 주소가 비었다 — SSO 로그인 · JWKS 검증이 꺼진 채 떴다. IdP 가 돌아오면 다시 시작한다',
+  });
+  return undefined;
+}
+
+/**
+ * **Role Change 수신** — `BARY_OIDC_ROLE_CHANGE_EVENT`(SET 의 `events` 키, IdP 가 정한 URI)가 켠다. 안 주면 수신 경로가 404 다
+ * (지금 동작). 기본값은 없다 — 틀린 기본값은 서명은 맞는데 이벤트가 없다며 모든 역할 변경을 조용히 버린다.
+ *
+ * **반만 있으면 기동을 거부한다:** OIDC 로그인(issuer · client_id)이 없거나, 서명 키가 공유 비밀(HS256)뿐이면 IdP 의 서명을
+ * 증명할 수 없다 — JWKS(`BARY_OIDC_JWKS_URL` 또는 discovery) 또는 PEM 공개키가 있어야 한다. 사람 계정은 `main` 이 확인한다.
+ */
+function roleChangeFromEnv(oidcRp: OidcRpSettings | undefined, jwks: JwksCache | undefined): OidcRoleChange | undefined {
+  const eventKey = env('BARY_OIDC_ROLE_CHANGE_EVENT', '');
+  if (eventKey === '') return undefined;
+  if (oidcRp === undefined) {
+    throw new Error('BARY_OIDC_ROLE_CHANGE_EVENT 는 OIDC 로그인(BARY_OIDC_ISSUER · _AUD · 키 · _AUTHORIZATION · _TOKEN · _CLIENT_ID · _REDIRECT_URI)이 켜져 있어야 쓴다');
+  }
+  const fixed = typeof oidcRp.key === 'string' ? undefined : oidcRp.key;
+  if (jwks === undefined && fixed === undefined) {
+    throw new Error('Role Change 는 IdP 의 공개키로만 검증한다 — BARY_OIDC_JWKS_URL(또는 discovery) 또는 PEM 공개키(BARY_OIDC_KEY_FILE)가 필요하다');
+  }
+  log.info('oidc.role_change.enabled', { issuer: oidcRp.issuer, eventKey, keys: jwks === undefined ? 'pem' : 'jwks' });
+  return { eventKey, keyFor: (kid) => (jwks !== undefined ? jwks.keyFor(kid) : fixed) };
+}
+
+/**
+ * **인증 실패 제한 저장소** (`BARY_AUTH_LIMIT_STORE`). 없으면 `undefined` — 서버가 인스턴스 메모리로 센다(지금과 같다).
+ * `pg` 는 사람 계정 PG(`BARY_ACCOUNTS_DSN`)의 `auth_throttle` 에서 노드가 함께 센다. 모르는 이름 · DSN 없음은 기동 거부.
+ */
+function authLimitFromEnv(): RateLimitStore | undefined {
+  const kind = env('BARY_AUTH_LIMIT_STORE', '').trim();
+  if (kind === '' || kind === 'memory') return undefined;
+  const dsn = env('BARY_ACCOUNTS_DSN', '');
+  const store = rateLimitStore(kind, dsn === '' ? {} : { accountsDb: new Db(dsn) });
+  log.info('auth.limit_store', { kind: store.kind });
+  return store;
 }
 
 /** 화면(GUI) 산출물 자리. 명시했는데 없으면 기동 거부, 기본 자리에 없으면 API 만 연다. */
@@ -554,6 +640,8 @@ async function listenApi(
   const trustedRaw = env('BARY_TRUSTED_PROXIES', '');
   const trustedProxies = parseTrustedProxies(trustedRaw);
   if (trustedProxies !== undefined) apiOpts.trustedProxies = trustedProxies;
+  const authLimit = authLimitFromEnv();
+  if (authLimit !== undefined) apiOpts.authLimit = authLimit;
   const server = tlsOn
     ? createHttpsServer(
         apiTlsOptions({
@@ -714,6 +802,8 @@ export async function main(): Promise<void> {
    * 마이그레이션까지 돌리고 나서 죽는 것은 아무에게도 이롭지 않다.
    */
   const t = readTimings();
+  // 데이터 공급 (2026-11-05) — 풀의 백엔드 출처 · 주소 집합 주기 갱신. 반만 설정되면 여기서 기동을 거부한다.
+  const dataSourcesCfg = dataSourcesConfigFromEnv();
 
   const dsn = env('BARY_DSN');
   const db = new Db(dsn);
@@ -889,8 +979,10 @@ export async function main(): Promise<void> {
   }, t.electionMs);
   retry.unref();
 
+  const dataSources = createDataSources(dataSourcesCfg, renderCaps.httpLua === true || renderCaps.streamLua === true);
   const control = new ControlPlane(db, store, driver, election,
-    { prefix, adminSocket, streamAdminSocket, renderCaps, engine: engineInfo, driver: driverBoot, secrets });
+    { prefix, adminSocket, streamAdminSocket, renderCaps, engine: engineInfo, driver: driverBoot, secrets,
+      discovery: dataSources.intake });
 
   // **기동 시 멤버십을 되돌려 놓는다** (§6.4). shared dict 는 프로세스 수명이라 엔진이
   // 재시작하면 슬롯이 통째로 빈다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.
@@ -948,6 +1040,11 @@ export async function main(): Promise<void> {
     clusterNode.start(clusterSyncMs);
     log.info('cluster.started', { node: nodeName, intervalMs: clusterSyncMs });
   }
+
+  // 데이터 공급 (2026-11-05). 러너는 모든 노드, 투영은 리더 · 클러스터 팔로워, 주소 집합 갱신은 리더만.
+  const stopDataSources = startDataSources(dataSourcesCfg, dataSources, {
+    db, store, control, events, isLeader: () => election.state.isLeader, clusterOn,
+  });
 
   /**
    * **DB 보존** (검수 B-08 · 제안#10).
@@ -1188,7 +1285,7 @@ export async function main(): Promise<void> {
     });
   }
 
-  const { auth, oidcRp, stopJwks } = await authFromEnv(t.oidcJwksMs);
+  const { auth, oidcRp, stopJwks, oidcRoleChange } = await authFromEnv(t.oidcJwksMs);
 
   const serveRoot = guiRootFromEnv();
 
@@ -1196,6 +1293,9 @@ export async function main(): Promise<void> {
   if (accounts !== undefined) {
     log.info('accounts.enabled', {});
     tidyAccounts(accounts);
+  }
+  if (oidcRoleChange !== undefined && accounts === undefined) {
+    throw new Error('BARY_OIDC_ROLE_CHANGE_EVENT 는 사람 계정(BARY_ACCOUNTS_DSN)이 켜져 있을 때만 쓴다 — 바꿀 계정이 없다');
   }
   const build = readBuildInfo(prefix);
   const dispatch = hostDispatchFromEnv(process.env, build?.commit);
@@ -1235,6 +1335,7 @@ export async function main(): Promise<void> {
 
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
+    discovery: dataSources.api,
     ...dispatch,
     ...sessionDomainFromEnv(),
     // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.
@@ -1245,6 +1346,7 @@ export async function main(): Promise<void> {
     sessionSecure: false,
     ...(serveRoot === undefined ? {} : { guiRoot: serveRoot }),
     ...(oidcRp === undefined ? {} : { oidcRp }),
+    ...(oidcRoleChange === undefined ? {} : { oidcRoleChange }),
   };
 
   /**
@@ -1306,6 +1408,7 @@ export async function main(): Promise<void> {
       stopJwks();
       stopNotify();
       clusterNode?.stop();
+      stopDataSources();
       // **durable store 의 락도 놓는다** (검수 B-16). 안 놓으면 다음 기동이 죽은
       // 주인을 가려내는 `/proc` 폴백에 기댄다 — 그 파일을 못 읽는 플랫폼에서는
       // `stillHolding` 이 안전한 쪽(살아 있다)으로 틀려 기동이 막힌다.

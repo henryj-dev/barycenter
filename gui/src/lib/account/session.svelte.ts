@@ -5,6 +5,7 @@
  * accounts_disabled), 로그인 전이다(401). 그때 `me` 는 undefined 다.
  */
 import { accountApi, type Me } from './api';
+import { isAdminOf } from './text';
 
 export function createSession() {
   let me = $state<Me | undefined>();
@@ -26,7 +27,7 @@ export function createSession() {
   return {
     get me() { return me; },
     get checked() { return checked; },
-    get isAdmin() { return me?.role === 'admin'; },
+    get isAdmin() { return me !== undefined && isAdminOf(me); },
     refresh,
     logout,
   };

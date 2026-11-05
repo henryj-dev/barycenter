@@ -51,7 +51,7 @@ describe('집합의 모양', () => {
     [{ key: 'x', cidrs: ['cloudflare'] }, 'invalid_value'],
     [{ key: 'x', cidrs: ['@other'] }, 'invalid_value'],
     [{ key: 'x', cidrs: ['10.0.0.0/8', '10.0.0.0/8'] }, 'duplicate'],
-    [{ key: 'x', cidrs: CF, source: 'aws' }, 'invalid_enum'],
+    [{ key: 'x', cidrs: CF, source: 'akamai' }, 'invalid_enum'],
   ])('%j 는 막는다 (%s)', (set, code) => {
     expect(issues(base({}, [set]))).toContain(code);
   });

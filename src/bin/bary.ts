@@ -38,8 +38,12 @@ import { getResource } from '../cli/get.js';
 import { listenerCreate, listenerDelete, listenerUpdate, parseListenerOptions } from '../cli/listener.js';
 import { parseListenerHosts, parseSourceAllow } from '../web/edit.js';
 import { parseListen, proxyCreate } from '../cli/proxy.js';
-import { addressSetCreate, addressSetDelete } from '../cli/address-set.js';
-import { poolCreate, poolDelete } from '../cli/pool.js';
+import { addressSetCreate, addressSetDelete, addressSetRefresh } from '../cli/address-set.js';
+import { poolCreate, poolDelete, poolDiscoverySet } from '../cli/pool.js';
+import {
+  ADDRESS_SOURCE_KINDS, DISCOVERY_SOURCE_KINDS, type AddressSourceKind, type DiscoverySourceKind,
+} from '../model/provisional.js';
+import { DISCOVERY_STATIC } from '../web/discovery.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
 import {
   certificateCreate, certificateDelete, sniBindingCreate, sniBindingDelete,
@@ -139,6 +143,11 @@ const usage = (): never => {
                                    --upstream-ca <인증서> 신뢰 번들로 쓸 인증서 키
                                    --upstream-verify      --upstream-ca 가 있어야 한다
                                  udp 와 패스스루가 가리키는 풀에는 못 켠다
+  bary pool discovery            --name (--source dns-srv|consul|kubernetes|file --query Q [--port N] [--empty keep|empty] | --off)
+                                 백엔드 출처 (2026-11-05). head 의 그 풀에서 출처만 바꾼다. commit 까지. apply 는 아니다
+                                   query: dns-srv 는 SRV 이름 · consul 은 서비스 · kubernetes 는 네임스페이스/서비스 · file 은 파일 이름
+                                   --empty keep(기본): 출처가 빈 목록을 주면 마지막 목록을 지킨다. empty: 백엔드 0
+                                 상태: bary get discovery · bary get pools/<풀>/discovery
   bary pool delete               --name
   bary route create              --name --listener --host|--sni --pool|--to|--reject [--status] [--path-prefix] [--websocket]. apply 는 아니다
                                  proxy 라우트는 둘을 더 받는다 (#109):
@@ -150,6 +159,10 @@ const usage = (): never => {
   bary address-set create        --name (--cidr a,b … | --cidr-file f | --cloudflare). commit 까지. apply 는 아니다 (#114)
                                  리스너는 --allow @이름 · 신뢰 대역 @이름 으로 참조한다
                                  --cloudflare: 공개 목록(ips-v4·ips-v6)을 받아 만들거나 바꾼다. 하나라도 실패하면 안 바꾼다
+                                 --source cloudflare|aws|gcp|fastly|url: 출처에서 받아 만든다. 그 뒤로는 출처가 목록을 정한다 (2026-11-05)
+                                   --family ipv4|ipv6   --service CLOUDFRONT (여러 번, aws·gcp)   --region ap-northeast-2 (여러 번, aws·gcp)
+                                   --url https://…  --json-path prefixes.ip_prefix   (url 출처. json-path 가 없으면 한 줄에 하나)
+  bary address-set refresh       --name. 출처에서 다시 받아 바뀌었으면 commit 까지 한다 (같으면 아무것도 안 쓴다)
   bary address-set delete        --name. 참조하는 리스너가 있으면 plan 이 막는다
   bary proxy create              --name --url https://example.com/v1/ (--listen 127.0.0.1:8080 | --listener <키>) (#112)
                                  URL 하나를 풀·백엔드·리스너(또는 라우트)로 펼쳐 변경 하나로 commit 한다. apply 는 아니다
@@ -305,7 +318,38 @@ async function main(): Promise<void> {
           show(out);
           return;
         }
+        if (sub === 'refresh') {
+          const out = await addressSetRefresh(call, name);
+          console.error(out.outcome === 'committed'
+            ? `address-set ${name} committed r${out.revision} — 대역 ${out.count}개 (적용은 apply)`
+            : `address-set ${name} unchanged — 대역 ${out.count}개`);
+          show(out);
+          return;
+        }
         if (sub !== 'create') usage();
+        const source = flag(argv, '--source');
+        if (source !== undefined) {
+          if (!(ADDRESS_SOURCE_KINDS as readonly string[]).includes(source)) usage();
+          const family = flag(argv, '--family');
+          if (family !== undefined && family !== 'ipv4' && family !== 'ipv6') usage();
+          const services = flagAll(argv, '--service');
+          const regions = flagAll(argv, '--region');
+          const url = flag(argv, '--url');
+          const jsonPath = flag(argv, '--json-path');
+          const out = await addressSetCreate(call, {
+            name, source: source as AddressSourceKind,
+            sourceOptions: {
+              ...(family === undefined ? {} : { family: family as 'ipv4' | 'ipv6' }),
+              ...(services.length === 0 ? {} : { services }),
+              ...(regions.length === 0 ? {} : { regions }),
+              ...(url === undefined ? {} : { url }),
+              ...(jsonPath === undefined ? {} : { jsonPath }),
+            },
+          });
+          console.error(`address-set ${name} committed r${out.revision} — ${source} 에서 대역 ${out.count}개`);
+          show(out);
+          return;
+        }
         const cidrFile = flag(argv, '--cidr-file');
         const cidrs = [
           ...flagAll(argv, '--cidr'),
@@ -448,6 +492,30 @@ async function main(): Promise<void> {
         try {
           const out = await poolDelete(call, name);
           console.error(`pool ${name} deleted r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
+      if (sub === 'discovery') {
+        const name = flag(argv, '--name') ?? usage();
+        const off = has(argv, '--off');
+        const source = flag(argv, '--source');
+        if (off === (source !== undefined)) usage();
+        if (source !== undefined && !(DISCOVERY_SOURCE_KINDS as readonly string[]).includes(source)) usage();
+        const empty = flag(argv, '--empty') ?? 'keep';
+        if (empty !== 'keep' && empty !== 'empty') usage();
+        try {
+          const out = await poolDiscoverySet(call, name, off
+            ? { ...DISCOVERY_STATIC }
+            : {
+              source: source as DiscoverySourceKind,
+              query: flag(argv, '--query') ?? usage(),
+              port: flag(argv, '--port') ?? '',
+              emptyMeans: empty as 'keep' | 'empty',
+            });
+          console.error(`pool ${name} ${off ? '정적으로 돌렸다' : `출처 ${source}`} — committed r${out.revision}`);
           show(out);
         } catch (e) {
           die(e);

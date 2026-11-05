@@ -661,6 +661,39 @@ export type Pool = {
    * 검증기가 둘 다 막는다.
    */
   upstreamTls?: UpstreamTls;
+  /**
+   * **백엔드 출처** (2026-11-05). 없으면 정적 — 이 칸 전과 같다.
+   *
+   * 있으면 데몬이 출처(DNS SRV · Consul · Kubernetes · 파일)에 주기적으로 묻고, 받은 주소가 이 풀의
+   * 정적 백엔드를 **대신한다**(멤버십 평면에서만 — 세대를 안 만든다). 정적 백엔드는 그대로 둔다:
+   * 출처가 아직 한 번도 답하지 않았거나 이 데몬에 그 출처가 설정되지 않았을 때 쓰인다.
+   */
+  discovery?: PoolDiscovery;
+};
+
+/** 풀의 백엔드 출처 이름 — 레지스트리(`src/control/discovery/registry.ts`)의 이름과 같다. */
+export const DISCOVERY_SOURCE_KINDS = ['dns-srv', 'consul', 'kubernetes', 'file'] as const;
+export type DiscoverySourceKind = typeof DISCOVERY_SOURCE_KINDS[number];
+
+/**
+ * 풀의 백엔드 출처 (2026-11-05).
+ *
+ * `query` 의 뜻은 출처가 정한다:
+ *   `dns-srv`     SRV 이름 — `_http._tcp.api.internal`
+ *   `consul`      서비스 이름 — 통과(passing) 인스턴스만 받는다
+ *   `kubernetes`  `네임스페이스/서비스` — 그 서비스의 EndpointSlice 에서 준비된(ready) 주소
+ *   `file`        `BARY_DISCOVERY_FILE_DIR` 안의 파일 이름(JSON) — 시험 · 수동용
+ */
+export type PoolDiscovery = {
+  source: DiscoverySourceKind;
+  query: string;
+  /** 받은 포트 대신 쓸 포트. 없으면 출처가 준 포트다. */
+  port?: number;
+  /**
+   * 출처가 **정상으로** 빈 목록을 줄 때. 기본 `keep` — 마지막으로 받은 목록을 지킨다.
+   * `empty` 면 백엔드 0 이 된다(요청이 실패한다). 오류 · 타임아웃은 이 값과 무관하게 언제나 지킨다.
+   */
+  emptyMeans?: 'keep' | 'empty';
 };
 
 /**
@@ -891,8 +924,34 @@ export type AddressSet = {
   key: string;
   /** CIDR 이나 주소 하나. 비어 있을 수 없다. 다른 집합을 참조하지 않는다(순환을 막는다). */
   cidrs: string[];
-  /** 어디서 받았나. `cloudflare` 면 CLI·GUI 가 공개 목록을 다시 받는 버튼을 준다. */
-  source?: 'cloudflare';
+  /**
+   * 어디서 받았나 — 출처 레지스트리(`src/control/address-sources/registry.ts`)의 이름.
+   * 있으면 손으로 고치지 않고, 데몬 · CLI · GUI 가 목록을 다시 받는다. 옛 저장값 `cloudflare` 도 같은 이름이다.
+   */
+  source?: AddressSourceKind;
+  /** 출처의 옵션(거르기 · 주소). `source` 가 있을 때만. */
+  sourceOptions?: AddressSourceOptions;
+};
+
+/** 주소 집합 출처 이름. 앞의 `cloudflare` 는 이 칸이 열거였던 때부터 있던 값이다. */
+export const ADDRESS_SOURCE_KINDS = ['cloudflare', 'aws', 'gcp', 'fastly', 'url'] as const;
+export type AddressSourceKind = typeof ADDRESS_SOURCE_KINDS[number];
+
+/**
+ * 주소 집합 출처의 옵션 (2026-11-05). 어느 칸을 어느 출처가 받는지는 해독기가 막는다.
+ *
+ *   `family`    `ipv4` | `ipv6` — 한쪽만. 없으면 둘 다 (모든 출처)
+ *   `services`  AWS `service`(예: `CLOUDFRONT`) · GCP `service`(예: `Google Cloud`)
+ *   `regions`   AWS `region`(예: `ap-northeast-2`) · GCP `scope`(예: `asia-northeast3`)
+ *   `url`       `url` 출처의 주소 — https 만
+ *   `jsonPath`  `url` 출처가 JSON 일 때 대역이 있는 자리 — `prefixes.ip_prefix` (배열은 펼친다). 없으면 한 줄에 하나
+ */
+export type AddressSourceOptions = {
+  family?: 'ipv4' | 'ipv6';
+  services?: string[];
+  regions?: string[];
+  url?: string;
+  jsonPath?: string;
 };
 
 /** 검증 전 모델. `validateModel` 의 입력이다. */

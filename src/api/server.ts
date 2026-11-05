@@ -27,7 +27,7 @@ import {
 } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { createSecureContext, type SecureContextOptions } from 'node:tls';
-import { createHash, randomBytes, randomUUID, X509Certificate } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, X509Certificate, type KeyObject } from 'node:crypto';
 
 import { currentLeader, listClusterNodes, nodeHistory } from '../control/cluster.js';
 import type { ControlPlane } from '../control/plane.js';
@@ -37,6 +37,9 @@ import {
   deadlineExceededKeys, drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
 } from '../control/drain.js';
 import { healthRows } from '../control/health.js';
+import type { DiscoveryPoolView } from '../control/discovery/runner.js';
+import { addressSources, type AddressSources } from '../control/address-sources/registry.js';
+import { refreshAddressSet, refreshRows } from '../control/address-sources/refresh.js';
 import { count, render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
@@ -57,7 +60,8 @@ import { newEcKey } from '../acme/der.js';
 import { PATH_SEGMENT_RULE, PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
-import { AuthFailureLimiter } from './auth-rate-limit.js';
+import { memoryRateLimit } from './auth-limit/memory.js';
+import type { RateLimitStore } from './auth-limit/store.js';
 import { clientAddress, type TrustedProxies } from './client-address.js';
 import { RELAY_PATHS, RELAY_WRITES, type Credential, type RegionRelay } from '../global/relay.js';
 import type { HostAddressFacts } from '../engine/host-addresses.js';
@@ -68,10 +72,17 @@ import {
   authorizationRequest, exchangeAuthorizationCode, exchangeForClaims, pkceChallenge, pkceVerifier,
   type OidcRpSettings,
 } from './oidc-code.js';
+import { roleProfilesView } from '../accounts/idp-roles/registry.js';
+import { MAX_SET_BYTES, verifyRoleChange } from '../accounts/idp-roles/role-change.js';
+
+/** Role Change 를 받는 설정 — `events` 키와 SET 서명 검증 키(JWKS). */
+export type OidcRoleChange = { eventKey: string; keyFor: (kid: string | undefined) => KeyObject | undefined };
 
 export type ApiOptions = {
   /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
   trustedProxies?: TrustedProxies;
+  /** 인증 실패 제한 저장소 (`BARY_AUTH_LIMIT_STORE`). 없으면 인스턴스 메모리 — 지금과 같다. */
+  authLimit?: RateLimitStore;
   /**
    * 클러스터 모드 (ADR-CLUSTER, #118). 없으면 이 인스턴스는 클러스터가 아니다.
    * `node` 는 이 노드의 이름, `staleAfterMs` 를 넘긴 신호는 「연락 없음」이다.
@@ -103,6 +114,11 @@ export type ApiOptions = {
   oidcRp?: OidcRpSettings;
   /** 테스트가 Token Endpoint 응답을 주입할 때. 없으면 전역 fetch. */
   oidcFetch?: typeof fetch;
+  /**
+   * **Role Change 수신** (`POST /api/v1/oidc/role-change`). 없으면 404. 사람 계정과 `oidcRp`(issuer · client_id)가 함께 있어야
+   * 뜻이 있다. 인증은 SET 서명(공급자 JWKS)으로만 한다 — Bearer · 쿠키를 보지 않는다.
+   */
+  oidcRoleChange?: OidcRoleChange;
   /** 외부 주소에 TLS 없이 바인딩된 상태. 인증된 metrics 에만 노출한다. */
   plaintextExposed?: boolean;
   /** GUI 로그인 세션. 없으면 API 인스턴스마다 하나를 만든다. */
@@ -139,6 +155,19 @@ export type ApiOptions = {
    * 그러면 GUI 는 바인드를 손으로 받는다.
    */
   hostAddresses?: () => HostAddressFacts;
+  /**
+   * 풀의 백엔드 출처 (2026-11-05). 데몬의 러너가 든 것을 보인다. 없으면 `/discovery` 가 「꺼짐」 을 말한다 —
+   * 출처 상태는 운영 상태라 이 노드의 러너가 본 것이다(노드마다 따로 묻는다).
+   */
+  discovery?: {
+    enabled: boolean;
+    reason?: string;
+    intervalMs?: number;
+    views(): DiscoveryPoolView[];
+    view(pool: string): DiscoveryPoolView | undefined;
+  };
+  /** 주소 집합 출처 (2026-11-05). 없으면 전역 fetch 로 받는다 — 시험이 주입한다. */
+  addressSources?: AddressSources;
 };
 
 export type BuildInfo = { commit?: string; describe?: string; installedAt?: string };
@@ -169,12 +198,15 @@ export function parseBuildInfo(text: string): BuildInfo | null {
 export type GlobalApiOptions = {
   /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
   trustedProxies?: TrustedProxies;
+  /** 인증 실패 제한 저장소 (`BARY_AUTH_LIMIT_STORE`). 없으면 인스턴스 메모리 — 지금과 같다. */
+  authLimit?: RateLimitStore;
   global: RegionRelay;
   auth: TokenAuth;
   maxBodyBytes?: number;
   guiRoot?: string;
   oidcRp?: OidcRpSettings;
   oidcFetch?: typeof fetch;
+  oidcRoleChange?: OidcRoleChange;
   plaintextExposed?: boolean;
   sessions?: BrowserSessions;
   sessionSecure?: boolean;
@@ -718,6 +750,85 @@ const ROUTES: Route[] = [
   route('GET', '/api/v1/address-sets', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).addressSets ?? []);
   }),
+  /**
+   * 주소 집합 「마지막 갱신」 (2026-11-05). 출처에서 다시 받은 기록 — 마지막으로 물은 때 · 성공했나 · 실패의 뜻 ·
+   * 마지막 성공(`refreshedAt`). 지금 head 에 있는 집합만이다.
+   */
+  route('GET', '/api/v1/address-sets/refresh-status', 'read', async (c, api) => {
+    const sets = (await api.store.modelAt((await api.store.head()).revision)).addressSets ?? [];
+    json(c.res, 200, await refreshRows(api.db, sets.map((s) => s.key)));
+  }),
+  /**
+   * 「목록 다시 받기」 (2026-11-05). 출처에서 받아 바뀌었으면 **커밋까지** 한다 — CLI `--cloudflare` 와 같이 적용은
+   * 사람이 영향을 보고 한다. 같으면 아무것도 안 쓴다(`unchanged`). 받기가 실패하면 집합은 그대로이고 502 다.
+   */
+  route('POST', '/api/v1/address-sets/:id/refresh', 'write', async (c, api) => {
+    const key = c.params['id'] ?? '';
+    const set = ((await api.store.modelAt((await api.store.head()).revision)).addressSets ?? []).find((s) => s.key === key);
+    if (set === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `주소 집합 '${key}' 가 없다` });
+      return;
+    }
+    if (set.source === undefined) {
+      json(c.res, 409, { error: 'no_source', message: `주소 집합 '${key}' 는 손으로 적은 집합이다 — 다시 받을 출처가 없다` });
+      return;
+    }
+    const out = await refreshAddressSet({
+      db: api.db, store: api.store, sources: api.addressSources ?? addressSources(), by: c.who.name,
+    }, key);
+    eventsOf(api).publish('address_set', { key, outcome: out.outcome });
+    if (out.outcome === 'failed') {
+      log.warn('address_set.refresh_failed', { key, reason: out.reason, detail: out.detail, by: c.who.name });
+      // 응답에는 사유의 정해진 말만 — 출처가 준 오류 문장(예외 메시지가 섞일 수 있다)은 로그에만 둔다.
+      json(c.res, 502, { error: 'address_source_failed', reason: out.reason, message: `출처에서 목록을 받지 못했다 (${out.reason}) — 자세한 내용은 데몬 로그 address_set.refresh_failed` });
+      return;
+    }
+    if (out.outcome === 'committed') eventsOf(api).publish('revision', { revision: out.revision, addressSet: key });
+    // 응답은 칸을 골라 만든다 — 결과 객체를 통째로 내보내면 실패 갈래의 `detail`(예외 문장)이 흐를 길이 남는다.
+    json(c.res, 200, out.outcome === 'unchanged'
+      ? { key: out.key, outcome: out.outcome, count: out.count }
+      : {
+          key: out.key, outcome: out.outcome, count: out.count, revision: out.revision, planId: out.planId,
+          ...(out.operation === undefined ? {} : { operation: out.operation }),
+          ...(out.held === undefined ? {} : { held: [...out.held] }),
+        });
+  }),
+  /**
+   * 풀의 백엔드 출처 (2026-11-05) — 이 노드의 러너가 든 것. 출처의 목록을 쓰는지(`advertised`) · 그 목록 ·
+   * 마지막 갱신 · 오류.
+   */
+  route('GET', '/api/v1/discovery', 'read', async (c, api) => {
+    const d = api.discovery;
+    json(c.res, 200, d === undefined
+      ? { enabled: false, reason: '이 데몬에 디스커버리 러너가 없다', pools: [] }
+      : {
+        enabled: d.enabled,
+        ...(d.reason === undefined ? {} : { reason: d.reason }),
+        ...(d.intervalMs === undefined ? {} : { intervalMs: d.intervalMs }),
+        pools: d.views(),
+      });
+  }),
+  route('GET', '/api/v1/pools/:id/discovery', 'read', async (c, api) => {
+    const key = c.params['id'] ?? '';
+    const pool = (await api.store.modelAt((await api.store.head()).revision)).pools.find((p) => p.key === key);
+    if (pool === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `풀 '${key}' 가 없다` });
+      return;
+    }
+    if (pool.discovery === undefined) {
+      json(c.res, 200, { pool: key, source: null });
+      return;
+    }
+    // 러너가 아직 그 풀을 안 돌았으면(방금 커밋했다 · 러너가 없다) 「기다림」 이다 — 정적 백엔드를 쓴다.
+    json(c.res, 200, api.discovery?.view(key) ?? {
+      pool: key, source: pool.discovery.source, query: pool.discovery.query,
+      state: api.discovery?.enabled === false || api.discovery === undefined ? 'unconfigured' : 'pending',
+      advertised: false, endpoints: [],
+      ...(api.discovery?.enabled === false || api.discovery === undefined
+        ? { error: { reason: 'unconfigured', detail: api.discovery?.reason ?? '이 데몬에 디스커버리 러너가 없다' } }
+        : {}),
+    });
+  }),
   route('GET', '/api/v1/sni-bindings', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).sniBindings);
   }),
@@ -1167,27 +1278,35 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
     json(c.res, 200, {
       configured: api.oidcRp?.issuer ?? null,
       providers: await accountsOf(api).providers(),
+      // 클레임 자리 프로필(lodestar · keycloak · entra · okta)과 권하는 매핑 — 화면이 「프로필로 채우기」 에 쓴다. 비밀이 아니다.
+      profiles: roleProfilesView(),
     });
   }, { leaderFree: true }),
 
   /**
-   * 공급자 설정 — JIT(관리자가 명시해서 켠다, 켜도 auditor 만)와 역할 클레임·매핑(IdP 권한 정본 계정용, B3).
-   * 둘 중 준 것만 바꾼다.
+   * 공급자 설정 — JIT(관리자가 명시해서 켠다), 권한 매핑(역할 클레임 · 매핑 · entitlement 클레임 · 접두 · 표 · 프로필),
+   * 공급자 기본 IdP 정본(`idpAuthority`). 준 것만 바꾼다. 셋은 따로 저장된다 — 매핑을 먼저 저장해야 기본 정본을 켤 수 있다.
    */
   route<AccountApi>('POST', '/api/v1/sso-providers', 'admin', async (c, api) => {
     const b = (c.body ?? {}) as Record<string, unknown>;
     const issuer = bodyStr(c.body, 'issuer');
     const hasJit = typeof b['jitEnabled'] === 'boolean';
-    const hasRoles = 'roleClaim' in b || 'roleMap' in b;
-    if (!hasJit && !hasRoles) throw new StoreError(400, 'malformed', "본문에 'jitEnabled' 또는 'roleClaim'·'roleMap' 이 필요하다");
-    if (hasJit) await accountsOf(api).setProviderJit(issuer, b['jitEnabled'] as boolean, c.who.name, metaOf(c.req));
-    if (hasRoles) {
-      const claim = b['roleClaim'];
-      const map = b['roleMap'];
-      if (claim !== null && typeof claim !== 'string') throw new StoreError(400, 'malformed', "'roleClaim' 은 문자열 또는 null 이다");
-      if (map === null || typeof map !== 'object' || Array.isArray(map)) throw new StoreError(400, 'malformed', "'roleMap' 은 객체다");
-      await accountsOf(api).setProviderRoles(issuer, claim as string | null, map as Record<string, unknown>, c.who.name, metaOf(c.req));
+    const mappingKeys = ['profile', 'roleClaim', 'roleMap', 'entitlementClaim', 'entitlementPrefix', 'entitlementMap'] as const;
+    const hasMapping = mappingKeys.some((k) => k in b);
+    const hasAuthority = 'idpAuthority' in b;
+    if (!hasJit && !hasMapping && !hasAuthority) {
+      throw new StoreError(400, 'malformed', "본문에 'jitEnabled' · 'idpAuthority' · 매핑('roleClaim' · 'roleMap' · 'entitlement…' · 'profile') 중 하나가 필요하다");
     }
+    if (hasAuthority && typeof b['idpAuthority'] !== 'boolean') throw new StoreError(400, 'malformed', "'idpAuthority' 는 true | false 다");
+    const a = accountsOf(api);
+    if (hasJit) await a.setProviderJit(issuer, b['jitEnabled'] as boolean, c.who.name, metaOf(c.req));
+    if (hasMapping) {
+      const input: Record<string, unknown> = {};
+      for (const k of mappingKeys) if (k in b) input[k] = b[k];
+      await a.setProviderMapping(issuer, input, c.who.name, metaOf(c.req));
+    }
+    // 매핑 다음에 — 같은 요청으로 매핑과 기본 정본을 함께 켤 수 있게.
+    if (hasAuthority) await a.setProviderAuthority(issuer, b['idpAuthority'] as boolean, c.who.name, metaOf(c.req));
     json(c.res, 200, { updated: true });
   }, { leaderFree: true, sensitive: true }),
 
@@ -1403,6 +1522,19 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
 ];
 
 
+/** 본문을 그대로(문자열) — 상한을 넘으면 즉시 끊는다(413). */
+async function readRaw(req: IncomingMessage, max: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const b = chunk as Buffer;
+    size += b.length;
+    if (size > max) throw new StoreError(413, 'body_too_large', `본문이 ${max} 바이트를 넘는다`);
+    chunks.push(b);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -1460,6 +1592,7 @@ function globalViewOf(api: ApiOptions): GlobalApiOptions | undefined {
     ...(api.guiRoot === undefined ? {} : { guiRoot: api.guiRoot }),
     ...(api.oidcRp === undefined ? {} : { oidcRp: { ...api.oidcRp, redirectUri: onHost(api.oidcRp.redirectUri, g.host) } }),
     ...(api.oidcFetch === undefined ? {} : { oidcFetch: api.oidcFetch }),
+    ...(api.oidcRoleChange === undefined ? {} : { oidcRoleChange: api.oidcRoleChange }),
     ...(api.plaintextExposed === undefined ? {} : { plaintextExposed: api.plaintextExposed }),
     ...(api.sessions === undefined ? {} : { sessions: api.sessions }),
     ...(api.sessionSecure === undefined ? {} : { sessionSecure: api.sessionSecure }),
@@ -1476,7 +1609,8 @@ const ipOf = (req: IncomingMessage): string | undefined => CLIENT_IP.get(req) ??
 
 export function apiHandler(api: AnyApi): RequestListener {
   const max = api.maxBodyBytes ?? DEFAULT_MAX_BODY;
-  const authFailures = new AuthFailureLimiter();
+  // 전역 화면도 **같은 저장소**로 센다(아래 `handle` 에 같은 것을 넘긴다).
+  const authFailures = api.authLimit ?? memoryRateLimit();
   api.sessions ??= new BrowserSessions();
   const globalApi = isGlobal(api) ? undefined : globalViewOf(api);
   const globalHost = isGlobal(api) ? undefined : api.globalSurface?.host;
@@ -1934,7 +2068,7 @@ async function dispatch<A>(
 
 async function handle(
   req: IncomingMessage, res: ServerResponse, api: AnyApi, max: number,
-  authFailures: AuthFailureLimiter,
+  authFailures: RateLimitStore,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -2126,6 +2260,81 @@ async function handle(
       throw e;
     }
     return;
+  }
+
+  /**
+   * **Role Change** — IdP 가 사람의 역할 · entitlement 가 바뀌면 서명된 SET 을 push 한다(lodestar 「Role Change URI」).
+   * 다음 SSO 로그인을 기다리지 않고 그 사람의 권한을 바로 맞춘다 — 열린 세션은 다음 요청부터 새 범위다.
+   *
+   * **인증은 SET 서명으로만** — IdP 는 세션도 Bearer 도 없다. 그래서 같은 출처 검사도 하지 않는다(쿠키를 보지 않는다).
+   * 본문은 `application/x-www-form-urlencoded` 의 `role_change_token`(heliopause `/auth/role-change` 와 같다).
+   * IdP 는 다시 보내지 않는다 — 거절 사유는 IdP 의 전달 기록을 읽는 사람을 위한 것이고, 여기 로그에도 크게 남긴다.
+   *   204 반영했다 · 이 사람에게는 반영하지 않는다(IdP 정본 아님 등 — 감사에만)
+   *   400 모양 · 401 서명 · iss · aud · 시각 · 409 이미 받았다(jti) · 더 새로운 것을 이미 적용했다(txn) · 안전장치가 막았다
+   */
+  if (req.method === 'POST' && url.pathname === '/api/v1/oidc/role-change') {
+    const rc = api.oidcRoleChange;
+    const rp = api.oidcRp;
+    const accounts = api.accounts;
+    if (rc === undefined || rp === undefined || accounts === undefined) {
+      json(res, 404, { code: 'role_change_not_configured', message: 'Role Change 수신이 설정되지 않았다' });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readRaw(req, MAX_SET_BYTES + 1024);
+    } catch (e) {
+      if (e instanceof StoreError) { json(res, e.status, { code: e.code, message: e.message }); return; }
+      throw e;
+    }
+    const verdict = verifyRoleChange(new URLSearchParams(raw).get('role_change_token') ?? '', {
+      issuer: rp.issuer, clientId: rp.clientId, eventKey: rc.eventKey, keyFor: rc.keyFor,
+    });
+    if (!verdict.ok) {
+      // 크게 남긴다 — 거절된 역할 변경은 「권한 축소가 반영되지 않았다」 는 뜻일 수 있고, 그 사실은 이 줄에만 있다. 토큰은 남기지 않는다.
+      log.warn('oidc.role_change.refused', { reason: verdict.reason, ip: ipOf(req) });
+      // 서명을 못 지난 것은 인증 실패로 센다(같은 IP 제한) — 아무나 이 문으로 서명 검증을 무한히 돌리지 못하게.
+      // `record` 는 비동기 결과다(실패 제한 저장소, #206) — 기다리지 않으면 Promise 가 늘 「막힘」 으로 읽혀 모든 거절이 429 가 된다.
+      // 저장소에 닿지 못하면(pg 장애) 막지 않고 거절 이유 그대로 답한다 — 이 문은 어차피 거절이다.
+      const limit = verdict.status === 401 ? await authFailures.record(`role-change:${ipOf(req) ?? 'unknown'}`) : undefined;
+      const retryAfter = limit?.ok === true ? limit.retryAfterS : undefined;
+      if (retryAfter !== undefined) {
+        json(res, 429, { code: 'rate_limited', message: '거절이 너무 많다 — 잠시 뒤 다시 보낸다' }, { 'retry-after': String(retryAfter) });
+        return;
+      }
+      json(res, verdict.status, { code: 'role_change_refused', message: verdict.reason });
+      return;
+    }
+    let out;
+    try {
+      out = await accounts.applyRoleChange(rp.issuer, verdict.change, metaOf(req));
+    } catch (e) {
+      if (e instanceof AccountStoreUnavailable) {
+        log.error('oidc.role_change.store_unavailable', { sub: verdict.change.sub });
+        accountStoreDown(res);
+        return;
+      }
+      throw e;
+    }
+    log.info('oidc.role_change', { sub: verdict.change.sub, outcome: out.kind, ...('why' in out ? { why: out.why } : {}),
+      ...(out.kind === 'applied' ? { from: out.from, to: out.to, sessions: out.sessions } : {}) });
+    switch (out.kind) {
+      case 'applied':
+      case 'ignored':
+        res.writeHead(204, { 'cache-control': 'no-store' });
+        res.end();
+        return;
+      case 'replay':
+        json(res, 409, { code: 'role_change_replayed', message: '이미 받은 SET 이다(jti)' });
+        return;
+      case 'stale':
+        json(res, 409, { code: 'role_change_stale', message: '이 사람에게 더 새로운 역할 변경을 이미 적용했다(txn)' });
+        return;
+      case 'refused':
+        log.warn('oidc.role_change.guarded', { sub: verdict.change.sub, why: out.why });
+        json(res, 409, { code: 'role_change_guarded', message: out.why });
+        return;
+    }
   }
 
   // Authorization Code 시작·교환. 아직 Bearer 가 없다. 스코프 표에 안 올린다.
@@ -2321,7 +2530,21 @@ async function handle(
     if (stale.length > 0) res.setHeader('set-cookie', stale);
     const key = ipOf(req) ?? 'unknown';
     count('bary_auth_failures_total');
-    const retryAfter = authFailures.record(key);
+    const limit = await authFailures.record(key);
+    /**
+     * **저장소에 닿지 못하면 메모리로 떨어지지 않는다**(`BARY_AUTH_LIMIT_STORE=pg`). 이 요청은 이미 실패한 인증이다 —
+     * 503 으로 답해 「세지 못했다」를 드러낸다. 맞는 자격(파일 토큰 · 인증서)은 이 자리에 오지 않으므로 그대로 들어간다:
+     * 계정 PG 장애가 API 토큰까지 막는 전체 장애가 되지 않는다(`accountStoreDown` 과 같은 정책).
+     */
+    if (!limit.ok) {
+      count('bary_auth_limit_store_errors_total');
+      json(res, 503, {
+        code: 'auth_limit_unavailable',
+        message: '인증 실패를 셀 저장소에 닿지 못했다 — 잠시 뒤 다시 시도하라',
+      }, { 'retry-after': '5' });
+      return;
+    }
+    const retryAfter = limit.retryAfterS;
     if (retryAfter !== undefined) {
       json(res, 429, {
         code: 'rate_limited', message: '인증 실패가 너무 많다 — 잠시 뒤 다시 시도하라',
@@ -2332,7 +2555,13 @@ async function handle(
     }
     return;
   }
-  authFailures.clear(ipOf(req) ?? 'unknown');
+  /**
+   * 성공은 계수를 지운다. **기다리지 않는다** — 공유 저장소가 느리거나 죽어도 맞는 자격의 요청이 그 때문에 늦거나
+   * 막히지 않는다. 메모리 구현은 부르는 순간 지운다(지금과 같은 순서).
+   */
+  void authFailures.clear(ipOf(req) ?? 'unknown').then((r) => {
+    if (!r.ok) count('bary_auth_limit_store_errors_total');
+  });
 
   if (isGlobal(api)) {
     await dispatch(req, res, url, who, api, [...GLOBAL_ROUTES, ...ACCOUNT_ROUTES as Route<GlobalApiOptions>[]], max, {

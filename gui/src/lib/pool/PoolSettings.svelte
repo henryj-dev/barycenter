@@ -16,6 +16,7 @@
   import { itemOf, resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import { HEALTH_DEFAULT, healthFormOf, healthIssue, poolBodyWithHealth, type HealthMode } from '@web/health-check';
+  import { DISCOVERY_SOURCES, DISCOVERY_STATIC, discoveryFormOf, discoveryIssue, poolBodyWithDiscovery } from '@web/discovery';
   import { UPSTREAM_TLS_OFF, caBundleChoices, poolBodyWithUpstreamTls, upstreamTlsFormOf, upstreamTlsIssue } from '@web/upstream-tls';
   import SettingsFrame, { sameBody } from '#lib/detail/SettingsFrame.svelte';
   import { ALGOS, hashKeyError, type Algo } from './pool-fields';
@@ -31,6 +32,7 @@
   let sendProxy = $state(false);
   let f = $state({ ...HEALTH_DEFAULT });
   let tls = $state({ ...UPSTREAM_TLS_OFF });
+  let disc = $state({ ...DISCOVERY_STATIC });
   let more = $state(false);
   let loaded = $state<string | undefined>();
   let problem = $state<string | undefined>();
@@ -42,6 +44,7 @@
     sendProxy = p['sendProxyProtocol'] === 'v1';
     f = healthFormOf(p);
     tls = upstreamTlsFormOf(p);
+    disc = discoveryFormOf(p);
   };
   // head 값으로 한 번 채운다. 그 뒤 모델이 바뀌어도 입력 중인 값을 덮지 않는다.
   $effect(() => {
@@ -67,13 +70,18 @@
   const tlsIssue = $derived(upstreamTlsIssue(cls, tls));
   const proxyErr = $derived(sendProxy && cls !== 'tcp' ? 'PROXY 송신은 TCP 풀에만 있어요.' : undefined);
   const probes = $derived(f.mode !== 'none');
+  const discIssue = $derived(discoveryIssue(disc));
+  const discMeta = $derived(DISCOVERY_SOURCES.find((s) => s.value === disc.source));
+  /** 「백엔드 출처」 선택지 — 정적 + 레지스트리 이름. */
+  const DISC_OPTIONS = [{ value: 'static', label: '정적 (직접 넣은 백엔드)' }, ...DISCOVERY_SOURCES.map((s) => ({ value: s.value, label: s.label }))];
+  const EMPTY_OPTIONS = [{ value: 'keep', label: '마지막 목록 유지' }, { value: 'empty', label: '백엔드 0' }];
 
   /** 폼 → 올릴 body. 틀리면 그 까닭(글). */
   const build = (): Record<string, unknown> | string => {
     if (pool === undefined) return '풀이 head 에 없어요.';
     try {
       const withHc = cls === 'udp' ? (({ key: _k, ...rest }) => rest)(pool as Record<string, unknown>) : poolBodyWithHealth(pool, f);
-      const body = poolBodyWithUpstreamTls({ ...withHc, protocolClass: cls }, tls);
+      const body = poolBodyWithDiscovery(poolBodyWithUpstreamTls({ ...withHc, protocolClass: cls }, tls), disc);
       body['algorithm'] = algo;
       if (algo === 'hash') body['hashKey'] = hash.trim();
       else delete body['hashKey'];
@@ -87,7 +95,7 @@
   const base = $derived(pool === undefined ? undefined : (({ key: _k, ...rest }) => rest)(pool as Record<string, unknown>));
   const draft = $derived(loaded === key ? build() : undefined);
   const dirty = $derived(draft !== undefined && (typeof draft === 'string' || !sameBody(draft, base)));
-  const invalid = $derived(hashErr !== undefined || hcIssue !== undefined || tlsIssue !== undefined || proxyErr !== undefined || typeof draft === 'string');
+  const invalid = $derived(hashErr !== undefined || hcIssue !== undefined || tlsIssue !== undefined || proxyErr !== undefined || discIssue !== undefined || typeof draft === 'string');
   const save = (): void => {
     problem = undefined;
     const body = build();
@@ -151,6 +159,17 @@
         <FormRow label="SNI" for="ps-sni"><TextInput id="ps-sni" bind:value={tls.sni} autocomplete="off" /></FormRow>
         <FormRow label="인증서 검증" error={tlsIssue} help={tls.caBundle === '' ? 'CA 번들을 고르면 켤 수 있어요.' : undefined}><Switch bind:checked={tls.verify} disabled={tls.caBundle === ''}>{tls.verify ? '켜짐' : '꺼짐'}</Switch></FormRow>
         <FormRow label="CA 번들"><Select label="CA 번들" bind:value={tls.caBundle} options={caOptions} width="100%" /></FormRow>
+      {/if}
+    </FormSection>
+
+    <FormSection title="백엔드 출처">
+      <FormRow label="출처" help="출처가 답하기 전이나 이 데몬에 출처가 설정되지 않았을 때는 정적 백엔드를 써요. 오류 · 타임아웃이면 마지막 목록을 지켜요.">
+        <Select label="출처" bind:value={disc.source} options={DISC_OPTIONS} mono={false} width="100%" />
+      </FormRow>
+      {#if disc.source !== 'static'}
+        <FormRow label={discMeta?.query ?? 'query'} for="ps-dq" error={discIssue} help={discMeta === undefined ? undefined : `예: ${discMeta.example}`}><TextInput id="ps-dq" bind:value={disc.query} invalid={discIssue !== undefined} autocomplete="off" /></FormRow>
+        <FormRow label="포트" for="ps-dport" help="비우면 출처가 준 포트예요."><TextInput id="ps-dport" bind:value={disc.port} autocomplete="off" inputmode="numeric" /></FormRow>
+        <FormRow label="빈 목록일 때" help="출처가 정상으로 빈 목록을 줄 때예요. 「백엔드 0」 이면 요청이 실패해요."><Select label="빈 목록일 때" bind:value={disc.emptyMeans} options={EMPTY_OPTIONS} mono={false} width="100%" /></FormRow>
       {/if}
     </FormSection>
 

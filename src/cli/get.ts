@@ -14,6 +14,9 @@ const LISTS = new Set([
   'tls-policies',
   'sni-bindings',
   'address-sets',
+  // 주소 집합 「마지막 갱신」 · 풀의 백엔드 출처 (2026-11-05).
+  'address-sets/refresh-status',
+  'discovery',
   // 클러스터 노드 (ADR-CLUSTER, #118).
   'cluster/nodes',
   // 이 설정이 점유하는 (전송, 주소, 포트) 전부 — 배포가 열어야 할 것 (§11.3).
@@ -31,6 +34,8 @@ export function getPath(what: string): string | undefined {
   // 클러스터 노드 하나의 최근 적용 기록 (#120).
   const nodeHist = /^cluster\/nodes\/([^/]+)\/history$/.exec(what);
   if (nodeHist?.[1] !== undefined) return `/api/v1/cluster/nodes/${encodeURIComponent(nodeHist[1])}/history`;
+  const disc = /^pools\/([^/]+)\/discovery$/.exec(what);
+  if (disc?.[1] !== undefined) return `/api/v1/pools/${encodeURIComponent(disc[1])}/discovery`;
   const pool = /^pools\/([^/]+)\/backends$/.exec(what);
   if (pool?.[1] !== undefined) return `/api/v1/pools/${encodeURIComponent(pool[1])}/backends`;
   const backend = /^backends\/([^/]+)\/status$/.exec(what);
