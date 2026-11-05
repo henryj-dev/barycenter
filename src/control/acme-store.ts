@@ -19,7 +19,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { Db, Queryable, Row } from '../store/pg.js';
+import type { Database, Queryable, Row } from '../store/db.js';
 
 export type OrderState = 'pending' | 'validating' | 'ready' | 'issued' | 'failed' | 'abandoned';
 
@@ -75,7 +75,7 @@ export function backoffSeconds(attempts: number, retryAfterSeconds?: number): nu
 export const MAX_ATTEMPTS = 8;
 
 export class AcmeStore {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Database) {}
 
   /** 계정을 만들거나 있으면 그대로. 디렉토리당 하나다. */
   async upsertAccount(opts: {

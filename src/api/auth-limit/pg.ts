@@ -8,7 +8,7 @@
  * 수치는 메모리 구현(`AuthFailureLimiter`)과 같다. 판정은 **한 문장의 upsert** 로 한다 — 두 노드가 동시에 더해도
  * 하나도 잃지 않는다(행 잠금).
  */
-import type { Queryable } from '../../store/pg.js';
+import type { Queryable } from '../../store/db.js';
 import type { LimitResult, RateLimitStore } from './store.js';
 
 export type PgRateLimitOptions = {

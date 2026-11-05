@@ -12,7 +12,7 @@
 import type { ControlPlane, FollowResult } from './plane.js';
 import type { LeaderElection } from './leader.js';
 import type { DataplaneDriver } from '../dp/driver.js';
-import type { Db } from '../store/pg.js';
+import type { Database } from '../store/db.js';
 import { log } from '../obs/log.js';
 
 export type NodeState = 'in_sync' | 'following' | 'failed' | 'standalone';
@@ -32,7 +32,7 @@ export class ClusterNode {
   #lastError: string | undefined;
 
   constructor(
-    private readonly db: Db,
+    private readonly db: Database,
     private readonly control: ControlPlane,
     private readonly driver: DataplaneDriver,
     private readonly election: LeaderElection,
@@ -118,7 +118,7 @@ export type ClusterNodeView = {
   behind: boolean;
 };
 
-export async function listClusterNodes(db: Db, staleAfterMs: number): Promise<ClusterNodeView[]> {
+export async function listClusterNodes(db: Database, staleAfterMs: number): Promise<ClusterNodeView[]> {
   const rows = (await db.query(
     `SELECT name, url, role, active_epoch::text AS epoch, active_generation, state, last_error,
             last_seen, (now() - last_seen) > ($1::text || ' milliseconds')::interval AS stale
@@ -141,7 +141,7 @@ export async function listClusterNodes(db: Db, staleAfterMs: number): Promise<Cl
 }
 
 /** 지금 리더와 리더가 된 시각 (#120). `leadership` 은 관측용 기록이다 — 락 자체가 아니다. */
-export async function currentLeader(db: Db): Promise<{ name: string; since: string } | undefined> {
+export async function currentLeader(db: Database): Promise<{ name: string; since: string } | undefined> {
   const r = (await db.query(
     `SELECT holder, acquired_at FROM leadership WHERE released_at IS NULL ORDER BY token DESC LIMIT 1`,
   )).rows[0];
@@ -152,7 +152,7 @@ export async function currentLeader(db: Db): Promise<{ name: string; since: stri
 /** 노드 하나의 최근 적용 기록 (#120). 팔로워의 `cluster.follow` 감사 행이다. */
 export type NodeApplyRecord = { at: string; revision?: string; generation?: string; phase?: string };
 
-export async function nodeHistory(db: Db, name: string, limit = 20): Promise<NodeApplyRecord[]> {
+export async function nodeHistory(db: Database, name: string, limit = 20): Promise<NodeApplyRecord[]> {
   const rows = (await db.query(
     `SELECT at, revision::text AS revision, after FROM audit
       WHERE principal = $1 AND action = 'cluster.follow'

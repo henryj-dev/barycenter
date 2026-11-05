@@ -33,7 +33,7 @@ import type { Certificate, Model } from '../model/provisional.js';
 import {
   count, fileBytes, measureGenerations, type Gauges, type LabeledGauge,
 } from '../obs/metrics.js';
-import type { Db, Row } from '../store/pg.js';
+import type { Database, Row } from '../store/db.js';
 import type { LeaderElection } from './leader.js';
 
 export type ControlPlaneOptions = {
@@ -153,7 +153,7 @@ export class ControlPlane {
   }
 
   constructor(
-    private readonly db: Db,
+    private readonly db: Database,
     private readonly store: ConfigStore,
     private readonly driver: DataplaneDriver,
     /**
@@ -1288,7 +1288,7 @@ export function certificateIntentOnly(before: Model, after: Model): boolean {
  *
  * **숨기는 것은 덮인 것뿐이다.** 활성화된 것보다 새 plan 은 그대로 보인다(「커밋됐지만 미적용은 숨기지 않는다」).
  */
-export async function pendingApplies(db: Db): Promise<{ planId: string; revision: string }[]> {
+export async function pendingApplies(db: Database): Promise<{ planId: string; revision: string }[]> {
   return (await db.query(
     // 활성 리비전과 **같은** 리비전의 plan 도 대기다 — 그 리비전이 활성화된 epoch 보다 새 epoch 이면(다시 렌더, 2026-11-01).
     `WITH a AS (

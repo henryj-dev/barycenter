@@ -4,7 +4,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { MigrationSet } from '../store/pg.js';
+import type { MigrationSet } from '../store/db.js';
 
 export const ACCOUNT_MIGRATIONS: MigrationSet = {
   dir: join(dirname(fileURLToPath(import.meta.url)), '..', 'store', 'account-migrations'),

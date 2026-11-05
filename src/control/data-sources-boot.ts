@@ -17,7 +17,7 @@ import type { EventHub } from '../api/events.js';
 import { log } from '../obs/log.js';
 import { count } from '../obs/metrics.js';
 import type { ConfigStore } from '../store/config-store.js';
-import type { Db } from '../store/pg.js';
+import type { Database } from '../store/db.js';
 import { addressSources, addressSourceScheduleFromEnv, type AddressSourceSchedule } from './address-sources/registry.js';
 import { refreshAllAddressSets } from './address-sources/refresh.js';
 import { configuredKinds, discoveryConfigFromEnv, discoverySources, type DiscoveryConfig } from './discovery/registry.js';
@@ -56,7 +56,7 @@ export function createDataSources(cfg: DataSourcesConfig, membershipPlane: boole
 }
 
 export type StartOptions = {
-  db: Db;
+  db: Database;
   store: ConfigStore;
   control: ControlPlane;
   events: EventHub;

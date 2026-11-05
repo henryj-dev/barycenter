@@ -7,7 +7,7 @@
  * **실패를 예외로 던지지 않는다** — 결과 객체다. 호출자가 try/catch 로 「틀린 코드」를 알아내야 하면
  * 언젠가 네트워크 실패를 틀린 코드로(또는 그 반대로) 읽고, 둘째 인증이 열린다.
  */
-import type { Queryable } from '../../store/pg.js';
+import type { Queryable } from '../../store/db.js';
 
 /** 실패의 뜻 여섯 가지 (heliopause `OtpFailure` 와 같은 뜻). */
 export type MfaFailure =

@@ -5,7 +5,7 @@
  *
  * 다른 저장소를 붙이려면: `RateLimitStore` 를 구현한 파일 하나 + 아래 표에 한 줄.
  */
-import type { Queryable } from '../../store/pg.js';
+import type { Queryable } from '../../store/db.js';
 import { memoryRateLimit } from './memory.js';
 import { pgRateLimit } from './pg.js';
 import type { RateLimitStore } from './store.js';

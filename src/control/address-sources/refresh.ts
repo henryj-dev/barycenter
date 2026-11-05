@@ -13,7 +13,7 @@
  */
 import type { AddressSet } from '../../model/provisional.js';
 import type { ConfigStore } from '../../store/config-store.js';
-import type { Db, Queryable } from '../../store/pg.js';
+import type { Database, Queryable } from '../../store/db.js';
 import { pendingApplies, type ControlPlane } from '../plane.js';
 import type { SourceFailure } from '../sources/fetch.js';
 import type { AddressSources } from './registry.js';
@@ -38,7 +38,7 @@ export type RefreshRow = {
 };
 
 export type RefreshOptions = {
-  db: Db;
+  db: Database;
   store: ConfigStore;
   sources: AddressSources;
   by: string;

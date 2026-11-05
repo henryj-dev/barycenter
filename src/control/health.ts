@@ -29,7 +29,7 @@ import { connect } from 'node:net';
 
 import type { Model } from '../model/provisional.js';
 import { log } from '../obs/log.js';
-import type { Db, Queryable } from '../store/pg.js';
+import type { Database, Queryable } from '../store/db.js';
 
 export type HealthState = 'healthy' | 'unhealthy' | 'unknown';
 
@@ -357,7 +357,7 @@ export class HealthProber {
   #next = 0;
 
   constructor(
-    private readonly db: Db,
+    private readonly db: Database,
     private readonly opts: ProbeOptions = {},
   ) {}
 
@@ -528,12 +528,12 @@ export class HealthProber {
 }
 
 /** 지금 판정. 없는 백엔드는 `unknown` 이다. */
-export async function currentHealth(db: Db): Promise<Map<string, HealthState>> {
+export async function currentHealth(db: Database): Promise<Map<string, HealthState>> {
   const rows = (await db.query('SELECT backend_key, state FROM backend_health')).rows;
   return new Map(rows.map((r) => [String(r['backend_key']), r['state'] as HealthState]));
 }
 
-export async function healthRows(db: Db): Promise<HealthRow[]> {
+export async function healthRows(db: Database): Promise<HealthRow[]> {
   const rows = (await db.query(
     `SELECT backend_key, state, observed_at, detail FROM backend_health ORDER BY backend_key`,
   )).rows;
