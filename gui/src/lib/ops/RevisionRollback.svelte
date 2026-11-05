@@ -7,6 +7,7 @@
   import { getContext } from 'svelte';
   import { Badge, Button, ConfirmDialog, FieldMessage, RadioGroup, Skeleton, toast } from '#lib/ui';
   import { whenText } from './audit';
+  import { titleOf, want } from './change-titles.svelte';
   import { LOST_MESSAGE, type Scope } from '#lib/global/scope.svelte.ts';
   import WriteNote from '#lib/global/WriteNote.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
@@ -37,7 +38,16 @@
   const pickable = $derived(visible.filter((r) => r.revision !== desk.head));
   const headRev = $derived(visible.find((r) => r.revision === desk.head));
   const byRev = $derived(new Map(ordered.map((r) => [r.revision, r])));
-  const summary = (r: Rev): string => r.note ?? (r.rollbackOf !== null ? `r${r.rollbackOf} 로 롤백` : '메모 없음');
+  /** 자동으로 붙는 메모(「changeset <id>」)는 사람 말이 아니다 — 시안처럼 무엇을 바꿨는지(`change-titles`)를 쓴다. */
+  const AUTO_NOTE = /^changeset [0-9a-f-]+$/;
+  $effect(() => { for (const r of visible) if (r.changeset !== null) want(desk, r.changeset); });
+  const summary = (r: Rev): string => {
+    if (r.rollbackOf !== null) return r.note ?? `r${r.rollbackOf} 로 롤백`;
+    const t = r.changeset === null ? undefined : titleOf(desk, r.changeset)?.title;
+    return t ?? (r.note !== null && !AUTO_NOTE.test(r.note) ? r.note : '설정 변경');
+  };
+  /** 사람 계정은 이름만(시안 「alice」). */
+  const byText = (s: string): string => s.replace(/^user:/, '');
 
   const confirm = (): void => {
     const t = selected;
@@ -71,7 +81,7 @@
   {:else}
     <div class="list">
       {#if headRev !== undefined}
-        <div class="rv head"><span class="dot" aria-hidden="true"></span><code>r{headRev.revision}</code><span class="when">{whenText(headRev.createdAt)}</span><span class="sum">{summary(headRev)} <Badge tone="ok" icon={null}>head</Badge></span><span class="by">{headRev.createdBy}</span></div>
+        <div class="rv head"><span class="dot" aria-hidden="true"></span><code>r{headRev.revision}</code><span class="when">{whenText(headRev.createdAt)}</span><span class="sum">{summary(headRev)} <Badge tone="ok" icon={null}>head</Badge></span><span class="by">{byText(headRev.createdBy)}</span></div>
       {/if}
       <RadioGroup label="되돌릴 리비전" direction="column" dot={false} bind:value={selected}
         options={pickable.map((r) => ({ value: r.revision, label: `r${r.revision}`, disabled: ro || desk.editing }))}>
@@ -81,7 +91,7 @@
             <span class="rv"><span class="dot" aria-hidden="true"></span><code>r{r.revision}</code>
               <span class="when">{whenText(r.createdAt)}</span>
               <span class="sum">{summary(r)}{#if r.rollbackOf !== null && r.note !== null} <Badge tone="pending" icon={null}>r{r.rollbackOf} 로 롤백</Badge>{/if}</span>
-              <span class="by">{r.createdBy}</span></span>
+              <span class="by">{byText(r.createdBy)}</span></span>
           {/if}
         {/snippet}
       </RadioGroup>

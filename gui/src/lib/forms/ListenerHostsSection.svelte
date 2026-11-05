@@ -15,7 +15,7 @@
 {#snippet row()}
   <FormRow
     label="호스트"
-    help="한 줄에 하나씩 넣어요. 넣으면 이 이름들만 받고, 같은 포트를 다른 리스너와 함께 쓸 수 있어요(서비스마다 인증서 · 출발지 제한 · 기본 동작을 따로 둬요). 비우면 이 포트의 기본 리스너가 돼요 — 맞는 이름이 없는 요청도 받아요."
+    help={`비우면 모든 호스트를 받아요. 한 줄에 하나씩 입력해요. (${value.split('\n').filter((l) => l.trim() !== '').length}개)`}
   >
     <ListInput label="호스트" bind:value check={hostLine} minRows={2} placeholder={'app.example.com\n*.example.com'} />
   </FormRow>

@@ -130,7 +130,7 @@
       <FormRow label="프로토콜">
         <Select label="프로토콜" bind:value={protocol} options={[{ value: 'http', label: 'HTTP' }, { value: 'https', label: 'HTTPS' }]} mono={false} width="100%" />
       </FormRow>
-      <FormRow label="바인드 주소" for="qp-bind" error={bind.trim() === '' ? '주소를 입력해요.' : undefined} help={bindHelp(bind)}><TextInput id="qp-bind" bind:value={bind} /></FormRow>
+      <FormRow label="바인드 주소" for="qp-bind" error={bind.trim() === '' ? '주소를 입력해요.' : undefined} warn={bind.trim() === '0.0.0.0'} help={bindHelp(bind)}><TextInput id="qp-bind" bind:value={bind} /></FormRow>
       <FormRow label="포트" for="qp-port" error={port.trim() === '' || portError(port) !== undefined ? '포트는 1–65535 사이여야 해요.' : undefined}>
         <TextInput id="qp-port" bind:value={port} invalid={portError(port) !== undefined} inputmode="numeric" />
       </FormRow>

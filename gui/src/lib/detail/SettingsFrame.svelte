@@ -69,7 +69,7 @@
 {#if scope?.blocked === true && sections !== undefined}
   <ReadView {sections} />
 {:else}
-  <Writable target>
+  <Writable>
     <form class="set" onsubmit={(e) => { e.preventDefault(); save(); }}>
       <div class="secs">{@render children()}</div>
       <div class="foot">

@@ -93,7 +93,7 @@
         {#if !ro && spec.extras.includes('rebuild') && rebuildable && rest !== 'rebuild'}<Button size="xs" href={resourcePath(kind, key, 'rebuild')}>URL로 다시 만들기</Button>{/if}
         {#if openReg !== undefined}<Button size="sm" outline="accent" href={openReg.href} target="_blank" rel="noopener">{openReg.label}</Button>{/if}
         {#if !ro}
-          {#if edit}{@render edit()}{:else if spec.editable && rest !== 'settings'}<Button size="sm" href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}
+          {#if edit}{@render edit()}{:else if spec.editable}<Button size="sm" href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}
           <Button size="sm" error disabled={desk.editing} onclick={() => { asking = true; }}>삭제…</Button>
         {/if}
       {/snippet}
@@ -108,6 +108,7 @@
   .rtag { font: 12px var(--mono); color: var(--tx3); }
   .empty { color: var(--tx2); }
   .mono { font-family: var(--mono); }
-  .frame { border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; background: var(--bg-page); }
-  .body { padding: 16px 20px; background: var(--bg-panel); }
+  /* 시안 상세 카드는 화면 아래까지 늘어난다(콘솔 상세 블록 flex:1). */
+  .frame { flex: 1; display: flex; flex-direction: column; border: 1px solid var(--bd); border-radius: var(--r-lg); overflow: hidden; background: var(--bg-page); }
+  .body { flex: 1; padding: 16px 20px; background: var(--bg-panel); }
 </style>
