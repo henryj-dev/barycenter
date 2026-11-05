@@ -3,9 +3,15 @@
    * 민감 작업 앞에서 한 번 묻는다(인증 앱 코드). 레이아웃에 하나만 둔다.
    * 모양은 디자인 시스템 §7 확인 대화상자와 같다 — 입력 칸이 있어서 `ConfirmDialog` 를 그대로 쓰지 않는다.
    */
+  import { getContext } from 'svelte';
   import { Button, FieldMessage, FormRow, FormSection, TextInput } from '#lib/ui';
   import { accountApi } from './api';
+  import type { Session } from './session.svelte';
   import { stepUp } from './step-up.svelte';
+
+  /** IdP OTP 대상이면 어느 IdP 의 인증 앱 코드인지 말한다(`/me` 의 `mfa.method`). */
+  const session = getContext<Session | undefined>('session');
+  const idp = $derived(session?.me?.mfa.method === 'idp' ? session.me.mfa.idp : undefined);
 
   let code = $state('');
   let error = $state<string | undefined>();
@@ -32,7 +38,7 @@
     <form onsubmit={(e) => { e.preventDefault(); void submit(); }}>
       <div class="head">
         <h2 id="stepup-h">인증 앱으로 한 번 더 확인해요</h2>
-        <p>이 작업은 최근 10분 안에 인증 앱 확인이 필요해요. 코드를 넣으면 바로 이어서 해요.</p>
+        <p>이 작업은 최근 10분 안에 인증 앱 확인이 필요해요.{#if idp !== undefined}{' '}{idp} 의 인증 앱 코드를 입력해요.{/if} 코드를 넣으면 바로 이어서 해요.</p>
       </div>
       <div class="body">
         <FormSection stack>
