@@ -24,7 +24,7 @@
 
 | env | 뜻 |
 |---|---|
-| `BARY_ACCOUNTS_DSN` | 공용 계정 PG. **모든 지역·전역 인스턴스가 같은 값**을 쓴다. 없으면 계정이 꺼진다(현행 OIDC 메모리 세션만) |
+| `BARY_ACCOUNTS_DSN` | 공용 계정 PG. **모든 지역·전역 인스턴스가 같은 값**을 쓴다. 없으면 계정이 꺼진다(현행 OIDC 메모리 세션만). 스킴이 백엔드를 고른다 — 지금은 PG 만 된다(`mysql:` · `mariadb:` · `sqlite:` 는 기동 거부, [ADR-MULTI-DB](adr-multi-db.md)) |
 | `BARY_ACCOUNTS_KEK` | TOTP 비밀을 감싸는 키, 32바이트 base64. **계정 PG 에 두지 않는다.** 아래 셋 중 **하나만** 준다. 없으면 기동 거부 |
 | `BARY_ACCOUNTS_KEK_FILE` | 같은 키를 **파일**에서 읽는다(한 줄, 64 KiB 상한). env 파일에 키가 안 남는다 |
 | `BARY_ACCOUNTS_KEK_CMD` | 같은 키를 **명령**의 stdout 으로 받는다(`systemd-creds cat` · `vault read` · KMS). 기동 때 한 번, 메모리에만. 상한 `BARY_ACCOUNTS_KEK_CMD_TIMEOUT_MS`(기본 10초) |

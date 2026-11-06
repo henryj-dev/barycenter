@@ -385,6 +385,8 @@ else
     # 렌더 결과를 실물로 재는 둘. 서로 컨테이너를 따로 세운다.
     group render
     run "store (실물 PG)      " --what "실물 PostgreSQL — DB CHECK 와 복합 FK 는 흉내로 못 잰다" npm run test:store --silent
+    # 방언 적합성 (docs/adr-multi-db.md). `BARY_TEST_DB` 가 고른다 — 기본 postgres. CI 매트릭스의 `db` 축이 준다.
+    run "dialect (실물 DB)    " --what "저장소 경계가 방언마다 같은 계약을 지키는가 (BARY_TEST_DB=${BARY_TEST_DB:-postgres})" env BARY_TEST_DB="${BARY_TEST_DB:-postgres}" npm run test:dialect --silent
     run "golden (nginx -t)    " --what "렌더 산출물을 실제 nginx -t 로 검사" npm run test:golden --silent
 
     # 엔진 사실과, 혼자 144초를 쓰는 S12 를 함께 둔다 — 둘이 합쳐야 e2e 와 길이가 맞는다.

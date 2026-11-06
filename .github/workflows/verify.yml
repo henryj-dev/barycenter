@@ -190,6 +190,9 @@ jobs:
       fail-fast: false
       matrix:
         group: ${{ fromJSON(needs.groups.outputs.list) }}
+        # **방언 축** (docs/adr-multi-db.md). 지금은 postgres 만 켠다 — 2단계가 sqlite, 3단계가 mysql 을
+        # 더한다. 값이 하나인 동안은 잡 수가 늘지 않는다. 잡 이름에 넣지 않는다(필수 검사 이름이 바뀐다).
+        db: [postgres]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -224,6 +227,7 @@ jobs:
       - name: verify
         env:
           GROUP: ${{ matrix.group }}
+          BARY_TEST_DB: ${{ matrix.db }}
         run: ./scripts/verify.sh --group "$GROUP"
 
       # **흔들림을 실행 요약에 올린다** (2026-09-01).

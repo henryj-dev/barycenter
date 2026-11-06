@@ -24,6 +24,7 @@
     "test:engine": "./tests/engine/run.sh",
     "typecheck": "tsc --noEmit",
     "test:store": "vitest run tests/store --no-file-parallelism",
+    "test:dialect": "vitest run tests/dialect --no-file-parallelism",
     "test:driver": "node scripts/driver-compat.mjs",
     "test:install": "./tests/install/run.sh",
     "build": "./scripts/build.sh",
