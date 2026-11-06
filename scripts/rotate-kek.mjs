@@ -71,7 +71,7 @@ const CANDIDATES = [
   resolve(HERE, '..', 'dist'),        // 개발 체크아웃
   resolve(appDir, 'dist'),            // 설치된 호스트
 ];
-const DIST = CANDIDATES.find((d) => existsSync(join(d, 'store', 'pg.js')));
+const DIST = CANDIDATES.find((d) => existsSync(join(d, 'store', 'open.js')));
 if (DIST === undefined) {
   console.error('  FAIL  산출물(dist)을 못 찾았다 — 본 곳:');
   for (const c of CANDIDATES) console.error(`          ${c}`);
@@ -80,7 +80,8 @@ if (DIST === undefined) {
   process.exit(1);
 }
 
-const { Db } = await import(`${DIST}/store/pg.js`);
+// DSN 의 스킴이 저장소를 고른다(docs/adr-multi-db.md) — 데몬과 같은 `openDb` 다. PG 구현을 직접 열면 sqlite: 를 PG 로 붙는다.
+const { openDb } = await import(`${DIST}/store/open.js`);
 const { resolveKek } = await import(`${DIST}/dp/kek-source.js`);
 
 const NONCE = 12;
@@ -162,7 +163,7 @@ function wrapDek(dek, ref, kek) {
 }
 
 // ── 돈다 ────────────────────────────────────────────────────────────────
-const db = new Db(dsn);
+const db = openDb(dsn, 'BARY_DSN');
 const rows = (await db.query(
   `SELECT scheme, name, version, kek_id, wrapped_dek FROM secret_materials
     WHERE kek_id <> $1 ORDER BY created_at, scheme, name, version`,
@@ -170,7 +171,9 @@ const rows = (await db.query(
 )).rows;
 
 const done = (await db.query(
-  'SELECT count(*)::int AS n FROM secret_materials WHERE kek_id = $1', [toId],
+  db.dialect.name === 'sqlite'
+    ? 'SELECT count(*) AS n FROM secret_materials WHERE kek_id = $1'
+    : 'SELECT count(*)::int AS n FROM secret_materials WHERE kek_id = $1', [toId],
 )).rows[0]?.['n'] ?? 0;
 
 console.log(`대상 ${rows.length} 행 · 이미 ${toId} 인 행 ${done} 개`);

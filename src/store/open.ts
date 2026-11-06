@@ -15,12 +15,12 @@ import { PgLeaderLock } from './pg-leader.js';
 import { SqliteDb } from './sqlite.js';
 import { SqliteLeaderLock } from './sqlite-leader.js';
 
-/** 이 빌드가 데몬에서 열 수 있는 종류 — ADR 의 완료 조건을 채운 방언. */
-export const SUPPORTED_DB_KINDS: readonly DbKind[] = ['postgres'];
+/** 이 빌드가 데몬에서 열 수 있는 종류 — ADR 의 완료 조건을 채운 방언(SQLite 는 2단계, 2026-11-06). */
+export const SUPPORTED_DB_KINDS: readonly DbKind[] = ['postgres', 'sqlite'];
 
 /**
- * 구현은 있으나 아직 완료 조건(저장소 시험 묶음 전체)을 채우지 못한 종류. **데몬은 열지 않는다** —
- * 시험(`tests/dialect` · `tests/store` 의 `BARY_TEST_DB`)만 `openDbForTest` 로 연다.
+ * 구현이 있는 종류. 완료 조건(저장소 시험 묶음 전체)을 채우기 전의 방언은 여기만 있고 `SUPPORTED_DB_KINDS` 에는
+ * 없다 — 데몬은 열지 않고 시험(`BARY_TEST_DB`)만 `openDbForTest` 로 연다. 지금은 둘이 같다(3단계 MySQL 이 이 자리를 쓴다).
  */
 export const IMPLEMENTED_DB_KINDS: readonly DbKind[] = ['postgres', 'sqlite'];
 

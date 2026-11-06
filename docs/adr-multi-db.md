@@ -1,7 +1,7 @@
 # ADR-MULTI-DB — 저장소를 PostgreSQL · MySQL(MariaDB) · SQLite 로 고른다
 
 날짜: 2026-11-05
-상태: 채택 — 1단계(공통 기반) 구현. 2단계(SQLite) · 3단계(MySQL/MariaDB)는 아직이다
+상태: 채택 — 1단계(공통 기반) · 2단계(SQLite, 아래 「2단계 — SQLite」) 구현. 데몬이 `sqlite:` 를 연다. 3단계(MySQL/MariaDB)는 아직이다
 바꾸는 결정: DESIGN.md §11.2 「v0 는 PostgreSQL 하나만」
 
 ## 결론
@@ -114,10 +114,9 @@ LISTEN/NOTIFY 가 없다. SSE(`src/api/events.ts`)는 **프로세스 안** `Even
 |---|---|---|---|
 | PG (지금) | 전용 연결의 `pg_try_advisory_lock(0x6261, 0x7279)` | `nextval('leader_token_seq')` | 연결의 `error` · `end` |
 | MySQL/MariaDB | 전용 연결의 `GET_LOCK('barycenter.leader', 0)` — 세션 잠금이고 연결이 끊기면 풀린다 | 카운터 표 `UPDATE … SET v = v + 1` 뒤 읽기, 한 트랜잭션 | 연결의 `error` · `end` |
-| SQLite | 한 호스트 안의 **잠금 파일**(`<db>.leader`, `O_EXCL` + 보유 PID 확인) 또는 DB 의 단일 행 임대 + 주기 갱신 | 카운터 표, `BEGIN IMMEDIATE` | 프로세스 종료 · 임대 만료 |
+| SQLite (2단계) | 잠금 파일 `<db>-leader.lock` 에 `BEGIN EXCLUSIVE` 를 프로세스 수명 동안 — SQLite 의 `fcntl` 잠금, 프로세스가 죽으면 커널이 푼다 | `bary_sequences` 카운터 + `leadership`, 한 쓰기 트랜잭션 | 잠금 파일의 inode 가 바뀜(1 초마다 본다) · 프로세스 종료 |
 
-SQLite 는 세션 잠금이 없다. 2단계가 둘 중 하나를 고르고, **임대를 고르면 그 만료 시간이 토큰 창의 상한**이다 —
-그 창은 DP Agent 의 펜싱이 무해하게 만든다는 §3.5 의 답에 기댄다.
+SQLite 는 세션 잠금이 없다. 후보는 잠금 파일과 DB 안 임대였고 **잠금 파일을 골랐다** — 근거는 아래 「2단계 — SQLite」.
 
 ### 직렬화 · 격리
 
@@ -208,6 +207,110 @@ SQLite 는 **파일**이다. 여러 호스트가 한 파일을 함께 쓰면 안
   쪽에서 고른다. 이 결정은 첫 함수를 옮길 때 한 번 정한다.
 - 스키마 모양: PG 의 `uuid` · `cidr` · `interval` · `array` 는 다른 방언에 원형이 없다. 그 방언의 모양 읽기가
   자기 저장 형을 이 논리 형으로 맞춘다(`src/store/schema-shape.ts`).
+
+## 2단계 — SQLite (2026-11-06)
+
+### 드라이버: Node 내장 `node:sqlite`
+
+새 런타임 의존성이 없다. 이 저장소의 Node 는 24(`.nvmrc` · `deploy/Dockerfile`)이고 `node:sqlite` 는 22.13 / 23.4 부터
+플래그 없이 열린다. 필요한 것이 다 있다 — 준비 문장의 `columns()`(선언 형), `setReadBigInts`(2^53 위의 정수),
+사용자 함수(`function`), SQLite 3.5x 내장. `better-sqlite3` 는 네이티브 빌드(알파인 이미지에 컴파일러)를 들인다.
+`node:sqlite` 는 **열 때** `process.getBuiltinModule` 로 가져온다 — PG 만 쓰는 데몬은 이 모듈을 건드리지 않는다.
+
+동기 API 를 비동기 경계로 감싼다(`src/store/sqlite.ts`):
+
+- **쓰기 연결 하나 + 비동기 뮤텍스.** 트랜잭션은 `BEGIN IMMEDIATE`(시작할 때 쓰기 잠금). 같은 프로세스 안에서
+  `busy_timeout` 으로 기다리면 동기 호출이 이벤트 루프를 막아 잠금을 쥔 쪽이 영영 못 끝난다 — 그래서 프로세스
+  안은 뮤텍스, `busy_timeout`(5 초)은 다른 프로세스의 몫이다.
+- **읽기 연결 하나.** 트랜잭션 밖의 `SELECT` 는 이쪽이다. WAL 이라 열린 쓰기 트랜잭션을 기다리지 않고 커밋된
+  것만 본다 — PG 에서 풀의 다른 연결이 보는 것과 같다.
+- 트랜잭션 안에서 트랜잭션 밖의 쓰기 · 중첩 트랜잭션을 부르면 **던진다**(기다리면 교착이다).
+
+### 드라이버가 맞추는 것과 맞추지 않는 것
+
+**SQL 을 만들지 않는다**는 결정은 그대로다. 드라이버는 문법 대응과 값의 모양만 맞춘다:
+
+| 맞춘다 | 어떻게 |
+|---|---|
+| 자리 표시 `$n` | `?n` 으로 옮긴다(SQLite 의 `?NNN` — 번호가 곧 인자 자리라 뜻이 같다). 문자열 · 주석 안은 그대로 |
+| `now()` · `gen_random_uuid()` | 사용자 함수. `now()` 는 PG 처럼 **트랜잭션 안에서 한 값**, 형식은 `toISOString()` 하나 — 문자열 비교가 시각 비교다 |
+| 인자 | boolean → 1/0 · Date → ISO · 배열/객체 → JSON 텍스트 |
+| 결과 | 열의 **선언 형**으로 PG 와 같은 JS 값(`int` → number · `bigint`/`INTEGER` 키 → decimal string · `boolean` · `timestamptz` → Date · `json_text` · `text_array` · `blob` → Buffer). 선언 형은 SQLite 계열 `001_init.sql` 머리말 |
+| 제약 오류 | PG SQLSTATE 를 단다(`23505` · `23503` · `23514` · `23502`) — 저장소의 409/422 갈래가 방언마다 같다 |
+
+맞추지 않는 것(저장소 함수가 갈래를 둔다): `FOR UPDATE`(뺀다 — 쓰기 트랜잭션 전체가 한 잠금이다) ·
+`SKIP LOCKED`(뺀다 — 쓰기가 하나뿐이라 「동시에 온 둘이 다른 행을 집는다」 가 저절로 선다) · `::형` ·
+`= ANY($n)`(→ `json_each`) · `jsonb` 연산 · `interval`(→ `strftime(…, now(), '+N seconds')` · `julianday`) · 시퀀스.
+
+### 방언을 넘기는 방법 (1단계가 남긴 결정)
+
+**`Queryable` 이 자기 방언을 든다**(`Queryable.dialect`). `Database` 와 그 `tx` · `dryRun` 이 주는 연결이 채운다.
+`Queryable` 만 받는 함수도 받은 연결에서 방언을 안다 — 인자를 늘리지 않는다. 비어 있으면 PG 로 본다(시험의 가짜
+연결 `{ query }` 가 그 모양이다. 실제 구현은 반드시 채운다).
+
+갈래는 `byDialect(q, { postgres, sqlite })` 다(`src/store/db.ts`). 형이 **지금 구현이 있는 방언만** 요구한다 —
+3단계가 `mysql` 을 더하면 타입 검사가 문장을 빠뜨린 자리를 모두 가리킨다. PG 문장이 SQLite 에서 그대로 같은 뜻인
+자리(자리 표시 · `now()` 는 드라이버가 맞춘다)는 갈래 없이 문장 하나다.
+
+### 마이그레이션: SQLite 계열은 최종 모양에서 시작한다
+
+배포된 SQLite DB 가 없던 때에 시작했으므로 SQLite 계열의 `001_init.sql` 이 **PG 33 단계 뒤의 최종 모양**을 한 번에
+만들고, `002`–`033` 은 같은 이름의 주석 파일이다(실행기는 이름이 PG 계열과 같아야 받는다). 계정 계열도 같다.
+다음 마이그레이션(034~)부터는 PG 와 같이 한 파일이 한 단계다. 같은 모양인지는 `tests/dialect/schema-shape-pg.json`
+(PG 의 모양)과 비교한다 — PG 회차가 「PG = 스냅숏」, SQLite 회차가 「SQLite = 스냅숏」 을 잰다.
+
+실행기는 계열 하나를 **한 쓰기 트랜잭션**(`BEGIN IMMEDIATE`)으로, 파일 하나를 SAVEPOINT 하나로 돈다. 다른 프로세스의
+동시 마이그레이션은 그 잠금이 막는다(PG 의 advisory 계열 잠금 자리).
+
+옮기지 못한 것은 `001_init.sql` 머리말에 있다: 정규식 CHECK 는 `GLOB` · `length` 로 같은 집합을, `lower()` 는 ASCII 만,
+`text[]` 의 원소 형은 검사하지 않는다(CHECK 안에서 `json_each` 를 못 쓴다).
+
+### 리더: 잠금 파일
+
+임대(lease)는 정본이 **시계**가 된다 — 갱신이 늦으면(GC 멈춤 · 디스크 지연) 다른 프로세스가 리더가 된 뒤에도 옛 리더가
+다음 갱신까지 자기가 리더라고 믿는다. `O_EXCL` + PID 파일은 낡은 파일을 치우는 경쟁(둘이 같은 낡은 PID 를 보고
+둘 다 지운다)과 PID 재사용이 있다. **SQLite 자신의 파일 잠금**은 POSIX `fcntl` 이라 프로세스가 죽으면 커널이 풀고
+(advisory lock 이 세션 종료로 풀리는 것과 같다), 같은 프로세스의 두 연결도 SQLite 가 가른다. 남는 구멍은 잠금 파일을
+**지우는** 것이다 — 그래서 세션이 1 초마다 inode 를 보고, 바뀌면 그 순간 리더가 아니다. 그 1 초 창은 DP Agent 의 토큰
+비교(§3.5)가 무해하게 만든다. 시험: `tests/dialect/sqlite-boundary.test.ts`(다른 프로세스 · SIGKILL · inode · 토큰).
+
+### 배치 검사
+
+`src/store/sqlite-checks.ts` — 클러스터 모드 · 네트워크 파일시스템(리눅스 `statfs` 형 번호) · 전역 화면 + SQLite 계정
+DB 에서 지역 API 가 이 호스트가 아님(이름을 풀어 이 호스트의 주소인지 본다)을 기동에서 거부한다. 계정 DB 만 PG 인
+갈래(설정 DB 만 SQLite)는 지역이 어디 있어도 된다.
+
+### CI
+
+`verify.yml` 의 `db` 축에 `include: {group: render, db: sqlite}` — DB 를 쓰는 조각(store · dialect)만 SQLite 로 더 돈다.
+잡 이름은 postgres 회차가 전과 같고 다른 방언에 ` · sqlite` 가 붙는다. 필수 검사는 `gate` · `codeql` 이라 그대로다
+(`gate` 가 `verify` 를 `needs` 로 받는다).
+
+### 완료 조건 — 2단계의 결과
+
+- `BARY_TEST_DB=sqlite`: `tests/dialect`(SQLite 경계 시험 포함) 통과 · `tests/store` 57 파일 통과(473 통과 · 9 건너뜀).
+- SQLite 에서 건너뛰는 시험 9 — 모두 PG 의 손발을 직접 재는 것이고, 지키는 불변식은 SQLite 짝이 잰다:
+  - `cluster-follow` 「팔로워가 리더의 활성 세대를 따라간다」 7: 여러 호스트가 설정 DB 하나를 보는 클러스터 — SQLite 는
+    클러스터 모드를 기동에서 거부한다.
+  - `health` 「커서 발급이 직렬화된다」 1: `pg.Client` 둘로 PG 행 잠금을 잰다 — SQLite 짝(엇갈린 `db.tx` 둘 · 다른 연결의
+    `BEGIN IMMEDIATE` 가 막힌다)이 같은 파일에 있다.
+  - `audit-migrate-lock` 「잠금을 놓는다」 1: PG 의 `pg_locks` 를 본다 — SQLite 짝(마이그레이션 뒤 다른 연결의 쓰기가 끝난다)과
+    「다른 프로세스가 쓰기를 쥔 동안 떠도 기다렸다 성공한다」 가 있다.
+- **방언마다 다른 계약 하나:** uuid 모양이 아닌 경로 id(`/plans/nope`)는 PG 가 `22P02` 로 **400**, SQLite 는 행이 없어 **404**
+  다(uuid 열이 텍스트다). 둘 다 500 이 아니다. 같게 하려면 경로에서 uuid 모양을 먼저 검사한다 — PG 의 답은 그대로 400 이다.
+- 같은 프로세스에서 같은 파일을 여는 `SqliteDb` 들은 쓰기 줄 하나를 함께 쓴다(`sqlite.ts` 의 `Shared`). 따로 두면 둘의 쓰기가
+  파일 잠금에서 만나 진 쪽이 `busy_timeout` 동안 이벤트 루프를 막는다.
+
+### 3단계(MySQL)를 위한 주의
+
+- `byDialect` 의 형에 `mysql` 을 더하면 tsc 가 갈래 자리를 가리킨다. **갈래 없이 문장 하나인 자리는 가리키지 않는다**
+  — 그 자리들은 「PG 와 SQLite 가 같은 문장」 이다. MySQL 드라이버도 `$n` → `?` 를 맞추면(순서 · 되풀이에 맞춰 인자
+  배열을 다시 짠다) 대부분 그대로 돈다. 남는 것은 `RETURNING`(없다) · `ON CONFLICT`(→ `ON DUPLICATE KEY`) · `now()` 다.
+  시험 묶음이 그 자리들을 잰다.
+- 결과 모양을 PG 와 맞추는 일(선언 형 · `bigNumberStrings` · `DATETIME` → Date · JSON 파싱)은 드라이버에 둔다 —
+  SQLite 가 한 방식이다.
+- 제약 오류의 SQLSTATE 대응도 드라이버에 둔다(MySQL `1062` → `23505` · `1452` → `23503` · `3819` → `23514`).
+- MySQL 의 DDL 은 트랜잭션이 아니다 — 최종 모양 한 파일로 시작하는 방식은 MySQL 에서 더 값지다(반쯤 적용될 단계가 하나다).
 
 ## 결과
 

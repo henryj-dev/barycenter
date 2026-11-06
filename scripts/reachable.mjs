@@ -106,7 +106,6 @@ const ALLOW = new Map([
   // 2 · 3 단계가 방언 마이그레이션 실행 뒤 「PG 모양 = 그 방언 모양」 을 기동 검사로도 쓸 때 배선된다.
   ['src/store/open.ts:openDbForTest', '시험 전용 — 완료 조건 전의 방언(SQLite)을 시험만 연다. 데몬은 openDb 로 거부한다(docs/adr-multi-db.md)'],
   ['src/store/open.ts:openLeaderLockForTest', '시험 전용 — openDbForTest 의 리더 잠금'],
-  ['src/store/db.ts:byDialect', '저장소 함수의 방언 갈래 — SQLite 분기를 옮기는 커밋들이 부른다(2단계 진행 중)'],
   ['src/store/schema-shape.ts:readSchemaShape', '방언 적합성 시험이 스키마 모양을 읽는다 — 2단계 배선 전의 자리'],
   ['src/store/schema-shape.ts:compareShapes', '방언 사이 스키마 비교 — 2단계 배선 전의 자리'],
 

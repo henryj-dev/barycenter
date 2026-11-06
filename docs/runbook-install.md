@@ -198,6 +198,48 @@ curl -fsS http://127.0.0.1:8088/readyz    # 엔진이 붙었고 드라이버가 
 지어내면 *"암호화된 줄 알았다"* 가 그대로 돌아오고, 아직 아무 자료도 안 들어간 그 시점에
 죽는 편이 정직하다.
 
+## 5½. SQLite 로 깔기 (단일 노드)
+
+PG 없이 한 호스트에 띄울 때다. 설계와 한계는 [`adr-multi-db.md`](./adr-multi-db.md) 「SQLite」 다.
+
+> **상태(2단계, 2026-11-06):** 데몬이 `sqlite:` DSN 을 받는다. 같은 저장소 시험 묶음(`tests/store`)과 방언 적합성 묶음이 `BARY_TEST_DB=sqlite` 로 통과한다(CI 의 `verify (render · sqlite)`).
+
+```
+BARY_DSN=sqlite:/var/lib/barycenter/bary.db               # 설정 DB. 절대 경로만 받는다
+BARY_ACCOUNTS_DSN=sqlite:/var/lib/barycenter/accounts.db  # 계정 DB. 따로 고른다 — PG 여도 된다
+```
+
+- **Node 22.13+ (권장 24).** 드라이버는 Node 내장 `node:sqlite` 다 — 따로 깔 것이 없다.
+- 파일은 **로컬 디스크**에 둔다. 디렉터리는 데몬 사용자가 쓸 수 있어야 한다 — 옆에 `-wal` · `-shm` ·
+  `-leader.lock` 파일이 생긴다. 지우지 않는다(`-leader.lock` 을 지우면 그 순간 리더가 물러난다).
+- 연결마다 `journal_mode=WAL` · `synchronous=FULL` · `foreign_keys=ON` · `busy_timeout=5000` 이다.
+
+**기동을 거부하는 조합** — 사유를 말하고 멈춘다:
+
+| 조합 | 왜 |
+|---|---|
+| `BARY_CLUSTER=1` + SQLite(설정 · 계정 어느 쪽이든) | 클러스터는 여러 호스트가 DB 를 공유한다. 파일은 못 한다 |
+| 파일이 NFS · SMB/CIFS · Ceph · AFS · Lustre 위(리눅스) | 네트워크 파일시스템의 파일 잠금을 믿을 수 없다. 다른 OS 는 이 검사를 하지 않는다 — 직접 확인한다 |
+| `BARY_GLOBAL_HOST` + SQLite 계정 DB + 다른 호스트의 지역 | 전역과 지역은 계정 DB 를 공유한다. 같은 호스트에 두고 지역 API 를 루프백 주소로 적거나, 계정 DB 를 PG 로 둔다 |
+
+**백업 — 파일을 그대로 복사하지 않는다.** WAL 모드에서는 커밋된 내용 일부가 아직 `-wal` 파일에만 있다.
+본 파일만 복사하면 최근 커밋이 빠지거나, 복사 도중의 쓰기로 깨진 사본이 된다. 데몬이 도는 채로 일관된
+사본을 만든다:
+
+```sh
+sqlite3 /var/lib/barycenter/bary.db "VACUUM INTO '/backup/bary-$(date +%F).db'"
+sqlite3 /var/lib/barycenter/accounts.db "VACUUM INTO '/backup/accounts-$(date +%F).db'"
+```
+
+(`sqlite3` CLI 의 `.backup` 도 온라인 백업 API 라 같다.) 복구는 데몬을 멈추고 사본을 제자리에 두고
+`-wal` · `-shm` 을 지운 뒤 띄운다. 시크릿 백엔드가 `fs` 면 `$PREFIX/secrets` 도 같이 받는다(위 4절).
+
+**한계:** 쓰기는 DB 전체가 한 줄이다 — 한 노드의 제어 평면에는 넉넉하지만 쓰기를 늘려 받을 방법은 없다.
+다른 프로세스(운영 도구)가 쓰기 트랜잭션을 쥐고 있으면 데몬의 쓰기가 최대 5 초 기다리고 그 뒤 실패한다.
+SQLite 와 PG 사이를 옮기는 행 단위 이주 도구는 없다 — `bary backup` 매니페스트로 설정을 새 DB 에 다시 넣는다(리비전 이력 · 계정 · 감사는 옮겨지지 않는다).
+
+`BARY_SECRET_BACKEND=pg` 는 「설정 DB 에 암호화해 둔다」 는 뜻이다 — 설정 DB 가 SQLite 면 그 파일에 들어간다. 그러면 위 백업 사본에 암호문이 들어 있고, KEK 는 따로 지킨다(4절과 같다).
+
 ## 6. 알아 둘 것
 
 ⚠️ 이 배포는 **단일 장애점**이다. 자동 페일오버는 없다 — 콜드 스탠바이이고 트래픽을

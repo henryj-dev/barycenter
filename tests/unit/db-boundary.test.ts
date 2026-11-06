@@ -31,7 +31,7 @@ describe('DSN 스킴 → 종류', () => {
 describe('openDb', () => {
   it('**구현이 없는 방언은 거부한다** — 스킴만 말하고 DSN(비밀번호)은 싣지 않는다', () => {
     const pw = ['not', 'a', 'secret'].join('-');
-    for (const dsn of [`mysql://u:${pw}@h/db`, `mariadb://u:${pw}@h/db`, 'sqlite:/tmp/x.db']) {
+    for (const dsn of [`mysql://u:${pw}@h/db`, `mariadb://u:${pw}@h/db`]) {
       let err: unknown;
       try {
         openDb(dsn, 'BARY_DSN');
@@ -42,7 +42,9 @@ describe('openDb', () => {
       expect(String((err as Error).message)).toContain('BARY_DSN');
       expect(String((err as Error).message)).not.toContain(pw);
     }
-    expect(() => assertSupportedDsn('sqlite:/tmp/x.db', 'BARY_ACCOUNTS_DSN')).toThrow(/BARY_ACCOUNTS_DSN 의 스킴이 sqlite:/);
+    expect(() => assertSupportedDsn('mysql://u@h/db', 'BARY_ACCOUNTS_DSN')).toThrow(/BARY_ACCOUNTS_DSN 의 스킴이 mysql:/);
+    // 2단계: SQLite 는 데몬이 연다(완료 조건 — dialect · store 묶음이 BARY_TEST_DB=sqlite 로 통과).
+    expect(assertSupportedDsn('sqlite:/tmp/x.db', 'BARY_DSN')).toBe('sqlite');
   });
 
   it('PG DSN 은 PG 구현을 연다 (연결은 첫 쿼리에서 맺는다)', async () => {

@@ -73,7 +73,7 @@ describe('회전 스크립트의 산출물 탐색', () => {
       mkdirSync(join(app, 'dist', 'store'), { recursive: true });
       mkdirSync(join(app, 'dist', 'dp'), { recursive: true });
       // ESM 은 링크 시점에 **이름**을 본다 — 그래서 스텁도 같은 이름을 내야 한다.
-      writeFileSync(join(app, 'dist', 'store', 'pg.js'), 'export class Db {}\n');
+      writeFileSync(join(app, 'dist', 'store', 'open.js'), 'export function openDb() { return {}; }\n');
       writeFileSync(join(app, 'dist', 'dp', 'kek-source.js'),
         'export async function resolveKek() { return Buffer.alloc(32); }\n');
 
