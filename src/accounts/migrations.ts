@@ -5,9 +5,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { MigrationSet } from '../store/db.js';
+import { dialectDirsOf } from '../store/migration-sets.js';
 
 export const ACCOUNT_MIGRATIONS: MigrationSet = {
   dir: join(dirname(fileURLToPath(import.meta.url)), '..', 'store', 'account-migrations'),
   table: 'account_schema_migrations',
   lock: [0x62_61, 0x61_63], // 'ba' 'ac' — 설정 DB 마이그레이션('mg')·리더 선출과 다른 키
+  dialectDirs: dialectDirsOf('account-migrations'),
 };

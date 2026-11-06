@@ -9,14 +9,12 @@
  * `pg` 는 이 저장소의 **첫 런타임 의존성**이다. 지금까지 stdlib 뿐이었다. 와이어 프로토콜을
  * 직접 구현할 이유가 없어서 받아들였고, 대신 여기 한 파일에 가둔다.
  */
-import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import pg from 'pg';
 
 import { log } from '../obs/log.js';
 import { DIALECTS, type Database, type Dialect, type MigrationSet, type Queryable, type Row } from './db.js';
+import { runMigrations, type MigrationDriver } from './migrate.js';
+import { CONFIG_MIGRATIONS } from './migration-sets.js';
 
 export type { MigrationSet, Queryable, Row } from './db.js';
 
@@ -28,8 +26,6 @@ export type { MigrationSet, Queryable, Row } from './db.js';
  * 다룬다" 고 적은 이유이고, DP 층의 좌표가 전부 문자열인 이유이기도 하다.
  */
 pg.types.setTypeParser(20, (v) => v);
-
-const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 
 export class Db implements Database {
   readonly dialect: Dialect = DIALECTS.postgres;
@@ -106,7 +102,7 @@ export class Db implements Database {
    * 읽기를 답한다). `hashtext()` 를 안 쓰는 이유도 저쪽과 같다 — 버전 간 안정성이
    * 보장되지 않아 PG 를 올리면 키가 바뀐다.
    */
-  static readonly MIGRATE_LOCK = [0x62_61, 0x6d_67] as const;   // 'ba' 'mg'
+  static readonly MIGRATE_LOCK = CONFIG_MIGRATIONS.lock;   // 'ba' 'mg'
 
   /**
    * 스키마를 최신으로. **한 번에 하나만 돈다** (검수 D15).
@@ -125,47 +121,50 @@ export class Db implements Database {
    * 세션 잠금을 쓰고 `finally` 로 놓는다. 트랜잭션 잠금(`xact`)은 마이그레이션마다
    * 트랜잭션이 갈리므로 그 사이가 열린다.
    */
-  async migrate(set: MigrationSet = { dir: MIGRATIONS, table: 'schema_migrations', lock: Db.MIGRATE_LOCK }): Promise<string[]> {
-    if (!/^[a-z_]+$/.test(set.table)) throw new Error(`마이그레이션 기록 테이블 이름이 이상하다: ${set.table}`);
-    const client = await this.#pool.connect();
-    try {
-      const [hi, lo] = set.lock;
-      // **기다린다.** `try_` 로 두고 물러나면 진 쪽이 낡은 스키마로 서비스를 시작한다.
-      await client.query('SELECT pg_advisory_lock($1::int, $2::int)', [hi, lo]);
-      try {
-        return await this.#migrateLocked(set);
-      } finally {
-        // 놓는 것을 잊으면 다음 기동이 영영 매달린다. 세션을 닫아도 풀리지만,
-        // 이 커넥션은 풀로 **돌아가므로** 명시적으로 놓는다.
-        await client.query('SELECT pg_advisory_unlock($1::int, $2::int)', [hi, lo])
-          .catch(() => undefined);
-      }
-    } finally {
-      client.release();
-    }
+  async migrate(set: MigrationSet = CONFIG_MIGRATIONS): Promise<string[]> {
+    return runMigrations(this.#migrationDriver(), set);
   }
 
-  async #migrateLocked(set: MigrationSet): Promise<string[]> {
-    await this.query(
-      `CREATE TABLE IF NOT EXISTS ${set.table} (
+  /** 실행기(`./migrate.ts`)의 PG 손발. 문장과 연결의 쓰임은 실행기로 옮기기 전과 같다. */
+  #migrationDriver(): MigrationDriver {
+    return {
+      dialect: this.dialect,
+      withMigrationLock: async (lock, fn) => {
+        const client = await this.#pool.connect();
+        try {
+          const [hi, lo] = lock;
+          // **기다린다.** `try_` 로 두고 물러나면 진 쪽이 낡은 스키마로 서비스를 시작한다.
+          await client.query('SELECT pg_advisory_lock($1::int, $2::int)', [hi, lo]);
+          try {
+            return await fn();
+          } finally {
+            // 놓는 것을 잊으면 다음 기동이 영영 매달린다. 세션을 닫아도 풀리지만,
+            // 이 커넥션은 풀로 **돌아가므로** 명시적으로 놓는다.
+            await client.query('SELECT pg_advisory_unlock($1::int, $2::int)', [hi, lo])
+              .catch(() => undefined);
+          }
+        } finally {
+          client.release();
+        }
+      },
+      ensureTable: async (table) => {
+        await this.query(
+          `CREATE TABLE IF NOT EXISTS ${table} (
          name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`,
-    );
-    const done = new Set(
-      (await this.query(`SELECT name FROM ${set.table}`)).rows.map((r) => String(r['name'])),
-    );
-    const applied: string[] = [];
-    for (const name of readdirSync(set.dir).filter((f) => f.endsWith('.sql')).sort()) {
-      if (done.has(name)) continue;
-      const sql = readFileSync(join(set.dir, name), 'utf8');
+        );
+      },
+      appliedNames: async (table) => new Set(
+        (await this.query(`SELECT name FROM ${table}`)).rows.map((r) => String(r['name'])),
+      ),
       // 마이그레이션 하나가 **한 트랜잭션**이다. 중간에 깨지면 부분 적용된 스키마가 남고,
       // 그 상태는 어느 버전도 아니라 다음 실행이 무엇을 해야 할지 알 수 없다.
-      await this.tx(async (c) => {
-        await c.query(sql);
-        await c.query(`INSERT INTO ${set.table} (name) VALUES ($1)`, [name]);
-      });
-      applied.push(name);
-    }
-    return applied;
+      applyOne: async (table, name, sql) => {
+        await this.tx(async (c) => {
+          await c.query(sql);
+          await c.query(`INSERT INTO ${table} (name) VALUES ($1)`, [name]);
+        });
+      },
+    };
   }
 
   async close(): Promise<void> {

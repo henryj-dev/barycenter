@@ -102,6 +102,11 @@ const ALLOW = new Map([
   ['src/cli/backup.ts:secretRefsIn', '백업에 시크릿이 안 실리는지 테스트가 직접 잰다'],
   ['src/control/acme-store.ts:backoffSeconds', '백오프 곡선을 테스트가 직접 잰다'],
 
+  // **다중 DB 1단계의 자리** (docs/adr-multi-db.md). 방언 적합성 시험(`tests/dialect`)이 부른다 —
+  // 2 · 3 단계가 방언 마이그레이션 실행 뒤 「PG 모양 = 그 방언 모양」 을 기동 검사로도 쓸 때 배선된다.
+  ['src/store/schema-shape.ts:readSchemaShape', '방언 적합성 시험이 스키마 모양을 읽는다 — 2단계 배선 전의 자리'],
+  ['src/store/schema-shape.ts:compareShapes', '방언 사이 스키마 비교 — 2단계 배선 전의 자리'],
+
   // ── ③ 메서드 예외 (검수 G6) ─────────────────────────────────────────
   //
   // **관측 창구.** 상태를 바꾸지 않고 읽기만 하며, 프로덕션은 그 값으로 판정하지
