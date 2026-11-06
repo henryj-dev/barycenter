@@ -7,8 +7,33 @@
  * e2e 가 실제 nginx 를 띄우는 것과 같은 이유다.
  */
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { Db } from '../../src/store/pg.js';
+import { ACCOUNT_MIGRATIONS } from '../../src/accounts/migrations.js';
+import type { Database } from '../../src/store/db.js';
+import { openDbForTest } from '../../src/store/open.js';
+
+/**
+ * **`BARY_TEST_DB` 가 시험하는 DB 를 고른다** (docs/adr-multi-db.md 「완료 조건」 — 같은 저장소 시험 묶음이
+ * 방언마다 통과한다). 기본은 postgres(도커 컨테이너). `sqlite` 면 임시 디렉터리의 파일이다 — 도커가 필요 없다.
+ * 이름(`pg-fixture`)과 함수 이름(`pgFor` · `startPg`)은 57 개 시험 파일이 부르는 그대로 둔다.
+ */
+export const TEST_DB = ((): 'postgres' | 'sqlite' => {
+  const v = (process.env['BARY_TEST_DB'] ?? 'postgres').trim();
+  if (v === 'postgres' || v === 'sqlite') return v;
+  throw new Error(`저장소 시험의 BARY_TEST_DB 는 postgres | sqlite 다: ${JSON.stringify(v)}`);
+})();
+
+/**
+ * 시험이 여는 저장소. 시험 파일은 `new Db(PG.dsn)` 으로 연다 — DSN 의 스킴이 구현을 고른다
+ * (`openDbForTest`: 완료 조건 전의 방언도 연다).
+ */
+export type Db = Database;
+export const Db = function Db(dsn: string): Database {
+  return openDbForTest(dsn);
+} as unknown as new (dsn: string) => Database;
 
 /**
  * **파일마다 자기 PG 를 쓴다.**
@@ -48,6 +73,11 @@ export function pgFor(id: string): PgHandle {
   const tag = process.env['BARY_TEST_PG_TAG'] ?? '';
   if (tag !== '' && !/^[a-z0-9-]{1,20}$/.test(tag)) throw new Error(`BARY_TEST_PG_TAG 는 [a-z0-9-] 1~20자다: ${tag}`);
   const key = tag === '' ? id : `${id}-${tag}`;
+  if (TEST_DB === 'sqlite') {
+    // 파일 하나. 파일마다 자기 디렉터리라 동시에 돌아도 안 부딪친다(PG 의 컨테이너 하나와 같은 격리).
+    const dir = join(tmpdir(), `bary-sqlite-${process.pid}-${key}`);
+    return { name: dir, port: 0, dsn: `sqlite:${join(dir, 'bary.db')}` };
+  }
   let h = 0;
   for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 4000;
   const port = 20000 + h;
@@ -64,6 +94,11 @@ const docker = (...args: string[]): string =>
  * `docker run` 이 깨졌고, 재실행하면 통과하니 원인을 안 찾게 된다.
  */
 export function startPg(pg: PgHandle): void {
+  if (TEST_DB === 'sqlite') {
+    rmSync(pg.name, { recursive: true, force: true });
+    mkdirSync(pg.name, { recursive: true });
+    return;
+  }
   try {
     docker('rm', '-f', pg.name);
   } catch {
@@ -106,6 +141,10 @@ export function startPg(pg: PgHandle): void {
 }
 
 export function stopPg(pg: PgHandle): void {
+  if (TEST_DB === 'sqlite') {
+    rmSync(pg.name, { recursive: true, force: true });
+    return;
+  }
   try {
     docker('rm', '-f', pg.name);
   } catch {
@@ -113,7 +152,9 @@ export function stopPg(pg: PgHandle): void {
   }
 }
 
+/** 시험하는 DB 를 띄울 수 있는가. SQLite 는 파일이라 도커가 필요 없다. */
 export function dockerAvailable(): boolean {
+  if (TEST_DB === 'sqlite') return true;
   try {
     docker('version', '--format', '{{.Server.Version}}');
     return true;
@@ -129,6 +170,7 @@ export function dockerAvailable(): boolean {
  * 따라 달라지고, 그건 테스트가 아니라 소음이다.
  */
 export async function reset(db: Db): Promise<void> {
+  if (db.dialect.name === 'sqlite') return resetSqlite(db);
   // **표를 안 비우고 시퀀스만 되돌리면 다음 삽입이 PK 로 충돌한다.**
   // 실제로 `leadership` 을 빠뜨려서 리더 선출 테스트 넷이 깨졌다 — 증상은 "리더가 못
   // 됐다"(`tryAcquire` 가 false)였는데 원인은 코드가 아니라 픽스처였다.
@@ -179,4 +221,39 @@ export async function reset(db: Db): Promise<void> {
   await db.query(`INSERT INTO config_head (revision) VALUES (currval('config_revision_seq'))`);
 }
 
-export { Db };
+/** 계정 계열이 만드는 표 — PG 의 `reset` 이 비우지 않는 쪽이다(목록에 없고 CASCADE 로도 안 딸려 온다). */
+const accountTables = (): Set<string> => {
+  const dir = ACCOUNT_MIGRATIONS.dialectDirs?.sqlite ?? '';
+  const names = new Set<string>();
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.sql'))) {
+    for (const m of readFileSync(join(dir, f), 'utf8').matchAll(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?([a-z_]+)/gi)) names.add(m[1]!);
+  }
+  return names;
+};
+
+/**
+ * SQLite 의 `reset` — PG 쪽과 같은 끝 상태. 설정 계열의 표를 모두 비우고(PG 의 `TRUNCATE … CASCADE` 가
+ * 데려가는 것과 같다), 카운터(`bary_sequences`)와 rowid 카운터(`sqlite_sequence`)를 되돌리고, 씨앗 행
+ * (최초 리비전 · 머리 · 헬스 커서)을 다시 넣는다. FK 검사는 커밋으로 미룬다 — 비우는 순서에 기대지 않게.
+ */
+async function resetSqlite(db: Db): Promise<void> {
+  const keep = accountTables();
+  await db.tx(async (c) => {
+    await c.query('PRAGMA defer_foreign_keys = ON');
+    const tables = (await c.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)).rows
+      .map((r) => String(r['name']))
+      .filter((t) => !t.endsWith('schema_migrations') && t !== 'bary_sequences' && !keep.has(t));
+    for (const t of tables) await c.query(`DELETE FROM ${t}`);
+    const seq = (await c.query(`SELECT name FROM sqlite_master WHERE name = 'sqlite_sequence'`)).rows.length > 0;
+    if (seq) {
+      for (const t of tables) await c.query('DELETE FROM sqlite_sequence WHERE name = $1', [t]);
+    }
+    await c.query(`UPDATE bary_sequences SET last_value = 0`);
+    await c.query(`INSERT INTO health_cursor DEFAULT VALUES`);
+    await c.query(`UPDATE bary_sequences SET last_value = 1 WHERE name = 'config_revision_seq'`);
+    await c.query(
+      `INSERT INTO config_revisions (revision, model, created_by, note)
+       VALUES (1, '{"listeners":[],"httpRoutes":[],"passthroughRoutes":[],"pools":[],"backends":[]}', 'system', '최초 리비전 — 빈 모델')`);
+    await c.query(`INSERT INTO config_head (revision) VALUES (1)`);
+  });
+}

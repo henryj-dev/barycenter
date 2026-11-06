@@ -81,6 +81,7 @@ import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '.
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
 import { openDb } from '../store/open.js';
+import { assertSqliteDeployment } from '../store/sqlite-checks.js';
 import { envBool, envInt, envIntOpt } from '../validate/env.js';
 import { isLoopbackBind, parseListen } from '../validate/sockets.js';
 
@@ -806,6 +807,14 @@ export async function main(): Promise<void> {
   const dataSourcesCfg = dataSourcesConfigFromEnv();
 
   const dsn = env('BARY_DSN');
+  // SQLite 배치 검사 (docs/adr-multi-db.md 「SQLite 의 한계」) — 클러스터 · 네트워크 파일시스템 · 전역 화면의 계정 DB 공유.
+  {
+    const regionsFile = env('BARY_GLOBAL_REGIONS', '').trim();
+    await assertSqliteDeployment({
+      dsn, accountsDsn: env('BARY_ACCOUNTS_DSN', ''), cluster: env('BARY_CLUSTER', '') === '1',
+      ...(regionsFile === '' || env('BARY_GLOBAL_HOST', '').trim() === '' ? {} : { regionApis: loadRegistry(regionsFile).map((r) => r.api) }),
+    });
+  }
   const db = openDb(dsn, 'BARY_DSN');
   const applied = await db.migrate();
   if (applied.length > 0) log.info('migrate.applied', { migrations: applied });

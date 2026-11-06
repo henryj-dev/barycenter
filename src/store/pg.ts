@@ -62,6 +62,7 @@ export class Db implements Database {
     try {
       await client.query('BEGIN');
       const out = await fn({
+        dialect: this.dialect,
         query: async (text, values) => {
           const r = await client.query(text, values as unknown[] | undefined);
           return { rows: r.rows as Row[], rowCount: r.rowCount };
@@ -83,6 +84,7 @@ export class Db implements Database {
     try {
       await client.query('BEGIN');
       return await fn({
+        dialect: this.dialect,
         query: async (text, values) => {
           const r = await client.query(text, values as unknown[] | undefined);
           return { rows: r.rows as Row[], rowCount: r.rowCount };

@@ -12,9 +12,17 @@
 import { dbKindOf, type Database, type DbKind, type LeaderLock } from './db.js';
 import { Db } from './pg.js';
 import { PgLeaderLock } from './pg-leader.js';
+import { SqliteDb } from './sqlite.js';
+import { SqliteLeaderLock } from './sqlite-leader.js';
 
-/** 이 빌드가 열 수 있는 종류. */
+/** 이 빌드가 데몬에서 열 수 있는 종류 — ADR 의 완료 조건을 채운 방언. */
 export const SUPPORTED_DB_KINDS: readonly DbKind[] = ['postgres'];
+
+/**
+ * 구현은 있으나 아직 완료 조건(저장소 시험 묶음 전체)을 채우지 못한 종류. **데몬은 열지 않는다** —
+ * 시험(`tests/dialect` · `tests/store` 의 `BARY_TEST_DB`)만 `openDbForTest` 로 연다.
+ */
+export const IMPLEMENTED_DB_KINDS: readonly DbKind[] = ['postgres', 'sqlite'];
 
 export class UnsupportedDb extends Error {
   constructor(readonly kind: DbKind, label: string) {
@@ -31,19 +39,47 @@ export function assertSupportedDsn(dsn: string, label = 'DSN'): DbKind {
   return kind;
 }
 
-export function openDb(dsn: string, label = 'DSN'): Database {
-  const kind = assertSupportedDsn(dsn, label);
+function open(kind: DbKind, dsn: string, label: string): Database {
   switch (kind) {
     case 'postgres': return new Db(dsn);
-    default: throw new UnsupportedDb(kind, label);
+    case 'sqlite': return new SqliteDb(dsn, label);
+    case 'mysql':
+    case 'mariadb':
+      throw new UnsupportedDb(kind, label);
   }
+}
+
+function openLock(kind: DbKind, dsn: string, label: string): LeaderLock {
+  switch (kind) {
+    case 'postgres': return new PgLeaderLock(dsn);
+    case 'sqlite': return new SqliteLeaderLock(dsn, label);
+    case 'mysql':
+    case 'mariadb':
+      throw new UnsupportedDb(kind, label);
+  }
+}
+
+export function openDb(dsn: string, label = 'DSN'): Database {
+  return open(assertSupportedDsn(dsn, label), dsn, label);
 }
 
 /** 리더 잠금. 설정 DB 의 DSN 으로 연다 — 선출은 설정 DB 를 공유하는 인스턴스 사이의 일이다. */
 export function openLeaderLock(dsn: string, label = 'DSN'): LeaderLock {
-  const kind = assertSupportedDsn(dsn, label);
-  switch (kind) {
-    case 'postgres': return new PgLeaderLock(dsn);
-    default: throw new UnsupportedDb(kind, label);
-  }
+  return openLock(assertSupportedDsn(dsn, label), dsn, label);
+}
+
+const assertImplemented = (dsn: string, label: string): DbKind => {
+  const kind = dbKindOf(dsn);
+  if (!IMPLEMENTED_DB_KINDS.includes(kind)) throw new UnsupportedDb(kind, label);
+  return kind;
+};
+
+/** **시험 전용.** 구현은 있으나 완료 조건 전인 방언(`IMPLEMENTED_DB_KINDS`)도 연다. 데몬은 부르지 않는다. */
+export function openDbForTest(dsn: string, label = 'BARY_TEST_DB'): Database {
+  return open(assertImplemented(dsn, label), dsn, label);
+}
+
+/** **시험 전용.** `openDbForTest` 의 리더 잠금. */
+export function openLeaderLockForTest(dsn: string, label = 'BARY_TEST_DB'): LeaderLock {
+  return openLock(assertImplemented(dsn, label), dsn, label);
 }

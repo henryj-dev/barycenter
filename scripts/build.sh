@@ -16,6 +16,15 @@ mkdir -p dist/store/migrations
 cp src/store/migrations/*.sql dist/store/migrations/
 mkdir -p dist/store/account-migrations
 cp src/store/account-migrations/*.sql dist/store/account-migrations/
+# 방언 계열(docs/adr-multi-db.md 「마이그레이션」). 파일이 있는 방언만 옮긴다 — 빈 자리(mysql, 3단계)는
+# 디렉터리만 만든다. 실행기는 그 방언으로 열 때 PG 계열과 이름이 같은지 다시 잰다.
+for d in src/store/dialects/*/migrations src/store/dialects/*/account-migrations; do
+  out="dist/${d#src/}"
+  mkdir -p "$out"
+  for f in "$d"/*.sql; do
+    if [ -e "$f" ]; then cp "$f" "$out/"; fi
+  done
+done
 # **진입점 전부에 건다** (검수 N1). 전에는 이름을 손으로 들고 있었고, `bary-dp-agent`
 # 가 `package.json` 의 `bin` 에 들어온 회차에 이 줄이 안 따라왔다 — 선언은 있는데
 # 실행 권한이 없는 산출물이 나갔다. 이 파일 머리말이 *"빌드가 조용히 반쪽짜리
