@@ -35,7 +35,7 @@ import {
   parseKeyRef, parseRef,
   type CertMaterial, type KeyRef, type SecretRef, type SecretStore,
 } from './secrets.js';
-import type { Queryable } from '../store/pg.js';
+import type { Queryable } from '../store/db.js';
 
 /** GCM 의 nonce 12 바이트 · tag 16 바이트. 둘 다 표준 크기다. */
 const NONCE = 12;

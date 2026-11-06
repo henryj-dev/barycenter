@@ -30,7 +30,7 @@
 import type { AcmeStore } from './acme-store.js';
 import { pendingApplies, type ControlPlane } from './plane.js';
 import type { ConfigStore } from '../store/config-store.js';
-import type { Db } from '../store/pg.js';
+import type { Database } from '../store/db.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { log } from '../obs/log.js';
 import { count } from '../obs/metrics.js';
@@ -46,7 +46,7 @@ export type PublishResult = {
 };
 
 export type PublisherOptions = {
-  db: Db;
+  db: Database;
   store: ConfigStore;
   control: ControlPlane;
   acme: AcmeStore;
@@ -62,7 +62,7 @@ export type PublisherOptions = {
  * 주문 상태가 아니라 **두 참조의 차이**로 찾는다. 그래서 게시가 중간에 죽어도 다음 틱이
  * 같은 것을 다시 집는다.
  */
-export async function pendingPublications(db: Db): Promise<{
+export async function pendingPublications(db: Database): Promise<{
   orderId: string; certificateKey: string; issuedRef: string;
 }[]> {
   /**
@@ -167,7 +167,7 @@ export async function publishIssued(opts: PublisherOptions): Promise<PublishResu
 }
 
 /** 인증서에 붙어 있는 ACME 의도. PUT 이 통째로 덮으므로 함께 실어야 한다. */
-async function acmeIntentOf(db: Db, key: string): Promise<{
+async function acmeIntentOf(db: Database, key: string): Promise<{
   acme?: { account: string; domains: string[] };
 }> {
   const r = (await db.query(

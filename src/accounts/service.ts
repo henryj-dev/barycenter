@@ -14,7 +14,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { ALL_SCOPES, minRole, PERSONAL_TOKEN, roleRank, scopesOfRole, type Principal, type Role, type Scope } from '../api/auth.js';
-import type { Db, Queryable, Row } from '../store/pg.js';
+import type { Database, Queryable, Row } from '../store/db.js';
 import { burnPasswordTime, hashPassword, needsRehash, passwordProblem, verifyPassword } from './password.js';
 import { mailText, type Mailer } from './mail.js';
 import type { Sealer } from './sealer/provider.js';
@@ -186,7 +186,7 @@ export type RoleChangeOutcome =
   | { kind: 'refused'; why: string };
 
 export type AccountServiceOptions = {
-  db: Db;
+  db: Database;
   sealer: Sealer;
   /** 인증 앱에 보이는 이름. */
   issuer?: string;
@@ -208,7 +208,7 @@ export type AccountServiceOptions = {
 };
 
 export class AccountService {
-  readonly #db: Db;
+  readonly #db: Database;
   readonly #sealer: Sealer;
   readonly #issuer: string;
   readonly #now: () => number;

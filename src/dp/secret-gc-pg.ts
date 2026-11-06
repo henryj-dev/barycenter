@@ -15,7 +15,7 @@
  * 추측이 틀렸을 때 살아 있는 키를 지운다. root 는 호출자가 모아서 준다.
  */
 import { partitionForSweep, type SecretSweepResult, type SweepEntry } from './secret-gc.js';
-import type { Queryable } from '../store/pg.js';
+import type { Queryable } from '../store/db.js';
 
 export type PgSecretSweepOptions = {
   db: Queryable;

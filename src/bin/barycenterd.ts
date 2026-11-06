@@ -80,7 +80,7 @@ import { renderCapsOf } from '../engine/render-caps.js';
 import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '../control/data-sources-boot.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
-import { Db } from '../store/pg.js';
+import { openDb } from '../store/open.js';
 import { envBool, envInt, envIntOpt } from '../validate/env.js';
 import { isLoopbackBind, parseListen } from '../validate/sockets.js';
 
@@ -305,7 +305,7 @@ async function accountsFromEnv(idpMfa?: AccountServiceOptions['idpMfa']): Promis
   }
   const sealing = await sealerFromEnv(process.env);
   log.info('accounts.sealer', { kind: sealing.kind, opens: sealing.openers });
-  const adb = new Db(dsn);
+  const adb = openDb(dsn, 'BARY_ACCOUNTS_DSN');
   const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
   if (applied.length > 0) log.info('accounts.migrate.applied', { migrations: applied });
   /**
@@ -393,7 +393,7 @@ async function accountCli(args: string[]): Promise<void> {
   if (args[0] === 'migrate') {
     const dsn = env('BARY_ACCOUNTS_DSN', '');
     if (dsn === '') throw new Error('BARY_ACCOUNTS_DSN 이 없다 — 어느 계정 DB 에 적용할지 모른다');
-    const adb = new Db(dsn);
+    const adb = openDb(dsn, 'BARY_ACCOUNTS_DSN');
     try {
       const applied = await adb.migrate(ACCOUNT_MIGRATIONS);
       process.stdout.write(applied.length === 0 ? '계정 마이그레이션: 적용할 것이 없다(이미 최신)\n'
@@ -596,7 +596,7 @@ function authLimitFromEnv(): RateLimitStore | undefined {
   const kind = env('BARY_AUTH_LIMIT_STORE', '').trim();
   if (kind === '' || kind === 'memory') return undefined;
   const dsn = env('BARY_ACCOUNTS_DSN', '');
-  const store = rateLimitStore(kind, dsn === '' ? {} : { accountsDb: new Db(dsn) });
+  const store = rateLimitStore(kind, dsn === '' ? {} : { accountsDb: openDb(dsn, 'BARY_ACCOUNTS_DSN') });
   log.info('auth.limit_store', { kind: store.kind });
   return store;
 }
@@ -806,7 +806,7 @@ export async function main(): Promise<void> {
   const dataSourcesCfg = dataSourcesConfigFromEnv();
 
   const dsn = env('BARY_DSN');
-  const db = new Db(dsn);
+  const db = openDb(dsn, 'BARY_DSN');
   const applied = await db.migrate();
   if (applied.length > 0) log.info('migrate.applied', { migrations: applied });
 

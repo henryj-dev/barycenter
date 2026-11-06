@@ -49,7 +49,7 @@ import type {
   RateLimit,
   RealIpHeaderName,
 } from '../model/provisional.js';
-import type { Db, Queryable, Row } from './pg.js';
+import type { Database, Queryable, Row } from './db.js';
 import { referencedSets, referencedSetsOfRoute } from '../model/address-sets.js';
 import { routeActions } from '../model/route-rules.js';
 import {
@@ -1033,7 +1033,7 @@ export class ConfigStore {
    * plan 단계에서 막혔다. capability 로 좁힌다고 해 놓고 capability 를 안 물어본 셈이다.
    */
   constructor(
-    private readonly db: Db,
+    private readonly db: Database,
     private readonly caps: RenderCapabilities = { streamRealip: false },
     /**
      * 인증서 **사실**을 읽는 창구 (검수 B-05). 없으면 SAN 커버리지를 안 본다.

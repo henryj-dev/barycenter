@@ -42,10 +42,16 @@ export function pgFor(id: string): PgHandle {
   //     리눅스  ip_local_port_range  32768–60999
   //     macOS   임시 포트            49152–65535
   //     여기    20000–23999          둘 다의 아래
+  //
+  // `BARY_TEST_PG_TAG` 를 주면 이름과 포트에 섞는다 — 같은 호스트에서 워크트리 둘이 저장소 시험을
+  // 동시에 돌 때 서로의 컨테이너를 `rm -f` 하지 않게. 없으면 지금 이름 · 포트 그대로다.
+  const tag = process.env['BARY_TEST_PG_TAG'] ?? '';
+  if (tag !== '' && !/^[a-z0-9-]{1,20}$/.test(tag)) throw new Error(`BARY_TEST_PG_TAG 는 [a-z0-9-] 1~20자다: ${tag}`);
+  const key = tag === '' ? id : `${id}-${tag}`;
   let h = 0;
-  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) % 4000;
+  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 4000;
   const port = 20000 + h;
-  return { name: `bary-pg-${id}`, port, dsn: `postgres://postgres:bary@127.0.0.1:${port}/bary` };
+  return { name: `bary-pg-${key}`, port, dsn: `postgres://postgres:bary@127.0.0.1:${port}/bary` };
 }
 
 const docker = (...args: string[]): string =>

@@ -11,14 +11,14 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { SecretStore } from '../dp/secrets.js';
-import type { Db } from '../store/pg.js';
+import type { Database } from '../store/db.js';
 
 /** 롤백이 닿을 수 있는 리비전 수. 이 밖으로의 롤백은 자료가 없어 **실패한다.** */
 export const DEFAULT_ROLLBACK_REVISIONS = 20;
 
 export type RootsOptions = {
   /** `query` 만 쓴다. 테스트가 빈 DB 를 넣을 수 있어야 배선을 잴 수 있다. */
-  db: Pick<Db, 'query'>;
+  db: Pick<Database, 'query'>;
   /** `generations/` 가 있는 곳. 세대 안의 인증서 디렉토리를 훑는다. */
   prefix: string;
   /**

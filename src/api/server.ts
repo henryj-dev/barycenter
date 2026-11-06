@@ -47,7 +47,7 @@ import { ConfigStore, isHistoryKind, StoreError, type PatchOp } from '../store/c
 import {
   AccountError, AccountStoreUnavailable, STEP_UP_MAX_AGE_MS, type AccountService, type Meta as AccountMeta, type SecondFactorKind,
 } from '../accounts/service.js';
-import type { Db } from '../store/pg.js';
+import type { Database } from '../store/db.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
 import { socketRows } from '../web/sockets-view.js';
@@ -88,7 +88,7 @@ export type ApiOptions = {
    * `node` 는 이 노드의 이름, `staleAfterMs` 를 넘긴 신호는 「연락 없음」이다.
    */
   cluster?: { node: string; staleAfterMs: number };
-  db: Db;
+  db: Database;
   store: ConfigStore;
   control: ControlPlane;
   auth: TokenAuth;

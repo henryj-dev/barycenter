@@ -5,7 +5,7 @@
  * 조건은 `no_new_traffic` 뿐이고 **숫자를 짓지 않는다.**
  */
 import { resolvePeer } from './membership.js';
-import type { Db } from '../store/pg.js';
+import type { Database } from '../store/db.js';
 
 export type DrainCondition = 'no_new_traffic' | 'quiesced' | 'deadline_exceeded';
 
@@ -84,7 +84,7 @@ export function parsePeerObservation(raw: unknown): { inflight: number; sessions
 }
 
 export async function startDrain(
-  db: Db, backendKey: string, by: string, deadlineSeconds?: number,
+  db: Database, backendKey: string, by: string, deadlineSeconds?: number,
 ): Promise<void> {
   const deadline = deadlineSeconds === undefined
     ? null
@@ -106,7 +106,7 @@ export async function startDrain(
  * 그 필터를 한 군데서 빠뜨리면 풀린 백엔드가 계속 빠진다. 누가 언제 뺐다 넣었는지는
  * `audit` 이 든다.
  */
-export async function endDrain(db: Db, backendKey: string): Promise<boolean> {
+export async function endDrain(db: Database, backendKey: string): Promise<boolean> {
   const r = await db.query('DELETE FROM backend_drain WHERE backend_key=$1', [backendKey]);
   return (r.rowCount ?? 0) > 0;
 }
@@ -134,12 +134,12 @@ export async function endDrain(db: Db, backendKey: string): Promise<boolean> {
  * 생기고, 리더가 아닌 인스턴스도 이 함수를 부른다. 지우는 것은 `endDrain` 과 백엔드 삭제
  * CASCADE 의 몫이다.
  */
-export async function drainKeys(db: Db): Promise<Set<string>> {
+export async function drainKeys(db: Database): Promise<Set<string>> {
   const rows = (await db.query('SELECT backend_key FROM backend_drain')).rows;
   return new Set(rows.map((r) => String(r['backend_key'])));
 }
 
-export async function isDraining(db: Db, backendKey: string): Promise<boolean> {
+export async function isDraining(db: Database, backendKey: string): Promise<boolean> {
   // **`drainKeys` 와 같은 조건이어야 한다.** 갈리면 "드레인 중이라는데 트래픽은 간다" 가 된다.
   const r = (await db.query(
     'SELECT 1 FROM backend_drain WHERE backend_key=$1', [backendKey])).rows[0];
@@ -147,7 +147,7 @@ export async function isDraining(db: Db, backendKey: string): Promise<boolean> {
 }
 
 /** 기한을 넘긴 드레인들. **빼는 판단이 아니라 관측이다.** */
-export async function deadlineExceededKeys(db: Db): Promise<Set<string>> {
+export async function deadlineExceededKeys(db: Database): Promise<Set<string>> {
   const rows = (await db.query(
     'SELECT backend_key FROM backend_drain WHERE deadline_at IS NOT NULL AND deadline_at <= now()',
   )).rows;

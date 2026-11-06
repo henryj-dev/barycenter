@@ -32,7 +32,7 @@
  *
  * 남기는 쪽으로 틀린다. `secret-gc.ts` 가 개인키에 대해 세운 것과 같은 원칙이다.
  */
-import type { Db } from './pg.js';
+import type { Database } from './db.js';
 import { TERMINAL_PHASES } from '../dp/operation.js';
 
 /** SQL 배열로 넘길 종단 상태 이름들. 목록을 두 벌 두면 반드시 갈라진다. */
@@ -51,7 +51,7 @@ export const DEFAULT_HEALTH_EVENT_DAYS = 30;
 export const DEFAULT_MAX_PER_SWEEP = 50_000;
 
 export type DbRetentionOptions = {
-  db: Pick<Db, 'query'>;
+  db: Pick<Database, 'query'>;
   /** **안 정하면 안 지운다.** 감사 추적의 보존 기간은 우리가 정할 것이 아니다. */
   auditDays?: number;
   healthEventDays?: number;
@@ -136,7 +136,7 @@ function checkDays(label: string, value: number): number {
  * 상한에 걸려 일부만 지워질 때 최신 행이 먼저 사라지면 안 된다.
  */
 async function prune(
-  db: Pick<Db, 'query'>, table: 'health_events' | 'audit', order: 'seq' | 'id',
+  db: Pick<Database, 'query'>, table: 'health_events' | 'audit', order: 'seq' | 'id',
   days: number, limit: number,
 ): Promise<number> {
   const out = await db.query(
@@ -267,7 +267,7 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
  * 반드시 빠진다 — 스키마의 참조 목록을 그대로 옮겨 적는다.
  */
 async function pruneRevisionPrefix(
-  db: Pick<Db, 'query'>, days: number, limit: number,
+  db: Pick<Database, 'query'>, days: number, limit: number,
 ): Promise<number> {
   const rows = (await db.query(
     `SELECT r.revision::text AS revision
