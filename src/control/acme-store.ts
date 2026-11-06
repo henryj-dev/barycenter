@@ -19,7 +19,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { Database, Queryable, Row } from '../store/db.js';
+import { byDialect, dialectOf, type Database, type Queryable, type Row } from '../store/db.js';
 
 export type OrderState = 'pending' | 'validating' | 'ready' | 'issued' | 'failed' | 'abandoned';
 
@@ -194,8 +194,10 @@ export class AcmeStore {
   async openOrder(opts: {
     accountId: string; certificateId: string; domains: readonly string[];
   }): Promise<{ id: string; created: boolean }> {
-    const existing = (await this.db.query(
-      `SELECT id FROM acme_orders WHERE certificate_id=$1 AND state = ANY($2::acme_order_state[])`,
+    const existing = (await this.db.query(byDialect(this.db, {
+      postgres: `SELECT id FROM acme_orders WHERE certificate_id=$1 AND state = ANY($2::acme_order_state[])`,
+      sqlite: `SELECT id FROM acme_orders WHERE certificate_id=$1 AND state IN (SELECT value FROM json_each($2))`,
+    }),
       [opts.certificateId, LIVE_STATES],
     )).rows[0];
     if (existing !== undefined) return { id: text(existing, 'id'), created: false };
@@ -220,21 +222,34 @@ export class AcmeStore {
    */
   async claimDue(holder: string, leaseSeconds = 120): Promise<AcmeOrderRow | undefined> {
     return this.db.tx(async (c: Queryable) => {
-      const picked = (await c.query(
-        `SELECT id FROM acme_orders
+      // SQLite 는 `SKIP LOCKED` 를 뺀다 — 쓰기 트랜잭션이 `BEGIN IMMEDIATE` 로 DB 전체를 한 줄로 세우므로
+      // 동시에 온 둘은 차례로 돌고, 뒤엣것은 앞엣것이 건 lease 를 보고 다른 주문을 집거나 빈손으로 간다.
+      const picked = (await c.query(byDialect(c, {
+        postgres: `SELECT id FROM acme_orders
           WHERE state = ANY($1::acme_order_state[])
             AND next_attempt_at <= now()
             AND (claimed_until IS NULL OR claimed_until < now())
           ORDER BY next_attempt_at
           FOR UPDATE SKIP LOCKED
           LIMIT 1`,
+        sqlite: `SELECT id FROM acme_orders
+          WHERE state IN (SELECT value FROM json_each($1))
+            AND next_attempt_at <= now()
+            AND (claimed_until IS NULL OR claimed_until < now())
+          ORDER BY next_attempt_at
+          LIMIT 1`,
+      }),
         [LIVE_STATES],
       )).rows[0];
       if (picked === undefined) return undefined;
 
-      await c.query(
-        `UPDATE acme_orders SET claimed_by=$2, claimed_until=now() + ($3 || ' seconds')::interval,
+      await c.query(byDialect(c, {
+        postgres: `UPDATE acme_orders SET claimed_by=$2, claimed_until=now() + ($3 || ' seconds')::interval,
                 updated_at=now() WHERE id=$1`,
+        sqlite: `UPDATE acme_orders SET claimed_by=$2,
+                claimed_until=strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+' || $3 || ' seconds'),
+                updated_at=now() WHERE id=$1`,
+      }),
         [text(picked, 'id'), holder, String(leaseSeconds)],
       );
       return this.#read(c, text(picked, 'id'));
@@ -307,12 +322,28 @@ export class AcmeStore {
   async recordOrderUrls(orderId: string, urls: {
     orderUrl: string; finalizeUrl: string; expiresAt?: string;
   }): Promise<void> {
-    await this.db.query(
-      `UPDATE acme_orders SET order_url=$2, finalize_url=$3,
+    switch (dialectOf(this.db).name) {
+      case 'postgres':
+        await this.db.query(
+          `UPDATE acme_orders SET order_url=$2, finalize_url=$3,
               expires_at=COALESCE($4::timestamptz, expires_at), updated_at=now()
         WHERE id=$1`,
-      [orderId, urls.orderUrl, urls.finalizeUrl, urls.expiresAt ?? null],
-    );
+          [orderId, urls.orderUrl, urls.finalizeUrl, urls.expiresAt ?? null],
+        );
+        return;
+      case 'sqlite':
+        // 시각은 한 형식(`toISOString`)이어야 문자열 비교가 시각 비교다 — CA 가 준 RFC 3339 를 맞춘다.
+        await this.db.query(
+          `UPDATE acme_orders SET order_url=$2, finalize_url=$3,
+              expires_at=COALESCE($4, expires_at), updated_at=now()
+        WHERE id=$1`,
+          [orderId, urls.orderUrl, urls.finalizeUrl,
+            urls.expiresAt === undefined ? null : new Date(urls.expiresAt).toISOString()],
+        );
+        return;
+      case 'mysql':
+        throw new Error('mysql 방언의 문장이 아직 없다 (docs/adr-multi-db.md 「단계」 3)');
+    }
   }
 
   async advance(orderId: string, state: OrderState): Promise<void> {
@@ -345,8 +376,8 @@ export class AcmeStore {
    * 한다. 계속 재시도하면서 아무 말도 안 하는 것이 더 나쁘다.
    */
   async fail(orderId: string, error: string): Promise<OrderState> {
-    const r = await this.db.query(
-      `UPDATE acme_orders
+    const r = await this.db.query(byDialect(this.db, {
+      postgres: `UPDATE acme_orders
           SET attempts = attempts + 1,
               state = CASE WHEN attempts + 1 >= $3 THEN 'abandoned'::acme_order_state
                            ELSE 'failed'::acme_order_state END,
@@ -356,6 +387,17 @@ export class AcmeStore {
               updated_at = now()
         WHERE id=$1
       RETURNING state`,
+      sqlite: `UPDATE acme_orders
+          SET attempts = attempts + 1,
+              state = CASE WHEN attempts + 1 >= $3 THEN 'abandoned' ELSE 'failed' END,
+              next_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(),
+                                         '+' || min(60 * pow(2, attempts), 3600) || ' seconds'),
+              last_error = $2,
+              claimed_by = NULL, claimed_until = NULL,
+              updated_at = now()
+        WHERE id=$1
+      RETURNING state`,
+    }),
       [orderId, error.slice(0, 2000), MAX_ATTEMPTS],
     );
     return text(r.rows[0] ?? {}, 'state') as OrderState;
@@ -407,13 +449,20 @@ export class AcmeStore {
    * 물으면 영영 안 걸린다. **자료를 놓았는가**로 묻는다 — 그게 우리가 아는 사실이다.
    */
   async orphans(olderThanSeconds: number): Promise<ChallengeRow[]> {
-    return (await this.db.query(
-      `SELECT c.* FROM acme_challenges c
+    return (await this.db.query(byDialect(this.db, {
+      postgres: `SELECT c.* FROM acme_challenges c
          JOIN acme_orders o ON o.id = c.order_id
         WHERE c.placed_at IS NOT NULL AND c.cleaned_at IS NULL
           AND (o.state IN ('issued','abandoned')
                OR c.placed_at < now() - ($1 || ' seconds')::interval)
         ORDER BY c.placed_at`,
+      sqlite: `SELECT c.* FROM acme_challenges c
+         JOIN acme_orders o ON o.id = c.order_id
+        WHERE c.placed_at IS NOT NULL AND c.cleaned_at IS NULL
+          AND (o.state IN ('issued','abandoned')
+               OR c.placed_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' seconds'))
+        ORDER BY c.placed_at`,
+    }),
       [String(olderThanSeconds)],
     )).rows.map((r): ChallengeRow => ({
       id: text(r, 'id'), orderId: text(r, 'order_id'), domain: text(r, 'domain'),

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { PgSecretStore } from '../../src/dp/secrets-pg.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'rotate-kek.mjs');
@@ -84,7 +84,7 @@ afterAll(async () => {
 let refs: string[] = [];
 
 beforeEach(async () => {
-  await db.query('TRUNCATE secret_materials');
+  await db.query(TEST_DB === 'sqlite' ? 'DELETE FROM secret_materials' : 'TRUNCATE secret_materials');
   const store = new PgSecretStore({ db, kek: OLD });
   const a = mintPair('a.example');
   const b = mintPair('b.example');

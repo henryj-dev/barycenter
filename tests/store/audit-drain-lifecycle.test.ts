@@ -23,7 +23,8 @@ import { TokenAuth } from '../../src/api/auth.js';
 import { LeaderElection } from '../../src/control/leader.js';
 import { deadlineExceededKeys, drainKeys, isDraining, startDrain } from '../../src/control/drain.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('audit-drain');
 const TOKEN = 'audit-drain-token';
@@ -85,7 +86,7 @@ beforeAll(async () => {
   await db.migrate();
   store = new ConfigStore(db, { streamRealip: false });
 
-  const election = new LeaderElection(PG.dsn, 'audit-drain-test');
+  const election = new LeaderElection(openLeaderLockForTest(PG.dsn), 'audit-drain-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   const control = new ControlPlane(db, store, driver, election,
     { prefix: '/tmp/bary-audit-drain', adminSocket: '/tmp/bary-admin-test.sock' });
@@ -139,7 +140,9 @@ describe('드레인 수명 (검수 B-04 · B-10)', () => {
      */
     await startDrain(db, 'a-11', 'tester', 3600);
     expect([...await drainKeys(db)]).toEqual(['a-11']);
-    await db.query(`UPDATE backend_drain SET deadline_at = now() - interval '1 second'`);
+    await db.query(TEST_DB === 'sqlite'
+      ? `UPDATE backend_drain SET deadline_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second')`
+      : `UPDATE backend_drain SET deadline_at = now() - interval '1 second'`);
     expect([...await drainKeys(db)], '만료가 드레인을 풀었다 — 트래픽이 돌아온다')
       .toEqual(['a-11']);
     expect(await isDraining(db, 'a-11')).toBe(true);

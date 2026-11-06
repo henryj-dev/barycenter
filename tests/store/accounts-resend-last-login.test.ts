@@ -13,7 +13,7 @@ import { ACCOUNT_MIGRATIONS } from '../../src/accounts/migrations.js';
 import { Sealer } from '../../src/accounts/seal.js';
 import { AccountService } from '../../src/accounts/service.js';
 import { hotp, stepOf } from '../../src/accounts/totp.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('accounts-resend');
 let db: Db;
@@ -49,7 +49,7 @@ beforeAll(async () => {
 afterAll(async () => { await db?.close(); stopPg(PG); });
 
 beforeEach(async () => {
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
   outbox = [];
   clock = Date.now();

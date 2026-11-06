@@ -23,7 +23,7 @@ import { hotp, stepOf } from '../../src/accounts/totp.js';
 import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('accounts-mfa-idp');
 const ISS = 'https://idp.test';
@@ -120,7 +120,7 @@ beforeAll(async () => {
 }, 180_000);
 afterAll(async () => { await db?.close(); stopPg(PG); });
 beforeEach(async () => {
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
   idpMode = 'ok';
   idpCalls = [];

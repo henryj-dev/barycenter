@@ -13,7 +13,7 @@
  */
 import type { AddressSet } from '../../model/provisional.js';
 import type { ConfigStore } from '../../store/config-store.js';
-import type { Database, Queryable } from '../../store/db.js';
+import { byDialect, type Database, type Queryable } from '../../store/db.js';
 import { pendingApplies, type ControlPlane } from '../plane.js';
 import type { SourceFailure } from '../sources/fetch.js';
 import type { AddressSources } from './registry.js';
@@ -143,9 +143,12 @@ async function record(
 
 /** 화면의 「마지막 갱신」. 지금 head 에 있는 집합만 — 지운 집합의 옛 기록은 거른다. */
 export async function refreshRows(db: Queryable, keys: readonly string[]): Promise<RefreshRow[]> {
-  const rows = (await db.query(
-    `SELECT key, checked_at, ok, reason, detail, refreshed_at, revision::text AS revision, by_actor
-       FROM address_set_refresh WHERE key = ANY($1) ORDER BY key`, [keys],
+  const rows = (await db.query(byDialect(db, {
+    postgres: `SELECT key, checked_at, ok, reason, detail, refreshed_at, revision::text AS revision, by_actor
+       FROM address_set_refresh WHERE key = ANY($1) ORDER BY key`,
+    sqlite: `SELECT key, checked_at, ok, reason, detail, refreshed_at, CAST(revision AS TEXT) AS revision, by_actor
+       FROM address_set_refresh WHERE key IN (SELECT value FROM json_each($1)) ORDER BY key`,
+  }), [keys],
   )).rows;
   const iso = (v: unknown): string => new Date(String(v)).toISOString();
   return rows.map((r) => ({

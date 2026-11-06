@@ -12,6 +12,12 @@
 export type Row = Record<string, unknown>;
 
 export interface Queryable {
+  /**
+   * 이 연결의 방언. `Queryable` 만 받는 저장소 함수(트랜잭션 안의 연결)가 자기 문장을 고르는 근거다
+   * (ADR 「방언을 넘기는 방법」). 실제 구현(`Database` 와 그 `tx` · `dryRun` 이 주는 연결)은 **반드시**
+   * 채운다. 비어 있으면 PG 로 본다 — 시험의 가짜 연결(`{ query }`)이 그 모양이다.
+   */
+  readonly dialect?: Dialect;
   query(text: string, values?: readonly unknown[]): Promise<{ rows: Row[]; rowCount: number | null }>;
 }
 
@@ -42,8 +48,33 @@ export type Dialect = {
 export const DIALECTS: Readonly<Record<DialectName, Dialect>> = {
   postgres: { name: 'postgres', placeholder: 'dollar', returning: true, rowLocks: true, skipLocked: true, transactionalDdl: true },
   mysql: { name: 'mysql', placeholder: 'question', returning: false, rowLocks: true, skipLocked: true, transactionalDdl: false },
-  sqlite: { name: 'sqlite', placeholder: 'question', returning: true, rowLocks: false, skipLocked: false, transactionalDdl: true },
+  // SQLite 는 `?NNN` 을 안다. 드라이버(`./sqlite.ts`)가 `$n` 을 `?n` 으로 옮긴다 — 번호가 곧 인자 자리라 뜻이 같다.
+  sqlite: { name: 'sqlite', placeholder: 'dollar', returning: true, rowLocks: false, skipLocked: false, transactionalDdl: true },
 };
+
+/** 연결의 방언. 비어 있으면 PG(시험의 가짜 연결). */
+export function dialectOf(q: Queryable): Dialect {
+  return q.dialect ?? DIALECTS.postgres;
+}
+
+/**
+ * 방언마다 나란히 둔 문장(또는 값). **지금 구현이 있는 방언만** 적는다 — 3단계가 `mysql` 을 더하면
+ * 이 형에 `mysql` 을 더하고, 타입 검사가 문장을 빠뜨린 자리를 모두 가리킨다(기본 갈래를 두지 않는 이유).
+ *
+ * PG 문장이 SQLite 에서 **그대로** 뜻이 같은 자리(자리 표시 · `now()` 는 드라이버가 맞춘다)는 이것을 쓰지
+ * 않고 문장 하나를 둔다. 이것을 쓰는 자리는 문법이나 뜻이 갈리는 자리다 — `FOR UPDATE` · `::형` ·
+ * `= ANY($n)` · `jsonb` 연산 · `interval` · 시퀀스.
+ */
+export type ByDialect<T> = { readonly postgres: T; readonly sqlite: T };
+
+export function byDialect<T>(q: Queryable, m: ByDialect<T>): T {
+  const d = dialectOf(q).name;
+  switch (d) {
+    case 'postgres': return m.postgres;
+    case 'sqlite': return m.sqlite;
+    case 'mysql': throw new Error('mysql 방언의 문장이 아직 없다 (docs/adr-multi-db.md 「단계」 3)');
+  }
+}
 
 /**
  * DSN 의 스킴으로 종류를 고른다.

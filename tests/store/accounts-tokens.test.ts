@@ -23,7 +23,8 @@ import { base32Encode, hotp, stepOf } from '../../src/accounts/totp.js';
 import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { byDialect } from '../../src/store/db.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('accounts-tokens');
 let db: Db;
@@ -62,7 +63,7 @@ beforeAll(async () => {
 afterAll(async () => { await db?.close(); stopPg(PG); });
 
 beforeEach(async () => {
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
   clock = Date.now();
 });
@@ -391,7 +392,10 @@ describe('개인 토큰 — HTTP', () => {
   it('**발급 · 폐기는 step-up 이 필요하다**', async () => {
     const op = await login('operator', 'op');
     const t = (await (await issue(op.cookie, { name: 'ci', role: 'operator' })).json() as { id: string }).id;
-    await db.query(`UPDATE sessions SET mfa_at = now() - interval '20 minutes'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE sessions SET mfa_at = now() - interval '20 minutes'`,
+      sqlite: `UPDATE sessions SET mfa_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-20 minutes')`,
+    }));
     const a = await issue(op.cookie, { name: 'ci2', role: 'operator' });
     expect(a.status).toBe(403);
     expect((await a.json() as { code: string }).code).toBe('mfa_step_up_required');

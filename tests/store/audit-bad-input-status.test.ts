@@ -21,7 +21,7 @@ import { ControlPlane } from '../../src/control/plane.js';
 import { TokenAuth } from '../../src/api/auth.js';
 import { LeaderElection } from '../../src/control/leader.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('audit-status');
 const TOKEN = 'audit-status-token';
@@ -104,10 +104,12 @@ describe('깨진 입력의 상태 코드 (검수 B-11)', () => {
 
     // ④ 같은 부류가 하나 더 있었다 — `plans.id` 는 uuid 컬럼이라 uuid 가 아닌
     //    경로 파라미터가 PG 의 22P02 로 500 이 됐다. 그 자리도 400 이다.
+    //    SQLite 의 uuid 열은 텍스트라 22P02 가 없다 — 모양이 틀린 id 는 행을 못 찾아 404 다. 500 이 아닌 것은 같다.
+    const notUuidStatus = TEST_DB === 'sqlite' ? 404 : 400;
     const notUuid = await req('GET', '/api/v1/plans/does-not-exist');
-    expect(notUuid.status).toBe(400);
+    expect(notUuid.status).toBe(notUuidStatus);
     const notUuidCs = await req('GET', '/api/v1/changesets/nope');
-    expect(notUuidCs.status).toBe(400);
+    expect(notUuidCs.status).toBe(notUuidStatus);
   });
 
   it('정상 입력은 그대로다', async () => {

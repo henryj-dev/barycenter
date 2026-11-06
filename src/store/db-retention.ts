@@ -32,7 +32,7 @@
  *
  * 남기는 쪽으로 틀린다. `secret-gc.ts` 가 개인키에 대해 세운 것과 같은 원칙이다.
  */
-import type { Database } from './db.js';
+import { byDialect, type Database } from './db.js';
 import { TERMINAL_PHASES } from '../dp/operation.js';
 
 /** SQL 배열로 넘길 종단 상태 이름들. 목록을 두 벌 두면 반드시 갈라진다. */
@@ -134,16 +134,23 @@ function checkDays(label: string, value: number): number {
  *
  * `ORDER BY` 를 넣는 이유는 결정성이 아니라 **오래된 것부터**여야 하기 때문이다.
  * 상한에 걸려 일부만 지워질 때 최신 행이 먼저 사라지면 안 된다.
+ *
+ * SQLite 는 `ctid` 자리에 `rowid` 를 쓴다(WITHOUT ROWID 표가 없다). 보존 일수의 경계 시각은 `strftime` 으로 낸다.
  */
 async function prune(
   db: Pick<Database, 'query'>, table: 'health_events' | 'audit', order: 'seq' | 'id',
   days: number, limit: number,
 ): Promise<number> {
-  const out = await db.query(
-    `DELETE FROM ${table} WHERE ctid IN (
+  const out = await db.query(byDialect(db, {
+    postgres: `DELETE FROM ${table} WHERE ctid IN (
        SELECT ctid FROM ${table}
        WHERE at < now() - make_interval(days => $1::int)
        ORDER BY ${order} LIMIT $2::int)`,
+    sqlite: `DELETE FROM ${table} WHERE rowid IN (
+       SELECT rowid FROM ${table}
+       WHERE at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days')
+       ORDER BY ${order} LIMIT CAST($2 AS INTEGER))`,
+  }),
     [String(days), String(limit)],
   );
   return out.rowCount ?? 0;
@@ -192,12 +199,18 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
    * 더는 못 쓴다" 는 선이고, 보존 기간은 "그 뒤로 얼마나 더 들고 있나" 다 — 둘을 한
    * 숫자로 접으면 진단하려고 남겨 둔 창이 사라진다.
    */
-  const plans = planDays === undefined ? 0 : (await opts.db.query(
-    `DELETE FROM plans WHERE ctid IN (
+  const plans = planDays === undefined ? 0 : (await opts.db.query(byDialect(opts.db, {
+    postgres: `DELETE FROM plans WHERE ctid IN (
        SELECT ctid FROM plans
        WHERE state IN ('planned', 'expired')
          AND expires_at < now() - make_interval(days => $1::int)
        ORDER BY created_at LIMIT $2::int)`,
+    sqlite: `DELETE FROM plans WHERE rowid IN (
+       SELECT rowid FROM plans
+       WHERE state IN ('planned', 'expired')
+         AND expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days')
+       ORDER BY created_at LIMIT CAST($2 AS INTEGER))`,
+  }),
     [String(planDays), String(limit)],
   )).rowCount ?? 0;
 
@@ -207,12 +220,18 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
    * `committed` 를 안 지우는 이유가 그 CASCADE 다: 커밋된 changeset 을 지우면 롤백
    * 수단인 plan 이 **함께** 사라진다.
    */
-  const changesets = changesetDays === undefined ? 0 : (await opts.db.query(
-    `DELETE FROM changesets WHERE ctid IN (
+  const changesets = changesetDays === undefined ? 0 : (await opts.db.query(byDialect(opts.db, {
+    postgres: `DELETE FROM changesets WHERE ctid IN (
        SELECT ctid FROM changesets
        WHERE state = 'discarded'
          AND created_at < now() - make_interval(days => $1::int)
        ORDER BY created_at LIMIT $2::int)`,
+    sqlite: `DELETE FROM changesets WHERE rowid IN (
+       SELECT rowid FROM changesets
+       WHERE state = 'discarded'
+         AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days')
+       ORDER BY created_at LIMIT CAST($2 AS INTEGER))`,
+  }),
     [String(changesetDays), String(limit)],
   )).rowCount ?? 0;
 
@@ -227,13 +246,20 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
    * 지우면 같은 plan 에 apply 를 다시 부를 수 있고, 그러면 이미 끝난 전환이 새
    * 오퍼레이션으로 되살아난다. 다른 리비전의 것은 `PLAN_STALE` 이 먼저 막는다.
    */
-  const operations = operationDays === undefined ? 0 : (await opts.db.query(
-    `DELETE FROM operations WHERE ctid IN (
+  const operations = operationDays === undefined ? 0 : (await opts.db.query(byDialect(opts.db, {
+    postgres: `DELETE FROM operations WHERE ctid IN (
        SELECT ctid FROM operations o
        WHERE o.phase = ANY($1::text[])
          AND o.updated_at < now() - make_interval(days => $2::int)
          AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = o.revision)
        ORDER BY o.updated_at LIMIT $3::int)`,
+    sqlite: `DELETE FROM operations WHERE rowid IN (
+       SELECT o.rowid FROM operations o
+       WHERE o.phase IN (SELECT value FROM json_each($1))
+         AND o.updated_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $2 || ' days')
+         AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = o.revision)
+       ORDER BY o.updated_at LIMIT CAST($3 AS INTEGER))`,
+  }),
     [TERMINAL_PHASE_NAMES, String(operationDays), String(limit)],
   )).rowCount ?? 0;
 
@@ -269,8 +295,8 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
 async function pruneRevisionPrefix(
   db: Pick<Database, 'query'>, days: number, limit: number,
 ): Promise<number> {
-  const rows = (await db.query(
-    `SELECT r.revision::text AS revision
+  const rows = (await db.query(byDialect(db, {
+    postgres: `SELECT r.revision::text AS revision
        FROM config_revisions r
       WHERE r.created_at < now() - make_interval(days => $1::int)
         AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = r.revision)
@@ -283,6 +309,20 @@ async function pruneRevisionPrefix(
                             OR c.committed_revision = r.revision)
       ORDER BY r.revision
       LIMIT $2::int`,
+    sqlite: `SELECT CAST(r.revision AS TEXT) AS revision
+       FROM config_revisions r
+      WHERE r.created_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days')
+        AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = r.revision)
+        AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.target_revision = r.revision)
+        AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.revision = r.revision)
+        -- changeset 도 리비전을 붙잡는다 (base_revision · committed_revision 둘 다).
+        -- 처음에 이 둘을 빠뜨렸고 FK 가 실물 PG 에서 잡았다.
+        AND NOT EXISTS (SELECT 1 FROM changesets c
+                         WHERE c.base_revision = r.revision
+                            OR c.committed_revision = r.revision)
+      ORDER BY r.revision
+      LIMIT CAST($2 AS INTEGER)`,
+  }),
     [String(days), String(limit)],
   )).rows.map((x) => String(x['revision']));
   if (rows.length === 0) return 0;
@@ -292,8 +332,10 @@ async function pruneRevisionPrefix(
    * 결과가 연속이 아닐 수 있다 — 그대로 지우면 사슬 가운데가 사라진다. 가장 오래된
    * 것부터 **연속인 만큼만** 취한다.
    */
-  const oldest = (await db.query(
-    'SELECT min(revision)::text AS m FROM config_revisions',
+  const oldest = (await db.query(byDialect(db, {
+    postgres: 'SELECT min(revision)::text AS m FROM config_revisions',
+    sqlite: 'SELECT CAST(min(revision) AS TEXT) AS m FROM config_revisions',
+  }),
   )).rows[0];
   const first = oldest === undefined || oldest['m'] === null ? undefined : String(oldest['m']);
   if (first === undefined || rows[0] !== first) return 0;
@@ -309,10 +351,14 @@ async function pruneRevisionPrefix(
 
   // 살아남는 쪽이 `rollback_of` 로 접두사를 가리키면 그 롤백의 출처가 사라진다.
   const cut = prefix[prefix.length - 1]!;
-  const held = (await db.query(
-    `SELECT min(rollback_of)::text AS m FROM config_revisions
+  const held = (await db.query(byDialect(db, {
+    postgres: `SELECT min(rollback_of)::text AS m FROM config_revisions
       WHERE rollback_of IS NOT NULL AND rollback_of <= $1::bigint
         AND revision > $1::bigint`,
+    sqlite: `SELECT CAST(min(rollback_of) AS TEXT) AS m FROM config_revisions
+      WHERE rollback_of IS NOT NULL AND rollback_of <= CAST($1 AS INTEGER)
+        AND revision > CAST($1 AS INTEGER)`,
+  }),
     [cut],
   )).rows[0];
   const heldFrom = held === undefined || held['m'] === null ? undefined : String(held['m']);
@@ -322,13 +368,19 @@ async function pruneRevisionPrefix(
   if (finalPrefix.length === 0) return 0;
 
   // 새 최고참의 `parent` 를 끊는다 — **지우기 전에** 해야 FK 가 안 막는다.
-  await db.query(
-    `UPDATE config_revisions SET parent = NULL
+  await db.query(byDialect(db, {
+    postgres: `UPDATE config_revisions SET parent = NULL
       WHERE parent = ANY($1::bigint[]) AND revision <> ALL($1::bigint[])`,
+    sqlite: `UPDATE config_revisions SET parent = NULL
+      WHERE parent IN (SELECT CAST(value AS INTEGER) FROM json_each($1))
+        AND revision NOT IN (SELECT CAST(value AS INTEGER) FROM json_each($1))`,
+  }),
     [finalPrefix],
   );
-  return (await db.query(
-    'DELETE FROM config_revisions WHERE revision = ANY($1::bigint[])',
+  return (await db.query(byDialect(db, {
+    postgres: 'DELETE FROM config_revisions WHERE revision = ANY($1::bigint[])',
+    sqlite: 'DELETE FROM config_revisions WHERE revision IN (SELECT CAST(value AS INTEGER) FROM json_each($1))',
+  }),
     [finalPrefix],
   )).rowCount ?? 0;
 }

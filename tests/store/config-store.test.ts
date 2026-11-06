@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ConfigStore, StoreError, type PatchOp } from '../../src/store/config-store.js';
+import { byDialect } from '../../src/store/db.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('store');
@@ -275,8 +276,8 @@ describe('정본 저장소', () => {
     const cs = await store.createChangeset(head.revision, 't');
     await store.patchChangeset(cs, minimal, 't');
     await store.plan(cs, 't');
-    expect((await db.query('SELECT count(*)::int AS n FROM pools')).rows[0]?.['n']).toBe(0);
-    expect((await db.query('SELECT count(*)::int AS n FROM listeners')).rows[0]?.['n']).toBe(0);
+    expect((await db.query(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM pools', sqlite: 'SELECT count(*) AS n FROM pools' }))).rows[0]?.['n']).toBe(0);
+    expect((await db.query(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM listeners', sqlite: 'SELECT count(*) AS n FROM listeners' }))).rows[0]?.['n']).toBe(0);
     expect((await store.head()).revision).toBe('1');
   });
 
@@ -370,13 +371,13 @@ describe('정본 저장소', () => {
       // 근거를 안 재면 나중에 FK 정책이 RESTRICT 로 바뀌었을 때 **롤백이 조용히
       // 옛 백엔드를 남긴다.** 명시적 DELETE 를 지운 대신 이걸 둔다.
       await commitAll(minimal);
-      const before = (await db.query('SELECT count(*)::int AS n FROM backends')).rows[0];
+      const before = (await db.query(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM backends', sqlite: 'SELECT count(*) AS n FROM backends' }))).rows[0];
       expect(before?.['n']).toBe(1);
       // 리스너가 RESTRICT 로 풀을 붙잡고 있으므로 **롤백과 같은 순서**로 지운다.
       // (처음엔 풀부터 지우려다 RESTRICT 에 막혔다 — 그 자체가 §4.0 이 의도한 동작이다.)
       await db.query(`DELETE FROM listeners`);
       await db.query(`DELETE FROM pools WHERE key = 'app'`);
-      const after = (await db.query('SELECT count(*)::int AS n FROM backends')).rows[0];
+      const after = (await db.query(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM backends', sqlite: 'SELECT count(*) AS n FROM backends' }))).rows[0];
       expect(after?.['n']).toBe(0);
     });
 

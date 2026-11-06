@@ -13,7 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { HealthProber, currentHealth, reduceMembership } from '../../src/control/health.js';
 import type { Model } from '../../src/model/provisional.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('health');
 let db: Db;
@@ -54,7 +54,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await reset(db);
-  await db.query('TRUNCATE backend_health, health_events');
+  await db.query(TEST_DB === 'sqlite' ? 'DELETE FROM backend_health' : 'TRUNCATE backend_health, health_events');
+  if (TEST_DB === 'sqlite') await db.query('DELETE FROM health_events');
   await db.query('UPDATE health_cursor SET next_seq = 1');
 });
 
@@ -107,14 +108,20 @@ describe('헬스 프로버', () => {
   it('**커서는 `nextval` 이 아니다** — 번호가 1 부터 이어진다 (§6.6)', async () => {
     const prober = new HealthProber(db, { failThreshold: 1, riseThreshold: 1, timeoutMs: 500 });
     await prober.sweep(model());
-    const rows = (await db.query('SELECT seq::text AS s FROM health_events ORDER BY seq')).rows;
+    const rows = (await db.query(TEST_DB === 'sqlite'
+      ? 'SELECT CAST(seq AS TEXT) AS s FROM health_events ORDER BY seq'
+      : 'SELECT seq::text AS s FROM health_events ORDER BY seq')).rows;
     expect(rows.map((r) => r['s'])).toEqual(['1', '2']);
     // 잠금 행이 다음 번호를 들고 있다.
-    const cur = (await db.query('SELECT next_seq::text AS n FROM health_cursor')).rows[0];
+    const cur = (await db.query(TEST_DB === 'sqlite'
+      ? 'SELECT CAST(next_seq AS TEXT) AS n FROM health_cursor'
+      : 'SELECT next_seq::text AS n FROM health_cursor')).rows[0];
     expect(cur?.['n']).toBe('3');
   }, 60_000);
 
-  it('**커서 발급이 직렬화된다** — `FOR UPDATE` 가 그걸 한다 (§6.6)', async () => {
+  // PG 전용 — `pg` 연결 둘로 `FOR UPDATE` 의 행 잠금을 잰다. SQLite 는 행 잠금이 없고 쓰기 트랜잭션이
+  // 한 줄이다 — 아래 SQLite 판이 같은 불변식(두 발급이 같은 번호를 못 본다)을 잰다.
+  it.skipIf(TEST_DB === 'sqlite')('**커서 발급이 직렬화된다** — `FOR UPDATE` 가 그걸 한다 (§6.6)', async () => {
     // `Promise.all` 로 두 sweep 을 돌리는 것으로는 못 잰다 — 트랜잭션이 겹칠지가 **운**이고,
     // 안 겹치면 `FOR UPDATE` 를 빼도 통과한다. 실제로 그렇게 짰다가 변이가 안 잡혔다.
     //
@@ -155,6 +162,41 @@ describe('헬스 프로버', () => {
       await A.end();
       await B.end();
     }
+  }, 60_000);
+
+  it.skipIf(TEST_DB !== 'sqlite')('**커서 발급이 직렬화된다** — SQLite 는 `BEGIN IMMEDIATE` 가 그걸 한다 (§6.6)', async () => {
+    // PG 판과 같은 인터리빙을 만든다: A 가 커서를 읽고 멈춘 사이에 B 가 트랜잭션을 연다.
+    // B 의 읽기는 A 가 커밋한 뒤에야 돈다 — 같은 번호를 볼 수 없다.
+    const seen: string[] = [];
+    let go!: () => void;
+    const gate = new Promise<void>((r) => { go = r; });
+    const issue = (who: string, wait?: Promise<void>): Promise<string> => db.tx(async (c) => {
+      const n = String((await c.query('SELECT CAST(next_seq AS TEXT) AS n FROM health_cursor')).rows[0]?.['n']);
+      seen.push(`${who}:read`);
+      if (wait !== undefined) await wait;
+      await c.query('UPDATE health_cursor SET next_seq = next_seq + 1');
+      await c.query(`INSERT INTO health_events (seq, backend_key, state) VALUES ($1,$2,'healthy')`, [n, who]);
+      seen.push(`${who}:commit`);
+      return n;
+    });
+    const a = issue('a', gate);
+    const b = issue('b');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen, 'B 가 A 의 커밋 전에 읽었다').toEqual(['a:read']);
+    // 다른 프로세스의 쓰기도 막힌다 — 같은 파일의 둘째 연결은 쓰기 잠금을 못 쥔다.
+    const { sqliteModule, sqlitePathOf } = await import('../../src/store/sqlite.js');
+    const other = new (sqliteModule().DatabaseSync)(sqlitePathOf(PG.dsn), { timeout: 0 });
+    try {
+      expect(() => other.exec('BEGIN IMMEDIATE')).toThrow(/locked|busy/i);
+    } finally {
+      other.close();
+    }
+    go();
+    const [na, nb] = await Promise.all([a, b]);
+    expect(nb).not.toBe(na);
+    expect(seen).toEqual(['a:read', 'a:commit', 'b:read', 'b:commit']);
+    const rows = (await db.query('SELECT CAST(seq AS TEXT) AS s FROM health_events ORDER BY seq')).rows;
+    expect(rows.map((r) => r['s'])).toEqual(['1', '2']);
   }, 60_000);
 
   it('**새 프로세스가 자기 관측을 안 버린다** — 순번을 저장된 값에서 이어 붙인다', async () => {

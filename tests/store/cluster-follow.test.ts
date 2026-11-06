@@ -24,7 +24,8 @@ import { ClusterNode, currentLeader, listClusterNodes, nodeHistory, nodeStateOf 
 import { LeaderElection } from '../../src/control/leader.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation, ApplyResult } from '../../src/dp/operation.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('cluster-follow');
 const CAPS = { httpLua: true, streamLua: true, streamRealip: false, sslConfCommand: true };
@@ -103,10 +104,10 @@ beforeAll(async () => {
   db = new Db(PG.dsn);
   await db.migrate();
   store = new ConfigStore(db, { streamRealip: false });
-  electionA = new LeaderElection(PG.dsn, 'web-01');
+  electionA = new LeaderElection(openLeaderLockForTest(PG.dsn), 'web-01');
   if (!(await electionA.tryAcquire())) throw new Error('리더 획득 실패');
   // B 는 락을 잡지 않는다 — 팔로워다.
-  electionB = new LeaderElection(PG.dsn, 'web-02');
+  electionB = new LeaderElection(openLeaderLockForTest(PG.dsn), 'web-02');
 }, 240_000);
 
 afterAll(async () => {
@@ -125,7 +126,9 @@ beforeEach(async () => {
   follower = planeOf(dpB, electionB);
 });
 
-describe('팔로워가 리더의 활성 세대를 따라간다', () => {
+// PG 전용 — 여러 호스트가 설정 DB 하나를 함께 보는 클러스터다. SQLite 는 파일 하나라 호스트를 넘어 나눌 수 없고
+// 데몬이 SQLite 로 클러스터 모드를 받지 않는다. 노드 상태 · 화면 데이터(아래)는 SQLite 에서도 잰다.
+describe.skipIf(TEST_DB === 'sqlite')('팔로워가 리더의 활성 세대를 따라간다', () => {
   it('**같은 이름의 세대를 자기 쪽에 만들고 활성화한다**', async () => {
     const generation = await commitAndApply(MODEL);
     expect(dpA.generation).toBe(generation);
@@ -212,7 +215,9 @@ describe('노드 상태 (cluster_nodes)', () => {
   });
 
   it('오래된 신호는 stale 이다', async () => {
-    await db.query(`INSERT INTO cluster_nodes (name, role, state, last_seen) VALUES ('web-09', 'follower', 'in_sync', now() - interval '1 hour')`);
+    await db.query(TEST_DB === 'sqlite'
+      ? `INSERT INTO cluster_nodes (name, role, state, last_seen) VALUES ('web-09', 'follower', 'in_sync', strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 hour'))`
+      : `INSERT INTO cluster_nodes (name, role, state, last_seen) VALUES ('web-09', 'follower', 'in_sync', now() - interval '1 hour')`);
     const [row] = await listClusterNodes(db, 60_000);
     expect(row).toMatchObject({ name: 'web-09', stale: true });
   });

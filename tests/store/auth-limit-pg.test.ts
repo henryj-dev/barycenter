@@ -16,7 +16,7 @@ import { AuthFailureLimiter } from '../../src/api/auth-rate-limit.js';
 import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('auth-limit-pg');
 let db: Db;
@@ -47,7 +47,7 @@ beforeAll(async () => {
 afterAll(async () => { await db?.close(); stopPg(PG); });
 
 beforeEach(async () => {
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
 });
 
@@ -63,7 +63,9 @@ describe('공유 인증 실패 제한 — 두 인스턴스, 같은 PG', () => {
     for (let i = 0; i < 3; i++) s.push((await fetch(`${A}/api/v1/config/head`, { headers: WRONG })).status);
     for (let i = 0; i < 2; i++) s.push((await fetch(`${B}/api/v1/config/head`, { headers: WRONG })).status);
     expect(s).toEqual([401, 401, 401, 401, 429]);
-    const row = (await db.query(`SELECT key, failures, blocked_until IS NOT NULL AS blocked FROM auth_throttle`)).rows;
+    const row = (await db.query(`SELECT key, failures, blocked_until IS NOT NULL AS blocked FROM auth_throttle`)).rows
+      // 식이 낸 boolean 은 SQLite 에서 1/0 이다.
+      .map((r) => ({ ...r, blocked: r['blocked'] === true || r['blocked'] === 1 }));
     expect(row).toEqual([{ key: 'api:127.0.0.1', failures: 5, blocked: true }]);
   });
 

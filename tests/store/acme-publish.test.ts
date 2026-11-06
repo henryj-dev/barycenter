@@ -19,7 +19,7 @@ import { pendingPublications, publishIssued } from '../../src/control/acme-publi
 import { ConfigStore } from '../../src/store/config-store.js';
 import { FsSecretStore } from '../../src/dp/secrets.js';
 import { newEcKey } from '../../src/acme/der.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('acmepub');
 let db: Db;
@@ -77,7 +77,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await reset(db);
-  await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
+  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
   const ref = await secrets.putKey('acct', newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString());
   accountId = await acme.upsertAccount({
     key: 'le', directoryUrl: 'https://ca.test/dir', accountKeyRef: ref.ref, by: 't',
@@ -123,7 +124,9 @@ describe('발급됨 주문이 둘일 때', () => {
   it('가장 새 주문만 게시하고, 다시 돌려도 아무것도 안 바뀐다(핑퐁이 없다)', async () => {
     const old = await issuedOrder('web', 'a.test');
     // 옛 주문을 확실히 앞에 둔다 — 같은 순간에 열린 것으로 보이지 않게.
-    await db.query("UPDATE acme_orders SET created_at = now() - interval '1 hour' WHERE id=$1", [old.orderId]);
+    await db.query(TEST_DB === 'sqlite'
+      ? "UPDATE acme_orders SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 hour') WHERE id=$1"
+      : "UPDATE acme_orders SET created_at = now() - interval '1 hour' WHERE id=$1", [old.orderId]);
     const fresh = await issuedOrder('web', 'a.test');
     expect(fresh.ref).not.toBe(old.ref);
 
@@ -177,8 +180,9 @@ describe('게시', () => {
       db, store, control: noApply as never, acme, secrets, applyAutomatically: false,
     });
     expect(Number(out[0]?.revision)).toBe(Number(head.revision) + 1);
-    const audit = (await db.query(
-      `SELECT count(*)::int AS n FROM audit WHERE principal='acme'`)).rows[0];
+    const audit = (await db.query(TEST_DB === 'sqlite'
+      ? `SELECT count(*) AS n FROM audit WHERE principal='acme'`
+      : `SELECT count(*)::int AS n FROM audit WHERE principal='acme'`)).rows[0];
     expect(Number(audit?.['n'])).toBeGreaterThan(0);
   });
 
@@ -216,8 +220,11 @@ describe('게시', () => {
 
     // ① 자료가 사라진 주문 — `describe` 가 던진다. `updated_at` 을 앞당겨 **먼저** 오게 한다.
     const bad = await acme.openOrder({ accountId, certificateId: certId, domains: ['a.test'] });
-    await db.query(
-      `UPDATE acme_orders SET state='issued', issued_ref=$2, cert_key_ref=$3,
+    await db.query(TEST_DB === 'sqlite'
+      ? `UPDATE acme_orders SET state='issued', issued_ref=$2, cert_key_ref=$3,
+              claimed_by=NULL, claimed_until=NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 hour')
+        WHERE id=$1`
+      : `UPDATE acme_orders SET state='issued', issued_ref=$2, cert_key_ref=$3,
               claimed_by=NULL, claimed_until=NULL, updated_at = now() - interval '1 hour'
         WHERE id=$1`,
       [bad.id, `store://gone@${'a'.repeat(32)}`, `key://gone@${'a'.repeat(32)}`]);

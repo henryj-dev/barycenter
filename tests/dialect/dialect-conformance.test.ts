@@ -2,13 +2,14 @@
  * 방언 적합성 — 경계(`Database` · `LeaderLock`)가 방언마다 같은 계약을 지키는가 (docs/adr-multi-db.md)
  *
  *   BARY_TEST_DB=postgres npm run test:dialect    (기본)
- *   BARY_TEST_DB=sqlite   npm run test:dialect    (2단계가 켠다)
+ *   BARY_TEST_DB=sqlite   npm run test:dialect    (2단계)
  *   BARY_TEST_DB=mysql    npm run test:dialect    (3단계가 켠다)
  *
  * 여기 SQL 은 방언마다 나란히 둔다(`byDialect`) — 저장소 함수가 하는 방식과 같다. 이 묶음은 **골격**이다:
  * 방언 하나의 완료 조건은 이것에 더해 `tests/store` 묶음 전체가 그 DB 로 통과하는 것이다.
  */
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -16,8 +17,8 @@ import { ACCOUNT_MIGRATIONS } from '../../src/accounts/migrations.js';
 import { LeaderElection } from '../../src/control/leader.js';
 import type { Database, DialectName } from '../../src/store/db.js';
 import { CONFIG_MIGRATIONS } from '../../src/store/migration-sets.js';
-import { openDb, openLeaderLock } from '../../src/store/open.js';
-import { readSchemaShape } from '../../src/store/schema-shape.js';
+import { openDbForTest, openLeaderLockForTest } from '../../src/store/open.js';
+import { compareShapes, readSchemaShape, type ColumnShape, type LogicalType, type SchemaShape } from '../../src/store/schema-shape.js';
 import { startTestDb, type TestDb } from './db-under-test.js';
 
 let t: TestDb;
@@ -29,7 +30,7 @@ const files = (dir: string): string[] => readdirSync(dir).filter((f) => f.endsWi
 
 beforeAll(async () => {
   t = startTestDb('conformance');
-  db = openDb(t.dsn, 'BARY_TEST_DB');
+  db = openDbForTest(t.dsn, 'BARY_TEST_DB');
 }, 180_000);
 
 afterAll(async () => {
@@ -56,6 +57,14 @@ describe(`방언 적합성 (${process.env['BARY_TEST_DB'] ?? 'postgres'})`, () =
     const raw = Object.entries(shape).flatMap(([table, cols]) =>
       Object.entries(cols).filter(([, c]) => c.type.startsWith('raw:')).map(([col, c]) => `${table}.${col} ${c.type}`));
     expect(raw).toEqual([]);
+  });
+
+  it('**스키마 모양이 PG 의 모양과 같다** — 표 · 열 · 논리 형 · NULL 허용 (`schema-shape-pg.json`)', async () => {
+    // 스냅숏은 PG 의 모양이다. PG 로 돌 때는 「살아 있는 PG = 스냅숏」 을, 다른 방언으로 돌 때는
+    // 「그 방언 = 스냅숏」 을 잰다 — 둘이 함께 「방언 = PG」 다. PG 마이그레이션을 더하면 PG 회차가 빨개지고,
+    // 스냅숏을 고치면(`node scripts/…` 없이 이 파일을 손으로) 다른 방언 회차가 그 방언의 파일을 요구한다.
+    const want = pgShapeSnapshot();
+    expect(compareShapes(want, await readSchemaShape(db))).toEqual([]);
   });
 
   describe('트랜잭션', () => {
@@ -106,8 +115,8 @@ describe(`방언 적합성 (${process.env['BARY_TEST_DB'] ?? 'postgres'})`, () =
 
   describe('리더 잠금', () => {
     it('**하나만 쥔다** · 놓으면 다른 쪽이 쥐고 토큰은 엄격히 커진다', async () => {
-      const a = new LeaderElection(openLeaderLock(t.dsn), 'a');
-      const b = new LeaderElection(openLeaderLock(t.dsn), 'b');
+      const a = new LeaderElection(openLeaderLockForTest(t.dsn), 'a');
+      const b = new LeaderElection(openLeaderLockForTest(t.dsn), 'b');
       try {
         expect(await a.tryAcquire()).toBe(true);
         expect(await b.tryAcquire()).toBe(false);
@@ -124,6 +133,19 @@ describe(`방언 적합성 (${process.env['BARY_TEST_DB'] ?? 'postgres'})`, () =
     });
   });
 });
+
+/** `schema-shape-pg.json` — `"열": "형"` 또는 `"열": "형 null"`. */
+function pgShapeSnapshot(): SchemaShape {
+  const raw = JSON.parse(readFileSync(join(import.meta.dirname, 'schema-shape-pg.json'), 'utf8')) as Record<string, Record<string, string>>;
+  const out: Record<string, Record<string, ColumnShape>> = {};
+  for (const [table, cols] of Object.entries(raw)) {
+    out[table] = Object.fromEntries(Object.entries(cols).map(([col, v]) => {
+      const [type, nul] = v.split(' ');
+      return [col, { type: type as LogicalType, nullable: nul === 'null' }];
+    }));
+  }
+  return out;
+}
 
 /** 시험 정의 시점에는 아직 DB 가 없다 — 문장은 부를 때 고른다. */
 function byDialectLater(m: Record<DialectName, string>): () => string {

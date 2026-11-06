@@ -8,8 +8,8 @@
  * 형은 **논리 형**으로 줄인다. `timestamptz` 와 `DATETIME(6)` 은 이름이 다르지만 같은 것을 담는다.
  * 줄이지 못한 형은 `raw:<이름>` 으로 둔다 — 비교에서 반드시 차이로 보인다(조용히 같다고 하지 않는다).
  *
- * 지금은 PG 의 읽기만 있다. 2 · 3 단계가 자기 방언의 읽기를 더하고, 방언 적합성 시험이
- * 「PG 의 모양 = 그 방언의 모양」 을 단언한다.
+ * PG · SQLite 의 읽기가 있다. 3단계가 MySQL 의 읽기를 더한다. 방언 적합성 시험이
+ * 「PG 의 모양 = 그 방언의 모양」 을 단언한다(`tests/dialect/schema-shape-pg.json` 이 PG 의 모양이다).
  */
 import type { Database, Queryable } from './db.js';
 
@@ -77,12 +77,69 @@ export async function readPgShape(q: Queryable): Promise<SchemaShape> {
   return out;
 }
 
+/**
+ * SQLite 의 선언 형 → 논리 형. 선언 형은 SQLite 계열 마이그레이션(`dialects/sqlite/migrations/001_init.sql`
+ * 머리말)이 정하고, 드라이버(`./sqlite.ts` 의 `decode`)가 같은 표로 JS 값을 맞춘다.
+ *
+ * `integer` 는 `INTEGER PRIMARY KEY`(rowid 별칭 — PG 의 `bigserial`)에만 쓴다. 그래서 `bigint` 다.
+ * PG 의 `integer`(int4)는 SQLite 에서 `int` 로 선언한다.
+ */
+const SQLITE_TYPES: Readonly<Record<string, LogicalType>> = {
+  'text': 'text',
+  'int': 'int',
+  'integer': 'bigint',
+  'bigint': 'bigint',
+  'boolean': 'bool',
+  'timestamptz': 'timestamp',
+  'json_text': 'json',
+  'blob': 'bytes',
+  'enum_text': 'enum',
+  'real': 'real',
+  'numeric': 'numeric',
+  'uuid': 'uuid',
+  'cidr': 'cidr',
+  'inet': 'cidr',
+  'text_array': 'array',
+};
+
+export function sqliteLogicalType(declared: string): LogicalType {
+  return SQLITE_TYPES[declared.toLowerCase()] ?? `raw:${declared}`;
+}
+
+/**
+ * SQLite 의 표와 열. 기록 표(`*schema_migrations`)와 시퀀스 대신의 카운터 표(`bary_sequences` — PG 에는
+ * `SEQUENCE` 라 표가 아니다)는 뺀다.
+ *
+ * **NULL 허용은 선언 그대로 읽는다.** SQLite 는 `INTEGER` 가 아닌 기본 키에 NULL 을 받는다(오래된 버그를
+ * 호환으로 남겼다) — 그래서 SQLite 계열은 기본 키에도 `NOT NULL` 을 적고, 이 읽기는 그것을 잰다.
+ * `INTEGER PRIMARY KEY` 만은 NULL 을 넣으면 새 rowid 가 되므로 NULL 일 수 없다.
+ */
+export async function readSqliteShape(q: Queryable): Promise<SchemaShape> {
+  const tables = await q.query(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+  );
+  const out: Record<string, Record<string, ColumnShape>> = {};
+  for (const t of tables.rows) {
+    const table = String(t['name']);
+    if (table.endsWith('schema_migrations') || table === 'bary_sequences') continue;
+    const cols = await q.query(`SELECT name, type, "notnull" AS nn, pk FROM pragma_table_info($1) ORDER BY cid`, [table]);
+    const shape: Record<string, ColumnShape> = {};
+    for (const c of cols.rows) {
+      const declared = String(c['type']);
+      const rowid = Number(c['pk']) > 0 && declared.toLowerCase() === 'integer';
+      shape[String(c['name'])] = { type: sqliteLogicalType(declared), nullable: Number(c['nn']) === 0 && !rowid };
+    }
+    out[table] = shape;
+  }
+  return out;
+}
+
 /** 저장소의 스키마 모양. 아직 읽기가 없는 방언은 던진다. */
 export async function readSchemaShape(db: Database): Promise<SchemaShape> {
   switch (db.dialect.name) {
     case 'postgres': return readPgShape(db);
+    case 'sqlite': return readSqliteShape(db);
     case 'mysql':
-    case 'sqlite':
       throw new Error(`${db.dialect.name} 의 스키마 모양 읽기는 아직 없다 (docs/adr-multi-db.md 「단계」)`);
   }
 }

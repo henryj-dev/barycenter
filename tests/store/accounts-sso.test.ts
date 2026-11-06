@@ -22,7 +22,8 @@ import { hotp, stepOf } from '../../src/accounts/totp.js';
 import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { byDialect } from '../../src/store/db.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('accounts-sso');
 const ISS = 'https://idp.test';
@@ -84,7 +85,7 @@ beforeAll(async () => {
 }, 180_000);
 afterAll(async () => { await db?.close(); stopPg(PG); });
 beforeEach(async () => {
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
   accounts = new AccountService({ db, sealer });
 });
@@ -102,7 +103,7 @@ describe('SSO 로그인 (로컬 권한 정본)', () => {
     const r = await sso(base);
     expect(r.status).toBe(403);
     expect((await r.json() as { code: string }).code).toBe('sso_not_linked');
-    expect((await db.query('SELECT count(*) AS n FROM users')).rows[0]!['n']).toBe('0');
+    expect(Number((await db.query('SELECT count(*) AS n FROM users')).rows[0]!['n'])).toBe(0);
   });
 
   it('**JIT 를 켜면 auditor 로만** 만들고, IdP 의 역할 클레임은 무시한다', async () => {
@@ -193,14 +194,18 @@ describe('연결 · 해제', () => {
     expect((await db.query(`SELECT user_id FROM user_identities WHERE issuer=$1 AND subject='u-6'`, [ISS])).rows[0]?.['user_id']).toBe(userId);
     expect((await sso(base)).status).toBe(401);
     // JIT 를 켜도 같은 IdP 계정으로 새 계정이 생기지 않는다
-    const before = (await db.query(`SELECT count(*)::int AS n FROM users`)).rows[0]?.['n'];
+    const countUsers = byDialect(db, { postgres: `SELECT count(*)::int AS n FROM users`, sqlite: `SELECT count(*) AS n FROM users` });
+    const before = (await db.query(countUsers)).rows[0]?.['n'];
     await accounts.setProviderJit(ISS, true, 'user:root');
     expect((await sso(base)).status).toBe(401);
-    expect((await db.query(`SELECT count(*)::int AS n FROM users`)).rows[0]?.['n']).toBe(before);
+    expect((await db.query(countUsers)).rows[0]?.['n']).toBe(before);
     // 개인정보는 지워졌다
     const u = (await db.query(`SELECT email, password_hash, display_name FROM users WHERE id=$1`, [userId])).rows[0]!;
     expect(u).toEqual({ email: null, password_hash: null, display_name: null });
-    expect((await db.query(`SELECT count(*)::int AS n FROM sessions WHERE user_id=$1`, [userId])).rows[0]?.['n']).toBe(0);
+    expect((await db.query(byDialect(db, {
+      postgres: `SELECT count(*)::int AS n FROM sessions WHERE user_id=$1`,
+      sqlite: `SELECT count(*) AS n FROM sessions WHERE user_id=$1`,
+    }), [userId])).rows[0]?.['n']).toBe(0);
   });
 });
 

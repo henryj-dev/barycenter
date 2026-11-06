@@ -181,7 +181,9 @@ jobs:
   # **조각마다 러너 하나.** 전에는 열여덟 단위가 한 잡에서 873초를 직렬로 돌았다.
   # 서로 기다릴 이유가 없는 것들이라, 나누면 임계 경로가 가장 긴 단위 하나로 줄어든다.
   verify:
-    name: verify (${{ matrix.group }})
+    # postgres 회차는 이름이 전과 같다. 다른 방언은 ` · <방언>` 이 붙는다 — 이름이 겹치지 않는다.
+    # 필수 검사는 `gate` · `codeql` 둘이라 이 이름이 바뀌어도 브랜치 보호는 그대로다(gate 가 이 잡을 needs 로 받는다).
+    name: verify (${{ matrix.group }}${{ matrix.db != 'postgres' && format(' · {0}', matrix.db) || '' }})
     needs: groups
     runs-on: ubuntu-latest
     # 한 조각이 빨개도 나머지는 끝까지 본다 — 한 번에 무엇이 깨졌는지 다 보는 편이
@@ -190,9 +192,12 @@ jobs:
       fail-fast: false
       matrix:
         group: ${{ fromJSON(needs.groups.outputs.list) }}
-        # **방언 축** (docs/adr-multi-db.md). 지금은 postgres 만 켠다 — 2단계가 sqlite, 3단계가 mysql 을
-        # 더한다. 값이 하나인 동안은 잡 수가 늘지 않는다. 잡 이름에 넣지 않는다(필수 검사 이름이 바뀐다).
+        # **방언 축** (docs/adr-multi-db.md). 조각 전부는 postgres 로 돈다. 다른 방언은 DB 를 쓰는 조각(`render` —
+        # store · dialect)만 더 돈다: 나머지 조각은 DB 를 안 쓰거나(골든 · 엔진 · 스파이크) 데몬을 PG 로 띄운다(e2e).
         db: [postgres]
+        include:
+          - group: render
+            db: sqlite
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

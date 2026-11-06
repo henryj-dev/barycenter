@@ -25,7 +25,8 @@ import { publishIssued } from '../../src/control/acme-publish.js';
 import { FsSecretStore } from '../../src/dp/secrets.js';
 import { newEcKey } from '../../src/acme/der.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('cert-no-pending');
 const CAPS = { httpLua: true, streamLua: true, streamRealip: false, sslConfCommand: true };
@@ -110,7 +111,7 @@ beforeAll(async () => {
   db = new Db(PG.dsn);
   await db.migrate();
   store = new ConfigStore(db, CAPS);
-  election = new LeaderElection(PG.dsn, 'cert-no-pending-test');
+  election = new LeaderElection(openLeaderLockForTest(PG.dsn), 'cert-no-pending-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
 }, 240_000);
 
@@ -124,7 +125,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await reset(db);
-  await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
+  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
   if (prefix !== '') {
     try { rmSync(prefix, { recursive: true, force: true }); } catch { /* 0500 자료 디렉토리 */ }
   }

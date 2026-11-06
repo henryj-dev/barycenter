@@ -13,7 +13,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AcmeStore, LIVE_STATES, MAX_ATTEMPTS, backoffSeconds } from '../../src/control/acme-store.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('acme');
 let db: Db;
@@ -52,7 +52,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await reset(db);
-  await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
+  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
   certA = await makeCert('cert-a');
   certB = await makeCert('cert-b');
   accountId = await store.upsertAccount({
@@ -72,8 +73,9 @@ describe('계정', () => {
     const acct = await store.account('https://ca.test/dir');
     expect(acct?.accountKeyRef).toMatch(/^key:\/\/acct@[a-f0-9]{32}$/);
     // 자료를 담을 컬럼 자체가 없다.
-    const cols = (await db.query(
-      `SELECT column_name FROM information_schema.columns WHERE table_name='acme_accounts'`,
+    const cols = (await db.query(TEST_DB === 'sqlite'
+      ? `SELECT name AS column_name FROM pragma_table_info('acme_accounts')`
+      : `SELECT column_name FROM information_schema.columns WHERE table_name='acme_accounts'`,
     )).rows.map((r) => String(r['column_name']));
     expect(cols).not.toContain('account_key');
     expect(cols).not.toContain('private_key');
@@ -159,7 +161,9 @@ describe('실행권 — 둘이 같은 주문을 몰면 nonce 가 서로를 깨�
     await store.claimDue('dead-leader', 120);
     expect(await store.claimDue('leader-2')).toBeUndefined();
     // 시각을 손으로 밀어 만료를 만든다. `sleep` 으로 재면 테스트가 느리고 불안정하다.
-    await db.query(`UPDATE acme_orders SET claimed_until = now() - interval '1 second' WHERE id=$1`,
+    await db.query(TEST_DB === 'sqlite'
+      ? `UPDATE acme_orders SET claimed_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second') WHERE id=$1`
+      : `UPDATE acme_orders SET claimed_until = now() - interval '1 second' WHERE id=$1`,
       [o.id]);
     expect((await store.claimDue('leader-2'))?.id).toBe(o.id);
   });
@@ -201,7 +205,9 @@ describe('백오프와 포기', () => {
     const o = await store.openOrder({ accountId, certificateId: certA, domains: ['a.test'] });
     await store.claimDue('leader-1');
     await store.fail(o.id, '일시적');
-    await db.query(`UPDATE acme_orders SET next_attempt_at = now() - interval '1 second' WHERE id=$1`,
+    await db.query(TEST_DB === 'sqlite'
+      ? `UPDATE acme_orders SET next_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second') WHERE id=$1`
+      : `UPDATE acme_orders SET next_attempt_at = now() - interval '1 second' WHERE id=$1`,
       [o.id]);
     expect((await store.claimDue('leader-1'))?.id).toBe(o.id);
   });
@@ -279,7 +285,9 @@ describe('챌린지와 고아 정리 (§8.2)', () => {
       await store.markPlaced(id);
       // 주문 상태로 물으면 영영 안 걸린다. **놓은 지 얼마나 됐나**로 묻는다.
       expect(await store.orphans(3600)).toHaveLength(0);
-      await db.query(`UPDATE acme_challenges SET placed_at = now() - interval '2 hours' WHERE id=$1`,
+      await db.query(TEST_DB === 'sqlite'
+        ? `UPDATE acme_challenges SET placed_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-2 hours') WHERE id=$1`
+        : `UPDATE acme_challenges SET placed_at = now() - interval '2 hours' WHERE id=$1`,
         [id]);
       expect((await store.orphans(3600)).map((c) => c.id)).toEqual([id]);
     },
@@ -316,7 +324,9 @@ describe('챌린지와 고아 정리 (§8.2)', () => {
     });
     await db.query('DELETE FROM certificates WHERE id=$1', [certA]);
     expect(await store.get(o.id)).toBeUndefined();
-    const n = (await db.query('SELECT count(*)::int AS n FROM acme_challenges')).rows[0];
+    const n = (await db.query(TEST_DB === 'sqlite'
+      ? 'SELECT count(*) AS n FROM acme_challenges'
+      : 'SELECT count(*)::int AS n FROM acme_challenges')).rows[0];
     expect(n?.['n']).toBe(0);
   });
 });
