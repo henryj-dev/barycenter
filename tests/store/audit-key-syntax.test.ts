@@ -99,13 +99,25 @@ describe('리소스 key 문법 (검수 S-01b)', () => {
     expect(decodeModel(legacy).ok).toBe(true);
 
     // 그리고 `modelAt` 도 읽어야 한다 — 그게 롤백의 첫 걸음이다.
-    await db.query(
-      `INSERT INTO config_revisions (revision, model, created_by, note)
+    let rev: string;
+    if (db.dialect.name === 'sqlite') {
+      // SQLite 의 시퀀스는 `bary_sequences` 표다 — 번호를 먼저 받고 넣는다.
+      rev = (await db.query(
+        `UPDATE bary_sequences SET last_value = last_value + 1 WHERE name = 'config_revision_seq'
+         RETURNING CAST(last_value AS TEXT) AS v`)).rows[0]?.['v'] as string;
+      await db.query(
+        `INSERT INTO config_revisions (revision, model, created_by, note) VALUES ($1, $2, 'legacy', '옛 리비전')`,
+        [rev, JSON.stringify(legacy)],
+      );
+    } else {
+      await db.query(
+        `INSERT INTO config_revisions (revision, model, created_by, note)
        VALUES (nextval('config_revision_seq'), $1::jsonb, 'legacy', '옛 리비전')`,
-      [JSON.stringify(legacy)],
-    );
-    const rev = (await db.query(`SELECT currval('config_revision_seq')::text AS v`))
-      .rows[0]?.['v'] as string;
+        [JSON.stringify(legacy)],
+      );
+      rev = (await db.query(`SELECT currval('config_revision_seq')::text AS v`))
+        .rows[0]?.['v'] as string;
+    }
     const read = await store.modelAt(rev);
     expect(read.certificates[0]?.key).toBe('../legacy-cert');
   });

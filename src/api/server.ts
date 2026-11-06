@@ -47,7 +47,7 @@ import { ConfigStore, isHistoryKind, StoreError, type PatchOp } from '../store/c
 import {
   AccountError, AccountStoreUnavailable, STEP_UP_MAX_AGE_MS, type AccountService, type Meta as AccountMeta, type SecondFactorKind,
 } from '../accounts/service.js';
-import type { Database } from '../store/db.js';
+import { byDialect, type Database } from '../store/db.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { CertMaterialError, inspectMaterial } from '../dp/certinfo.js';
 import { socketRows } from '../web/sockets-view.js';
@@ -1145,9 +1145,12 @@ const ROUTES: Route[] = [
     // PG 가 `LIMIT must not be negative` 로 거절해 500 이 된다.
     const asked = Number(c.url.searchParams.get('limit') ?? '100') || 100;
     const limit = Math.min(Math.max(Math.floor(asked), 1), 1000);
-    const rows = (await api.db.query(
-      `SELECT id, at, principal, action, subject, revision, after->>'trigger' AS trigger FROM audit
-        ORDER BY id DESC LIMIT $1`, [limit],
+    const rows = (await api.db.query(byDialect(api.db, {
+      postgres: `SELECT id, at, principal, action, subject, revision, after->>'trigger' AS trigger FROM audit
+        ORDER BY id DESC LIMIT $1`,
+      sqlite: `SELECT id, at, principal, action, subject, revision, after ->> '$.trigger' AS trigger FROM audit
+        ORDER BY id DESC LIMIT $1`,
+    }), [limit],
     )).rows;
     // 본문(before/after)은 안 준다. `trigger` 한 칸만 꺼낸다 — 자동 적용을 사람이 누른 적용과 가르는 표시다.
     json(c.res, 200, rows.map((r) => ({

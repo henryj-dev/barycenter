@@ -38,6 +38,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import { DIALECTS, type Database, type Dialect, type MigrationSet, type Queryable, type Row } from './db.js';
@@ -324,63 +325,111 @@ class Runner {
   }
 }
 
+/**
+ * 한 파일의 연결 묶음. **같은 프로세스 안에서 같은 파일을 여는 `SqliteDb` 는 이것을 함께 쓴다.**
+ *
+ * 데몬은 같은 파일을 여러 번 연다(계정 DB 를 계정 서비스와 공유 실패 제한이 따로 연다 · 전역 화면 시험은
+ * 인스턴스 넷). 인스턴스마다 쓰기 연결과 뮤텍스를 따로 두면 둘의 쓰기가 SQLite 의 파일 잠금에서 만나고, 진 쪽은
+ * `busy_timeout` 동안 **이벤트 루프를 동기로 막는다** — 이긴 쪽은 그 루프 위에서 `await` 중이라 못 끝나고, 진 쪽은
+ * 5 초 뒤 `database is locked` 다. 그래서 파일 하나에 쓰기 줄이 하나다(경로 → 묶음, 참조 수로 닫는다).
+ */
+class Shared {
+  readonly lock = new Mutex();
+  /** 지금 이 비동기 흐름이 이 파일의 트랜잭션 안인가. 안에서 바깥 쓰기를 부르면 영영 기다린다 — 그 전에 던진다. */
+  readonly inTx = new AsyncLocalStorage<true>();
+  /** 트랜잭션 안의 `now()` — PG 처럼 트랜잭션 시작 시각 하나. */
+  txNow: string | undefined;
+  readonly writer: Runner;
+  readonly reader: Runner;
+  refs = 0;
+  /** 연 파일의 inode. 지우고 같은 경로에 새로 만든 파일이면 이 묶음을 다시 쓰지 않는다. */
+  readonly inode: string | undefined;
+
+  constructor(readonly path: string) {
+    const now = (): string => this.txNow ?? new Date().toISOString();
+    this.writer = new Runner(openConn(path, { now }));
+    try {
+      this.reader = new Runner(openConn(path, { now }));
+    } catch (e) {
+      this.writer.close();
+      throw e;
+    }
+    this.inode = inodeOf(path);
+  }
+}
+
+const inodeOf = (path: string): string | undefined => {
+  try {
+    const st = statSync(path, { bigint: true });
+    return `${st.dev}:${st.ino}`;
+  } catch {
+    return undefined;
+  }
+};
+
+const shared = new Map<string, Shared>();
+
 export class SqliteDb implements Database {
   readonly dialect: Dialect = DIALECTS.sqlite;
   readonly path: string;
-  readonly #writer: Runner;
-  readonly #reader: Runner;
-  readonly #lock = new Mutex();
-  /** 지금 이 비동기 흐름이 이 DB 의 트랜잭션 안인가. 안에서 바깥 쓰기를 부르면 영영 기다린다 — 그 전에 던진다. */
-  readonly #inTx = new AsyncLocalStorage<true>();
-  /** 트랜잭션 안의 `now()` — PG 처럼 트랜잭션 시작 시각 하나. */
-  #txNow: string | undefined;
+  readonly #s: Shared;
+  #closed = false;
 
   constructor(dsn: string, label = 'DSN') {
     this.path = sqlitePathOf(dsn, label);
-    const now = (): string => this.#txNow ?? new Date().toISOString();
-    this.#writer = new Runner(openConn(this.path, { now }));
-    try {
-      this.#reader = new Runner(openConn(this.path, { now }));
-    } catch (e) {
-      this.#writer.close();
-      throw e;
+    let s = shared.get(this.path);
+    if (s !== undefined && (s.inode === undefined || s.inode !== inodeOf(this.path))) {
+      shared.delete(this.path); // 낡은 묶음 — 남은 인스턴스가 닫을 때 닫힌다
+      s = undefined;
     }
+    if (s === undefined) {
+      s = new Shared(this.path);
+      shared.set(this.path, s);
+    }
+    s.refs += 1;
+    this.#s = s;
+  }
+
+  #open(): void {
+    if (this.#closed) throw new Error('SQLite: 닫힌 저장소다');
   }
 
   async query(text: string, values?: readonly unknown[]): Promise<Result> {
-    if (isRead(text)) return this.#reader.run(text, values);
-    if (this.#inTx.getStore() === true) {
+    this.#open();
+    if (isRead(text)) return this.#s.reader.run(text, values);
+    if (this.#s.inTx.getStore() === true) {
       throw new Error('SQLite: 트랜잭션 안에서 트랜잭션 밖의 쓰기를 불렀다 — 쓰기는 한 줄이라 영영 기다린다 (트랜잭션의 연결로 쓴다)');
     }
-    return this.#lock.run(async () => this.#writer.run(text, values));
+    return this.#s.lock.run(async () => this.#s.writer.run(text, values));
   }
 
   #txQueryable(): Queryable {
     return {
       dialect: this.dialect,
-      query: async (text, values) => this.#writer.run(text, values),
+      query: async (text, values) => this.#s.writer.run(text, values),
     };
   }
 
   async #inWriteTx<T>(fn: (c: Queryable) => Promise<T>, commit: boolean): Promise<T> {
-    if (this.#inTx.getStore() === true) {
+    this.#open();
+    if (this.#s.inTx.getStore() === true) {
       throw new Error('SQLite: 트랜잭션 안에서 트랜잭션을 또 열었다 — 쓰기는 한 줄이라 영영 기다린다');
     }
-    return this.#lock.run(async () => this.#inTx.run(true, async () => {
-      this.#writer.conn.exec('BEGIN IMMEDIATE');
-      this.#txNow = new Date().toISOString();
+    return this.#s.lock.run(async () => this.#s.inTx.run(true, async () => {
+      this.#s.writer.conn.exec('BEGIN IMMEDIATE');
+      this.#s.txNow = new Date().toISOString();
       try {
         const out = await fn(this.#txQueryable());
         // 미뤄 둔 FK 검사(`defer_foreign_keys`)는 COMMIT 에서 깨진다 — 같은 SQLSTATE 로 옮긴다.
         if (commit) {
-          try { this.#writer.conn.exec('COMMIT'); } catch (e) { throw mapSqliteError(e); }
-        } else this.#writer.conn.exec('ROLLBACK');
+          try { this.#s.writer.conn.exec('COMMIT'); } catch (e) { throw mapSqliteError(e); }
+        } else this.#s.writer.conn.exec('ROLLBACK');
         return out;
       } catch (e) {
-        try { this.#writer.conn.exec('ROLLBACK'); } catch { /* 이미 끝난 트랜잭션 */ }
+        try { this.#s.writer.conn.exec('ROLLBACK'); } catch { /* 이미 끝난 트랜잭션 */ }
         throw e;
       } finally {
-        this.#txNow = undefined;
+        this.#s.txNow = undefined;
       }
     }));
   }
@@ -401,14 +450,15 @@ export class SqliteDb implements Database {
    * 중간 파일이 깨지면 계열 전체가 롤백된다 — 반쯤 적용된 스키마가 남지 않는다.
    */
   async migrate(set: MigrationSet = CONFIG_MIGRATIONS): Promise<string[]> {
+    this.#open();
     return runMigrations(this.#migrationDriver(), set);
   }
 
   #migrationDriver(): MigrationDriver {
-    const w = this.#writer;
+    const w = this.#s.writer;
     return {
       dialect: this.dialect,
-      withMigrationLock: async (_lock, fn) => this.#lock.run(async () => {
+      withMigrationLock: async (_lock, fn) => this.#s.lock.run(async () => {
         w.conn.exec('BEGIN IMMEDIATE');
         try {
           const out = await fn();
@@ -439,10 +489,17 @@ export class SqliteDb implements Database {
     };
   }
 
+  /** 이 인스턴스를 닫는다. 같은 파일을 쓰는 마지막 인스턴스가 닫을 때 연결을 닫는다. */
   async close(): Promise<void> {
-    await this.#lock.run(async () => {
-      this.#reader.close();
-      this.#writer.close();
+    if (this.#closed) return;
+    this.#closed = true;
+    const s = this.#s;
+    await s.lock.run(async () => {
+      s.refs -= 1;
+      if (s.refs > 0) return;
+      if (shared.get(s.path) === s) shared.delete(s.path);
+      s.reader.close();
+      s.writer.close();
     });
   }
 }

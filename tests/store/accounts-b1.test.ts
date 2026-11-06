@@ -19,7 +19,8 @@ import { hotp, stepOf } from '../../src/accounts/totp.js';
 import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { byDialect } from '../../src/store/db.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('accounts-b1');
 let db: Db;
@@ -62,7 +63,7 @@ afterAll(async () => { await db?.close(); stopPg(PG); });
 beforeEach(async () => {
   outbox = [];
   // 테이블을 나열하지 않는다 — 마이그레이션이 늘 때마다 빠진 이름이 다음 스위트를 깨뜨린다.
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
 });
 
@@ -103,7 +104,7 @@ describe('비밀번호 재설정', () => {
     const s = svc(false);
     await admin(s);
     await s.requestPasswordReset('root@x.io');
-    expect((await db.query('SELECT count(*) AS n FROM password_resets')).rows[0]!['n']).toBe('0');
+    expect(Number((await db.query('SELECT count(*) AS n FROM password_resets')).rows[0]!['n'])).toBe(0);
     expect(s.features()).toEqual({ mail: false });
   });
 });
@@ -147,7 +148,10 @@ describe('step-up · 세션 생존', () => {
   it('step-up 은 MFA 시각을 새로 찍고, 틀린 코드·인증 앱 없음은 거절', async () => {
     const s = svc();
     const a = await admin(s);
-    await db.query(`UPDATE sessions SET mfa_at = now() - interval '1 hour'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE sessions SET mfa_at = now() - interval '1 hour'`,
+      sqlite: `UPDATE sessions SET mfa_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 hour')`,
+    }));
     const before = (await s.authenticate(a.sid))!.account!.mfaAt!;
     await expect(s.stepUp((await s.authenticate(a.sid))!.account!.sessionHash, a.id, '000000')).rejects.toMatchObject({ code: 'step_up_failed' });
     clock += 30_000;
@@ -192,7 +196,10 @@ describe('민감 작업 게이트 (HTTP)', () => {
     // 방금 MFA 를 지났다 → 통과
     const first = await inv();
     expect(first.status, await first.clone().text()).toBe(200);
-    await db.query(`UPDATE sessions SET mfa_at = now() - interval '20 minutes'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE sessions SET mfa_at = now() - interval '20 minutes'`,
+      sqlite: `UPDATE sessions SET mfa_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-20 minutes')`,
+    }));
     const blocked = await inv();
     expect(blocked.status).toBe(403);
     expect((await blocked.json() as { code: string }).code).toBe('mfa_step_up_required');

@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { LeaderElection } from '../../src/control/leader.js';
+import { ConfigStore } from '../../src/store/config-store.js';
 import type { Database } from '../../src/store/db.js';
 import { openDbForTest, openLeaderLockForTest } from '../../src/store/open.js';
 import { leaderLockPathOf, LEADER_WATCH_MS } from '../../src/store/sqlite-leader.js';
@@ -96,6 +97,43 @@ describe('SQLite 드라이버', () => {
     await expect(db.tx(async () => { await db.query(`DELETE FROM probe WHERE k = 'none'`); }))
       .rejects.toThrow(/트랜잭션 밖의 쓰기/);
     await expect(db.tx(async () => db.tx(async () => undefined))).rejects.toThrow(/트랜잭션을 또 열었다/);
+  });
+});
+
+describe('SQLite 위의 저장소 함수', () => {
+  it('**같은 파일을 여는 저장소 둘의 쓰기가 겹쳐도 막히지 않는다** — 프로세스 안의 쓰기 줄은 파일마다 하나다', async () => {
+    const other = openDbForTest(dsn);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const a = db.tx(async (c) => {
+        await c.query(`INSERT INTO probe (k, n) VALUES ('lane-a', 1)`);
+        await gate;
+      });
+      // 따로 된 쓰기 연결이면 이 BEGIN IMMEDIATE 가 이벤트 루프를 동기로 막아 a 가 영영 못 끝난다(5 초 뒤 locked).
+      const b = other.tx(async (c) => { await c.query(`INSERT INTO probe (k, n) VALUES ('lane-b', 1)`); });
+      setTimeout(release, 20);
+      const t0 = Date.now();
+      await Promise.all([a, b]);
+      expect(Date.now() - t0).toBeLessThan(2_000);
+      expect((await db.query(`SELECT k FROM probe WHERE k LIKE 'lane-%' ORDER BY k`)).rows.map((r) => r['k'])).toEqual(['lane-a', 'lane-b']);
+    } finally {
+      await other.close();
+    }
+    // 하나를 닫아도 다른 하나는 그대로 쓴다.
+    expect((await db.query(`SELECT count(*) AS n FROM probe WHERE k LIKE 'lane-%'`)).rows[0]?.['n']).toBe(2);
+  });
+
+  it('ConfigStore 의 changeset → plan → commit 이 SQLite 에서 선다 — 리비전 · epoch 가 PG 처럼 decimal string', async () => {
+    const store = new ConfigStore(db);
+    const head = await store.head();
+    const cs = await store.createChangeset(head.revision, 'tester');
+    await store.patchChangeset(cs, [{ op: 'put', kind: 'pool', key: 'app', body: { protocolClass: 'http', algorithm: 'round_robin' } }], 'tester');
+    const plan = await store.plan(cs, 'tester');
+    const out = await store.commit(cs, plan.id, 'tester');
+    expect(BigInt(out.revision) > BigInt(head.revision)).toBe(true);
+    expect(out.activationEpoch).toMatch(/^[0-9]+$/);
+    expect((await store.head()).revision).toBe(out.revision);
   });
 });
 

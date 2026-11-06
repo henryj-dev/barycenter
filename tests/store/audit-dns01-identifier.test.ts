@@ -45,7 +45,7 @@ import { AcmeRunner, type ChallengePlacer } from '../../src/control/acme-runner.
 import { FileDns01 } from '../../src/control/dns01.js';
 import { newEcKey } from '../../src/acme/der.js';
 import { FsSecretStore } from '../../src/dp/secrets.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('dns01-identifier');
 
@@ -118,7 +118,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await reset(db);
-  await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
+  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
   const ref = await secrets.putKey(
     `acct-${Math.random().toString(36).slice(2)}`,
     newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString(),

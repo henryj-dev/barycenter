@@ -33,7 +33,7 @@ import type { Certificate, Model } from '../model/provisional.js';
 import {
   count, fileBytes, measureGenerations, type Gauges, type LabeledGauge,
 } from '../obs/metrics.js';
-import type { Database, Row } from '../store/db.js';
+import { byDialect, type Database, type Row } from '../store/db.js';
 import type { LeaderElection } from './leader.js';
 
 export type ControlPlaneOptions = {
@@ -545,12 +545,16 @@ export class ControlPlane {
     /** 활성화를 **시작하기 직전**에 부른다 — 노드 상태를 「따라가는 중」으로 적는 자리다 (#120). */
     onStart?: (target: { revision: string; epoch: string; generation: string }) => Promise<void>,
   ): Promise<FollowResult> {
-    const r = (await this.db.query(
-      `SELECT id, revision::text AS revision, activation_epoch::text AS epoch, generation,
+    const r = (await this.db.query(byDialect(this.db, {
+      postgres: `SELECT id, revision::text AS revision, activation_epoch::text AS epoch, generation,
               envelope->>'leaderToken' AS token
          FROM operations WHERE phase = 'activated'
         ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
-    )).rows[0];
+      sqlite: `SELECT id, CAST(revision AS TEXT) AS revision, CAST(activation_epoch AS TEXT) AS epoch, generation,
+              envelope ->> '$.leaderToken' AS token
+         FROM operations WHERE phase = 'activated'
+        ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
+    }))).rows[0];
     if (r === undefined) return { kind: 'nothing_active' };
     const active = {
       id: String(r['id']), revision: String(r['revision']),
@@ -571,9 +575,11 @@ export class ControlPlane {
     const { manifest, planeTargets } = await this.buildGeneration(
       model, active.generation, active.epoch, rendered, membership,
     );
-    const t = (await this.db.query(
-      `SELECT CASE WHEN is_called THEN last_value ELSE 0 END::text AS t FROM leader_token_seq`,
-    )).rows[0];
+    // SQLite 의 카운터는 `last_value` 가 곧 마지막으로 낸 값이다(아직 안 냈으면 0 — PG 의 `is_called` 거짓과 같다).
+    const t = (await this.db.query(byDialect(this.db, {
+      postgres: `SELECT CASE WHEN is_called THEN last_value ELSE 0 END::text AS t FROM leader_token_seq`,
+      sqlite: `SELECT CAST(last_value AS TEXT) AS t FROM bary_sequences WHERE name = 'leader_token_seq'`,
+    }))).rows[0];
     // **둘 중 큰 것** — 시퀀스의 마지막 값과 활성 오퍼레이션을 낸 리더의 토큰. 시퀀스만 보면
     // 그 값이 활성 오퍼레이션의 토큰보다 낮은 경우(시퀀스를 되돌린 복구 등)에 에이전트 기록과
     // 어긋난다. 어느 쪽이든 「발급된 리더보다 낮지 않다」를 지킨다.
@@ -778,9 +784,10 @@ export class ControlPlane {
     const st = await this.driver.status();
     const head = await this.store.head();
     const gen = measureGenerations(this.opts.prefix);
-    const health = (await this.db.query(
-      `SELECT state, count(*)::int AS n FROM backend_health GROUP BY state`,
-    )).rows;
+    const health = (await this.db.query(byDialect(this.db, {
+      postgres: `SELECT state, count(*)::int AS n FROM backend_health GROUP BY state`,
+      sqlite: `SELECT state, count(*) AS n FROM backend_health GROUP BY state`,
+    }))).rows;
     const byState = Object.fromEntries(health.map((r) => [String(r['state']), Number(r['n'])]));
     const pending = { n: (await pendingApplies(this.db)).length };
     const mem = process.memoryUsage();
@@ -817,11 +824,14 @@ export class ControlPlane {
    * 않는 이유는 그대로다 — manifest 의 digest 는 파일 집합 + 평면의 수다.
    */
   private async activeRenderDigest(): Promise<{ digest: string; epoch: string } | undefined> {
-    const r = (await this.db.query(
-      `SELECT o.activation_epoch::text AS epoch, p.render_digest FROM operations o
+    const r = (await this.db.query(byDialect(this.db, {
+      postgres: `SELECT o.activation_epoch::text AS epoch, p.render_digest FROM operations o
          JOIN plans p ON p.id = o.plan_id
         WHERE o.phase = 'activated' ORDER BY o.activation_epoch DESC, o.created_at DESC LIMIT 1`,
-    )).rows[0];
+      sqlite: `SELECT CAST(o.activation_epoch AS TEXT) AS epoch, p.render_digest FROM operations o
+         JOIN plans p ON p.id = o.plan_id
+        WHERE o.phase = 'activated' ORDER BY o.activation_epoch DESC, o.created_at DESC LIMIT 1`,
+    }))).rows[0];
     if (r === undefined) return undefined;
     return { digest: String(r['render_digest']), epoch: String(r['epoch']) };
   }

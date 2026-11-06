@@ -11,7 +11,8 @@ import { ACCOUNT_MIGRATIONS } from '../../src/accounts/migrations.js';
 import { Sealer } from '../../src/accounts/seal.js';
 import { AccountError, AccountService, AccountStoreUnavailable } from '../../src/accounts/service.js';
 import { hotp, stepOf } from '../../src/accounts/totp.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { byDialect } from '../../src/store/db.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('accounts-service');
 let db: Db;
@@ -59,7 +60,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   // 테이블을 나열하지 않는다 — 마이그레이션이 늘 때마다 빠진 이름이 다음 스위트를 깨뜨린다.
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
 });
 
@@ -231,7 +232,10 @@ describe('관리', () => {
   it('계정 감사에 비밀이 실리지 않는다', async () => {
     const s = svc();
     await makeAdmin(s);
-    const rows = (await db.query('SELECT detail::text AS d FROM account_audit')).rows.map((r) => String(r['d']));
+    const rows = (await db.query(byDialect(db, {
+      postgres: 'SELECT detail::text AS d FROM account_audit',
+      sqlite: 'SELECT CAST(detail AS TEXT) AS d FROM account_audit',
+    }))).rows.map((r) => String(r['d']));
     expect(rows.join(' ')).not.toMatch(/admin-password-1|scrypt\$/);
   });
 });

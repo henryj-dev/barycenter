@@ -221,6 +221,31 @@ export async function reset(db: Db): Promise<void> {
   await db.query(`INSERT INTO config_head (revision) VALUES (currval('config_revision_seq'))`);
 }
 
+/**
+ * 스키마를 통째로 비운다 — 다음 `migrate` 가 처음부터 다시 만든다. PG 는 지금까지 시험이 쓰던 문장 그대로다.
+ * SQLite 는 스키마가 없다 — 표 · 인덱스 · 트리거를 모두 지우고 rowid 카운터를 비운다. FK 검사를 꺼야 부모 표를
+ * 먼저 지울 수 있다(`PRAGMA foreign_keys` 는 트랜잭션 밖에서만 바뀐다).
+ */
+export async function freshSchema(db: Db): Promise<void> {
+  if (db.dialect.name !== 'sqlite') {
+    await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+    return;
+  }
+  await db.query('PRAGMA foreign_keys = OFF');
+  try {
+    const objs = (await db.query(
+      `SELECT type, name FROM sqlite_master WHERE type IN ('table','trigger','view') AND name NOT LIKE 'sqlite_%'`,
+    )).rows;
+    for (const o of objs.filter((x) => x['type'] !== 'table')) await db.query(`DROP ${String(o['type'])} IF EXISTS ${String(o['name'])}`);
+    for (const o of objs.filter((x) => x['type'] === 'table')) await db.query(`DROP TABLE IF EXISTS ${String(o['name'])}`);
+    if ((await db.query(`SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'`)).rows.length > 0) {
+      await db.query('DELETE FROM sqlite_sequence');
+    }
+  } finally {
+    await db.query('PRAGMA foreign_keys = ON');
+  }
+}
+
 /** 계정 계열이 만드는 표 — PG 의 `reset` 이 비우지 않는 쪽이다(목록에 없고 CASCADE 로도 안 딸려 온다). */
 const accountTables = (): Set<string> => {
   const dir = ACCOUNT_MIGRATIONS.dialectDirs?.sqlite ?? '';

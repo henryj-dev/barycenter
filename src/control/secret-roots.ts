@@ -11,7 +11,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { SecretStore } from '../dp/secrets.js';
-import type { Database } from '../store/db.js';
+import { byDialect, type Database } from '../store/db.js';
 
 /** 롤백이 닿을 수 있는 리비전 수. 이 밖으로의 롤백은 자료가 없어 **실패한다.** */
 export const DEFAULT_ROLLBACK_REVISIONS = 20;
@@ -95,9 +95,12 @@ export async function collectSecretRoots(opts: RootsOptions): Promise<Set<string
 
   // ④ 주문이 든 자료·키. **끝난 주문도 최근 것은 남긴다** — 게시가 아직 안 갔을 수 있고,
   //    그때 자료를 지우면 발급해 놓고 못 쓰는 상태가 된다.
-  for (const r of (await opts.db.query(
-    `SELECT issued_ref, cert_key_ref FROM acme_orders
-      WHERE state <> 'abandoned' OR updated_at > now() - interval '7 days'`)).rows) {
+  for (const r of (await opts.db.query(byDialect(opts.db, {
+    postgres: `SELECT issued_ref, cert_key_ref FROM acme_orders
+      WHERE state <> 'abandoned' OR updated_at > now() - interval '7 days'`,
+    sqlite: `SELECT issued_ref, cert_key_ref FROM acme_orders
+      WHERE state <> 'abandoned' OR updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-7 days')`,
+  }))).rows) {
     for (const k of ['issued_ref', 'cert_key_ref']) {
       const v = r[k];
       if (typeof v === 'string') roots.add(v);

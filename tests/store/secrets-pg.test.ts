@@ -25,7 +25,7 @@ import { FsSecretStore } from '../../src/dp/secrets.js';
 import { PgSecretStore } from '../../src/dp/secrets-pg.js';
 import { sweepSecretsPg } from '../../src/dp/secret-gc-pg.js';
 import { newEcKey } from '../../src/acme/der.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('secretspg');
 let db: Db;
@@ -63,7 +63,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.query('TRUNCATE secret_materials');
+  await db.query(TEST_DB === 'sqlite' ? 'DELETE FROM secret_materials' : 'TRUNCATE secret_materials');
   await store.refreshFacts();
 });
 
@@ -93,7 +93,9 @@ describe('왕복', () => {
     const a = await store.put('web', { fullchain: m.pem, privkey: m.key });
     const b = await store.put('web', { fullchain: m.pem, privkey: m.key });
     expect(b.ref).toBe(a.ref);
-    expect((await db.query('SELECT count(*) c FROM secret_materials')).rows[0]!['c']).toBe('1');
+    expect((await db.query(TEST_DB === 'sqlite'
+      ? 'SELECT CAST(count(*) AS TEXT) c FROM secret_materials'
+      : 'SELECT count(*) c FROM secret_materials')).rows[0]!['c']).toBe('1');
   });
 
   it('**재업로드가 고친다** — 못 여는 행을 같은 자료로 덮는다 (검수 2026-08-29 · A)', async () => {

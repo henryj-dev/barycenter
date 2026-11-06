@@ -8,7 +8,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { LeaderElection, NotLeader } from '../../src/control/leader.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('leader');
 
@@ -16,7 +17,7 @@ let db: Db;
 const open: LeaderElection[] = [];
 
 const elect = (name: string): LeaderElection => {
-  const e = new LeaderElection(PG.dsn, name);
+  const e = new LeaderElection(openLeaderLockForTest(PG.dsn), name);
   open.push(e);
   return e;
 };
@@ -62,7 +63,9 @@ describe('리더 선출', () => {
 
     // **토큰은 "리더가 몇 번 바뀌었나" 를 뜻해야 한다.** 락을 못 잡은 인스턴스가
     // 시퀀스를 태우면 그 뜻이 깨진다 — 락을 잡은 뒤에 뽑는 이유다.
-    const seq = (await db.query(`SELECT last_value::text AS v FROM leader_token_seq`)).rows[0];
+    const seq = (await db.query(TEST_DB === 'sqlite'
+      ? `SELECT CAST(last_value AS TEXT) AS v FROM bary_sequences WHERE name = 'leader_token_seq'`
+      : `SELECT last_value::text AS v FROM leader_token_seq`)).rows[0];
     expect(seq?.['v']).toBe('1');
   });
 
@@ -92,8 +95,9 @@ describe('리더 선출', () => {
     const a = elect('a');
     await a.tryAcquire();
     await a.release();
-    const rows = (await db.query(
-      `SELECT token::text AS token, holder, released_at FROM leadership ORDER BY token`,
+    const rows = (await db.query(TEST_DB === 'sqlite'
+      ? `SELECT CAST(token AS TEXT) AS token, holder, released_at FROM leadership ORDER BY token`
+      : `SELECT token::text AS token, holder, released_at FROM leadership ORDER BY token`,
     )).rows;
     expect(rows).toHaveLength(1);
     // `released_at` 이 NULL 이면 "죽어서 락이 풀렸다" 는 뜻이다. 그 구분이 정보다.

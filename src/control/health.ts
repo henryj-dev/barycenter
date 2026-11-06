@@ -29,7 +29,7 @@ import { connect } from 'node:net';
 
 import type { Model } from '../model/provisional.js';
 import { log } from '../obs/log.js';
-import type { Database, Queryable } from '../store/db.js';
+import { byDialect, type Database, type Queryable } from '../store/db.js';
 
 export type HealthState = 'healthy' | 'unhealthy' | 'unknown';
 
@@ -331,8 +331,12 @@ export function probePlanOf(model: Model, poolKey: string): ProbePlan {
 async function emit(
   c: Queryable, backendKey: string, state: HealthState, detail: string | undefined,
 ): Promise<string> {
-  const cur = (await c.query(
-    'SELECT next_seq::text AS n FROM health_cursor FOR UPDATE',
+  // SQLite 는 `FOR UPDATE` 를 뺀다 — 쓰기 트랜잭션이 `BEGIN IMMEDIATE` 라 DB 전체가 한 줄이고,
+  // 커서를 읽는 순간 이미 다른 쓰기는 기다린다. 잠금 행이 하는 직렬화를 그것이 진다.
+  const cur = (await c.query(byDialect(c, {
+    postgres: 'SELECT next_seq::text AS n FROM health_cursor FOR UPDATE',
+    sqlite: 'SELECT CAST(next_seq AS TEXT) AS n FROM health_cursor',
+  }),
   )).rows[0];
   const seq = String(cur?.['n'] ?? '1');
   await c.query('UPDATE health_cursor SET next_seq = next_seq + 1');
@@ -369,8 +373,10 @@ export class HealthProber {
 
     // 저장된 최대값에서 이어 붙인다. 재기동·리더 교체를 건너 단조가 유지된다.
     if (this.#next === 0) {
-      const row = (await this.db.query(
-        'SELECT COALESCE(MAX(probe_start_seq), 0)::text AS m FROM backend_health')).rows[0];
+      const row = (await this.db.query(byDialect(this.db, {
+        postgres: 'SELECT COALESCE(MAX(probe_start_seq), 0)::text AS m FROM backend_health',
+        sqlite: 'SELECT CAST(COALESCE(MAX(probe_start_seq), 0) AS TEXT) AS m FROM backend_health',
+      }))).rows[0];
       this.#next = Number(row?.['m'] ?? 0) + 1;
     }
 
@@ -444,9 +450,12 @@ export class HealthProber {
     const flipped: HealthFlip[] = [];
     for (const r of results) {
       const flip = await this.db.tx(async (c) => {
-        const row = (await c.query(
-          `SELECT state, probe_start_seq, consecutive, last_ok FROM backend_health
-            WHERE backend_key = $1 FOR UPDATE`, [r.key],
+        const row = (await c.query(byDialect(c, {
+          postgres: `SELECT state, probe_start_seq, consecutive, last_ok FROM backend_health
+            WHERE backend_key = $1 FOR UPDATE`,
+          sqlite: `SELECT state, probe_start_seq, consecutive, last_ok FROM backend_health
+            WHERE backend_key = $1`,
+        }), [r.key],
         )).rows[0];
         const prevSeq = row === undefined ? 0 : Number(row['probe_start_seq']);
         // **낡은 관측은 버린다** (§6.6 ABA). 늦게 끝난 옛 프로브가 최신 판정을 덮으면

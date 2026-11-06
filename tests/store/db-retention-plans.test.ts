@@ -33,6 +33,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { sweepDatabase } from '../../src/store/db-retention.js';
 import { ConfigStore } from '../../src/store/config-store.js';
+import { byDialect } from '../../src/store/db.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('retplan');
@@ -58,11 +59,11 @@ beforeEach(async () => {
 });
 
 const count = async (t: 'plans' | 'changesets'): Promise<number> =>
-  Number((await db.query(`SELECT count(*)::int AS n FROM ${t}`)).rows[0]!['n']);
+  Number((await db.query(byDialect(db, { postgres: `SELECT count(*)::int AS n FROM ${t}`, sqlite: `SELECT count(*) AS n FROM ${t}` }))).rows[0]!['n']);
 
 /** 나이를 뒤로 민다 — 시계를 기다리지 않는다. */
 const age = async (t: 'plans' | 'changesets', col: string, days: number): Promise<void> => {
-  await db.query(`UPDATE ${t} SET ${col} = now() - make_interval(days => $1::int)`, [String(days)]);
+  await db.query(byDialect(db, { postgres: `UPDATE ${t} SET ${col} = now() - make_interval(days => $1::int)`, sqlite: `UPDATE ${t} SET ${col} = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days')` }), [String(days)]);
 };
 
 describe('plan·changeset 보존 (제안 #10)', () => {
@@ -77,7 +78,8 @@ describe('plan·changeset 보존 (제안 #10)', () => {
     expect(await count('plans')).toBe(1);
 
     // 만료시킨다. 커밋 안 된 plan 은 아무도 못 쓴다.
-    await db.query("UPDATE plans SET expires_at = now() - interval '1 day'");
+    // SQLite 의 시각은 밀리초까지라 다음 문장의 now() 와 같은 값이 될 수 있다 — 1 초 더 민다(PG 는 마이크로초).
+    await db.query(byDialect(db, { postgres: "UPDATE plans SET expires_at = now() - interval '1 day'", sqlite: "UPDATE plans SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 day', '-1 seconds')" }));
     const r = await sweepDatabase({ db, planDays: 1 });
     expect(r.plans).toBe(1);
     expect(await count('plans')).toBe(0);
@@ -95,7 +97,7 @@ describe('plan·changeset 보존 (제안 #10)', () => {
 
     // 아주 오래된 것으로 밀어도 남는다.
     await age('plans', 'created_at', 3650);
-    await db.query("UPDATE plans SET expires_at = now() - interval '3650 days'");
+    await db.query(byDialect(db, { postgres: "UPDATE plans SET expires_at = now() - interval '3650 days'", sqlite: "UPDATE plans SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')" }));
     const r = await sweepDatabase({ db, planDays: 1 });
     expect(r.plans, '커밋된 plan 이 지워졌다 — 롤백 수단이 사라진다').toBe(0);
     expect(await count('plans')).toBe(1);
@@ -161,9 +163,9 @@ describe('plan·changeset 보존 (제안 #10)', () => {
   });
 
   it('`config_revisions` 는 안 건드린다 — 롤백과 시크릿 GC root 다', async () => {
-    const before = Number((await db.query('SELECT count(*)::int AS n FROM config_revisions')).rows[0]!['n']);
+    const before = Number((await db.query(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM config_revisions', sqlite: 'SELECT count(*) AS n FROM config_revisions' }))).rows[0]!['n']);
     await sweepDatabase({ db, planDays: 1, changesetDays: 1, auditDays: 1, healthEventDays: 1 });
-    const after = Number((await db.query('SELECT count(*)::int AS n FROM config_revisions')).rows[0]!['n']);
+    const after = Number((await db.query(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM config_revisions', sqlite: 'SELECT count(*) AS n FROM config_revisions' }))).rows[0]!['n']);
     expect(after).toBe(before);
   });
 });

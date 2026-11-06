@@ -41,7 +41,7 @@ import { FsSecretStore } from '../../src/dp/secrets.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
 import { ConfigStore } from '../../src/store/config-store.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('acme-account-path');
 const TOKEN = 'acct-token';
@@ -91,7 +91,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await reset(db);
-  await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
+  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
 });
 
 type Res = { status: number; body: Record<string, unknown> };

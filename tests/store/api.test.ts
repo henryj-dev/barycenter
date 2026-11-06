@@ -28,6 +28,7 @@ import { ControlPlane } from '../../src/control/plane.js';
 import { TokenAuth } from '../../src/api/auth.js';
 import { LeaderElection } from '../../src/control/leader.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
+import { byDialect } from '../../src/store/db.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('api');
@@ -177,7 +178,7 @@ describe('§5.2 읽기 엔드포인트', () => {
 describe('픽스처', () => {
   it('**reset 이 TLS 테이블도 비운다** — 앞 테스트가 만든 행이 안 남는다', async () => {
     for (const table of ['certificates', 'tls_policies', 'sni_certificate_bindings']) {
-      const n = (await db.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0]?.['n'];
+      const n = (await db.query(byDialect(db, { postgres: `SELECT count(*)::int AS n FROM ${table}`, sqlite: `SELECT count(*) AS n FROM ${table}` }))).rows[0]?.['n'];
       expect(n, table).toBe(0);
     }
   });

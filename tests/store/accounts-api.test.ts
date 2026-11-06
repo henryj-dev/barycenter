@@ -18,7 +18,7 @@ import { hotp, stepOf } from '../../src/accounts/totp.js';
 import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('accounts-api');
 const TOKEN = 'machine-token-plain';
@@ -72,7 +72,7 @@ afterAll(async () => { await db?.close(); stopPg(PG); });
 
 beforeEach(async () => {
   // 테이블을 나열하지 않는다 — 마이그레이션이 늘 때마다 빠진 이름이 다음 스위트를 깨뜨린다.
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
   accounts = new AccountService({ db, sealer });
   await serve(accounts);

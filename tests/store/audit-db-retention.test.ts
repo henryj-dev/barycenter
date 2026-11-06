@@ -18,6 +18,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { sweepDatabase } from '../../src/store/db-retention.js';
+import { byDialect } from '../../src/store/db.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('dbretention');
@@ -28,23 +29,29 @@ const maybe = HAVE_DOCKER ? describe : describe.skip;
 
 /** `at` 을 직접 박는다 — 나이를 기다릴 수는 없다. */
 async function insertEvent(seq: number, ageDays: number): Promise<void> {
-  await db.query(
-    `INSERT INTO health_events (seq, backend_key, state, at)
+  await db.query(byDialect(db, {
+    postgres: `INSERT INTO health_events (seq, backend_key, state, at)
      VALUES ($1, 'b', 'healthy', now() - ($2 || ' days')::interval)`,
+    sqlite: `INSERT INTO health_events (seq, backend_key, state, at)
+     VALUES ($1, 'b', 'healthy', strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $2 || ' days'))`,
+  }),
     [String(seq), String(ageDays)],
   );
 }
 
 async function insertAudit(ageDays: number): Promise<void> {
-  await db.query(
-    `INSERT INTO audit (principal, action, subject, at)
+  await db.query(byDialect(db, {
+    postgres: `INSERT INTO audit (principal, action, subject, at)
      VALUES ('t', 'changeset.create', 's', now() - ($1 || ' days')::interval)`,
+    sqlite: `INSERT INTO audit (principal, action, subject, at)
+     VALUES ('t', 'changeset.create', 's', strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days'))`,
+  }),
     [String(ageDays)],
   );
 }
 
 const countOf = async (table: string): Promise<number> => Number(
-  (await db.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0]?.['n'] ?? 0,
+  (await db.query(byDialect(db, { postgres: `SELECT count(*)::int AS n FROM ${table}`, sqlite: `SELECT count(*) AS n FROM ${table}` }))).rows[0]?.['n'] ?? 0,
 );
 
 maybe('DB 보존 (검수 B-08 · 제안#10)', () => {
@@ -69,7 +76,7 @@ maybe('DB 보존 (검수 B-08 · 제안#10)', () => {
     const out = await sweepDatabase({ db });
 
     expect(out.healthEvents).toBe(2);
-    const left = (await db.query('SELECT seq::text AS s FROM health_events ORDER BY seq')).rows;
+    const left = (await db.query(byDialect(db, { postgres: 'SELECT seq::text AS s FROM health_events ORDER BY seq', sqlite: 'SELECT CAST(seq AS TEXT) AS s FROM health_events ORDER BY seq' }))).rows;
     expect(left.map((r) => r['s'])).toEqual(['3']);
   });
 
@@ -101,7 +108,7 @@ maybe('DB 보존 (검수 B-08 · 제안#10)', () => {
 
     await sweepDatabase({ db });
 
-    const after = (await db.query('SELECT next_seq::text AS n FROM health_cursor')).rows[0];
+    const after = (await db.query(byDialect(db, { postgres: 'SELECT next_seq::text AS n FROM health_cursor', sqlite: 'SELECT CAST(next_seq AS TEXT) AS n FROM health_cursor' }))).rows[0];
     expect(after?.['n']).toBe('3');
   });
 

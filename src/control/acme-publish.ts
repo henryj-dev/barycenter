@@ -30,7 +30,7 @@
 import type { AcmeStore } from './acme-store.js';
 import { pendingApplies, type ControlPlane } from './plane.js';
 import type { ConfigStore } from '../store/config-store.js';
-import type { Database } from '../store/db.js';
+import { byDialect, type Database } from '../store/db.js';
 import type { SecretStore } from '../dp/secrets.js';
 import { log } from '../obs/log.js';
 import { count } from '../obs/metrics.js';
@@ -76,8 +76,8 @@ export async function pendingPublications(db: Database): Promise<{
    * 「가장 새」 는 주문을 연 시각이다 — 인증서당 살아 있는 주문은 하나뿐이라 나중에 연 것이 나중의 의도다.
    * `updated_at` 은 쓰지 않는다: 지난 주문도 손대면(정리 · 그만둠) 움직인다.
    */
-  return (await db.query(
-    `SELECT latest.order_id, latest.certificate_key, latest.issued_ref
+  return (await db.query(byDialect(db, {
+    postgres: `SELECT latest.order_id, latest.certificate_key, latest.issued_ref
        FROM (SELECT DISTINCT ON (o.certificate_id)
                     o.id AS order_id, c.key AS certificate_key, o.issued_ref, c.material_ref,
                     o.updated_at
@@ -88,6 +88,20 @@ export async function pendingPublications(db: Database): Promise<{
               ORDER BY o.certificate_id, o.created_at DESC, o.id DESC) latest
       WHERE latest.material_ref IS DISTINCT FROM latest.issued_ref
       ORDER BY latest.updated_at`,
+    // SQLite 에는 `DISTINCT ON` 이 없다 — 인증서마다 같은 순서로 첫 행을 창 함수로 고른다.
+    sqlite: `SELECT latest.order_id, latest.certificate_key, latest.issued_ref
+       FROM (SELECT o.id AS order_id, c.key AS certificate_key, o.issued_ref, c.material_ref,
+                    o.updated_at,
+                    row_number() OVER (PARTITION BY o.certificate_id
+                                       ORDER BY o.created_at DESC, o.id DESC) AS rn
+               FROM acme_orders o
+               JOIN certificates c ON c.id = o.certificate_id
+              WHERE o.state = 'issued'
+                AND o.issued_ref IS NOT NULL) latest
+      WHERE latest.rn = 1
+        AND latest.material_ref IS NOT latest.issued_ref
+      ORDER BY latest.updated_at`,
+  }),
   )).rows.map((r) => ({
     orderId: String(r['order_id']),
     certificateKey: String(r['certificate_key']),

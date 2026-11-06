@@ -14,7 +14,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { ALL_SCOPES, minRole, PERSONAL_TOKEN, roleRank, scopesOfRole, type Principal, type Role, type Scope } from '../api/auth.js';
-import type { Database, Queryable, Row } from '../store/db.js';
+import { byDialect, dialectOf, type Database, type Queryable, type Row } from '../store/db.js';
 import { burnPasswordTime, hashPassword, needsRehash, passwordProblem, verifyPassword } from './password.js';
 import { mailText, type Mailer } from './mail.js';
 import type { Sealer } from './sealer/provider.js';
@@ -118,6 +118,19 @@ const isRole = (v: unknown): v is Role => typeof v === 'string' && (ROLES as rea
  * 마지막 관리자 보호 · 관리자 MFA 가 이것으로 잰다. 별칭 `u` 의 users 행에 쓴다.
  */
 const ADMIN_SQL = `((u.role='admin' OR 'admin' = ANY(u.idp_grant)) AND NOT ('admin' = ANY(u.idp_deny)))`;
+/**
+ * SQLite 의 같은 판정 — 배열 열은 JSON 텍스트(`text_array`)라 `json_each` 로 원소를 본다.
+ *
+ * SQLite 문장에는 `FOR UPDATE` 가 없다. SQLite 의 쓰기 트랜잭션은 `BEGIN IMMEDIATE` 라 시작할 때 DB 전체의 쓰기 잠금을
+ * 쥔다 — 모든 `db.tx` 가 이미 한 줄로 선다. PG 가 행 잠금으로 막는 경합(마지막 관리자 · 링크 두 번 쓰기)이 저절로 막힌다.
+ * 잠금만 하는 PG 문장(실효 관리자 행 잠그기)은 SQLite 에서 돌지 않는다(`rowLocks`).
+ */
+const ADMIN_SQL_SQLITE = `((u.role='admin' OR EXISTS (SELECT 1 FROM json_each(u.idp_grant) WHERE value='admin'))
+  AND NOT EXISTS (SELECT 1 FROM json_each(u.idp_deny) WHERE value='admin'))`;
+/** `read` 범위를 deny 받지 않았다 — SQLite 판. PG 문장은 `NOT ('read' = ANY(u.idp_deny))` 다. */
+const NOT_DENY_READ_SQLITE = `NOT EXISTS (SELECT 1 FROM json_each(u.idp_deny) WHERE value='read')`;
+/** 식이 낸 boolean — PG 는 `true`, SQLite 는 `1` 을 준다(선언 형이 없는 식은 정수다). */
+const yes = (v: unknown): boolean => v === true || v === 1;
 /** 실효 권한 정본이 IdP 인가 — 그 사람의 정본이 idp 이거나, 이어진 공급자가 「이 공급자의 SSO 사용자는 모두 IdP 정본」 이다. */
 const IDP_AUTHORITY_SQL = `(u.role_authority='idp' OR EXISTS (SELECT 1 FROM user_identities pi JOIN sso_providers pp ON pp.issuer=pi.issuer
   WHERE pi.user_id=u.id AND pp.idp_authority))`;
@@ -151,8 +164,8 @@ function authorityView(r: Row): {
   const a = authorityOfRow(r);
   return {
     roleAuthority: str(r, 'role_authority'),
-    idpAuthority: r['idp_authority'] === true,
-    roleAuthorityByProvider: r['by_provider'] === true,
+    idpAuthority: yes(r['idp_authority']),
+    roleAuthorityByProvider: yes(r['by_provider']),
     idpGrant: a?.grant ?? [], idpDeny: a?.deny ?? [],
     scopes: a === undefined ? [] : scopesOfAuthority(a),
   };
@@ -289,7 +302,10 @@ export class AccountService {
   /** 활성 admin 이 하나도 없을 때만. 호스트 CLI 가 부른다. */
   async bootstrap(by: string): Promise<string> {
     return this.#tx(async (c) => {
-      const admins = (await c.query(`SELECT 1 FROM users u WHERE ${ADMIN_SQL} AND u.status='active' LIMIT 1`)).rows;
+      const admins = (await c.query(byDialect(c, {
+        postgres: `SELECT 1 FROM users u WHERE ${ADMIN_SQL} AND u.status='active' LIMIT 1`,
+        sqlite: `SELECT 1 FROM users u WHERE ${ADMIN_SQL_SQLITE} AND u.status='active' LIMIT 1`,
+      }))).rows;
       if (admins.length > 0) throw new AccountError(409, 'admin_exists', '활성 관리자가 이미 있다 — bootstrap 은 첫 관리자용이다');
       const t = token();
       await c.query(
@@ -364,10 +380,13 @@ export class AccountService {
     if (problem !== undefined) throw new AccountError(400, 'weak_password', problem);
     const hash = await hashPassword(password);
     await this.#tx(async (c) => {
-      const r = (await c.query(
-        `SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id
+      const r = (await c.query(byDialect(c, {
+        postgres: `SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id
           WHERE r.token_hash=$1 AND r.used_at IS NULL AND r.expires_at > now() AND u.status='active'
-          FOR UPDATE OF r`, [sha(t)],
+          FOR UPDATE OF r`,
+        sqlite: `SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id
+          WHERE r.token_hash=$1 AND r.used_at IS NULL AND r.expires_at > now() AND u.status='active'`,
+      }), [sha(t)],
       )).rows[0];
       if (r === undefined) throw new AccountError(404, 'link_invalid', '링크가 없거나 만료됐거나 이미 쓰였다');
       const userId = str(r, 'user_id');
@@ -410,10 +429,13 @@ export class AccountService {
 
   async confirmEmailChange(t: string, meta: Meta = {}): Promise<void> {
     await this.#tx(async (c) => {
-      const r = (await c.query(
-        `SELECT e.user_id, e.new_email FROM email_changes e JOIN users u ON u.id=e.user_id
+      const r = (await c.query(byDialect(c, {
+        postgres: `SELECT e.user_id, e.new_email FROM email_changes e JOIN users u ON u.id=e.user_id
           WHERE e.token_hash=$1 AND e.used_at IS NULL AND e.expires_at > now() AND u.status='active'
-          FOR UPDATE OF e`, [sha(t)],
+          FOR UPDATE OF e`,
+        sqlite: `SELECT e.user_id, e.new_email FROM email_changes e JOIN users u ON u.id=e.user_id
+          WHERE e.token_hash=$1 AND e.used_at IS NULL AND e.expires_at > now() AND u.status='active'`,
+      }), [sha(t)],
       )).rows[0];
       if (r === undefined) throw new AccountError(404, 'link_invalid', '링크가 없거나 만료됐거나 이미 쓰였다');
       await c.query(`UPDATE email_changes SET used_at=now() WHERE token_hash=$1`, [sha(t)]);
@@ -426,7 +448,10 @@ export class AccountService {
   async recoveryLink(userId: string, by: string, meta: Meta = {}): Promise<string> {
     const t = token();
     return this.#tx(async (c) => {
-      const u = (await c.query(`SELECT role, status FROM users WHERE id=$1 FOR UPDATE`, [userId])).rows[0];
+      const u = (await c.query(byDialect(c, {
+        postgres: `SELECT role, status FROM users WHERE id=$1 FOR UPDATE`,
+        sqlite: `SELECT role, status FROM users WHERE id=$1`,
+      }), [userId])).rows[0];
       if (u === undefined || str(u, 'status') === 'deleted') throw new AccountError(404, 'no_user', '그런 계정이 없다');
       await c.query(`UPDATE invitations SET revoked_at=now() WHERE for_user=$1 AND used_at IS NULL AND revoked_at IS NULL`, [userId]);
       await c.query(
@@ -565,8 +590,11 @@ export class AccountService {
   }
 
   async #usableLink(c: Queryable | undefined, t: string): Promise<Row> {
-    const q = `SELECT i.*, u.username FROM invitations i LEFT JOIN users u ON u.id = i.for_user
-                WHERE i.token_hash=$1 ${c === undefined ? '' : 'FOR UPDATE OF i'}`;
+    const q = byDialect(c ?? this.#db, {
+      postgres: `SELECT i.*, u.username FROM invitations i LEFT JOIN users u ON u.id = i.for_user
+                WHERE i.token_hash=$1 ${c === undefined ? '' : 'FOR UPDATE OF i'}`,
+      sqlite: `SELECT i.*, u.username FROM invitations i LEFT JOIN users u ON u.id = i.for_user WHERE i.token_hash=$1`,
+    });
     const rows = c === undefined ? await this.#q(q, [sha(t)]) : (await c.query(q, [sha(t)])).rows;
     const inv = rows[0];
     // 없음·만료·사용됨·취소됨을 **가르지 않는다** — 링크를 추측하는 쪽에 단서를 안 준다.
@@ -670,7 +698,7 @@ export class AccountService {
     let current = authorityOfRow(row);
     if (current === undefined) return { kind: 'denied' };
     const factor = await this.#factorOf(undefined, userId, row['totp_at'] !== null);
-    if (row['idp_authority'] === true) {
+    if (yes(row['idp_authority'])) {
       const mapped = mapper.fromClaims(claims.raw ?? {});
       const synced = await this.#syncIdp(userId, mapped, `sso:${claims.iss}`, meta);
       if (synced === undefined) return { kind: 'denied' };
@@ -710,10 +738,13 @@ export class AccountService {
    */
   async #applyIdp(c: Queryable, userId: string, next: IdpAuthority, actor: string, meta: Meta):
     Promise<{ ok: true; value: IdpAuthority; from: IdpAuthority } | { ok: false; why: string }> {
-    await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
-    const r = (await c.query(
-      `SELECT u.role, u.idp_grant, u.idp_deny, u.status, t.confirmed_at AS totp_at
-         FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u`, [userId],
+    if (dialectOf(c).rowLocks) await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
+    const r = (await c.query(byDialect(c, {
+      postgres: `SELECT u.role, u.idp_grant, u.idp_deny, u.status, t.confirmed_at AS totp_at
+         FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u`,
+      sqlite: `SELECT u.role, u.idp_grant, u.idp_deny, u.status, t.confirmed_at AS totp_at
+         FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
+    }), [userId],
     )).rows[0];
     const cur = r === undefined ? undefined : authorityOfRow(r);
     if (r === undefined || cur === undefined) return { ok: false, why: '계정이 없다' };
@@ -728,8 +759,10 @@ export class AccountService {
       return refuse('관리자 범위를 주려면 둘째 인증(인증 앱 또는 IdP OTP)이 먼저 있어야 한다');
     }
     if (wasAdmin && !isAdmin && str(r, 'status') === 'active') {
-      const others = (await c.query(
-        `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL} AND u.status='active' AND u.id <> $1`, [userId],
+      const others = (await c.query(byDialect(c, {
+        postgres: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL} AND u.status='active' AND u.id <> $1`,
+        sqlite: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL_SQLITE} AND u.status='active' AND u.id <> $1`,
+      }), [userId],
       )).rows[0]!;
       if (Number(others['n']) === 0) return refuse('마지막 활성 관리자의 관리자 범위를 빼려 했다');
     }
@@ -755,9 +788,12 @@ export class AccountService {
         [issuer, ch.jti, new Date(ch.exp * 1000)],
       )).rowCount;
       if (fresh === 0) return { kind: 'replay' };
-      const i = (await c.query(
-        `SELECT i.user_id, i.role_change_txn::text AS txn, u.status, ${IDP_AUTHORITY_SQL} AS idp_authority
+      const i = (await c.query(byDialect(c, {
+        postgres: `SELECT i.user_id, i.role_change_txn::text AS txn, u.status, ${IDP_AUTHORITY_SQL} AS idp_authority
            FROM user_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF i`,
+        sqlite: `SELECT i.user_id, CAST(i.role_change_txn AS TEXT) AS txn, u.status, ${IDP_AUTHORITY_SQL} AS idp_authority
+           FROM user_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2`,
+      }),
         [issuer, ch.sub],
       )).rows[0];
       if (i === undefined) {
@@ -772,7 +808,7 @@ export class AccountService {
         return { kind: 'ignored', why };
       };
       if (str(i, 'status') !== 'active') return ignore('not_active', '로컬에서 정지 · 삭제된 계정이다(로컬이 우선)');
-      if (i['idp_authority'] !== true) return ignore('local_authority', '권한 정본이 로컬이다 — IdP 의 역할 변경을 쓰지 않는다');
+      if (!yes(i['idp_authority'])) return ignore('local_authority', '권한 정본이 로컬이다 — IdP 의 역할 변경을 쓰지 않는다');
       const p = (await c.query(`SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1`, [issuer])).rows[0];
       const mapped = this.#roleMapper(mappingOfRow(p)).fromLists({ roles: ch.roles, entitlements: ch.entitlements });
       let next: IdpAuthority;
@@ -830,10 +866,12 @@ export class AccountService {
       const n = (await c.query(`DELETE FROM user_identities WHERE issuer=$1 AND subject=$2 AND user_id=$3`, [issuer, subject, userId])).rowCount;
       if (n === 0) throw new AccountError(404, 'no_identity', '그 연결이 없다');
       // IdP OTP 가 관리자의 유일한 둘째 인증이면 끊지 않는다 — 관리자는 MFA 가 필수다(인증 앱 해제를 막는 것과 같다).
-      const u = (await c.query(
-        `SELECT ${ADMIN_SQL} AS admin, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`, [userId],
+      const u = (await c.query(byDialect(c, {
+        postgres: `SELECT ${ADMIN_SQL} AS admin, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
+        sqlite: `SELECT ${ADMIN_SQL_SQLITE} AS admin, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
+      }), [userId],
       )).rows[0];
-      if (u !== undefined && u['admin'] === true
+      if (u !== undefined && yes(u['admin'])
         && (await this.#factorOf(c, userId, u['confirmed_at'] !== null && u['confirmed_at'] !== undefined)) === undefined) {
         throw new AccountError(409, 'admin_needs_mfa', '관리자의 유일한 둘째 인증(IdP OTP)이라 끊을 수 없다 — 먼저 인증 앱을 등록한다');
       }
@@ -849,9 +887,14 @@ export class AccountService {
    * 공급자 기본 정본 끄기). 연결 끊기는 그 사람의 역할을 넘지 않는다(역할 범위로 돌아갈 뿐이다).
    */
   async #settleLocal(c: Queryable, userId?: string): Promise<void> {
-    await c.query(
-      `UPDATE users u SET idp_grant='{}', idp_deny='{}' WHERE (cardinality(u.idp_grant) > 0 OR cardinality(u.idp_deny) > 0)
+    await c.query(byDialect(c, {
+      postgres: `UPDATE users u SET idp_grant='{}', idp_deny='{}' WHERE (cardinality(u.idp_grant) > 0 OR cardinality(u.idp_deny) > 0)
           AND NOT ${IDP_AUTHORITY_SQL} ${userId === undefined ? '' : 'AND u.id=$1'}`,
+      // SQLite 의 UPDATE 별칭은 `AS` 가 있어야 한다. 빈 배열은 JSON 텍스트 `[]` 다.
+      sqlite: `UPDATE users AS u SET idp_grant='[]', idp_deny='[]'
+          WHERE (json_array_length(u.idp_grant) > 0 OR json_array_length(u.idp_deny) > 0)
+          AND NOT ${IDP_AUTHORITY_SQL} ${userId === undefined ? '' : 'AND u.id=$1'}`,
+    }),
       userId === undefined ? [] : [userId],
     );
   }
@@ -885,7 +928,10 @@ export class AccountService {
     const obj = (v: unknown, what: string): Record<string, unknown> =>
       (v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : bad(`'${what}' 은 객체다`));
     await this.#tx(async (c) => {
-      const cur = mappingOfRow((await c.query(`SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1 FOR UPDATE`, [issuer])).rows[0]);
+      const cur = mappingOfRow((await c.query(byDialect(c, {
+        postgres: `SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1 FOR UPDATE`,
+        sqlite: `SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1`,
+      }), [issuer])).rows[0]);
       let next: ClaimsMapperConfig = { ...cur };
       if (input.profile !== undefined) {
         const p = typeof input.profile === 'string' ? roleProfile(input.profile) : undefined;
@@ -962,11 +1008,16 @@ export class AccountService {
    */
   async login(identifier: string, password: string, meta: Meta = {}): Promise<LoginOutcome> {
     const id = identifier.trim().toLowerCase();
-    const u = (await this.#q(
-      `SELECT u.id, u.username, u.role, u.status, u.password_hash, u.failed_logins, u.locked_until,
+    const u = (await this.#q(byDialect(this.#db, {
+      postgres: `SELECT u.id, u.username, u.role, u.status, u.password_hash, u.failed_logins, u.locked_until,
               t.confirmed_at AS totp_at, ${ADMIN_SQL} AS admin
          FROM users u LEFT JOIN mfa_totp t ON t.user_id = u.id
         WHERE (u.username=$1 OR u.email=$1) AND u.status <> 'deleted'`,
+      sqlite: `SELECT u.id, u.username, u.role, u.status, u.password_hash, u.failed_logins, u.locked_until,
+              t.confirmed_at AS totp_at, ${ADMIN_SQL_SQLITE} AS admin
+         FROM users u LEFT JOIN mfa_totp t ON t.user_id = u.id
+        WHERE (u.username=$1 OR u.email=$1) AND u.status <> 'deleted'`,
+    }),
       [id],
     ))[0];
     const now = this.#now();
@@ -989,7 +1040,7 @@ export class AccountService {
       await this.#q(`UPDATE users SET password_hash=$2 WHERE id=$1`, [userId, await hashPassword(password)]);
     }
     // admin 인데 MFA 가 없는 상태는 만들지 않지만(수락·승격이 막는다), 만들어졌다면 들이지 않는다.
-    if (u['admin'] === true && factor === undefined) return { kind: 'denied' };
+    if (yes(u['admin']) && factor === undefined) return { kind: 'denied' };
     if (factor !== undefined) {
       const sid = await this.#newSession(userId, now + MFA_PENDING_MS, true, ['pwd'], meta);
       return { kind: 'mfa', sessionId: sid, maxAgeS: MFA_PENDING_MS / 1000, method: factor };
@@ -1062,10 +1113,22 @@ export class AccountService {
    * 보존 기한 정리 (공통 수치 1차) — 감사 기록 1년, 끝난 시도 계수. 여러 인스턴스가 동시에 돌려도 같다.
    */
   async purgeExpired(): Promise<{ audit: number }> {
-    const audit = (await this.#q(
-      `WITH d AS (DELETE FROM account_audit WHERE at < $1 RETURNING 1) SELECT count(*)::int AS n FROM d`,
-      [new Date(this.#now() - AUDIT_RETENTION_MS)],
-    ))[0]!;
+    const cut = new Date(this.#now() - AUDIT_RETENTION_MS);
+    let audit: Row;
+    switch (dialectOf(this.#db).name) {
+      case 'postgres':
+        audit = (await this.#q(
+          `WITH d AS (DELETE FROM account_audit WHERE at < $1 RETURNING 1) SELECT count(*)::int AS n FROM d`,
+          [cut],
+        ))[0]!;
+        break;
+      case 'sqlite':
+        // SQLite 는 CTE 안에 DELETE 를 못 둔다 — 지운 행을 돌려받아 센다.
+        audit = { n: (await this.#q(`DELETE FROM account_audit WHERE at < $1 RETURNING 1`, [cut])).length };
+        break;
+      case 'mysql':
+        throw new Error('mysql 방언의 문장이 아직 없다 (docs/adr-multi-db.md 「단계」 3)');
+    }
     await this.#q(`DELETE FROM auth_throttle WHERE last_failure_at < $1`, [new Date(this.#now() - LOCK_MAX_MS)]);
     // 수명이 지난 SET 의 jti — 그 뒤의 재전송은 exp 검사가 막는다.
     await this.#q(`DELETE FROM idp_set_jti WHERE expires_at < $1`, [new Date(this.#now())]);
@@ -1080,11 +1143,15 @@ export class AccountService {
     if (pendingId === undefined) return { kind: 'denied' };
     const now = this.#now();
     return this.#tx(async (c) => {
-      const s = (await c.query(
-        `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.locked_until, u.status
+      const s = (await c.query(byDialect(c, {
+        postgres: `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.locked_until, u.status
            FROM sessions s JOIN users u ON u.id = s.user_id
           WHERE s.id_hash=$1 AND s.mfa_pending AND s.revoked_at IS NULL AND s.expires_at > now()
           FOR UPDATE OF s, u`,
+        sqlite: `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.locked_until, u.status
+           FROM sessions s JOIN users u ON u.id = s.user_id
+          WHERE s.id_hash=$1 AND s.mfa_pending AND s.revoked_at IS NULL AND s.expires_at > now()`,
+      }),
         [sha(pendingId)],
       )).rows[0];
       if (s === undefined || str(s, 'status') !== 'active') return { kind: 'denied' } as const;
@@ -1159,13 +1226,18 @@ export class AccountService {
    */
   async stepUp(sessionHash: string, userId: string, code: string, meta: Meta = {}): Promise<void> {
     await this.#tx(async (c) => {
-      const t = (await c.query(
-        `SELECT 1 FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL FOR UPDATE`, [userId],
+      const t = (await c.query(byDialect(c, {
+        postgres: `SELECT 1 FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL FOR UPDATE`,
+        sqlite: `SELECT 1 FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL`,
+      }), [userId],
       )).rows[0];
       if ((await this.#factorOf(c, userId, t !== undefined)) === undefined) {
         throw new AccountError(409, 'no_totp', '인증 앱을 먼저 등록한다 — 민감 작업은 MFA 가 필요하다');
       }
-      const u = (await c.query(`SELECT failed_logins, locked_until FROM users WHERE id=$1 FOR UPDATE`, [userId])).rows[0]!;
+      const u = (await c.query(byDialect(c, {
+        postgres: `SELECT failed_logins, locked_until FROM users WHERE id=$1 FOR UPDATE`,
+        sqlite: `SELECT failed_logins, locked_until FROM users WHERE id=$1`,
+      }), [userId])).rows[0]!;
       if (this.#locked(u['locked_until'], this.#now())) {
         throw new AccountError(429, 'locked', '실패가 너무 많다 — 잠시 뒤 다시 한다');
       }
@@ -1177,9 +1249,12 @@ export class AccountService {
       }
       const method = f.method;
       await c.query(`UPDATE users SET failed_logins=0, locked_until=NULL WHERE id=$1`, [userId]);
-      await c.query(
-        `UPDATE sessions SET mfa_at=now(), auth_methods = array_append(auth_methods, $2)
-          WHERE id_hash=$1 AND revoked_at IS NULL`, [sessionHash, `step-up:${method}`],
+      await c.query(byDialect(c, {
+        postgres: `UPDATE sessions SET mfa_at=now(), auth_methods = array_append(auth_methods, $2)
+          WHERE id_hash=$1 AND revoked_at IS NULL`,
+        sqlite: `UPDATE sessions SET mfa_at=now(), auth_methods = json_insert(auth_methods, '$[#]', $2)
+          WHERE id_hash=$1 AND revoked_at IS NULL`,
+      }), [sessionHash, `step-up:${method}`],
       );
       await this.#audit(c, `user:${userId}`, 'session.step_up', userId, meta, { method });
     });
@@ -1187,11 +1262,16 @@ export class AccountService {
 
   /** 열린 SSE 의 하트비트가 묻는다. 못 물으면 던진다 — 스트림 쪽이 닫는다. */
   async sessionAlive(sessionHash: string): Promise<boolean> {
-    const r = await this.#q(
-      `SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id
+    const r = await this.#q(byDialect(this.#db, {
+      postgres: `SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id
         WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending AND u.status='active'
           AND NOT ('read' = ANY(u.idp_deny))
           AND s.last_seen_at > now() - make_interval(secs => $2::double precision / 1000)`,
+      sqlite: `SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id
+        WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending AND u.status='active'
+          AND ${NOT_DENY_READ_SQLITE}
+          AND s.last_seen_at > strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || ($2 / 1000.0) || ' seconds')`,
+    }),
       [sessionHash, SESSION_IDLE_MS],
     );
     return r.length > 0;
@@ -1225,12 +1305,18 @@ export class AccountService {
   async authenticate(sessionId: string | undefined): Promise<Principal | undefined> {
     if (sessionId === undefined || sessionId === '') return undefined;
     const h = sha(sessionId);
-    const r = (await this.#q(
-      `SELECT s.user_id, s.mfa_at, s.last_seen_at, u.username, u.role, u.idp_grant, u.idp_deny
+    const r = (await this.#q(byDialect(this.#db, {
+      postgres: `SELECT s.user_id, s.mfa_at, s.last_seen_at, u.username, u.role, u.idp_grant, u.idp_deny
          FROM sessions s JOIN users u ON u.id = s.user_id
         WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending
           AND s.last_seen_at > now() - make_interval(secs => $2::double precision / 1000)
           AND u.status='active'`,
+      sqlite: `SELECT s.user_id, s.mfa_at, s.last_seen_at, u.username, u.role, u.idp_grant, u.idp_deny
+         FROM sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending
+          AND s.last_seen_at > strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || ($2 / 1000.0) || ' seconds')
+          AND u.status='active'`,
+    }),
       [h, SESSION_IDLE_MS],
     ))[0];
     if (r === undefined) return undefined;
@@ -1292,7 +1378,7 @@ export class AccountService {
     const identities = (await this.#q(
       `SELECT issuer, subject, linked_at, last_login_at FROM user_identities WHERE user_id=$1 ORDER BY linked_at`, [userId],
     )).map((i) => ({ issuer: str(i, 'issuer'), subject: str(i, 'subject'), linkedAt: iso(i['linked_at']), lastLoginAt: isoOpt(i['last_login_at']) }));
-    const hasPassword = (await this.#q(`SELECT password_hash IS NOT NULL AS p FROM users WHERE id=$1`, [userId]))[0]?.['p'] === true;
+    const hasPassword = yes((await this.#q(`SELECT password_hash IS NOT NULL AS p FROM users WHERE id=$1`, [userId]))[0]?.['p']);
     const idp = this.#idpMfa !== undefined && (await this.#idpSubject(undefined, userId)) !== undefined ? this.#idpMfa.host : undefined;
     return {
       identities, hasPassword,
@@ -1332,7 +1418,10 @@ export class AccountService {
   async beginTotp(userId: string, username: string): Promise<{ secret: string; uri: string }> {
     const secret = newTotpSecret();
     await this.#tx(async (c) => {
-      const cur = (await c.query(`SELECT confirmed_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`, [userId])).rows[0];
+      const cur = (await c.query(byDialect(c, {
+        postgres: `SELECT confirmed_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`,
+        sqlite: `SELECT confirmed_at FROM mfa_totp WHERE user_id=$1`,
+      }), [userId])).rows[0];
       if (cur !== undefined && cur['confirmed_at'] !== null) {
         throw new AccountError(409, 'totp_exists', '이미 등록된 인증 앱이 있다 — 먼저 해제한다');
       }
@@ -1347,7 +1436,10 @@ export class AccountService {
 
   async confirmTotp(userId: string, code: string, meta: Meta = {}): Promise<string[]> {
     return this.#tx(async (c) => {
-      const t = (await c.query(`SELECT secret_sealed, confirmed_at, created_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`, [userId])).rows[0];
+      const t = (await c.query(byDialect(c, {
+        postgres: `SELECT secret_sealed, confirmed_at, created_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`,
+        sqlite: `SELECT secret_sealed, confirmed_at, created_at FROM mfa_totp WHERE user_id=$1`,
+      }), [userId])).rows[0];
       if (t === undefined || t['confirmed_at'] !== null) throw new AccountError(409, 'no_pending_totp', '확인할 등록이 없다');
       if (new Date(String(t['created_at'])).getTime() + TOTP_SETUP_TTL_MS < this.#now()) {
         throw new AccountError(410, 'totp_setup_expired', '인증 앱 등록이 만료됐다(24시간) — 처음부터 다시 등록한다');
@@ -1365,8 +1457,11 @@ export class AccountService {
   async removeTotp(userId: string, password: string, meta: Meta = {}): Promise<void> {
     await this.#requirePassword(userId, password);
     await this.#tx(async (c) => {
-      const u = (await c.query(`SELECT ${ADMIN_SQL} AS admin FROM users u WHERE u.id=$1`, [userId])).rows[0];
-      if (u !== undefined && u['admin'] === true) throw new AccountError(409, 'admin_needs_mfa', '관리자는 인증 앱을 해제할 수 없다');
+      const u = (await c.query(byDialect(c, {
+        postgres: `SELECT ${ADMIN_SQL} AS admin FROM users u WHERE u.id=$1`,
+        sqlite: `SELECT ${ADMIN_SQL_SQLITE} AS admin FROM users u WHERE u.id=$1`,
+      }), [userId])).rows[0];
+      if (u !== undefined && yes(u['admin'])) throw new AccountError(409, 'admin_needs_mfa', '관리자는 인증 앱을 해제할 수 없다');
       await c.query('DELETE FROM mfa_totp WHERE user_id=$1', [userId]);
       await c.query('DELETE FROM mfa_recovery_codes WHERE user_id=$1', [userId]);
       await this.#audit(c, `user:${userId}`, 'account.totp_disable', userId, meta);
@@ -1436,7 +1531,10 @@ export class AccountService {
     const created = new Date(this.#now());
     const expires = new Date(created.getTime() + days * DAY_MS);
     return this.#tx(async (c) => {
-      const u = (await c.query(`SELECT role, status FROM users WHERE id=$1 FOR UPDATE`, [userId])).rows[0];
+      const u = (await c.query(byDialect(c, {
+        postgres: `SELECT role, status FROM users WHERE id=$1 FOR UPDATE`,
+        sqlite: `SELECT role, status FROM users WHERE id=$1`,
+      }), [userId])).rows[0];
       if (u === undefined || str(u, 'status') !== 'active') throw new AccountError(404, 'no_user', '쓸 수 있는 계정이 아니다');
       const owner = str(u, 'role');
       if (!isRole(owner) || roleRank(role) > roleRank(owner)) {
@@ -1535,9 +1633,12 @@ export class AccountService {
   /** 열린 SSE 의 하트비트가 묻는다(개인 토큰). 못 물으면 던진다 — 스트림 쪽이 닫는다. */
   async tokenAlive(tokenId: string): Promise<boolean> {
     if (!UUID.test(tokenId)) return false;
-    const r = await this.#q(
-      `SELECT 1 FROM api_tokens t JOIN users u ON u.id=t.user_id
+    const r = await this.#q(byDialect(this.#db, {
+      postgres: `SELECT 1 FROM api_tokens t JOIN users u ON u.id=t.user_id
         WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at > $2 AND u.status='active' AND NOT ('read' = ANY(u.idp_deny))`,
+      sqlite: `SELECT 1 FROM api_tokens t JOIN users u ON u.id=t.user_id
+        WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at > $2 AND u.status='active' AND ${NOT_DENY_READ_SQLITE}`,
+    }),
       [tokenId, new Date(this.#now())],
     );
     return r.length > 0;
@@ -1556,7 +1657,7 @@ export class AccountService {
     )).map((u) => ({
       id: str(u, 'id'), username: str(u, 'username'), displayName: opt(u, 'display_name'), email: opt(u, 'email'),
       role: str(u, 'role'), ...authorityView(u), status: str(u, 'status'),
-      createdAt: iso(u['created_at']), lockedUntil: isoOpt(u['locked_until']), totp: u['totp'] === true,
+      createdAt: iso(u['created_at']), lockedUntil: isoOpt(u['locked_until']), totp: yes(u['totp']),
       lastLoginAt: isoOpt(u['last_login_at']),
       /** 철회되지 않고 만료되지 않은 개인 API 토큰 수. */
       tokens: Number(u['tokens']),
@@ -1577,19 +1678,24 @@ export class AccountService {
     }
     await this.#tx(async (c) => {
       // 실효 관리자 행을 잠근다 — 둘이 동시에 서로를 강등해 관리자가 0 이 되는 경합을 막는다.
-      await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
-      const u = (await c.query(
-        `SELECT u.role, u.status, u.role_authority, u.idp_grant, u.idp_deny, t.confirmed_at,
+      if (dialectOf(c).rowLocks) await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
+      const u = (await c.query(byDialect(c, {
+        postgres: `SELECT u.role, u.status, u.role_authority, u.idp_grant, u.idp_deny, t.confirmed_at,
                 EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id=u.id) AS has_identity,
                 ${PROVIDER_AUTHORITY_SQL} AS by_provider
            FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u`,
+        sqlite: `SELECT u.role, u.status, u.role_authority, u.idp_grant, u.idp_deny, t.confirmed_at,
+                EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id=u.id) AS has_identity,
+                ${PROVIDER_AUTHORITY_SQL} AS by_provider
+           FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
+      }),
         [userId],
       )).rows[0];
       if (u === undefined || str(u, 'status') === 'deleted') throw new AccountError(404, 'no_user', '그런 계정이 없다');
       const cur = authorityOfRow(u);
       if (cur === undefined) throw new AccountError(409, 'bad_role', '계정의 역할 값을 읽을 수 없다');
       const authority = patch.roleAuthority ?? str(u, 'role_authority');
-      const byProvider = u['by_provider'] === true;
+      const byProvider = yes(u['by_provider']);
       const idpRules = authority === 'idp' || byProvider;
       // IdP 가 정본이면 역할은 SSO 로그인 · Role Change 가 맞춘다 — 관리자가 손으로 바꾸면 다음에 덮인다. 그러니 막는다.
       if (idpRules && patch.role !== undefined) {
@@ -1597,7 +1703,7 @@ export class AccountService {
           ? '이 계정의 역할은 IdP 가 정한다(공급자 기본 정본) — 먼저 「사람 → SSO 공급자」 에서 공급자 기본 IdP 정본을 끈다'
           : '이 계정의 역할은 IdP 가 정한다 — 먼저 권한 정본을 local 로 바꾼다');
       }
-      if (authority === 'idp' && u['has_identity'] !== true) {
+      if (authority === 'idp' && !yes(u['has_identity'])) {
         throw new AccountError(409, 'no_identity', 'SSO 가 연결되지 않은 계정은 IdP 를 권한 정본으로 둘 수 없다');
       }
       const role = patch.role ?? str(u, 'role');
@@ -1634,10 +1740,13 @@ export class AccountService {
    */
   async deleteUser(userId: string, by: string, meta: Meta = {}): Promise<void> {
     await this.#tx(async (c) => {
-      await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
-      const u = (await c.query(`SELECT u.status, ${ADMIN_SQL} AS admin FROM users u WHERE u.id=$1 FOR UPDATE`, [userId])).rows[0];
+      if (dialectOf(c).rowLocks) await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
+      const u = (await c.query(byDialect(c, {
+        postgres: `SELECT u.status, ${ADMIN_SQL} AS admin FROM users u WHERE u.id=$1 FOR UPDATE`,
+        sqlite: `SELECT u.status, ${ADMIN_SQL_SQLITE} AS admin FROM users u WHERE u.id=$1`,
+      }), [userId])).rows[0];
       if (u === undefined || str(u, 'status') === 'deleted') throw new AccountError(404, 'no_user', '그런 계정이 없다');
-      if (u['admin'] === true && str(u, 'status') === 'active') await this.#guardLastAdmin(c, userId);
+      if (yes(u['admin']) && str(u, 'status') === 'active') await this.#guardLastAdmin(c, userId);
       await c.query(
         `UPDATE users SET status='deleted', email=NULL, password_hash=NULL, display_name=NULL,
                           deleted_at=now(), updated_at=now() WHERE id=$1`,
@@ -1660,8 +1769,10 @@ export class AccountService {
   }
 
   async #guardLastAdmin(c: Queryable, exceptUserId: string): Promise<void> {
-    const others = (await c.query(
-      `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL} AND u.status='active' AND u.id <> $1`, [exceptUserId],
+    const others = (await c.query(byDialect(c, {
+      postgres: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL} AND u.status='active' AND u.id <> $1`,
+      sqlite: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL_SQLITE} AND u.status='active' AND u.id <> $1`,
+    }), [exceptUserId],
     )).rows[0]!;
     if (Number(others['n']) === 0) {
       throw new AccountError(409, 'last_admin', '마지막 활성 관리자는 강등·정지·삭제할 수 없다');

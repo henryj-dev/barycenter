@@ -8,7 +8,7 @@
  * 수치는 메모리 구현(`AuthFailureLimiter`)과 같다. 판정은 **한 문장의 upsert** 로 한다 — 두 노드가 동시에 더해도
  * 하나도 잃지 않는다(행 잠금).
  */
-import type { Queryable } from '../../store/db.js';
+import { byDialect, type Queryable } from '../../store/db.js';
 import type { LimitResult, RateLimitStore } from './store.js';
 
 export type PgRateLimitOptions = {
@@ -37,8 +37,8 @@ export function pgRateLimit(o: PgRateLimitOptions): RateLimitStore {
       const t = now();
       try {
         // 마지막 실패에서 ttl 이 지났으면 1 부터. 대기는 같은 문장에서 정한다 — 읽고 다시 쓰는 사이에 끼어들 틈이 없다.
-        const r = (await o.db.query(
-          `INSERT INTO auth_throttle (key, failures, last_failure_at, blocked_until)
+        const r = (await o.db.query(byDialect(o.db, {
+          postgres: `INSERT INTO auth_throttle (key, failures, last_failure_at, blocked_until)
            VALUES ($1, 1, $2, CASE WHEN 1 >= $4 THEN $2::timestamptz + make_interval(secs => $5::double precision / 1000) END)
            ON CONFLICT (key) DO UPDATE SET
              failures = CASE WHEN auth_throttle.last_failure_at <= $3 THEN 1 ELSE auth_throttle.failures + 1 END,
@@ -49,6 +49,19 @@ export function pgRateLimit(o: PgRateLimitOptions): RateLimitStore {
                  $5::double precision * power(2, (CASE WHEN auth_throttle.last_failure_at <= $3 THEN 1 ELSE auth_throttle.failures + 1 END) - $4)) / 1000)
                END
            RETURNING failures`,
+          // SQLite: 시각은 ISO 텍스트다 — 간격은 `strftime` 의 초 수정자로 더한다(형식이 같아 문자열 비교가 시각 비교다).
+          sqlite: `INSERT INTO auth_throttle (key, failures, last_failure_at, blocked_until)
+           VALUES ($1, 1, $2, CASE WHEN 1 >= $4 THEN strftime('%Y-%m-%dT%H:%M:%fZ', $2, '+' || ($5 / 1000.0) || ' seconds') END)
+           ON CONFLICT (key) DO UPDATE SET
+             failures = CASE WHEN auth_throttle.last_failure_at <= $3 THEN 1 ELSE auth_throttle.failures + 1 END,
+             last_failure_at = $2,
+             blocked_until = CASE
+               WHEN (CASE WHEN auth_throttle.last_failure_at <= $3 THEN 1 ELSE auth_throttle.failures + 1 END) >= $4
+               THEN strftime('%Y-%m-%dT%H:%M:%fZ', $2, '+' || (min($6 * 1.0,
+                 $5 * pow(2, (CASE WHEN auth_throttle.last_failure_at <= $3 THEN 1 ELSE auth_throttle.failures + 1 END) - $4)) / 1000.0) || ' seconds')
+               END
+           RETURNING failures`,
+        }),
           [`${prefix}${key}`, new Date(t), new Date(t - ttl), max, base, cap],
         )).rows[0];
         const n = Number(r?.['failures']);

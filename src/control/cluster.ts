@@ -12,7 +12,7 @@
 import type { ControlPlane, FollowResult } from './plane.js';
 import type { LeaderElection } from './leader.js';
 import type { DataplaneDriver } from '../dp/driver.js';
-import type { Database } from '../store/db.js';
+import { byDialect, dialectOf, type Database } from '../store/db.js';
 import { log } from '../obs/log.js';
 
 export type NodeState = 'in_sync' | 'following' | 'failed' | 'standalone';
@@ -119,11 +119,17 @@ export type ClusterNodeView = {
 };
 
 export async function listClusterNodes(db: Database, staleAfterMs: number): Promise<ClusterNodeView[]> {
-  const rows = (await db.query(
-    `SELECT name, url, role, active_epoch::text AS epoch, active_generation, state, last_error,
+  const rows = (await db.query(byDialect(db, {
+    postgres: `SELECT name, url, role, active_epoch::text AS epoch, active_generation, state, last_error,
             last_seen, (now() - last_seen) > ($1::text || ' milliseconds')::interval AS stale
-       FROM cluster_nodes ORDER BY name`, [String(staleAfterMs)],
+       FROM cluster_nodes ORDER BY name`,
+    sqlite: `SELECT name, url, role, CAST(active_epoch AS TEXT) AS epoch, active_generation, state, last_error,
+            last_seen, (julianday(now()) - julianday(last_seen)) * 86400000.0 > CAST($1 AS REAL) AS stale
+       FROM cluster_nodes ORDER BY name`,
+  }), [String(staleAfterMs)],
   )).rows;
+  // SQLite 의 비교식은 0/1 을 준다(선언 형이 없다). PG 는 boolean 이다.
+  const isStale = (v: unknown): boolean => (dialectOf(db).name === 'sqlite' ? Number(v) === 1 : v === true);
   const leaderEpoch = rows.find((r) => r['role'] === 'leader' && r['epoch'] != null)?.['epoch'];
   return rows.map((r) => ({
     name: String(r['name']),
@@ -134,7 +140,7 @@ export async function listClusterNodes(db: Database, staleAfterMs: number): Prom
     state: String(r['state']) as NodeState,
     ...(r['last_error'] == null ? {} : { lastError: String(r['last_error']) }),
     lastSeen: new Date(r['last_seen'] as string).toISOString(),
-    stale: r['stale'] === true,
+    stale: isStale(r['stale']),
     behind: r['role'] === 'follower' && leaderEpoch != null && r['epoch'] != null
       && String(r['epoch']) !== String(leaderEpoch),
   }));
@@ -153,10 +159,14 @@ export async function currentLeader(db: Database): Promise<{ name: string; since
 export type NodeApplyRecord = { at: string; revision?: string; generation?: string; phase?: string };
 
 export async function nodeHistory(db: Database, name: string, limit = 20): Promise<NodeApplyRecord[]> {
-  const rows = (await db.query(
-    `SELECT at, revision::text AS revision, after FROM audit
+  const rows = (await db.query(byDialect(db, {
+    postgres: `SELECT at, revision::text AS revision, after FROM audit
       WHERE principal = $1 AND action = 'cluster.follow'
-      ORDER BY at DESC LIMIT $2`, [`cluster:${name}`, limit],
+      ORDER BY at DESC LIMIT $2`,
+    sqlite: `SELECT at, CAST(revision AS TEXT) AS revision, after FROM audit
+      WHERE principal = $1 AND action = 'cluster.follow'
+      ORDER BY at DESC LIMIT $2`,
+  }), [`cluster:${name}`, limit],
   )).rows;
   return rows.map((r) => {
     const after = (r['after'] ?? {}) as { generation?: string; phase?: string };

@@ -19,7 +19,8 @@ import { hotp, stepOf } from '../../src/accounts/totp.js';
 import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg } from './pg-fixture.js';
+import { byDialect } from '../../src/store/db.js';
+import { Db, dockerAvailable, pgFor, startPg, stopPg, freshSchema } from './pg-fixture.js';
 
 const PG = pgFor('accounts-numbers');
 const PASS = 'operator-pass-1';
@@ -78,7 +79,7 @@ beforeAll(async () => {
 afterAll(async () => { await db?.close(); stopPg(PG); });
 
 beforeEach(async () => {
-  await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await freshSchema(db);
   await db.migrate(ACCOUNT_MIGRATIONS);
   accounts = new AccountService({ db, sealer });
 });
@@ -97,9 +98,15 @@ describe('세션 — 유휴 30분 · 절대 12시간', () => {
     expect(r.headers.getSetCookie().find((c) => c.startsWith('bary_sid='))).toMatch(/Max-Age=43200/i);
     expect(SESSION_MAX_MS).toBe(12 * 3600_000);
     const cookie = cookieOf(r, 'bary_sid');
-    await db.query(`UPDATE sessions SET last_seen_at = now() - interval '29 minutes'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE sessions SET last_seen_at = now() - interval '29 minutes'`,
+      sqlite: `UPDATE sessions SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-29 minutes')`,
+    }));
     expect((await fetch(`${A}/api/v1/me`, { headers: { cookie } })).status).toBe(200);
-    await db.query(`UPDATE sessions SET last_seen_at = now() - interval '31 minutes'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE sessions SET last_seen_at = now() - interval '31 minutes'`,
+      sqlite: `UPDATE sessions SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-31 minutes')`,
+    }));
     expect((await fetch(`${A}/api/v1/me`, { headers: { cookie } })).status).toBe(401);
   });
 });
@@ -112,7 +119,10 @@ describe('MFA 최근성 10분 · TOTP 등록 24시간', () => {
   it('**미확인 등록은 24시간 뒤 확인할 수 없다**', async () => {
     const userId = await operator();
     const { secret } = await accounts.beginTotp(userId, 'op');
-    await db.query(`UPDATE mfa_totp SET created_at = now() - interval '25 hours'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE mfa_totp SET created_at = now() - interval '25 hours'`,
+      sqlite: `UPDATE mfa_totp SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-25 hours')`,
+    }));
     await expect(accounts.confirmTotp(userId, codeFor(secret))).rejects.toMatchObject({ code: 'totp_setup_expired' });
     // 다시 시작하면 된다
     const again = await accounts.beginTotp(userId, 'op');
@@ -131,12 +141,18 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
     expect(fifth.status).toBe(429);
     expect(Number(fifth.headers.get('retry-after'))).toBe(1); // 시작 1초
     // 첫 지연은 1초라 느린 CI 에서 풀릴 수 있다 — 막힘을 늘려 「검증 전 차단」만 잰다
-    await db.query(`UPDATE auth_throttle SET blocked_until = now() + interval '1 minute'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE auth_throttle SET blocked_until = now() + interval '1 minute'`,
+      sqlite: `UPDATE auth_throttle SET blocked_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+1 minute')`,
+    }));
     // 인스턴스 B 에서 **맞는** 비밀번호 — 그래도 429 (프로세스마다 따로 세지 않는다, 검증 전에 막는다)
     const ok = await post(B, '/api/v1/session/login', { username: 'op', password: PASS });
     expect(ok.status).toBe(429);
     // 막힘이 풀리면 된다 — 영구 잠금이 아니다
-    await db.query(`UPDATE auth_throttle SET blocked_until = now() - interval '1 second'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE auth_throttle SET blocked_until = now() - interval '1 second'`,
+      sqlite: `UPDATE auth_throttle SET blocked_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second')`,
+    }));
     expect((await post(B, '/api/v1/session/login', { username: 'op', password: PASS })).status).toBe(200);
   });
 
@@ -153,10 +169,16 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
     const locked = (await db.query(`SELECT failed_logins, locked_until FROM users WHERE username='mfa'`)).rows[0]!;
     expect(Number(locked['failed_logins'])).toBe(5);
     expect(locked['locked_until']).not.toBeNull();
-    await db.query(`UPDATE users SET locked_until = now() + interval '1 minute'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE users SET locked_until = now() + interval '1 minute'`,
+      sqlite: `UPDATE users SET locked_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+1 minute')`,
+    }));
     // 잠긴 동안은 비밀번호 단계부터 거절
     expect((await accounts.login('mfa', PASS)).kind).toBe('denied');
-    await db.query(`UPDATE users SET locked_until = now() - interval '1 second'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE users SET locked_until = now() - interval '1 second'`,
+      sqlite: `UPDATE users SET locked_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second')`,
+    }));
     const pending = await wrong();
     expect((await accounts.completeMfa(pending, codeFor(secret, Date.now() + 30_000))).kind).toBe('session');
     expect(Number((await db.query(`SELECT failed_logins FROM users WHERE username='mfa'`)).rows[0]!['failed_logins'])).toBe(0);
@@ -164,7 +186,10 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
 
   it('지연은 지수로 는다 — 1초, 2초, 4초 … 최대 15분, 마지막 실패 뒤 15분이면 처음부터', async () => {
     const at = async (): Promise<number> => {
-      const r = (await db.query(`SELECT extract(epoch from blocked_until - last_failure_at)::int AS s FROM auth_throttle WHERE key='t'`)).rows[0]!;
+      const r = (await db.query(byDialect(db, {
+        postgres: `SELECT extract(epoch from blocked_until - last_failure_at)::int AS s FROM auth_throttle WHERE key='t'`,
+        sqlite: `SELECT CAST(round((julianday(blocked_until) - julianday(last_failure_at)) * 86400) AS INTEGER) AS s FROM auth_throttle WHERE key='t'`,
+      }))).rows[0]!;
       return Number(r['s']);
     };
     for (let i = 0; i < 4; i++) expect(await accounts.throttleFail('t')).toBeUndefined();
@@ -175,14 +200,20 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
     for (let i = 0; i < 10; i++) await accounts.throttleFail('t');
     expect(await accounts.throttleFail('t')).toBe(900);
     // 마지막 실패 뒤 15분이 지나면 처음부터
-    await db.query(`UPDATE auth_throttle SET last_failure_at = now() - interval '16 minutes'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE auth_throttle SET last_failure_at = now() - interval '16 minutes'`,
+      sqlite: `UPDATE auth_throttle SET last_failure_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-16 minutes')`,
+    }));
     expect(await accounts.throttleFail('t')).toBeUndefined();
   });
 
   it('계정 계수도 마지막 실패 뒤 15분이 지나면 처음부터 센다', async () => {
     await operator();
     for (let i = 0; i < 4; i++) expect((await accounts.login('op', 'wrong-Pass-1')).kind).toBe('denied');
-    await db.query(`UPDATE users SET last_failed_at = now() - interval '16 minutes'`);
+    await db.query(byDialect(db, {
+      postgres: `UPDATE users SET last_failed_at = now() - interval '16 minutes'`,
+      sqlite: `UPDATE users SET last_failed_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-16 minutes')`,
+    }));
     expect((await accounts.login('op', 'wrong-Pass-1')).kind).toBe('denied');
     const u = (await db.query(`SELECT failed_logins, locked_until FROM users WHERE username='op'`)).rows[0]!;
     expect(Number(u['failed_logins'])).toBe(1);
@@ -192,7 +223,10 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
 
 describe('보존 · 재해시 · 본문 상한', () => {
   it('**감사 기록은 1년 보존** — 그보다 오래된 것만 지운다', async () => {
-    await db.query(`INSERT INTO account_audit (at, actor, action) VALUES (now() - interval '366 days', 'x', 'old'), (now() - interval '364 days', 'x', 'young')`);
+    await db.query(byDialect(db, {
+      postgres: `INSERT INTO account_audit (at, actor, action) VALUES (now() - interval '366 days', 'x', 'old'), (now() - interval '364 days', 'x', 'young')`,
+      sqlite: `INSERT INTO account_audit (at, actor, action) VALUES (strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-366 days'), 'x', 'old'), (strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-364 days'), 'x', 'young')`,
+    }));
     expect(await accounts.purgeExpired()).toEqual({ audit: 1 });
     const left = (await db.query(`SELECT action FROM account_audit WHERE actor='x'`)).rows.map((r) => r['action']);
     expect(left).toEqual(['young']);
