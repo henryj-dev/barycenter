@@ -21,6 +21,7 @@ import { render, wildcardAlsoOn, type RenderCapabilities, type RenderedConfig } 
 import { compileHostRoutes, type CompileWarning, type RouteInput } from '../route/compile.js';
 import { decodeModel } from '../model/decode.js';
 import { certCoversHost } from '../dp/certinfo.js';
+import { probeTlsNameGaps } from '../control/health.js';
 import {
   normalizeHost, validateBackendHost, validateHeaderValue, validatePathPrefix,
 } from '../validate/strings.js';
@@ -2429,6 +2430,19 @@ function capabilityWarningsOf(model: Model, caps: RenderCapabilities): Impact['c
           + 'PROXY protocol 설정이 달라 함께 붙일 수 없다. 두 리스너의 PROXY protocol 을 맞추거나 bind 를 맞춰라',
       });
     }
+  }
+
+  /**
+   * **헬스 프로브가 인증서 이름을 IP 로 검증한다** (2026-11-08). 데이터 경로(nginx)는 검증을 안 해서 붙는데 프로브만
+   * `ERR_TLS_CERT_ALTNAME_INVALID` 로 백엔드를 빼 풀이 빈다. 거절하지 않는다 — IP SAN 이나 사설 CA 는 정상일 수 있다.
+   */
+  for (const g of probeTlsNameGaps(model)) {
+    out.push({
+      kind: 'probe_tls_no_sni',
+      message: `${g.pool} 의 헬스 프로브는 TLS 인증서를 IP(${g.backends.join(', ')})로 검증한다 — upstreamTls.sni 가 없어서다. `
+        + '인증서에 그 IP 가 없으면 백엔드가 늘 unhealthy 로 빠진다. 업스트림 TLS 의 SNI 에 백엔드 인증서 이름을 넣는다. '
+        + '사설 CA 면 healthCheck.protocol 을 tcp_connect 로 둔다(앱 상태는 못 본다)',
+    });
   }
 
   if (caps.sslConfCommand !== true && model.tlsPolicies.some((p) => p.cipherPolicy !== undefined)) {

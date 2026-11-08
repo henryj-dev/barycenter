@@ -25,7 +25,7 @@
  */
 import { request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { connect } from 'node:net';
+import { connect, isIP } from 'node:net';
 
 import type { Model } from '../model/provisional.js';
 import { log } from '../obs/log.js';
@@ -224,8 +224,13 @@ export function probeHttp(
       // 인증서 실패는 **고칠 길을 함께** 말한다. 이 문구가 운영자가 보는 「왜 빠졌나」다.
       const code = (e as NodeJS.ErrnoException).code ?? '';
       const tlsTrust = /CERT|SELF_SIGNED|UNABLE_TO_(GET|VERIFY)|ALTNAME|HOSTNAME|SIGNATURE|TOO_WEAK|KEY_TOO_SMALL/.test(code);
+      // 이름이 안 맞는 것(ALTNAME)은 SNI 를 먼저 권한다 — tcp_connect 는 앱 상태를 못 보는 차선이다(2026-11-08).
+      const nameMismatch = /ALTNAME|HOSTNAME/.test(code);
       resolve(opts.tls !== undefined && tlsTrust
-        ? `인증서를 검증하지 못했다 (${code}). 사설 CA 면 healthCheck.protocol 을 tcp_connect 로 둔다`
+        ? (nameMismatch
+          ? `인증서 이름이 맞지 않는다 (${code}). 업스트림 TLS 의 SNI 에 백엔드 인증서 이름을 넣는다. `
+            + '사설 CA 면 그 CA 로 검증할 수 없으므로 healthCheck.protocol 을 tcp_connect 로 둔다(앱 상태는 못 본다)'
+          : `인증서를 검증하지 못했다 (${code}). 사설 CA 면 healthCheck.protocol 을 tcp_connect 로 둔다`)
         : e.message);
     });
     req.end();
@@ -320,6 +325,40 @@ export function probePlanOf(model: Model, poolKey: string): ProbePlan {
     ...(spec?.rise === undefined ? {} : { rise: spec.rise }),
     ...(spec?.fall === undefined ? {} : { fall: spec.fall }),
   };
+}
+
+/**
+ * 프로브가 **인증서 이름을 IP 로 검증하게 되는** 백엔드 (2026-11-08, `idp.tinyuniver.se`).
+ *
+ * 풀이 `upstreamTls: { enabled: true }`(sni 없음) 에 `healthCheck.protocol: 'http'` 였다. 백엔드는 IP 였고 공인 인증서
+ * `CN=idp.tinyuniver.se` 를 냈다. 프로브는 검증하므로 `ERR_TLS_CERT_ALTNAME_INVALID` 로 늘 `unhealthy` 였다 — 풀이 비어 500.
+ * 데이터 경로(nginx)는 검증을 안 해서 안 보였다.
+ *
+ * 판정은 **`probePlanOf` 의 계획 그대로다** — 따로 짓지 않는다. 두 자리가 갈리면 경고가 거짓말한다.
+ * 노드는 `servername` 이 없으면 `Host` 헤더의 이름을, 그것도 없으면 찌르는 host 를 SNI · 검증 이름으로 쓴다. IP 면 쓰지 않는다.
+ * 그래서 셋(sni · hostHeader · backend host) 중 하나라도 IP 아닌 이름이면 대상이 아니다.
+ *
+ * 거절하지 않는다 — IP SAN 인증서나 사설 CA 는 정상일 수 있다. plan 이 알릴 뿐이다.
+ */
+export function probeTlsNameGaps(model: Model): { pool: string; backends: string[] }[] {
+  const out: { pool: string; backends: string[] }[] = [];
+  const isName = (h: string | undefined): boolean => {
+    if (h === undefined || h === '') return false;
+    // `Host` 는 `name:port` 일 수 있다. 노드도 `:` 앞만 쓴다. `[v6]` 꼴은 이름이 아니다.
+    const name = h.startsWith('[') ? '' : h.split(':', 1)[0] ?? '';
+    return name !== '' && isIP(name) === 0;
+  };
+  for (const pool of model.pools) {
+    const plan = probePlanOf(model, pool.key);
+    const tls = plan.http?.tls;
+    if (plan.mode !== 'active' || plan.protocol !== 'http' || tls === undefined) continue;
+    if (isName(tls.servername) || isName(plan.http?.hostHeader)) continue;
+    const backends = model.backends
+      .filter((b) => b.pool === pool.key && !isName(plan.hostOverride ?? b.host))
+      .map((b) => b.key);
+    if (backends.length > 0) out.push({ pool: pool.key, backends });
+  }
+  return out;
 }
 
 /**
