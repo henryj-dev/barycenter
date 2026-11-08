@@ -26,7 +26,7 @@ import { FsSecretStore } from '../../src/dp/secrets.js';
 import { newEcKey } from '../../src/acme/der.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import { openLeaderLockForTest } from '../../src/store/open.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, IS_MYSQL, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('cert-no-pending');
 const CAPS = { httpLua: true, streamLua: true, streamRealip: false, sslConfCommand: true };
@@ -125,8 +125,11 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await reset(db);
-  // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
-  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다). MySQL 은 FK 가 걸린 표를 TRUNCATE 못 한다 — 자식부터 지운다.
+  if (TEST_DB === 'postgres') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  if (IS_MYSQL) {
+    for (const t of ['acme_challenges', 'acme_orders', 'acme_accounts']) await db.query(`DELETE FROM ${t}`);
+  }
   if (prefix !== '') {
     try { rmSync(prefix, { recursive: true, force: true }); } catch { /* 0500 자료 디렉토리 */ }
   }

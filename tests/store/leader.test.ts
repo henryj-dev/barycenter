@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { LeaderElection, NotLeader } from '../../src/control/leader.js';
 import { openLeaderLockForTest } from '../../src/store/open.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, IS_MYSQL, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('leader');
 
@@ -65,6 +65,7 @@ describe('리더 선출', () => {
     // 시퀀스를 태우면 그 뜻이 깨진다 — 락을 잡은 뒤에 뽑는 이유다.
     const seq = (await db.query(TEST_DB === 'sqlite'
       ? `SELECT CAST(last_value AS TEXT) AS v FROM bary_sequences WHERE name = 'leader_token_seq'`
+      : IS_MYSQL ? "SELECT CAST(`last_value` AS CHAR) AS v FROM bary_sequences WHERE name = 'leader_token_seq'"
       : `SELECT last_value::text AS v FROM leader_token_seq`)).rows[0];
     expect(seq?.['v']).toBe('1');
   });
@@ -97,6 +98,7 @@ describe('리더 선출', () => {
     await a.release();
     const rows = (await db.query(TEST_DB === 'sqlite'
       ? `SELECT CAST(token AS TEXT) AS token, holder, released_at FROM leadership ORDER BY token`
+      : IS_MYSQL ? 'SELECT CAST(token AS CHAR) AS token, holder, released_at FROM leadership ORDER BY token'
       : `SELECT token::text AS token, holder, released_at FROM leadership ORDER BY token`,
     )).rows;
     expect(rows).toHaveLength(1);

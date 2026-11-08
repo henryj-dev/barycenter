@@ -13,7 +13,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AcmeStore, LIVE_STATES, MAX_ATTEMPTS, backoffSeconds } from '../../src/control/acme-store.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, IS_MYSQL, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('acme');
 let db: Db;
@@ -26,15 +26,21 @@ const REF = (n: string): string => `store://${n}@${'a'.repeat(32)}`;
 /** 계정·주문 키는 **인증서가 없는 키**라 스킴이 다르다 — 섞이면 DB 가 막는다. */
 const KEYREF = (n: string): string => `key://${n}@${'a'.repeat(32)}`;
 
+/** 인증서 행을 넣고 id 를 돌려준다. MySQL 에는 `RETURNING` 이 없다 — 유일한 `key` 로 다시 읽는다. */
+async function insertCert(sql: string, params: unknown[], key: string): Promise<string> {
+  if (!IS_MYSQL) return String((await db.query(sql, params)).rows[0]?.['id']);
+  await db.query(sql.replace(/\s+RETURNING id$/, ''), params);
+  return String((await db.query('SELECT id FROM certificates WHERE key=$1', [key])).rows[0]?.['id']);
+}
+
 /** 인증서 행을 직접 넣는다 — 여기서 재는 것은 changeset 경로가 아니다. */
 async function makeCert(key: string): Promise<string> {
-  const r = await db.query(
+  return insertCert(
     `INSERT INTO certificates (id,key,name,material_ref,chain_digest,key_digest,
                                created_by,updated_by,revision)
      VALUES (gen_random_uuid(),$1,$1,$2,$3,$4,'t','t',1) RETURNING id`,
-    [key, REF(key), `sha256:${'0'.repeat(64)}`, `sha256:${'1'.repeat(64)}`],
+    [key, REF(key), `sha256:${'0'.repeat(64)}`, `sha256:${'1'.repeat(64)}`], key,
   );
-  return String(r.rows[0]?.['id']);
 }
 
 beforeAll(async () => {
@@ -53,7 +59,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await reset(db);
   // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
-  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  if (TEST_DB !== 'sqlite' && !IS_MYSQL) await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // MySQL 의 `reset` 은 주문 · 도전까지 비운다 — 계정만 남는다(FK 가 있어 TRUNCATE 는 못 한다).
+  if (IS_MYSQL) await db.query('DELETE FROM acme_accounts');
   certA = await makeCert('cert-a');
   certB = await makeCert('cert-b');
   accountId = await store.upsertAccount({
@@ -75,7 +83,10 @@ describe('계정', () => {
     // 자료를 담을 컬럼 자체가 없다.
     const cols = (await db.query(TEST_DB === 'sqlite'
       ? `SELECT name AS column_name FROM pragma_table_info('acme_accounts')`
-      : `SELECT column_name FROM information_schema.columns WHERE table_name='acme_accounts'`,
+      : IS_MYSQL
+        ? `SELECT COLUMN_NAME AS column_name FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'acme_accounts'`
+        : `SELECT column_name FROM information_schema.columns WHERE table_name='acme_accounts'`,
     )).rows.map((r) => String(r['column_name']));
     expect(cols).not.toContain('account_key');
     expect(cols).not.toContain('private_key');
@@ -163,7 +174,9 @@ describe('실행권 — 둘이 같은 주문을 몰면 nonce 가 서로를 깨�
     // 시각을 손으로 밀어 만료를 만든다. `sleep` 으로 재면 테스트가 느리고 불안정하다.
     await db.query(TEST_DB === 'sqlite'
       ? `UPDATE acme_orders SET claimed_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second') WHERE id=$1`
-      : `UPDATE acme_orders SET claimed_until = now() - interval '1 second' WHERE id=$1`,
+      : IS_MYSQL
+        ? 'UPDATE acme_orders SET claimed_until = DATE_SUB(now(), INTERVAL 1 SECOND) WHERE id=$1'
+        : `UPDATE acme_orders SET claimed_until = now() - interval '1 second' WHERE id=$1`,
       [o.id]);
     expect((await store.claimDue('leader-2'))?.id).toBe(o.id);
   });
@@ -207,7 +220,9 @@ describe('백오프와 포기', () => {
     await store.fail(o.id, '일시적');
     await db.query(TEST_DB === 'sqlite'
       ? `UPDATE acme_orders SET next_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second') WHERE id=$1`
-      : `UPDATE acme_orders SET next_attempt_at = now() - interval '1 second' WHERE id=$1`,
+      : IS_MYSQL
+        ? 'UPDATE acme_orders SET next_attempt_at = DATE_SUB(now(), INTERVAL 1 SECOND) WHERE id=$1'
+        : `UPDATE acme_orders SET next_attempt_at = now() - interval '1 second' WHERE id=$1`,
       [o.id]);
     expect((await store.claimDue('leader-1'))?.id).toBe(o.id);
   });
@@ -287,7 +302,9 @@ describe('챌린지와 고아 정리 (§8.2)', () => {
       expect(await store.orphans(3600)).toHaveLength(0);
       await db.query(TEST_DB === 'sqlite'
         ? `UPDATE acme_challenges SET placed_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-2 hours') WHERE id=$1`
-        : `UPDATE acme_challenges SET placed_at = now() - interval '2 hours' WHERE id=$1`,
+        : IS_MYSQL
+          ? 'UPDATE acme_challenges SET placed_at = DATE_SUB(now(), INTERVAL 2 HOUR) WHERE id=$1'
+          : `UPDATE acme_challenges SET placed_at = now() - interval '2 hours' WHERE id=$1`,
         [id]);
       expect((await store.orphans(3600)).map((c) => c.id)).toEqual([id]);
     },
@@ -326,8 +343,9 @@ describe('챌린지와 고아 정리 (§8.2)', () => {
     expect(await store.get(o.id)).toBeUndefined();
     const n = (await db.query(TEST_DB === 'sqlite'
       ? 'SELECT count(*) AS n FROM acme_challenges'
+      : IS_MYSQL ? 'SELECT CAST(count(*) AS SIGNED) AS n FROM acme_challenges'
       : 'SELECT count(*)::int AS n FROM acme_challenges')).rows[0];
-    expect(n?.['n']).toBe(0);
+    expect(Number(n?.['n'])).toBe(0);
   });
 });
 

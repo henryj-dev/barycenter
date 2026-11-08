@@ -240,6 +240,76 @@ SQLite 와 PG 사이를 옮기는 행 단위 이주 도구는 없다 — `bary b
 
 `BARY_SECRET_BACKEND=pg` 는 「설정 DB 에 암호화해 둔다」 는 뜻이다 — 설정 DB 가 SQLite 면 그 파일에 들어간다. 그러면 위 백업 사본에 암호문이 들어 있고, KEK 는 따로 지킨다(4절과 같다).
 
+## 5¾. MySQL · MariaDB 로 깔기
+
+PG 대신 MySQL 8 · MariaDB 를 쓸 때다. 서버 DB 라 **클러스터 모드(`BARY_CLUSTER=1`)도 된다** — 노드들이 같은 서버 하나를
+함께 쓴다. 설계와 한계는 [`adr-multi-db.md`](./adr-multi-db.md) 「3단계 — MySQL/MariaDB」 다.
+
+> **상태(3단계, 2026-11-06):** MYSQL_STATUS
+
+```
+BARY_DSN=mysql://bary:<비밀번호>@db.internal:3306/bary            # 설정 DB. MariaDB 는 mariadb:// (같은 구현이다)
+BARY_ACCOUNTS_DSN=mysql://bary:<비밀번호>@db.internal:3306/bary_accounts   # 계정 DB. 따로 고른다 — PG · SQLite 여도 된다
+# 인자: ?socket=/run/mysqld/mysqld.sock (유닉스 소켓) · ?ssl=true (시스템 CA 로 검증) · ?sslca=/etc/barycenter/db-ca.pem
+```
+
+비밀번호의 특수 문자는 퍼센트 인코딩한다. DSN 을 env 에 두기 싫으면 PG 와 같은 방식(환경 파일의 권한 `0600`)을 따른다.
+
+**서버 버전:** MySQL **8.0.29+**(시험은 8.4 LTS) · MariaDB **10.6+**(시험은 11). 낮으면 첫 연결에서 거부한다.
+
+**DB 와 사용자** — DB 는 `utf8mb4` · `utf8mb4_bin` 으로 만든다(표는 그것을 스스로 적지만 DB 의 기본값도 맞춘다):
+
+```sql
+CREATE DATABASE bary CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE DATABASE bary_accounts CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE USER 'bary'@'10.0.0.%' IDENTIFIED BY '<비밀번호>';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES, TRIGGER ON bary.*          TO 'bary'@'10.0.0.%';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES, TRIGGER ON bary_accounts.* TO 'bary'@'10.0.0.%';
+```
+
+- `TRIGGER` 는 마이그레이션이 트리거를 만들기 때문이다(백엔드 운영 상태 정리 · 연쇄 삭제 몇 자리 — ADR). **MySQL 에서 바이너리 로그가
+  켜져 있으면**(8.x 기본) 트리거를 만드는 데 `SUPER` 가 더 필요하다. 셋 중 하나를 고른다: 첫 기동(마이그레이션)만 관리자 계정의 DSN
+  으로 띄운다 · `log_bin_trust_function_creators=1` 을 켠다 · 사용자에게 `SUPER`(8.x 는 `SET_USER_ID` 류)를 준다.
+  이것을 안 하면 첫 기동이 `You do not have the SUPER privilege and binary logging is enabled` 로 멈춘다 — 그대로 고치고 다시 띄우면
+  된다(아래 「반쯤 적용」).
+- 리더 잠금(`GET_LOCK`)은 권한이 필요 없다.
+
+**서버 설정** — 기동이 확인하는 것과 확인하지 않는 것:
+
+| 설정 | 값 | 확인 |
+|---|---|---|
+| `innodb_flush_log_at_trx_commit` | `1` | 기동(마이그레이션)이 확인하고 아니면 거부한다 — 아니면 커밋한 리비전 · 리더 토큰이 서버 크래시에 사라질 수 있다 |
+| `binlog_format` (MySQL) | `ROW`(8.x 기본) | 확인하지 않는다. 연결은 `READ COMMITTED` 라 `STATEMENT` 면 쓰기가 실패한다 |
+| 기본 엔진 | InnoDB | 표가 `ENGINE=InnoDB` 를 적는다(`NO_ENGINE_SUBSTITUTION` — 없으면 실패한다) |
+| `wait_timeout` | 아무 값 | 리더 연결은 자기 세션의 값을 올리고 2 초마다 잠금을 확인한다 |
+
+연결마다 드라이버가 거는 것: `time_zone='+00:00'` · `READ COMMITTED` · `utf8mb4_bin` · 엄격한 `sql_mode`. 서버의 전역 값을 바꿀 필요는 없다.
+**사람이 `mysql` 클라이언트로 시각을 넣으면 세션 시간대를 `+00:00` 으로 둔다** — `DATETIME` 은 시간대가 없어서 다른 시간대로 넣은 시각은
+그대로 틀린 시각이 된다.
+
+**클러스터 모드:** 모든 노드가 **같은 기본 서버 하나**에 붙는다. 리더 선출은 서버의 이름 잠금(`GET_LOCK`)이고, 이름 잠금은 노드 사이에
+나뉘지 않는다 — **Galera · Group Replication 다중 기본 · 노드마다 다른 복제본**을 가리키면 리더가 둘이 된다. 앞단에 프록시를 둔다면
+쓰기를 한 서버로만 보내는 설정이어야 한다. 기본 서버가 바뀌면(장애 조치) 리더 연결이 끊기므로 그 순간 리더가 물러나고, 새 서버에서 다시
+뽑는다. 비동기 복제본으로 넘어가면 덜 받은 커밋(리더 토큰 포함)이 사라질 수 있다 — PG 의 비동기 복제와 같은 한계이고, 낡은 리더의 쓰기는
+DP Agent 의 토큰 비교가 막는다(DESIGN §3.5).
+
+**반쯤 적용된 마이그레이션.** MySQL 의 DDL 은 트랜잭션이 아니다. 마이그레이션이 중간에 깨지면 기동 로그가
+`마이그레이션 <파일> 의 N/M 번째 문장이 실패했다 — 앞 문장들은 이미 적용됐다` 를 말하고 멈춘다. 원인(권한 · 디스크)을 고치고 **그대로 다시
+띄운다** — 파일의 모든 문장이 다시 돌아도 안전하게 쓰여 있고(`IF NOT EXISTS` 류), 그 파일은 끝까지 성공해야 기록된다. 손으로 표를 지우지
+않는다.
+
+**백업:** `mysqldump --single-transaction --routines --triggers bary > bary-$(date +%F).sql`(계정 DB 도 같이). `--single-transaction` 은
+InnoDB 의 일관된 스냅숏이라 데몬이 도는 채로 뜰 수 있다. **`--triggers` 를 빼면 복구한 DB 에 트리거가 없다** — 백엔드를 지워도 운영 상태가
+남고, 리스너를 지워도 SNI 바인딩이 남는다. 복구는 빈 DB 에 그 파일을 넣고 데몬을 띄운다(마이그레이션 기록 표도 덤프에 들어 있다).
+시크릿 백엔드가 `pg` 면 설정 DB 에 암호문이 들어 있고 KEK 는 따로 지킨다(4절과 같다).
+
+**한계:**
+
+- PG · SQLite 와 사이를 옮기는 행 단위 이주 도구는 없다 — `bary backup` 매니페스트로 설정을 새 DB 에 다시 넣는다(리비전 이력 · 계정 · 감사는 옮겨지지 않는다).
+- 키 · 이름 열은 `varchar(255)`(URL 은 768)이다 — PG 의 `text` 와 달리 길이 상한이 있다. 앱의 문법 검사가 그보다 훨씬 좁다.
+- 문자열 비교는 바이트(`utf8mb4_bin`)다. MariaDB 의 `utf8mb4_bin` 은 끝 공백을 무시한다(PAD SPACE) — 키 문법이 공백을 받지 않아 키에서는 문제가 없다.
+- uuid 는 텍스트다. 경로의 uuid 는 API 가 먼저 정규형으로 맞춘다(대문자 · 중괄호도 PG 처럼 받는다).
+
 ## 6. 알아 둘 것
 
 ⚠️ 이 배포는 **단일 장애점**이다. 자동 페일오버는 없다 — 콜드 스탠바이이고 트래픽을

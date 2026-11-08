@@ -20,6 +20,7 @@ import { ConfigStore } from '../../src/store/config-store.js';
 import { ControlPlane } from '../../src/control/plane.js';
 import { TokenAuth } from '../../src/api/auth.js';
 import { LeaderElection } from '../../src/control/leader.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
@@ -62,7 +63,7 @@ beforeAll(async () => {
   await db.migrate();
   store = new ConfigStore(db, { streamRealip: false });
 
-  const election = new LeaderElection(PG.dsn, 'audit-status-test');
+  const election = new LeaderElection(openLeaderLockForTest(PG.dsn), 'audit-status-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   const control = new ControlPlane(db, store, driver, election,
     { prefix: '/tmp/bary-audit-status', adminSocket: '/tmp/bary-admin-test.sock' });

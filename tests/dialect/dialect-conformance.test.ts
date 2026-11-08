@@ -3,7 +3,8 @@
  *
  *   BARY_TEST_DB=postgres npm run test:dialect    (기본)
  *   BARY_TEST_DB=sqlite   npm run test:dialect    (2단계)
- *   BARY_TEST_DB=mysql    npm run test:dialect    (3단계가 켠다)
+ *   BARY_TEST_DB=mysql    npm run test:dialect    (3단계)
+ *   BARY_TEST_DB=mariadb  npm run test:dialect    (3단계 — MySQL 방언)
  *
  * 여기 SQL 은 방언마다 나란히 둔다(`byDialect`) — 저장소 함수가 하는 방식과 같다. 이 묶음은 **골격**이다:
  * 방언 하나의 완료 조건은 이것에 더해 `tests/store` 묶음 전체가 그 DB 로 통과하는 것이다.
@@ -40,7 +41,7 @@ afterAll(async () => {
 
 describe(`방언 적합성 (${process.env['BARY_TEST_DB'] ?? 'postgres'})`, () => {
   it('DSN 의 스킴이 시험하는 방언을 연다', () => {
-    expect(db.dialect.name).toBe(t.name);
+    expect(db.dialect.name).toBe(t.dialect);
   });
 
   it('**두 계열을 같은 DB 에 적용해도 섞이지 않는다** — 다시 돌리면 아무것도 안 한다', async () => {
@@ -78,12 +79,12 @@ describe(`방언 적합성 (${process.env['BARY_TEST_DB'] ?? 'postgres'})`, () =
 
     const put = byDialectLater({
       postgres: 'INSERT INTO dialect_probe (k, n) VALUES ($1, $2)',
-      mysql: 'INSERT INTO dialect_probe (k, n) VALUES (?, ?)',
+      mysql: 'INSERT INTO dialect_probe (k, n) VALUES ($1, $2)',
       sqlite: 'INSERT INTO dialect_probe (k, n) VALUES (?, ?)',
     });
     const get = byDialectLater({
       postgres: 'SELECT n FROM dialect_probe WHERE k = $1',
-      mysql: 'SELECT n FROM dialect_probe WHERE k = ?',
+      mysql: 'SELECT n FROM dialect_probe WHERE k = $1',
       sqlite: 'SELECT n FROM dialect_probe WHERE k = ?',
     });
     const read = async (k: string): Promise<unknown> => (await db.query(get(), [k])).rows[0]?.['n'];

@@ -395,6 +395,7 @@ describe('개인 토큰 — HTTP', () => {
     await db.query(byDialect(db, {
       postgres: `UPDATE sessions SET mfa_at = now() - interval '20 minutes'`,
       sqlite: `UPDATE sessions SET mfa_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-20 minutes')`,
+      mysql: `UPDATE sessions SET mfa_at = DATE_SUB(now(), INTERVAL 20 MINUTE)`,
     }));
     const a = await issue(op.cookie, { name: 'ci2', role: 'operator' });
     expect(a.status).toBe(403);

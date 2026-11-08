@@ -194,7 +194,9 @@ describe('연결 · 해제', () => {
     expect((await db.query(`SELECT user_id FROM user_identities WHERE issuer=$1 AND subject='u-6'`, [ISS])).rows[0]?.['user_id']).toBe(userId);
     expect((await sso(base)).status).toBe(401);
     // JIT 를 켜도 같은 IdP 계정으로 새 계정이 생기지 않는다
-    const countUsers = byDialect(db, { postgres: `SELECT count(*)::int AS n FROM users`, sqlite: `SELECT count(*) AS n FROM users` });
+    const countUsers = byDialect(db, {
+      postgres: `SELECT count(*)::int AS n FROM users`, sqlite: `SELECT count(*) AS n FROM users`, mysql: `SELECT count(*) AS n FROM users`,
+    });
     const before = (await db.query(countUsers)).rows[0]?.['n'];
     await accounts.setProviderJit(ISS, true, 'user:root');
     expect((await sso(base)).status).toBe(401);
@@ -202,10 +204,12 @@ describe('연결 · 해제', () => {
     // 개인정보는 지워졌다
     const u = (await db.query(`SELECT email, password_hash, display_name FROM users WHERE id=$1`, [userId])).rows[0]!;
     expect(u).toEqual({ email: null, password_hash: null, display_name: null });
-    expect((await db.query(byDialect(db, {
+    // MySQL 의 count(*) 는 BIGINT — 문자열로 온다. 수로 견준다.
+    expect(Number((await db.query(byDialect(db, {
       postgres: `SELECT count(*)::int AS n FROM sessions WHERE user_id=$1`,
       sqlite: `SELECT count(*) AS n FROM sessions WHERE user_id=$1`,
-    }), [userId])).rows[0]?.['n']).toBe(0);
+      mysql: `SELECT count(*) AS n FROM sessions WHERE user_id=$1`,
+    }), [userId])).rows[0]?.['n'])).toBe(0);
   });
 });
 

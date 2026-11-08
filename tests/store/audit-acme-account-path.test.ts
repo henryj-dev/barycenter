@@ -41,7 +41,7 @@ import { FsSecretStore } from '../../src/dp/secrets.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
 import { ConfigStore } from '../../src/store/config-store.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, IS_MYSQL, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('acme-account-path');
 const TOKEN = 'acct-token';
@@ -92,7 +92,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await reset(db);
   // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
-  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  if (TEST_DB !== 'sqlite' && !IS_MYSQL) await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // MySQL 의 `reset` 은 주문 · 도전까지 비운다 — 계정만 남는다(FK 가 있어 TRUNCATE 는 못 한다).
+  if (IS_MYSQL) await db.query('DELETE FROM acme_accounts');
 });
 
 type Res = { status: number; body: Record<string, unknown> };
@@ -117,14 +119,20 @@ class Placer implements ChallengePlacer {
   async remove(): Promise<void> { /* 같다 */ }
 }
 
+/** 인증서 행을 넣고 id 를 돌려준다. MySQL 에는 `RETURNING` 이 없다 — 유일한 `key` 로 다시 읽는다. */
+async function insertCert(sql: string, params: unknown[], key: string): Promise<string> {
+  if (!IS_MYSQL) return String((await db.query(sql, params)).rows[0]?.['id']);
+  await db.query(sql.replace(/\s+RETURNING id$/, ''), params);
+  return String((await db.query('SELECT id FROM certificates WHERE key=$1', [key])).rows[0]?.['id']);
+}
+
 /** 인증서 하나. `acme` 의도만 있고 자료는 없다 — 첫 발급 전 상태다. */
 async function certWithAcmeIntent(accountKey: string): Promise<string> {
-  const r = await db.query(
+  return insertCert(
     `INSERT INTO certificates (id,key,name,acme_account,acme_domains,created_by,updated_by,revision)
      VALUES (gen_random_uuid(),'web','web',$1,$2,'t','t',1) RETURNING id`,
-    [accountKey, ['a.test']],
+    [accountKey, ['a.test']], 'web',
   );
-  return String(r.rows[0]?.['id']);
 }
 
 describe('계정을 만드는 제품 경로', () => {

@@ -35,7 +35,7 @@ import {
   parseKeyRef, parseRef,
   type CertMaterial, type KeyRef, type SecretRef, type SecretStore,
 } from './secrets.js';
-import type { Queryable } from '../store/db.js';
+import { byDialect, type Queryable } from '../store/db.js';
 
 /** GCM 의 nonce 12 바이트 · tag 16 바이트. 둘 다 표준 크기다. */
 const NONCE = 12;
@@ -183,8 +183,7 @@ export class PgSecretStore implements SecretStore {
      * 재업로드할 자료가 없다 — 그것까지 옮기려면 옛 KEK 로 읽어 새 KEK 로 다시 감싸는
      * **별도의 통과**가 필요하다. 그것이 `scripts/rotate-kek.mjs` 다 (§4.8.3).
      */
-    await this.#db.query(
-      `INSERT INTO secret_materials
+    const putStore = `INSERT INTO secret_materials
          (scheme, name, version, kek_id, wrapped_dek, nonce, ciphertext,
           sha256, chain_digest, key_digest, facts)
        VALUES ('store', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -192,7 +191,21 @@ export class PgSecretStore implements SecretStore {
          kek_id = EXCLUDED.kek_id, wrapped_dek = EXCLUDED.wrapped_dek,
          nonce = EXCLUDED.nonce, ciphertext = EXCLUDED.ciphertext,
          sha256 = EXCLUDED.sha256, chain_digest = EXCLUDED.chain_digest,
-         key_digest = EXCLUDED.key_digest, facts = EXCLUDED.facts`,
+         key_digest = EXCLUDED.key_digest, facts = EXCLUDED.facts`;
+    // 유일 키가 PK(scheme, name, version) 하나라 MySQL 의 대상도 같다.
+    await this.#db.query(byDialect(this.#db, {
+      postgres: putStore,
+      sqlite: putStore,
+      mysql: `INSERT INTO secret_materials
+         (scheme, name, version, kek_id, wrapped_dek, nonce, ciphertext,
+          sha256, chain_digest, key_digest, facts)
+       VALUES ('store', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON DUPLICATE KEY UPDATE
+         kek_id = VALUES(kek_id), wrapped_dek = VALUES(wrapped_dek),
+         nonce = VALUES(nonce), ciphertext = VALUES(ciphertext),
+         sha256 = VALUES(sha256), chain_digest = VALUES(chain_digest),
+         key_digest = VALUES(key_digest), facts = VALUES(facts)`,
+    }),
       [name, version, env.kekId, env.wrappedDek, env.nonce, env.ciphertext,
         sha256(`${chainDigest}|${keyDigest}`), chainDigest, keyDigest,
         JSON.stringify(facts)],
@@ -246,14 +259,24 @@ export class PgSecretStore implements SecretStore {
     const version = versionOf(keyDigest);
     const ref = `key://${name}@${version}`;
     const env = this.#seal(ref, privkey);
-    await this.#db.query(
-      `INSERT INTO secret_materials
+    const putKey = `INSERT INTO secret_materials
          (scheme, name, version, kek_id, wrapped_dek, nonce, ciphertext, key_digest)
        VALUES ('key', $1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (scheme, name, version) DO UPDATE SET
          kek_id = EXCLUDED.kek_id, wrapped_dek = EXCLUDED.wrapped_dek,
          nonce = EXCLUDED.nonce, ciphertext = EXCLUDED.ciphertext,
-         key_digest = EXCLUDED.key_digest`,
+         key_digest = EXCLUDED.key_digest`;
+    await this.#db.query(byDialect(this.#db, {
+      postgres: putKey,
+      sqlite: putKey,
+      mysql: `INSERT INTO secret_materials
+         (scheme, name, version, kek_id, wrapped_dek, nonce, ciphertext, key_digest)
+       VALUES ('key', $1, $2, $3, $4, $5, $6, $7)
+       ON DUPLICATE KEY UPDATE
+         kek_id = VALUES(kek_id), wrapped_dek = VALUES(wrapped_dek),
+         nonce = VALUES(nonce), ciphertext = VALUES(ciphertext),
+         key_digest = VALUES(key_digest)`,
+    }),
       [name, version, env.kekId, env.wrappedDek, env.nonce, env.ciphertext, keyDigest],
     );
     return { ref, name, version, keyDigest };

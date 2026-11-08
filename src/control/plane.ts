@@ -554,6 +554,11 @@ export class ControlPlane {
               envelope ->> '$.leaderToken' AS token
          FROM operations WHERE phase = 'activated'
         ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
+      // MariaDB 에는 `->>` 가 없다.
+      mysql: `SELECT id, CAST(revision AS CHAR) AS revision, CAST(activation_epoch AS CHAR) AS epoch, generation,
+              JSON_UNQUOTE(JSON_EXTRACT(envelope, '$.leaderToken')) AS token
+         FROM operations WHERE phase = 'activated'
+        ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
     }))).rows[0];
     if (r === undefined) return { kind: 'nothing_active' };
     const active = {
@@ -579,6 +584,7 @@ export class ControlPlane {
     const t = (await this.db.query(byDialect(this.db, {
       postgres: `SELECT CASE WHEN is_called THEN last_value ELSE 0 END::text AS t FROM leader_token_seq`,
       sqlite: `SELECT CAST(last_value AS TEXT) AS t FROM bary_sequences WHERE name = 'leader_token_seq'`,
+      mysql: "SELECT CAST(`last_value` AS CHAR) AS t FROM bary_sequences WHERE name = 'leader_token_seq'",
     }))).rows[0];
     // **둘 중 큰 것** — 시퀀스의 마지막 값과 활성 오퍼레이션을 낸 리더의 토큰. 시퀀스만 보면
     // 그 값이 활성 오퍼레이션의 토큰보다 낮은 경우(시퀀스를 되돌린 복구 등)에 에이전트 기록과
@@ -787,6 +793,7 @@ export class ControlPlane {
     const health = (await this.db.query(byDialect(this.db, {
       postgres: `SELECT state, count(*)::int AS n FROM backend_health GROUP BY state`,
       sqlite: `SELECT state, count(*) AS n FROM backend_health GROUP BY state`,
+      mysql: `SELECT state, count(*) AS n FROM backend_health GROUP BY state`,
     }))).rows;
     const byState = Object.fromEntries(health.map((r) => [String(r['state']), Number(r['n'])]));
     const pending = { n: (await pendingApplies(this.db)).length };
@@ -829,6 +836,9 @@ export class ControlPlane {
          JOIN plans p ON p.id = o.plan_id
         WHERE o.phase = 'activated' ORDER BY o.activation_epoch DESC, o.created_at DESC LIMIT 1`,
       sqlite: `SELECT CAST(o.activation_epoch AS TEXT) AS epoch, p.render_digest FROM operations o
+         JOIN plans p ON p.id = o.plan_id
+        WHERE o.phase = 'activated' ORDER BY o.activation_epoch DESC, o.created_at DESC LIMIT 1`,
+      mysql: `SELECT CAST(o.activation_epoch AS CHAR) AS epoch, p.render_digest FROM operations o
          JOIN plans p ON p.id = o.plan_id
         WHERE o.phase = 'activated' ORDER BY o.activation_epoch DESC, o.created_at DESC LIMIT 1`,
     }))).rows[0];
@@ -895,9 +905,14 @@ export class ControlPlane {
       planes,
     };
 
-    await this.db.query(
-      `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by,envelope)
-       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7) ON CONFLICT (plan_id) DO NOTHING`,
+    const insertOp = `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by,envelope)
+       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7) ON CONFLICT (plan_id) DO NOTHING`;
+    await this.db.query(byDialect(this.db, {
+      postgres: insertOp,
+      sqlite: insertOp,
+      mysql: `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by,envelope)
+       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7) ON DUPLICATE KEY UPDATE plan_id = plan_id`,
+    }),
       [operationId, planId, revision, epoch, op.targetGeneration, by, JSON.stringify(op)],
     );
     for (const plane of touched) {
@@ -1083,10 +1098,17 @@ export class ControlPlane {
   private async claim(
     op: ApplyOperation, planId: string, revision: string, epoch: string, by: string,
   ): Promise<OperationView | undefined> {
-    const r = await this.db.query(
-      `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by,envelope)
+    const claimOp = `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by,envelope)
        VALUES ($1,$2,$3,$4,$5,'pending',$6,$7)
-       ON CONFLICT (plan_id) DO NOTHING RETURNING id`,
+       ON CONFLICT (plan_id) DO NOTHING RETURNING id`;
+    // MySQL: 충돌하면 0 행, 넣으면 1 행 — `rowCount` 만 본다. 다른 유일 키는 PK(id) 뿐이고 id 는 새 uuid 다.
+    const r = await this.db.query(byDialect(this.db, {
+      postgres: claimOp,
+      sqlite: claimOp,
+      mysql: `INSERT INTO operations (id,plan_id,revision,activation_epoch,generation,phase,created_by,envelope)
+       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7)
+       ON DUPLICATE KEY UPDATE plan_id = plan_id`,
+    }),
       // **봉투를 그대로 보관한다.** 취소할 때 재구성하면 정본 튜플이 달라져 슬롯의
       // 주인으로 인정받지 못한다 (§9.2 `abortConfig`).
       [op.operationId, planId, revision, epoch, op.targetGeneration, by, JSON.stringify(op)],

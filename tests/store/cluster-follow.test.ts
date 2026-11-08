@@ -25,7 +25,7 @@ import { LeaderElection } from '../../src/control/leader.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation, ApplyResult } from '../../src/dp/operation.js';
 import { openLeaderLockForTest } from '../../src/store/open.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, IS_MYSQL, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('cluster-follow');
 const CAPS = { httpLua: true, streamLua: true, streamRealip: false, sslConfCommand: true };
@@ -153,16 +153,20 @@ describe.skipIf(TEST_DB === 'sqlite')('팔로워가 리더의 활성 세대를 �
 
   it('시퀀스가 리더 토큰보다 낮아도(되돌린 복구) 리더 토큰을 쓴다', async () => {
     await commitAndApply(MODEL);
-    await db.query(`SELECT setval('leader_token_seq', 1, false)`);
+    // MySQL 의 카운터는 `last_value` 가 마지막으로 낸 값이다 — 0 이 PG 의 `is_called` 거짓과 같다.
+    await db.query(IS_MYSQL
+      ? "UPDATE bary_sequences SET `last_value` = 0 WHERE name = 'leader_token_seq'"
+      : `SELECT setval('leader_token_seq', 1, false)`);
     await follower.followActive('cluster:web-02');
     expect(dpB.fenced[0]).toBe(dpA.applied[0]!.leaderToken);
   });
 
   it('`operations` 에 쓰지 않는다 — 리더의 결정 기록이다', async () => {
     await commitAndApply(MODEL);
-    const before = (await db.query('SELECT count(*)::int AS n FROM operations')).rows[0]!['n'];
+    const count = IS_MYSQL ? 'SELECT count(*) AS n FROM operations' : 'SELECT count(*)::int AS n FROM operations';
+    const before = (await db.query(count)).rows[0]!['n'];
     await follower.followActive('cluster:web-02');
-    const after = (await db.query('SELECT count(*)::int AS n FROM operations')).rows[0]!['n'];
+    const after = (await db.query(count)).rows[0]!['n'];
     expect(after).toBe(before);
   });
 
@@ -217,7 +221,9 @@ describe('노드 상태 (cluster_nodes)', () => {
   it('오래된 신호는 stale 이다', async () => {
     await db.query(TEST_DB === 'sqlite'
       ? `INSERT INTO cluster_nodes (name, role, state, last_seen) VALUES ('web-09', 'follower', 'in_sync', strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 hour'))`
-      : `INSERT INTO cluster_nodes (name, role, state, last_seen) VALUES ('web-09', 'follower', 'in_sync', now() - interval '1 hour')`);
+      : IS_MYSQL
+        ? `INSERT INTO cluster_nodes (name, role, state, last_seen) VALUES ('web-09', 'follower', 'in_sync', DATE_SUB(now(), INTERVAL 1 HOUR))`
+        : `INSERT INTO cluster_nodes (name, role, state, last_seen) VALUES ('web-09', 'follower', 'in_sync', now() - interval '1 hour')`);
     const [row] = await listClusterNodes(db, 60_000);
     expect(row).toMatchObject({ name: 'web-09', stale: true });
   });

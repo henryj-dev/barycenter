@@ -5,7 +5,7 @@
  * 조건은 `no_new_traffic` 뿐이고 **숫자를 짓지 않는다.**
  */
 import { resolvePeer } from './membership.js';
-import type { Database } from '../store/db.js';
+import { byDialect, type Database } from '../store/db.js';
 
 export type DrainCondition = 'no_new_traffic' | 'quiesced' | 'deadline_exceeded';
 
@@ -89,11 +89,18 @@ export async function startDrain(
   const deadline = deadlineSeconds === undefined
     ? null
     : new Date(Date.now() + deadlineSeconds * 1000).toISOString();
-  await db.query(
-    `INSERT INTO backend_drain (backend_key, started_by, deadline_at)
+  const upsert = `INSERT INTO backend_drain (backend_key, started_by, deadline_at)
      VALUES ($1,$2,$3)
      ON CONFLICT (backend_key) DO UPDATE SET
-       started_at=now(), started_by=EXCLUDED.started_by, deadline_at=EXCLUDED.deadline_at`,
+       started_at=now(), started_by=EXCLUDED.started_by, deadline_at=EXCLUDED.deadline_at`;
+  await db.query(byDialect(db, {
+    postgres: upsert,
+    sqlite: upsert,
+    mysql: `INSERT INTO backend_drain (backend_key, started_by, deadline_at)
+     VALUES ($1,$2,$3)
+     ON DUPLICATE KEY UPDATE
+       started_at=now(), started_by=VALUES(started_by), deadline_at=VALUES(deadline_at)`,
+  }),
     [backendKey, by, deadline],
   );
 }

@@ -43,6 +43,7 @@
     "vitest": "^5.0.5"
   },
   "dependencies": {
+    "mysql2": "3.24.6",
     "nodemailer": "10.3.1",
     "pg": "^8.23.1"
   },

@@ -11,7 +11,7 @@
  * 둘째 인증 수단은 어댑터다(`./mfa/`). 기본은 로컬 TOTP, IdP OTP 를 켜면(`idpMfa`) 그 IdP 와 이어진 사람은
  * IdP 의 OTP 로 통과한다. 복구 코드는 언제나 로컬이다.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import { ALL_SCOPES, minRole, PERSONAL_TOKEN, roleRank, scopesOfRole, type Principal, type Role, type Scope } from '../api/auth.js';
 import { byDialect, dialectOf, type Database, type Queryable, type Row } from '../store/db.js';
@@ -129,8 +129,17 @@ const ADMIN_SQL_SQLITE = `((u.role='admin' OR EXISTS (SELECT 1 FROM json_each(u.
   AND NOT EXISTS (SELECT 1 FROM json_each(u.idp_deny) WHERE value='admin'))`;
 /** `read` 범위를 deny 받지 않았다 — SQLite 판. PG 문장은 `NOT ('read' = ANY(u.idp_deny))` 다. */
 const NOT_DENY_READ_SQLITE = `NOT EXISTS (SELECT 1 FROM json_each(u.idp_deny) WHERE value='read')`;
-/** 식이 낸 boolean — PG 는 `true`, SQLite 는 `1` 을 준다(선언 형이 없는 식은 정수다). */
-const yes = (v: unknown): boolean => v === true || v === 1;
+/**
+ * MySQL · MariaDB 의 같은 판정 — 배열 열은 JSON(`bary:array`)이라 `JSON_CONTAINS` 로 원소를 본다.
+ *
+ * MySQL 문장의 `FOR UPDATE OF x` 는 `FOR UPDATE` 다(MariaDB 에 `OF` 가 없다). 그래서 JOIN 한 다른 표의 행도 잠근다 —
+ * 어차피 같은 트랜잭션이 쓰는 행이거나 짧은 보조 행이다. 경합이 있는 자리(Role Change)만 잠금 문장을 따로 둔다.
+ */
+const ADMIN_SQL_MYSQL = `((u.role='admin' OR JSON_CONTAINS(u.idp_grant, JSON_QUOTE('admin')))
+  AND NOT JSON_CONTAINS(u.idp_deny, JSON_QUOTE('admin')))`;
+const NOT_DENY_READ_MYSQL = `NOT JSON_CONTAINS(u.idp_deny, JSON_QUOTE('read'))`;
+/** 식이 낸 boolean — PG 는 `true`, SQLite · MariaDB 는 `1`, MySQL 은 `'1'` 을 준다(선언 형이 없는 식). */
+const yes = (v: unknown): boolean => v === true || v === 1 || v === '1';
 /** 실효 권한 정본이 IdP 인가 — 그 사람의 정본이 idp 이거나, 이어진 공급자가 「이 공급자의 SSO 사용자는 모두 IdP 정본」 이다. */
 const IDP_AUTHORITY_SQL = `(u.role_authority='idp' OR EXISTS (SELECT 1 FROM user_identities pi JOIN sso_providers pp ON pp.issuer=pi.issuer
   WHERE pi.user_id=u.id AND pp.idp_authority))`;
@@ -277,6 +286,15 @@ export class AccountService {
     }
   }
 
+  /** `#q` 와 같되 영향 받은 행 수를 돌려준다 — `RETURNING` 이 없는 MySQL 갈래가 센다. */
+  async #run(text: string, values?: readonly unknown[]): Promise<number> {
+    try {
+      return (await this.#db.query(text, values)).rowCount ?? 0;
+    } catch (e) {
+      throw new AccountStoreUnavailable(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async #tx<T>(fn: (c: Queryable) => Promise<T>): Promise<T> {
     try {
       return await this.#db.tx(fn);
@@ -305,6 +323,7 @@ export class AccountService {
       const admins = (await c.query(byDialect(c, {
         postgres: `SELECT 1 FROM users u WHERE ${ADMIN_SQL} AND u.status='active' LIMIT 1`,
         sqlite: `SELECT 1 FROM users u WHERE ${ADMIN_SQL_SQLITE} AND u.status='active' LIMIT 1`,
+        mysql: `SELECT 1 FROM users u WHERE ${ADMIN_SQL_MYSQL} AND u.status='active' LIMIT 1`,
       }))).rows;
       if (admins.length > 0) throw new AccountError(409, 'admin_exists', '활성 관리자가 이미 있다 — bootstrap 은 첫 관리자용이다');
       const t = token();
@@ -324,11 +343,22 @@ export class AccountService {
     const t = token();
     const at = new Date(this.#now() + INVITE_TTL_MS);
     return this.#tx(async (c) => {
-      const r = (await c.query(
-        `INSERT INTO invitations (token_hash, kind, email, role, invited_by, expires_at)
+      let r: Row;
+      if (dialectOf(c).name === 'mysql') {
+        // RETURNING 이 없다 — id 를 여기서 정해 넣는다.
+        r = { id: randomUUID() };
+        await c.query(
+          `INSERT INTO invitations (id, token_hash, kind, email, role, invited_by, expires_at)
+           VALUES ($6,$1,'invite',$2,$3,$4,$5)`,
+          [sha(t), email, input.role, by, at, r['id']],
+        );
+      } else {
+        r = (await c.query(
+          `INSERT INTO invitations (token_hash, kind, email, role, invited_by, expires_at)
          VALUES ($1,'invite',$2,$3,$4,$5) RETURNING id`,
-        [sha(t), email, input.role, by, at],
-      )).rows[0]!;
+          [sha(t), email, input.role, by, at],
+        )).rows[0]!;
+      }
       await this.#audit(c, by, 'account.invite', null, meta, { role: input.role, email: email !== null });
       return { id: str(r, 'id'), token: t, expiresAt: at.toISOString() };
     }).then(async (out) => {
@@ -386,6 +416,9 @@ export class AccountService {
           FOR UPDATE OF r`,
         sqlite: `SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id
           WHERE r.token_hash=$1 AND r.used_at IS NULL AND r.expires_at > now() AND u.status='active'`,
+        mysql: `SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id
+          WHERE r.token_hash=$1 AND r.used_at IS NULL AND r.expires_at > now() AND u.status='active'
+          FOR UPDATE`,
       }), [sha(t)],
       )).rows[0];
       if (r === undefined) throw new AccountError(404, 'link_invalid', '링크가 없거나 만료됐거나 이미 쓰였다');
@@ -435,6 +468,9 @@ export class AccountService {
           FOR UPDATE OF e`,
         sqlite: `SELECT e.user_id, e.new_email FROM email_changes e JOIN users u ON u.id=e.user_id
           WHERE e.token_hash=$1 AND e.used_at IS NULL AND e.expires_at > now() AND u.status='active'`,
+        mysql: `SELECT e.user_id, e.new_email FROM email_changes e JOIN users u ON u.id=e.user_id
+          WHERE e.token_hash=$1 AND e.used_at IS NULL AND e.expires_at > now() AND u.status='active'
+          FOR UPDATE`,
       }), [sha(t)],
       )).rows[0];
       if (r === undefined) throw new AccountError(404, 'link_invalid', '링크가 없거나 만료됐거나 이미 쓰였다');
@@ -451,6 +487,7 @@ export class AccountService {
       const u = (await c.query(byDialect(c, {
         postgres: `SELECT role, status FROM users WHERE id=$1 FOR UPDATE`,
         sqlite: `SELECT role, status FROM users WHERE id=$1`,
+        mysql: `SELECT role, status FROM users WHERE id=$1 FOR UPDATE`,
       }), [userId])).rows[0];
       if (u === undefined || str(u, 'status') === 'deleted') throw new AccountError(404, 'no_user', '그런 계정이 없다');
       await c.query(`UPDATE invitations SET revoked_at=now() WHERE for_user=$1 AND used_at IS NULL AND revoked_at IS NULL`, [userId]);
@@ -485,12 +522,23 @@ export class AccountService {
     const t = token();
     const at = new Date(this.#now() + INVITE_TTL_MS);
     const out = await this.#tx(async (c) => {
-      const r = (await c.query(
-        `UPDATE invitations SET token_hash=$2, expires_at=$3
+      let r: Row | undefined;
+      if (dialectOf(c).name === 'mysql') {
+        // RETURNING 이 없다 — 바꾼 행을 같은 트랜잭션에서 다시 읽는다(그 행은 이 트랜잭션이 잠갔다).
+        const n = (await c.query(
+          `UPDATE invitations SET token_hash=$2, expires_at=$3
+            WHERE id=$1 AND kind='invite' AND used_at IS NULL AND revoked_at IS NULL`,
+          [id, sha(t), at],
+        )).rowCount;
+        r = n === 0 ? undefined : (await c.query(`SELECT email, role FROM invitations WHERE id=$1`, [id])).rows[0];
+      } else {
+        r = (await c.query(
+          `UPDATE invitations SET token_hash=$2, expires_at=$3
           WHERE id=$1 AND kind='invite' AND used_at IS NULL AND revoked_at IS NULL
           RETURNING email, role`,
-        [id, sha(t), at],
-      )).rows[0];
+          [id, sha(t), at],
+        )).rows[0];
+      }
       if (r === undefined) throw new AccountError(404, 'no_invitation', '다시 보낼 수 있는 초대가 아니다');
       const email = opt(r, 'email');
       await this.#audit(c, by, 'account.invite_resend', null, meta, { id, role: str(r, 'role'), email: email !== null });
@@ -569,11 +617,20 @@ export class AccountService {
       } else {
         const username = (input.username ?? '').trim().toLowerCase();
         if (!USERNAME.test(username)) throw new AccountError(400, 'bad_username', '아이디는 영소문자·숫자·._- 2~63자다');
-        userId = str((await c.query(
-          `INSERT INTO users (username, display_name, email, role, password_hash, created_by)
+        if (dialectOf(c).name === 'mysql') {
+          userId = randomUUID();
+          await c.query(
+            `INSERT INTO users (id, username, display_name, email, role, password_hash, created_by)
+             VALUES ($7,$1,$2,$3,$4,$5,$6)`,
+            [username, input.displayName ?? null, opt(inv, 'email'), role, hash, `invite:${str(inv, 'id')}`, userId],
+          );
+        } else {
+          userId = str((await c.query(
+            `INSERT INTO users (username, display_name, email, role, password_hash, created_by)
            VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-          [username, input.displayName ?? null, opt(inv, 'email'), role, hash, `invite:${str(inv, 'id')}`],
-        )).rows[0]!, 'id');
+            [username, input.displayName ?? null, opt(inv, 'email'), role, hash, `invite:${str(inv, 'id')}`],
+          )).rows[0]!, 'id');
+        }
       }
       await c.query(`UPDATE invitations SET used_at=now(), used_by=$2 WHERE id=$1`, [str(inv, 'id'), userId]);
       let codes: string[] | undefined;
@@ -594,6 +651,8 @@ export class AccountService {
       postgres: `SELECT i.*, u.username FROM invitations i LEFT JOIN users u ON u.id = i.for_user
                 WHERE i.token_hash=$1 ${c === undefined ? '' : 'FOR UPDATE OF i'}`,
       sqlite: `SELECT i.*, u.username FROM invitations i LEFT JOIN users u ON u.id = i.for_user WHERE i.token_hash=$1`,
+      mysql: `SELECT i.*, u.username FROM invitations i LEFT JOIN users u ON u.id = i.for_user
+                WHERE i.token_hash=$1 ${c === undefined ? '' : 'FOR UPDATE'}`,
     });
     const rows = c === undefined ? await this.#q(q, [sha(t)]) : (await c.query(q, [sha(t)])).rows;
     const inv = rows[0];
@@ -635,10 +694,19 @@ export class AccountService {
   async takeSsoFlow(flowId: string | undefined, state: string):
     Promise<{ codeVerifier: string; nonce: string; intent: 'login' | 'link'; userId: string | null } | undefined> {
     if (flowId === undefined || flowId === '') return undefined;
-    const r = (await this.#q(
-      `DELETE FROM login_flows WHERE id_hash=$1 RETURNING state, nonce, code_verifier, intent, user_id, expires_at`,
-      [sha(flowId)],
-    ))[0];
+    const r = dialectOf(this.#db).name === 'mysql'
+      // RETURNING 이 없다 — 잠가 읽고 지운다. 둘이 같은 흐름을 꺼내도 한쪽만 행을 본다.
+      ? await this.#tx(async (c) => {
+        const row = (await c.query(
+          `SELECT state, nonce, code_verifier, intent, user_id, expires_at FROM login_flows WHERE id_hash=$1 FOR UPDATE`, [sha(flowId)],
+        )).rows[0];
+        if (row !== undefined) await c.query(`DELETE FROM login_flows WHERE id_hash=$1`, [sha(flowId)]);
+        return row;
+      })
+      : (await this.#q(
+        `DELETE FROM login_flows WHERE id_hash=$1 RETURNING state, nonce, code_verifier, intent, user_id, expires_at`,
+        [sha(flowId)],
+      ))[0];
     if (r === undefined || str(r, 'state') !== state || new Date(String(r['expires_at'])).getTime() <= this.#now()) return undefined;
     return {
       codeVerifier: str(r, 'code_verifier'), nonce: str(r, 'nonce'),
@@ -738,12 +806,14 @@ export class AccountService {
    */
   async #applyIdp(c: Queryable, userId: string, next: IdpAuthority, actor: string, meta: Meta):
     Promise<{ ok: true; value: IdpAuthority; from: IdpAuthority } | { ok: false; why: string }> {
-    if (dialectOf(c).rowLocks) await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
+    await this.#lockAdmins(c);
     const r = (await c.query(byDialect(c, {
       postgres: `SELECT u.role, u.idp_grant, u.idp_deny, u.status, t.confirmed_at AS totp_at
          FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u`,
       sqlite: `SELECT u.role, u.idp_grant, u.idp_deny, u.status, t.confirmed_at AS totp_at
          FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
+      mysql: `SELECT u.role, u.idp_grant, u.idp_deny, u.status, t.confirmed_at AS totp_at
+         FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE`,
     }), [userId],
     )).rows[0];
     const cur = r === undefined ? undefined : authorityOfRow(r);
@@ -762,6 +832,7 @@ export class AccountService {
       const others = (await c.query(byDialect(c, {
         postgres: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL} AND u.status='active' AND u.id <> $1`,
         sqlite: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL_SQLITE} AND u.status='active' AND u.id <> $1`,
+        mysql: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL_MYSQL} AND u.status='active' AND u.id <> $1`,
       }), [userId],
       )).rows[0]!;
       if (Number(others['n']) === 0) return refuse('마지막 활성 관리자의 관리자 범위를 빼려 했다');
@@ -783,15 +854,24 @@ export class AccountService {
   async applyRoleChange(issuer: string, ch: RoleChange, meta: Meta = {}): Promise<RoleChangeOutcome> {
     const actor = `sso:${issuer}`;
     return this.#tx(async (c): Promise<RoleChangeOutcome> => {
-      const fresh = (await c.query(
-        `INSERT INTO idp_set_jti (issuer, jti, expires_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+      const fresh = (await c.query(byDialect(c, {
+        postgres: `INSERT INTO idp_set_jti (issuer, jti, expires_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+        sqlite: `INSERT INTO idp_set_jti (issuer, jti, expires_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+        // 유일 키는 PK (issuer, jti) 하나다. 겹치면 아무것도 안 바뀌어 rowCount 0 — PG 의 DO NOTHING 과 같다.
+        mysql: `INSERT INTO idp_set_jti (issuer, jti, expires_at) VALUES ($1,$2,$3) ON DUPLICATE KEY UPDATE jti=jti`,
+      }),
         [issuer, ch.jti, new Date(ch.exp * 1000)],
       )).rowCount;
       if (fresh === 0) return { kind: 'replay' };
+      // MySQL 의 `FOR UPDATE` 는 JOIN 한 users 행도 잠근다(MariaDB 에 `OF` 가 없다) — 연결 행만 따로 잠근다.
+      if (dialectOf(c).name === 'mysql') await c.query(`SELECT 1 FROM user_identities WHERE issuer=$1 AND subject=$2 FOR UPDATE`, [issuer, ch.sub]);
       const i = (await c.query(byDialect(c, {
         postgres: `SELECT i.user_id, i.role_change_txn::text AS txn, u.status, ${IDP_AUTHORITY_SQL} AS idp_authority
            FROM user_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF i`,
         sqlite: `SELECT i.user_id, CAST(i.role_change_txn AS TEXT) AS txn, u.status, ${IDP_AUTHORITY_SQL} AS idp_authority
+           FROM user_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2`,
+        // 연결 행은 위에서 따로 잠갔다 — 여기서 users 행까지 잠그면 관리자 잠금과 순서가 엇갈린다.
+        mysql: `SELECT i.user_id, CAST(i.role_change_txn AS CHAR) AS txn, u.status, ${IDP_AUTHORITY_SQL} AS idp_authority
            FROM user_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2`,
       }),
         [issuer, ch.sub],
@@ -848,9 +928,15 @@ export class AccountService {
         if (i > 5) throw new AccountError(409, 'conflict', '쓸 수 있는 이름을 못 골랐다');
         name = `${base.slice(0, 50)}-${randomBytes(2).toString('hex')}`;
       }
-      const id = str((await c.query(
-        `INSERT INTO users (username, role, created_by) VALUES ($1,'auditor',$2) RETURNING id`, [name, `sso:${claims.iss}`],
-      )).rows[0]!, 'id');
+      let id: string;
+      if (dialectOf(c).name === 'mysql') {
+        id = randomUUID();
+        await c.query(`INSERT INTO users (id, username, role, created_by) VALUES ($3,$1,'auditor',$2)`, [name, `sso:${claims.iss}`, id]);
+      } else {
+        id = str((await c.query(
+          `INSERT INTO users (username, role, created_by) VALUES ($1,'auditor',$2) RETURNING id`, [name, `sso:${claims.iss}`],
+        )).rows[0]!, 'id');
+      }
       await c.query(
         `INSERT INTO user_identities (issuer, subject, user_id, linked_by) VALUES ($1,$2,$3,'jit')`, [claims.iss, claims.sub, id],
       );
@@ -869,6 +955,7 @@ export class AccountService {
       const u = (await c.query(byDialect(c, {
         postgres: `SELECT ${ADMIN_SQL} AS admin, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
         sqlite: `SELECT ${ADMIN_SQL_SQLITE} AS admin, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
+        mysql: `SELECT ${ADMIN_SQL_MYSQL} AS admin, t.confirmed_at FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
       }), [userId],
       )).rows[0];
       if (u !== undefined && yes(u['admin'])
@@ -893,6 +980,9 @@ export class AccountService {
       // SQLite 의 UPDATE 별칭은 `AS` 가 있어야 한다. 빈 배열은 JSON 텍스트 `[]` 다.
       sqlite: `UPDATE users AS u SET idp_grant='[]', idp_deny='[]'
           WHERE (json_array_length(u.idp_grant) > 0 OR json_array_length(u.idp_deny) > 0)
+          AND NOT ${IDP_AUTHORITY_SQL} ${userId === undefined ? '' : 'AND u.id=$1'}`,
+      mysql: `UPDATE users u SET idp_grant='[]', idp_deny='[]'
+          WHERE (JSON_LENGTH(u.idp_grant) > 0 OR JSON_LENGTH(u.idp_deny) > 0)
           AND NOT ${IDP_AUTHORITY_SQL} ${userId === undefined ? '' : 'AND u.id=$1'}`,
     }),
       userId === undefined ? [] : [userId],
@@ -931,6 +1021,7 @@ export class AccountService {
       const cur = mappingOfRow((await c.query(byDialect(c, {
         postgres: `SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1 FOR UPDATE`,
         sqlite: `SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1`,
+        mysql: `SELECT ${PROVIDER_COLS} FROM sso_providers WHERE issuer=$1 FOR UPDATE`,
       }), [issuer])).rows[0]);
       let next: ClaimsMapperConfig = { ...cur };
       if (input.profile !== undefined) {
@@ -947,12 +1038,24 @@ export class AccountService {
       if (input.entitlementMap !== undefined) next.entitlementMap = obj(input.entitlementMap, 'entitlementMap') as Record<string, EntitlementEffect>;
       const problem = claimsConfigProblem(next);
       if (problem !== undefined) bad(problem);
-      await c.query(
-        `INSERT INTO sso_providers (issuer, role_claim, role_map, entitlement_claim, entitlement_prefix, entitlement_map, updated_by)
+      // sso_providers 의 유일 키는 PK(issuer) 하나다 — MySQL 의 ON DUPLICATE KEY 가 같은 대상을 본다.
+      await c.query(byDialect(c, {
+        postgres: `INSERT INTO sso_providers (issuer, role_claim, role_map, entitlement_claim, entitlement_prefix, entitlement_map, updated_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT (issuer) DO UPDATE SET role_claim=EXCLUDED.role_claim, role_map=EXCLUDED.role_map,
            entitlement_claim=EXCLUDED.entitlement_claim, entitlement_prefix=EXCLUDED.entitlement_prefix,
            entitlement_map=EXCLUDED.entitlement_map, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        sqlite: `INSERT INTO sso_providers (issuer, role_claim, role_map, entitlement_claim, entitlement_prefix, entitlement_map, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (issuer) DO UPDATE SET role_claim=EXCLUDED.role_claim, role_map=EXCLUDED.role_map,
+           entitlement_claim=EXCLUDED.entitlement_claim, entitlement_prefix=EXCLUDED.entitlement_prefix,
+           entitlement_map=EXCLUDED.entitlement_map, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        mysql: `INSERT INTO sso_providers (issuer, role_claim, role_map, entitlement_claim, entitlement_prefix, entitlement_map, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON DUPLICATE KEY UPDATE role_claim=VALUES(role_claim), role_map=VALUES(role_map),
+           entitlement_claim=VALUES(entitlement_claim), entitlement_prefix=VALUES(entitlement_prefix),
+           entitlement_map=VALUES(entitlement_map), updated_at=now(), updated_by=VALUES(updated_by)`,
+      }),
         [issuer, next.roleClaim, JSON.stringify(next.roleMap), next.entitlementClaim, next.entitlementPrefix,
           JSON.stringify(next.entitlementMap), by],
       );
@@ -977,9 +1080,14 @@ export class AccountService {
           throw new AccountError(409, 'roles_not_configured', '역할 클레임과 매핑을 먼저 저장한다 — 없이 켜면 이 공급자로 오는 사람이 모두 로그인을 거부당한다');
         }
       }
-      await c.query(
-        `INSERT INTO sso_providers (issuer, idp_authority, updated_by) VALUES ($1,$2,$3)
+      await c.query(byDialect(c, {
+        postgres: `INSERT INTO sso_providers (issuer, idp_authority, updated_by) VALUES ($1,$2,$3)
          ON CONFLICT (issuer) DO UPDATE SET idp_authority=EXCLUDED.idp_authority, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        sqlite: `INSERT INTO sso_providers (issuer, idp_authority, updated_by) VALUES ($1,$2,$3)
+         ON CONFLICT (issuer) DO UPDATE SET idp_authority=EXCLUDED.idp_authority, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        mysql: `INSERT INTO sso_providers (issuer, idp_authority, updated_by) VALUES ($1,$2,$3)
+         ON DUPLICATE KEY UPDATE idp_authority=VALUES(idp_authority), updated_at=now(), updated_by=VALUES(updated_by)`,
+      }),
         [issuer, enabled, by],
       );
       if (!enabled) await this.#settleLocal(c);
@@ -991,9 +1099,14 @@ export class AccountService {
   async setProviderJit(issuer: string, enabled: boolean, by: string, meta: Meta = {}): Promise<void> {
     if (issuer.trim() === '') throw new AccountError(400, 'malformed', 'issuer 가 비었다');
     await this.#tx(async (c) => {
-      await c.query(
-        `INSERT INTO sso_providers (issuer, jit_enabled, updated_by) VALUES ($1,$2,$3)
+      await c.query(byDialect(c, {
+        postgres: `INSERT INTO sso_providers (issuer, jit_enabled, updated_by) VALUES ($1,$2,$3)
          ON CONFLICT (issuer) DO UPDATE SET jit_enabled=EXCLUDED.jit_enabled, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        sqlite: `INSERT INTO sso_providers (issuer, jit_enabled, updated_by) VALUES ($1,$2,$3)
+         ON CONFLICT (issuer) DO UPDATE SET jit_enabled=EXCLUDED.jit_enabled, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+        mysql: `INSERT INTO sso_providers (issuer, jit_enabled, updated_by) VALUES ($1,$2,$3)
+         ON DUPLICATE KEY UPDATE jit_enabled=VALUES(jit_enabled), updated_at=now(), updated_by=VALUES(updated_by)`,
+      }),
         [issuer, enabled, by],
       );
       await this.#audit(c, by, 'account.sso_jit', null, meta, { issuer, enabled });
@@ -1015,6 +1128,10 @@ export class AccountService {
         WHERE (u.username=$1 OR u.email=$1) AND u.status <> 'deleted'`,
       sqlite: `SELECT u.id, u.username, u.role, u.status, u.password_hash, u.failed_logins, u.locked_until,
               t.confirmed_at AS totp_at, ${ADMIN_SQL_SQLITE} AS admin
+         FROM users u LEFT JOIN mfa_totp t ON t.user_id = u.id
+        WHERE (u.username=$1 OR u.email=$1) AND u.status <> 'deleted'`,
+      mysql: `SELECT u.id, u.username, u.role, u.status, u.password_hash, u.failed_logins, u.locked_until,
+              t.confirmed_at AS totp_at, ${ADMIN_SQL_MYSQL} AS admin
          FROM users u LEFT JOIN mfa_totp t ON t.user_id = u.id
         WHERE (u.username=$1 OR u.email=$1) AND u.status <> 'deleted'`,
     }),
@@ -1061,12 +1178,25 @@ export class AccountService {
    */
   async #failed(userId: string, _prev: number, meta: Meta, c?: Queryable): Promise<void> {
     const run = async (q: Queryable): Promise<number> => {
-      const r = (await q.query(
-        `UPDATE users SET failed_logins = CASE WHEN last_failed_at IS NULL OR last_failed_at < $2 THEN 1 ELSE failed_logins + 1 END,
+      let r: Row | undefined;
+      if (dialectOf(q).name === 'mysql') {
+        // RETURNING 이 없다 — 같은 트랜잭션에서 다시 읽는다(행은 이 UPDATE 가 잠갔다). SET 은 왼쪽부터라
+        // failed_logins 의 CASE 가 옛 last_failed_at 을 본다 — PG 와 같은 뜻이다.
+        await q.query(
+          `UPDATE users SET failed_logins = CASE WHEN last_failed_at IS NULL OR last_failed_at < $2 THEN 1 ELSE failed_logins + 1 END,
+                            last_failed_at = $3
+            WHERE id=$1`,
+          [userId, new Date(this.#now() - LOCK_MAX_MS), new Date(this.#now())],
+        );
+        r = (await q.query(`SELECT failed_logins FROM users WHERE id=$1`, [userId])).rows[0];
+      } else {
+        r = (await q.query(
+          `UPDATE users SET failed_logins = CASE WHEN last_failed_at IS NULL OR last_failed_at < $2 THEN 1 ELSE failed_logins + 1 END,
                           last_failed_at = $3
           WHERE id=$1 RETURNING failed_logins`,
-        [userId, new Date(this.#now() - LOCK_MAX_MS), new Date(this.#now())],
-      )).rows[0];
+          [userId, new Date(this.#now() - LOCK_MAX_MS), new Date(this.#now())],
+        )).rows[0];
+      }
       const n = Number(r?.['failed_logins'] ?? 0);
       const ms = backoffMs(n);
       await q.query(`UPDATE users SET locked_until=$2 WHERE id=$1`, [userId, ms === 0 ? null : new Date(this.#now() + ms)]);
@@ -1095,14 +1225,27 @@ export class AccountService {
   async throttleFail(key: string): Promise<number | undefined> {
     const now = new Date(this.#now());
     const fresh = new Date(this.#now() - LOCK_MAX_MS);
-    const r = (await this.#q(
-      `INSERT INTO auth_throttle (key, failures, last_failure_at) VALUES ($1, 1, $2)
+    const r = dialectOf(this.#db).name === 'mysql'
+      // RETURNING 이 없다 — upsert 와 다시 읽기를 한 트랜잭션에 둔다(행 잠금이 커밋까지 남아 남의 증가가 끼지 않는다).
+      // SET 은 왼쪽부터다 — failures 의 CASE 가 옛 last_failure_at 을 본다.
+      ? await this.#tx(async (c) => {
+        await c.query(
+          `INSERT INTO auth_throttle (key, failures, last_failure_at) VALUES ($1, 1, $2)
+           ON DUPLICATE KEY UPDATE
+             failures = CASE WHEN last_failure_at < $3 THEN 1 ELSE failures + 1 END,
+             last_failure_at = VALUES(last_failure_at)`,
+          [key, now, fresh],
+        );
+        return (await c.query(`SELECT failures FROM auth_throttle WHERE key=$1`, [key])).rows[0]!;
+      })
+      : (await this.#q(
+        `INSERT INTO auth_throttle (key, failures, last_failure_at) VALUES ($1, 1, $2)
        ON CONFLICT (key) DO UPDATE SET
          failures = CASE WHEN auth_throttle.last_failure_at < $3 THEN 1 ELSE auth_throttle.failures + 1 END,
          last_failure_at = $2
        RETURNING failures`,
-      [key, now, fresh],
-    ))[0]!;
+        [key, now, fresh],
+      ))[0]!;
     const ms = backoffMs(Number(r['failures']));
     if (ms === 0) return undefined;
     await this.#q(`UPDATE auth_throttle SET blocked_until=$2 WHERE key=$1`, [key, new Date(this.#now() + ms)]);
@@ -1127,7 +1270,9 @@ export class AccountService {
         audit = { n: (await this.#q(`DELETE FROM account_audit WHERE at < $1 RETURNING 1`, [cut])).length };
         break;
       case 'mysql':
-        throw new Error('mysql 방언의 문장이 아직 없다 (docs/adr-multi-db.md 「단계」 3)');
+        // RETURNING 도 CTE 안의 DELETE 도 없다 — 지운 행 수를 센다.
+        audit = { n: await this.#run(`DELETE FROM account_audit WHERE at < $1`, [cut]) };
+        break;
     }
     await this.#q(`DELETE FROM auth_throttle WHERE last_failure_at < $1`, [new Date(this.#now() - LOCK_MAX_MS)]);
     // 수명이 지난 SET 의 jti — 그 뒤의 재전송은 exp 검사가 막는다.
@@ -1151,6 +1296,10 @@ export class AccountService {
         sqlite: `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.locked_until, u.status
            FROM sessions s JOIN users u ON u.id = s.user_id
           WHERE s.id_hash=$1 AND s.mfa_pending AND s.revoked_at IS NULL AND s.expires_at > now()`,
+        mysql: `SELECT s.user_id, s.created_at, u.username, u.failed_logins, u.locked_until, u.status
+           FROM sessions s JOIN users u ON u.id = s.user_id
+          WHERE s.id_hash=$1 AND s.mfa_pending AND s.revoked_at IS NULL AND s.expires_at > now()
+          FOR UPDATE`,
       }),
         [sha(pendingId)],
       )).rows[0];
@@ -1229,6 +1378,7 @@ export class AccountService {
       const t = (await c.query(byDialect(c, {
         postgres: `SELECT 1 FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL FOR UPDATE`,
         sqlite: `SELECT 1 FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL`,
+        mysql: `SELECT 1 FROM mfa_totp t WHERE t.user_id=$1 AND t.confirmed_at IS NOT NULL FOR UPDATE`,
       }), [userId],
       )).rows[0];
       if ((await this.#factorOf(c, userId, t !== undefined)) === undefined) {
@@ -1237,6 +1387,7 @@ export class AccountService {
       const u = (await c.query(byDialect(c, {
         postgres: `SELECT failed_logins, locked_until FROM users WHERE id=$1 FOR UPDATE`,
         sqlite: `SELECT failed_logins, locked_until FROM users WHERE id=$1`,
+        mysql: `SELECT failed_logins, locked_until FROM users WHERE id=$1 FOR UPDATE`,
       }), [userId])).rows[0]!;
       if (this.#locked(u['locked_until'], this.#now())) {
         throw new AccountError(429, 'locked', '실패가 너무 많다 — 잠시 뒤 다시 한다');
@@ -1253,6 +1404,8 @@ export class AccountService {
         postgres: `UPDATE sessions SET mfa_at=now(), auth_methods = array_append(auth_methods, $2)
           WHERE id_hash=$1 AND revoked_at IS NULL`,
         sqlite: `UPDATE sessions SET mfa_at=now(), auth_methods = json_insert(auth_methods, '$[#]', $2)
+          WHERE id_hash=$1 AND revoked_at IS NULL`,
+        mysql: `UPDATE sessions SET mfa_at=now(), auth_methods = JSON_ARRAY_APPEND(auth_methods, '$', $2)
           WHERE id_hash=$1 AND revoked_at IS NULL`,
       }), [sessionHash, `step-up:${method}`],
       );
@@ -1271,6 +1424,10 @@ export class AccountService {
         WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending AND u.status='active'
           AND ${NOT_DENY_READ_SQLITE}
           AND s.last_seen_at > strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || ($2 / 1000.0) || ' seconds')`,
+      mysql: `SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id
+        WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending AND u.status='active'
+          AND ${NOT_DENY_READ_MYSQL}
+          AND s.last_seen_at > DATE_SUB(now(), INTERVAL ($2 * 1000) MICROSECOND)`,
     }),
       [sessionHash, SESSION_IDLE_MS],
     );
@@ -1316,6 +1473,11 @@ export class AccountService {
         WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending
           AND s.last_seen_at > strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || ($2 / 1000.0) || ' seconds')
           AND u.status='active'`,
+      mysql: `SELECT s.user_id, s.mfa_at, s.last_seen_at, u.username, u.role, u.idp_grant, u.idp_deny
+         FROM sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.id_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND NOT s.mfa_pending
+          AND s.last_seen_at > DATE_SUB(now(), INTERVAL ($2 * 1000) MICROSECOND)
+          AND u.status='active'`,
     }),
       [h, SESSION_IDLE_MS],
     ))[0];
@@ -1341,17 +1503,24 @@ export class AccountService {
   /** 로그아웃 — 쿠키를 지우는 것만으로 끝내지 않는다. 서버에서 그 세션을 철회한다. */
   async logout(sessionId: string | undefined, meta: Meta = {}): Promise<void> {
     if (sessionId === undefined || sessionId === '') return;
-    const r = (await this.#q(
-      `UPDATE sessions SET revoked_at=now() WHERE id_hash=$1 AND revoked_at IS NULL RETURNING user_id`,
-      [sha(sessionId)],
-    ))[0];
+    const r = dialectOf(this.#db).name === 'mysql'
+      // RETURNING 이 없다 — id_hash 는 PK 이고 user_id 는 바뀌지 않아, 철회했으면 그 뒤에 읽어도 같다.
+      ? (await this.#run(`UPDATE sessions SET revoked_at=now() WHERE id_hash=$1 AND revoked_at IS NULL`, [sha(sessionId)])) === 0
+        ? undefined
+        : (await this.#q(`SELECT user_id FROM sessions WHERE id_hash=$1`, [sha(sessionId)]))[0]
+      : (await this.#q(
+        `UPDATE sessions SET revoked_at=now() WHERE id_hash=$1 AND revoked_at IS NULL RETURNING user_id`,
+        [sha(sessionId)],
+      ))[0];
     if (r !== undefined) await this.#audit(undefined, `user:${str(r, 'user_id')}`, 'session.logout', str(r, 'user_id'), meta);
   }
 
   async logoutAll(userId: string, actor: string, meta: Meta = {}): Promise<number> {
-    const rows = await this.#q(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL RETURNING 1`, [userId]);
-    await this.#audit(undefined, actor, 'session.logout_all', userId, meta, { sessions: rows.length });
-    return rows.length;
+    const n = dialectOf(this.#db).name === 'mysql'
+      ? await this.#run(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, [userId])
+      : (await this.#q(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL RETURNING 1`, [userId])).length;
+    await this.#audit(undefined, actor, 'session.logout_all', userId, meta, { sessions: n });
+    return n;
   }
 
   // ── 내 계정 ──────────────────────────────────────────────────────────
@@ -1421,13 +1590,20 @@ export class AccountService {
       const cur = (await c.query(byDialect(c, {
         postgres: `SELECT confirmed_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`,
         sqlite: `SELECT confirmed_at FROM mfa_totp WHERE user_id=$1`,
+        mysql: `SELECT confirmed_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`,
       }), [userId])).rows[0];
       if (cur !== undefined && cur['confirmed_at'] !== null) {
         throw new AccountError(409, 'totp_exists', '이미 등록된 인증 앱이 있다 — 먼저 해제한다');
       }
-      await c.query(
-        `INSERT INTO mfa_totp (user_id, secret_sealed, created_at) VALUES ($1,$2,$3)
+      await c.query(byDialect(c, {
+        postgres: `INSERT INTO mfa_totp (user_id, secret_sealed, created_at) VALUES ($1,$2,$3)
          ON CONFLICT (user_id) DO UPDATE SET secret_sealed=EXCLUDED.secret_sealed, last_step=0, created_at=EXCLUDED.created_at`,
+        sqlite: `INSERT INTO mfa_totp (user_id, secret_sealed, created_at) VALUES ($1,$2,$3)
+         ON CONFLICT (user_id) DO UPDATE SET secret_sealed=EXCLUDED.secret_sealed, last_step=0, created_at=EXCLUDED.created_at`,
+        // 유일 키는 PK(user_id) 하나다.
+        mysql: `INSERT INTO mfa_totp (user_id, secret_sealed, created_at) VALUES ($1,$2,$3)
+         ON DUPLICATE KEY UPDATE secret_sealed=VALUES(secret_sealed), last_step=0, created_at=VALUES(created_at)`,
+      }),
         [userId, await this.#seal(secret, `totp:${userId}`), new Date(this.#now())],
       );
     });
@@ -1439,6 +1615,7 @@ export class AccountService {
       const t = (await c.query(byDialect(c, {
         postgres: `SELECT secret_sealed, confirmed_at, created_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`,
         sqlite: `SELECT secret_sealed, confirmed_at, created_at FROM mfa_totp WHERE user_id=$1`,
+        mysql: `SELECT secret_sealed, confirmed_at, created_at FROM mfa_totp WHERE user_id=$1 FOR UPDATE`,
       }), [userId])).rows[0];
       if (t === undefined || t['confirmed_at'] !== null) throw new AccountError(409, 'no_pending_totp', '확인할 등록이 없다');
       if (new Date(String(t['created_at'])).getTime() + TOTP_SETUP_TTL_MS < this.#now()) {
@@ -1460,6 +1637,7 @@ export class AccountService {
       const u = (await c.query(byDialect(c, {
         postgres: `SELECT ${ADMIN_SQL} AS admin FROM users u WHERE u.id=$1`,
         sqlite: `SELECT ${ADMIN_SQL_SQLITE} AS admin FROM users u WHERE u.id=$1`,
+        mysql: `SELECT ${ADMIN_SQL_MYSQL} AS admin FROM users u WHERE u.id=$1`,
       }), [userId])).rows[0];
       if (u !== undefined && yes(u['admin'])) throw new AccountError(409, 'admin_needs_mfa', '관리자는 인증 앱을 해제할 수 없다');
       await c.query('DELETE FROM mfa_totp WHERE user_id=$1', [userId]);
@@ -1534,6 +1712,7 @@ export class AccountService {
       const u = (await c.query(byDialect(c, {
         postgres: `SELECT role, status FROM users WHERE id=$1 FOR UPDATE`,
         sqlite: `SELECT role, status FROM users WHERE id=$1`,
+        mysql: `SELECT role, status FROM users WHERE id=$1 FOR UPDATE`,
       }), [userId])).rows[0];
       if (u === undefined || str(u, 'status') !== 'active') throw new AccountError(404, 'no_user', '쓸 수 있는 계정이 아니다');
       const owner = str(u, 'role');
@@ -1544,11 +1723,21 @@ export class AccountService {
       if (Number(n['n']) >= TOKEN_MAX_PER_USER) {
         throw new AccountError(409, 'too_many_tokens', `토큰은 ${TOKEN_MAX_PER_USER}개까지다 — 안 쓰는 것을 먼저 폐기한다`);
       }
-      const id = str((await c.query(
-        `INSERT INTO api_tokens (user_id, name, role, lookup, token_hash, created_at, created_by, expires_at)
+      let id: string;
+      if (dialectOf(c).name === 'mysql') {
+        id = randomUUID();
+        await c.query(
+          `INSERT INTO api_tokens (id, user_id, name, role, lookup, token_hash, created_at, created_by, expires_at)
+           VALUES ($9,$1,$2,$3,$4,$5,$6,$7,$8)`,
+          [userId, name, role, lookup, sha(value), created, actor, expires, id],
+        );
+      } else {
+        id = str((await c.query(
+          `INSERT INTO api_tokens (user_id, name, role, lookup, token_hash, created_at, created_by, expires_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-        [userId, name, role, lookup, sha(value), created, actor, expires],
-      )).rows[0]!, 'id');
+          [userId, name, role, lookup, sha(value), created, actor, expires],
+        )).rows[0]!, 'id');
+      }
       await this.#audit(c, actor, 'account.token_issue', userId, meta, { tokenId: id, name, role, expiresAt: expires.toISOString() });
       return {
         id, name, role, prefix: `bary_${lookup}`, createdAt: created.toISOString(), expiresAt: expires.toISOString(),
@@ -1564,11 +1753,20 @@ export class AccountService {
   async revokeToken(ownerId: string, tokenId: string, actor: string, meta: Meta = {}): Promise<void> {
     if (!UUID.test(ownerId) || !UUID.test(tokenId)) throw new AccountError(404, 'no_token', '그런 토큰이 없다');
     await this.#tx(async (c) => {
-      const r = (await c.query(
-        `UPDATE api_tokens SET revoked_at=$3, revoked_by=$4 WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL
+      let r: Row | undefined;
+      if (dialectOf(c).name === 'mysql') {
+        const n = (await c.query(
+          `UPDATE api_tokens SET revoked_at=$3, revoked_by=$4 WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL`,
+          [tokenId, ownerId, new Date(this.#now()), actor],
+        )).rowCount;
+        r = n === 0 ? undefined : (await c.query(`SELECT name, role, expires_at FROM api_tokens WHERE id=$1`, [tokenId])).rows[0];
+      } else {
+        r = (await c.query(
+          `UPDATE api_tokens SET revoked_at=$3, revoked_by=$4 WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL
          RETURNING name, role, expires_at`,
-        [tokenId, ownerId, new Date(this.#now()), actor],
-      )).rows[0];
+          [tokenId, ownerId, new Date(this.#now()), actor],
+        )).rows[0];
+      }
       if (r === undefined) throw new AccountError(404, 'no_token', '그런 토큰이 없다');
       await this.#audit(c, actor, 'account.token_revoke', ownerId, meta, {
         tokenId, name: str(r, 'name'), role: str(r, 'role'), expiresAt: isoAt(r['expires_at']),
@@ -1623,10 +1821,23 @@ export class AccountService {
    * (값 · 해시는 없다).
    */
   async #revokeAllTokens(c: Queryable, userId: string, by: string, reason: 'suspend' | 'recovery', meta: Meta): Promise<void> {
-    const ids = (await c.query(
-      `UPDATE api_tokens SET revoked_at=$3, revoked_by=$2 WHERE user_id=$1 AND revoked_at IS NULL RETURNING id`,
-      [userId, by, new Date(this.#now())],
-    )).rows.map((r) => str(r, 'id'));
+    let ids: string[];
+    if (dialectOf(c).name === 'mysql') {
+      // RETURNING 이 없다 — 잠가 읽은 id 만 거둔다. 그 사이 생긴 토큰을 세지 않고 거두는 일이 없다.
+      ids = (await c.query(`SELECT id FROM api_tokens WHERE user_id=$1 AND revoked_at IS NULL FOR UPDATE`, [userId])).rows.map((r) => str(r, 'id'));
+      if (ids.length > 0) {
+        await c.query(
+          `UPDATE api_tokens SET revoked_at=$3, revoked_by=$2
+            WHERE user_id=$1 AND id IN (SELECT jt.v FROM JSON_TABLE($4, '$[*]' COLUMNS (v VARCHAR(768) PATH '$')) jt)`,
+          [userId, by, new Date(this.#now()), ids],
+        );
+      }
+    } else {
+      ids = (await c.query(
+        `UPDATE api_tokens SET revoked_at=$3, revoked_by=$2 WHERE user_id=$1 AND revoked_at IS NULL RETURNING id`,
+        [userId, by, new Date(this.#now())],
+      )).rows.map((r) => str(r, 'id'));
+    }
     if (ids.length > 0) await this.#audit(c, by, 'account.token_revoke_all', userId, meta, { reason, count: ids.length, tokenIds: ids });
   }
 
@@ -1638,6 +1849,8 @@ export class AccountService {
         WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at > $2 AND u.status='active' AND NOT ('read' = ANY(u.idp_deny))`,
       sqlite: `SELECT 1 FROM api_tokens t JOIN users u ON u.id=t.user_id
         WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at > $2 AND u.status='active' AND ${NOT_DENY_READ_SQLITE}`,
+      mysql: `SELECT 1 FROM api_tokens t JOIN users u ON u.id=t.user_id
+        WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at > $2 AND u.status='active' AND ${NOT_DENY_READ_MYSQL}`,
     }),
       [tokenId, new Date(this.#now())],
     );
@@ -1678,7 +1891,7 @@ export class AccountService {
     }
     await this.#tx(async (c) => {
       // 실효 관리자 행을 잠근다 — 둘이 동시에 서로를 강등해 관리자가 0 이 되는 경합을 막는다.
-      if (dialectOf(c).rowLocks) await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
+      await this.#lockAdmins(c);
       const u = (await c.query(byDialect(c, {
         postgres: `SELECT u.role, u.status, u.role_authority, u.idp_grant, u.idp_deny, t.confirmed_at,
                 EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id=u.id) AS has_identity,
@@ -1688,6 +1901,10 @@ export class AccountService {
                 EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id=u.id) AS has_identity,
                 ${PROVIDER_AUTHORITY_SQL} AS by_provider
            FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1`,
+        mysql: `SELECT u.role, u.status, u.role_authority, u.idp_grant, u.idp_deny, t.confirmed_at,
+                EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id=u.id) AS has_identity,
+                ${PROVIDER_AUTHORITY_SQL} AS by_provider
+           FROM users u LEFT JOIN mfa_totp t ON t.user_id=u.id WHERE u.id=$1 FOR UPDATE`,
       }),
         [userId],
       )).rows[0];
@@ -1740,10 +1957,11 @@ export class AccountService {
    */
   async deleteUser(userId: string, by: string, meta: Meta = {}): Promise<void> {
     await this.#tx(async (c) => {
-      if (dialectOf(c).rowLocks) await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`);
+      await this.#lockAdmins(c);
       const u = (await c.query(byDialect(c, {
         postgres: `SELECT u.status, ${ADMIN_SQL} AS admin FROM users u WHERE u.id=$1 FOR UPDATE`,
         sqlite: `SELECT u.status, ${ADMIN_SQL_SQLITE} AS admin FROM users u WHERE u.id=$1`,
+        mysql: `SELECT u.status, ${ADMIN_SQL_MYSQL} AS admin FROM users u WHERE u.id=$1 FOR UPDATE`,
       }), [userId])).rows[0];
       if (u === undefined || str(u, 'status') === 'deleted') throw new AccountError(404, 'no_user', '그런 계정이 없다');
       if (yes(u['admin']) && str(u, 'status') === 'active') await this.#guardLastAdmin(c, userId);
@@ -1768,10 +1986,20 @@ export class AccountService {
     });
   }
 
+  /** 실효 관리자 행을 잠근다(호출자의 트랜잭션 안). SQLite 는 쓰기 트랜잭션이 이미 DB 전체를 잠갔다. */
+  async #lockAdmins(c: Queryable): Promise<void> {
+    switch (dialectOf(c).name) {
+      case 'postgres': await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL} AND u.status='active' FOR UPDATE`); break;
+      case 'mysql': await c.query(`SELECT u.id FROM users u WHERE ${ADMIN_SQL_MYSQL} AND u.status='active' FOR UPDATE`); break;
+      case 'sqlite': break;
+    }
+  }
+
   async #guardLastAdmin(c: Queryable, exceptUserId: string): Promise<void> {
     const others = (await c.query(byDialect(c, {
       postgres: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL} AND u.status='active' AND u.id <> $1`,
       sqlite: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL_SQLITE} AND u.status='active' AND u.id <> $1`,
+      mysql: `SELECT count(*) AS n FROM users u WHERE ${ADMIN_SQL_MYSQL} AND u.status='active' AND u.id <> $1`,
     }), [exceptUserId],
     )).rows[0]!;
     if (Number(others['n']) === 0) {

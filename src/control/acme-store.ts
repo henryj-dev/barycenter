@@ -82,15 +82,43 @@ export class AcmeStore {
     key: string; directoryUrl: string; accountKeyRef: string;
     contact?: readonly string[]; by: string;
   }): Promise<string> {
+    const params = [opts.key, opts.directoryUrl, opts.contact ?? [], opts.accountKeyRef, opts.by];
+    if (dialectOf(this.db).name === 'mysql') return this.#upsertAccountMysql(params);
     const r = await this.db.query(
       `INSERT INTO acme_accounts (id,key,directory_url,contact,account_key_ref,created_by)
        VALUES (gen_random_uuid(),$1,$2,$3,$4,$5)
        ON CONFLICT (directory_url) DO UPDATE SET
          contact=EXCLUDED.contact, updated_at=now()
        RETURNING id`,
-      [opts.key, opts.directoryUrl, opts.contact ?? [], opts.accountKeyRef, opts.by],
+      params,
     );
     return text(r.rows[0] ?? {}, 'id');
+  }
+
+  /**
+   * MySQL 의 `ON DUPLICATE KEY` 는 충돌 대상을 못 고른다 — 이 표는 유일 키가 셋(id · key · directory_url)이라
+   * 다른 디렉토리의 같은 `key` 가 조용히 그 행을 고치게 된다. PG 처럼 `directory_url` 만 대상으로 하려고
+   * 「고치고, 없으면 넣는다」. 동시에 넣어 `directory_url` 이 겹치면 한 번 더 고친다(PG 의 갱신과 같은 끝).
+   */
+  async #upsertAccountMysql(params: unknown[]): Promise<string> {
+    return this.db.tx(async (c) => {
+      const update = (): Promise<{ rowCount: number | null }> => c.query(
+        'UPDATE acme_accounts SET contact=$3, updated_at=now() WHERE directory_url=$2', params);
+      if ((await update()).rowCount === 0) {
+        try {
+          await c.query(
+            `INSERT INTO acme_accounts (id,key,directory_url,contact,account_key_ref,created_by)
+             VALUES ($6,$1,$2,$3,$4,$5)`,
+            [...params, randomUUID()],
+          );
+        } catch (e) {
+          if ((e as { constraint?: string }).constraint !== 'acme_account_directory_uq') throw e;
+          await update();
+        }
+      }
+      const r = (await c.query('SELECT id FROM acme_accounts WHERE directory_url=$2', params)).rows[0];
+      return text(r ?? {}, 'id');
+    });
   }
 
   /** CA 가 준 계정 URL(kid)을 기억한다. 재시작 뒤 다시 등록하지 않기 위해서다. */
@@ -197,6 +225,7 @@ export class AcmeStore {
     const existing = (await this.db.query(byDialect(this.db, {
       postgres: `SELECT id FROM acme_orders WHERE certificate_id=$1 AND state = ANY($2::acme_order_state[])`,
       sqlite: `SELECT id FROM acme_orders WHERE certificate_id=$1 AND state IN (SELECT value FROM json_each($2))`,
+      mysql: `SELECT id FROM acme_orders WHERE certificate_id=$1 AND state IN (SELECT jt.v FROM JSON_TABLE($2, '$[*]' COLUMNS (v VARCHAR(768) PATH '$')) jt)`,
     }),
       [opts.certificateId, LIVE_STATES],
     )).rows[0];
@@ -238,6 +267,14 @@ export class AcmeStore {
             AND (claimed_until IS NULL OR claimed_until < now())
           ORDER BY next_attempt_at
           LIMIT 1`,
+        // MySQL 8 · MariaDB 10.6 은 `SKIP LOCKED` 가 있다. 순서는 `LIMIT` 뒤다.
+        mysql: `SELECT id FROM acme_orders
+          WHERE state IN (SELECT jt.v FROM JSON_TABLE($1, '$[*]' COLUMNS (v VARCHAR(768) PATH '$')) jt)
+            AND next_attempt_at <= now()
+            AND (claimed_until IS NULL OR claimed_until < now())
+          ORDER BY next_attempt_at
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
       }),
         [LIVE_STATES],
       )).rows[0];
@@ -248,6 +285,8 @@ export class AcmeStore {
                 updated_at=now() WHERE id=$1`,
         sqlite: `UPDATE acme_orders SET claimed_by=$2,
                 claimed_until=strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+' || $3 || ' seconds'),
+                updated_at=now() WHERE id=$1`,
+        mysql: `UPDATE acme_orders SET claimed_by=$2, claimed_until=DATE_ADD(now(), INTERVAL $3 SECOND),
                 updated_at=now() WHERE id=$1`,
       }),
         [text(picked, 'id'), holder, String(leaseSeconds)],
@@ -342,7 +381,15 @@ export class AcmeStore {
         );
         return;
       case 'mysql':
-        throw new Error('mysql 방언의 문장이 아직 없다 (docs/adr-multi-db.md 「단계」 3)');
+        // `DATETIME` 은 시간대를 안 받는다 — Date 로 넘겨 드라이버가 UTC 리터럴로 적게 한다.
+        await this.db.query(
+          `UPDATE acme_orders SET order_url=$2, finalize_url=$3,
+              expires_at=COALESCE($4, expires_at), updated_at=now()
+        WHERE id=$1`,
+          [orderId, urls.orderUrl, urls.finalizeUrl,
+            urls.expiresAt === undefined ? null : new Date(urls.expiresAt)],
+        );
+        return;
     }
   }
 
@@ -376,7 +423,7 @@ export class AcmeStore {
    * 한다. 계속 재시도하면서 아무 말도 안 하는 것이 더 나쁘다.
    */
   async fail(orderId: string, error: string): Promise<OrderState> {
-    const r = await this.db.query(byDialect(this.db, {
+    const update = byDialect(this.db, {
       postgres: `UPDATE acme_orders
           SET attempts = attempts + 1,
               state = CASE WHEN attempts + 1 >= $3 THEN 'abandoned'::acme_order_state
@@ -397,15 +444,49 @@ export class AcmeStore {
               updated_at = now()
         WHERE id=$1
       RETURNING state`,
-    }),
-      [orderId, error.slice(0, 2000), MAX_ATTEMPTS],
-    );
-    return text(r.rows[0] ?? {}, 'state') as OrderState;
+      // MySQL 은 SET 을 왼쪽부터 적용하고 뒤 식은 바뀐 열을 본다 — `attempts` 를 맨 뒤에 두어 앞 식이 PG 처럼 옛 값을 본다.
+      mysql: `UPDATE acme_orders
+          SET state = CASE WHEN attempts + 1 >= $3 THEN 'abandoned' ELSE 'failed' END,
+              next_attempt_at = DATE_ADD(now(), INTERVAL CAST(LEAST(60 * POWER(2, attempts), 3600) AS SIGNED) SECOND),
+              last_error = $2,
+              claimed_by = NULL, claimed_until = NULL,
+              updated_at = now(),
+              attempts = attempts + 1
+        WHERE id=$1`,
+    });
+    const params = [orderId, error.slice(0, 2000), MAX_ATTEMPTS];
+    if (dialectOf(this.db).name !== 'mysql') {
+      const r = await this.db.query(update, params);
+      return text(r.rows[0] ?? {}, 'state') as OrderState;
+    }
+    // `RETURNING` 이 없다 — 같은 트랜잭션에서 다시 읽는다.
+    return this.db.tx(async (c) => {
+      await c.query(update, params);
+      const r = (await c.query('SELECT state FROM acme_orders WHERE id=$1', [orderId])).rows[0];
+      return text(r ?? {}, 'state') as OrderState;
+    });
   }
 
   // ── 챌린지 ──────────────────────────────────────────────────────────────
 
   async putChallenge(ch: Omit<ChallengeRow, 'id' | 'placedAt' | 'cleanedAt'>): Promise<string> {
+    if (dialectOf(this.db).name === 'mysql') {
+      // 유일 키는 PK(새 uuid)와 (order_id, domain, type) 뿐이라 충돌 대상이 같다. `RETURNING` 대신 그 키로 다시 읽는다.
+      return this.db.tx(async (c) => {
+        await c.query(
+          `INSERT INTO acme_challenges (id,order_id,domain,type,token,value,authz_url,challenge_url)
+           VALUES ($8,$1,$2,$3,$4,$5,$6,$7)
+           ON DUPLICATE KEY UPDATE
+             token=VALUES(token), value=VALUES(value),
+             authz_url=VALUES(authz_url), challenge_url=VALUES(challenge_url)`,
+          [ch.orderId, ch.domain, ch.type, ch.token, ch.value, ch.authzUrl, ch.challengeUrl, randomUUID()],
+        );
+        const r = (await c.query(
+          'SELECT id FROM acme_challenges WHERE order_id=$1 AND domain=$2 AND type=$3',
+          [ch.orderId, ch.domain, ch.type])).rows[0];
+        return text(r ?? {}, 'id');
+      });
+    }
     const r = await this.db.query(
       `INSERT INTO acme_challenges (id,order_id,domain,type,token,value,authz_url,challenge_url)
        VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7)
@@ -461,6 +542,12 @@ export class AcmeStore {
         WHERE c.placed_at IS NOT NULL AND c.cleaned_at IS NULL
           AND (o.state IN ('issued','abandoned')
                OR c.placed_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' seconds'))
+        ORDER BY c.placed_at`,
+      mysql: `SELECT c.* FROM acme_challenges c
+         JOIN acme_orders o ON o.id = c.order_id
+        WHERE c.placed_at IS NOT NULL AND c.cleaned_at IS NULL
+          AND (o.state IN ('issued','abandoned')
+               OR c.placed_at < DATE_SUB(now(), INTERVAL $1 SECOND))
         ORDER BY c.placed_at`,
     }),
       [String(olderThanSeconds)],

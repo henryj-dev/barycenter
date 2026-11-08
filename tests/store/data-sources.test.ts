@@ -22,6 +22,7 @@ import { LeaderElection } from '../../src/control/leader.js';
 import { ControlPlane } from '../../src/control/plane.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import { ConfigStore, type PatchOp } from '../../src/store/config-store.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('data-sources');
@@ -80,7 +81,7 @@ beforeAll(async () => {
   db = new Db(PG.dsn);
   await db.migrate();
   store = new ConfigStore(db, { streamRealip: false });
-  const election = new LeaderElection(PG.dsn, 'data-sources-test');
+  const election = new LeaderElection(openLeaderLockForTest(PG.dsn), 'data-sources-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   const control = new ControlPlane(db, store, driver, election, { prefix: '/tmp/bary-ds-test', adminSocket: '/tmp/bary-ds.sock' });
   const hash = createHash('sha256').update(TOKEN).digest('hex');

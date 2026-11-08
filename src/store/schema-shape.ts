@@ -8,7 +8,7 @@
  * 형은 **논리 형**으로 줄인다. `timestamptz` 와 `DATETIME(6)` 은 이름이 다르지만 같은 것을 담는다.
  * 줄이지 못한 형은 `raw:<이름>` 으로 둔다 — 비교에서 반드시 차이로 보인다(조용히 같다고 하지 않는다).
  *
- * PG · SQLite 의 읽기가 있다. 3단계가 MySQL 의 읽기를 더한다. 방언 적합성 시험이
+ * PG · SQLite · MySQL(MariaDB) 의 읽기가 있다. 방언 적합성 시험이
  * 「PG 의 모양 = 그 방언의 모양」 을 단언한다(`tests/dialect/schema-shape-pg.json` 이 PG 의 모양이다).
  */
 import type { Database, Queryable } from './db.js';
@@ -134,13 +134,79 @@ export async function readSqliteShape(q: Queryable): Promise<SchemaShape> {
   return out;
 }
 
-/** 저장소의 스키마 모양. 아직 읽기가 없는 방언은 던진다. */
+/**
+ * MySQL · MariaDB 의 열 형 → 논리 형. MySQL 계열 마이그레이션(`dialects/mysql/migrations/001_init.sql` 머리말)이
+ * 정한 대응을 읽어 낸다.
+ *
+ * - `char(36)` 은 uuid 에만 쓴다. `tinyint(1)` 은 `BOOLEAN` 이다.
+ * - JSON 을 담는 열(MySQL `json` · MariaDB 는 `longtext` 별칭)은 **열 주석**이 논리 형을 말한다 — `bary:json` · `bary:array`
+ *   (PG 의 `jsonb` · `text[]`). MariaDB 는 `JSON` 을 `longtext` 로 보이므로 주석 없이는 텍스트와 가를 수 없다.
+ */
+export function mysqlLogicalType(dataType: string, columnType: string, comment: string): LogicalType {
+  const c = /^bary:([a-z]+)$/.exec(comment.trim())?.[1];
+  if (c === 'json' || c === 'array' || c === 'uuid') return c;
+  const dt = dataType.toLowerCase();
+  const ct = columnType.toLowerCase();
+  if (dt === 'char' && ct === 'char(36)') return 'uuid';
+  if (dt === 'tinyint' && /^tinyint\(1\)/.test(ct)) return 'bool';
+  return MYSQL_TYPES[dt] ?? `raw:${columnType}`;
+}
+
+const MYSQL_TYPES: Readonly<Record<string, LogicalType>> = {
+  'varchar': 'text',
+  'char': 'text',
+  'text': 'text',
+  'mediumtext': 'text',
+  'longtext': 'text',
+  'smallint': 'int',
+  'int': 'int',
+  'bigint': 'bigint',
+  'datetime': 'timestamp',
+  'json': 'json',
+  'blob': 'bytes',
+  'mediumblob': 'bytes',
+  'longblob': 'bytes',
+  'varbinary': 'bytes',
+  'enum': 'enum',
+  'double': 'real',
+  'float': 'real',
+  'decimal': 'numeric',
+};
+
+/**
+ * MySQL 의 표와 열(지금 DB — `DATABASE()`). 기록 표 · 카운터 표(`bary_sequences`)는 뺀다. **생성 열은 뺀다** — PG 의
+ * 부분 유일 색인(`WHERE …`)을 MySQL 은 생성 열 + 유일 색인으로 옮겼다(그 열은 스키마의 열이 아니라 색인의 손발이다).
+ */
+export async function readMysqlShape(q: Queryable): Promise<SchemaShape> {
+  const r = await q.query(
+    `SELECT c.TABLE_NAME AS table_name, c.COLUMN_NAME AS column_name, c.DATA_TYPE AS data_type,
+            c.COLUMN_TYPE AS column_type, c.IS_NULLABLE AS is_nullable, c.COLUMN_COMMENT AS column_comment,
+            c.EXTRA AS extra
+       FROM information_schema.COLUMNS c
+       JOIN information_schema.TABLES t
+         ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+      WHERE c.TABLE_SCHEMA = DATABASE() AND t.TABLE_TYPE = 'BASE TABLE'
+      ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION`,
+  );
+  const out: Record<string, Record<string, ColumnShape>> = {};
+  for (const row of r.rows) {
+    const table = String(row['table_name']);
+    if (table.endsWith('schema_migrations') || table === 'bary_sequences') continue;
+    if (/(VIRTUAL|STORED|PERSISTENT) GENERATED/i.test(String(row['extra'] ?? ''))) continue;
+    (out[table] ??= {})[String(row['column_name'])] = {
+      type: mysqlLogicalType(String(row['data_type']), String(row['column_type']), String(row['column_comment'] ?? '')),
+      nullable: row['is_nullable'] === 'YES',
+    };
+  }
+  return out;
+}
+
+/** 저장소의 스키마 모양. */
 export async function readSchemaShape(db: Database): Promise<SchemaShape> {
   switch (db.dialect.name) {
     case 'postgres': return readPgShape(db);
     case 'sqlite': return readSqliteShape(db);
-    case 'mysql':
-      throw new Error(`${db.dialect.name} 의 스키마 모양 읽기는 아직 없다 (docs/adr-multi-db.md 「단계」)`);
+    case 'mysql': return readMysqlShape(db);
   }
 }
 

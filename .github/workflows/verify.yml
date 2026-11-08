@@ -198,6 +198,11 @@ jobs:
         include:
           - group: render
             db: sqlite
+          # MySQL 계열 둘(docs/adr-multi-db.md 「3단계」) — 같은 방언, 서버가 다르다. 둘 다에서 도는 문장만 쓴다.
+          - group: render
+            db: mysql
+          - group: render
+            db: mariadb
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -216,9 +221,15 @@ jobs:
       # 느린 날 거짓 실패가 난다. `unit` 조각은 도커를 안 쓰므로 건너뛴다.
       - name: 엔진·DB 이미지 준비
         if: matrix.group != 'unit'
+        env:
+          BARY_TEST_DB: ${{ matrix.db }}
         run: |
           docker pull docker.io/openresty/openresty:alpine
           docker pull docker.io/library/postgres:17-alpine
+          case "$BARY_TEST_DB" in
+            mysql) docker pull docker.io/library/mysql:8.4 ;;
+            mariadb) docker pull docker.io/library/mariadb:11 ;;
+          esac
 
       # **골든 도구 이미지를 여기서 만든다** (2026-11-03). 골든이 쓰는 curl · openssl · socat 을 엔진 이미지 위에 한 번
       # 얹는다(tests/golden/tools-image.ts). 시험 안에서 처음 만들면 apk 의 망 실패가 시험 하나의 엉뚱한 빨강으로

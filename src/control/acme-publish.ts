@@ -101,6 +101,19 @@ export async function pendingPublications(db: Database): Promise<{
       WHERE latest.rn = 1
         AND latest.material_ref IS NOT latest.issued_ref
       ORDER BY latest.updated_at`,
+    // MySQL 도 `DISTINCT ON` 이 없다 — SQLite 와 같은 창 함수.
+    mysql: `SELECT latest.order_id, latest.certificate_key, latest.issued_ref
+       FROM (SELECT o.id AS order_id, c.key AS certificate_key, o.issued_ref, c.material_ref,
+                    o.updated_at,
+                    row_number() OVER (PARTITION BY o.certificate_id
+                                       ORDER BY o.created_at DESC, o.id DESC) AS rn
+               FROM acme_orders o
+               JOIN certificates c ON c.id = o.certificate_id
+              WHERE o.state = 'issued'
+                AND o.issued_ref IS NOT NULL) latest
+      WHERE latest.rn = 1
+        AND NOT (latest.material_ref <=> latest.issued_ref)
+      ORDER BY latest.updated_at`,
   }),
   )).rows.map((r) => ({
     orderId: String(r['order_id']),

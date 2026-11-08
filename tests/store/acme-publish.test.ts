@@ -19,7 +19,7 @@ import { pendingPublications, publishIssued } from '../../src/control/acme-publi
 import { ConfigStore } from '../../src/store/config-store.js';
 import { FsSecretStore } from '../../src/dp/secrets.js';
 import { newEcKey } from '../../src/acme/der.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, IS_MYSQL, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('acmepub');
 let db: Db;
@@ -75,21 +75,29 @@ afterAll(async () => {
   }
 });
 
+/** 인증서 행을 넣고 id 를 돌려준다. MySQL 에는 `RETURNING` 이 없다 — 유일한 `key` 로 다시 읽는다. */
+async function insertCert(sql: string, params: unknown[], key: string): Promise<string> {
+  if (!IS_MYSQL) return String((await db.query(sql, params)).rows[0]?.['id']);
+  await db.query(sql.replace(/\s+RETURNING id$/, ''), params);
+  return String((await db.query('SELECT id FROM certificates WHERE key=$1', [key])).rows[0]?.['id']);
+}
+
 beforeEach(async () => {
   await reset(db);
   // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
-  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  if (TEST_DB !== 'sqlite' && !IS_MYSQL) await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // MySQL 의 `reset` 은 주문 · 도전까지 비운다 — 계정만 남는다(FK 가 있어 TRUNCATE 는 못 한다).
+  if (IS_MYSQL) await db.query('DELETE FROM acme_accounts');
   const ref = await secrets.putKey('acct', newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString());
   accountId = await acme.upsertAccount({
     key: 'le', directoryUrl: 'https://ca.test/dir', accountKeyRef: ref.ref, by: 't',
   });
   // **ACME 의도만 있고 자료가 없는 인증서** — 첫 발급을 기다리는 상태다.
-  const r = await db.query(
+  certId = await insertCert(
     `INSERT INTO certificates (id,key,name,acme_account,acme_domains,created_by,updated_by,revision)
      VALUES (gen_random_uuid(),'web','web','le',$1,'t','t',1) RETURNING id`,
-    [['a.test']],
+    [['a.test']], 'web',
   );
-  certId = String(r.rows[0]?.['id']);
 });
 
 describe('무엇이 게시를 기다리는가', () => {
@@ -126,7 +134,9 @@ describe('발급됨 주문이 둘일 때', () => {
     // 옛 주문을 확실히 앞에 둔다 — 같은 순간에 열린 것으로 보이지 않게.
     await db.query(TEST_DB === 'sqlite'
       ? "UPDATE acme_orders SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 hour') WHERE id=$1"
-      : "UPDATE acme_orders SET created_at = now() - interval '1 hour' WHERE id=$1", [old.orderId]);
+      : IS_MYSQL
+        ? 'UPDATE acme_orders SET created_at = DATE_SUB(now(), INTERVAL 1 HOUR) WHERE id=$1'
+        : "UPDATE acme_orders SET created_at = now() - interval '1 hour' WHERE id=$1", [old.orderId]);
     const fresh = await issuedOrder('web', 'a.test');
     expect(fresh.ref).not.toBe(old.ref);
 
@@ -182,6 +192,7 @@ describe('게시', () => {
     expect(Number(out[0]?.revision)).toBe(Number(head.revision) + 1);
     const audit = (await db.query(TEST_DB === 'sqlite'
       ? `SELECT count(*) AS n FROM audit WHERE principal='acme'`
+      : IS_MYSQL ? `SELECT count(*) AS n FROM audit WHERE principal='acme'`
       : `SELECT count(*)::int AS n FROM audit WHERE principal='acme'`)).rows[0];
     expect(Number(audit?.['n'])).toBeGreaterThan(0);
   });
@@ -211,12 +222,11 @@ describe('게시', () => {
     // **둘이 필요하다.** 하나만 두면 `break` 와 `continue` 가 구분되지 않는다 — 처음에
     // 하나로 짰다가 변이 실험에서 `break` 를 넣어도 통과하는 것을 보고 알았다. 이름이
     // 약속한 것을 안 재고 있었다.
-    const other = await db.query(
+    const otherId = await insertCert(
       `INSERT INTO certificates (id,key,name,acme_account,acme_domains,created_by,updated_by,revision)
        VALUES (gen_random_uuid(),'web2','web2','le',$1,'t','t',1) RETURNING id`,
-      [['b.test']],
+      [['b.test']], 'web2',
     );
-    const otherId = String(other.rows[0]?.['id']);
 
     // ① 자료가 사라진 주문 — `describe` 가 던진다. `updated_at` 을 앞당겨 **먼저** 오게 한다.
     const bad = await acme.openOrder({ accountId, certificateId: certId, domains: ['a.test'] });
@@ -224,7 +234,11 @@ describe('게시', () => {
       ? `UPDATE acme_orders SET state='issued', issued_ref=$2, cert_key_ref=$3,
               claimed_by=NULL, claimed_until=NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 hour')
         WHERE id=$1`
-      : `UPDATE acme_orders SET state='issued', issued_ref=$2, cert_key_ref=$3,
+      : IS_MYSQL
+        ? `UPDATE acme_orders SET state='issued', issued_ref=$2, cert_key_ref=$3,
+              claimed_by=NULL, claimed_until=NULL, updated_at = DATE_SUB(now(), INTERVAL 1 HOUR)
+        WHERE id=$1`
+        : `UPDATE acme_orders SET state='issued', issued_ref=$2, cert_key_ref=$3,
               claimed_by=NULL, claimed_until=NULL, updated_at = now() - interval '1 hour'
         WHERE id=$1`,
       [bad.id, `store://gone@${'a'.repeat(32)}`, `key://gone@${'a'.repeat(32)}`]);

@@ -18,13 +18,19 @@ import { openDbForTest } from '../../src/store/open.js';
 /**
  * **`BARY_TEST_DB` 가 시험하는 DB 를 고른다** (docs/adr-multi-db.md 「완료 조건」 — 같은 저장소 시험 묶음이
  * 방언마다 통과한다). 기본은 postgres(도커 컨테이너). `sqlite` 면 임시 디렉터리의 파일이다 — 도커가 필요 없다.
+ * `mysql` · `mariadb` 는 도커의 `mysql:8.4` · `mariadb:11` 이다(서버 하나를 파일들이 나눠 쓰고, 파일마다 자기 DB).
  * 이름(`pg-fixture`)과 함수 이름(`pgFor` · `startPg`)은 57 개 시험 파일이 부르는 그대로 둔다.
  */
-export const TEST_DB = ((): 'postgres' | 'sqlite' => {
+export type TestDbKind = 'postgres' | 'sqlite' | 'mysql' | 'mariadb';
+export const TEST_DB = ((): TestDbKind => {
   const v = (process.env['BARY_TEST_DB'] ?? 'postgres').trim();
-  if (v === 'postgres' || v === 'sqlite') return v;
-  throw new Error(`저장소 시험의 BARY_TEST_DB 는 postgres | sqlite 다: ${JSON.stringify(v)}`);
+  if (v === 'postgres' || v === 'sqlite' || v === 'mysql' || v === 'mariadb') return v;
+  throw new Error(`저장소 시험의 BARY_TEST_DB 는 postgres | sqlite | mysql | mariadb 다: ${JSON.stringify(v)}`);
 })();
+
+/** 시험하는 DB 의 방언 — MariaDB 는 MySQL 방언이다. */
+export const TEST_DIALECT: 'postgres' | 'sqlite' | 'mysql' = TEST_DB === 'mariadb' ? 'mysql' : TEST_DB;
+export const IS_MYSQL = TEST_DIALECT === 'mysql';
 
 /**
  * 시험이 여는 저장소. 시험 파일은 `new Db(PG.dsn)` 으로 연다 — DSN 의 스킴이 구현을 고른다
@@ -46,7 +52,7 @@ export const Db = function Db(dsn: string): Database {
  * 컨테이너를 공유하고 테이블만 나누는 방법도 있지만, 그러면 `reset()` 이 남의 스위트
  * 데이터를 지운다. 격리가 싼 쪽을 고른다.
  */
-export type PgHandle = { name: string; port: number; dsn: string };
+export type PgHandle = { name: string; port: number; dsn: string; database?: string };
 
 export function pgFor(id: string): PgHandle {
   // 포트는 id 에서 결정적으로 뽑는다. 무작위로 고르면 재현이 안 된다.
@@ -78,6 +84,7 @@ export function pgFor(id: string): PgHandle {
     const dir = join(tmpdir(), `bary-sqlite-${process.pid}-${key}`);
     return { name: dir, port: 0, dsn: `sqlite:${join(dir, 'bary.db')}` };
   }
+  if (TEST_DB === 'mysql' || TEST_DB === 'mariadb') return mysqlFor(key, tag);
   let h = 0;
   for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 4000;
   const port = 20000 + h;
@@ -97,6 +104,10 @@ export function startPg(pg: PgHandle): void {
   if (TEST_DB === 'sqlite') {
     rmSync(pg.name, { recursive: true, force: true });
     mkdirSync(pg.name, { recursive: true });
+    return;
+  }
+  if (TEST_DB === 'mysql' || TEST_DB === 'mariadb') {
+    startMysql(pg);
     return;
   }
   try {
@@ -145,6 +156,11 @@ export function stopPg(pg: PgHandle): void {
     rmSync(pg.name, { recursive: true, force: true });
     return;
   }
+  if (TEST_DB === 'mysql' || TEST_DB === 'mariadb') {
+    // 서버는 다음 파일이 다시 쓴다 — 이 파일의 DB 만 지운다. 서버는 `docker rm -f <name>` 으로 치운다.
+    try { mysqlExec(pg.name, `DROP DATABASE IF EXISTS \`${pg.database ?? ''}\``); } catch { /* 서버가 없으면 그만 */ }
+    return;
+  }
   try {
     docker('rm', '-f', pg.name);
   } catch {
@@ -171,6 +187,7 @@ export function dockerAvailable(): boolean {
  */
 export async function reset(db: Db): Promise<void> {
   if (db.dialect.name === 'sqlite') return resetSqlite(db);
+  if (db.dialect.name === 'mysql') return resetMysql(db);
   // **표를 안 비우고 시퀀스만 되돌리면 다음 삽입이 PK 로 충돌한다.**
   // 실제로 `leadership` 을 빠뜨려서 리더 선출 테스트 넷이 깨졌다 — 증상은 "리더가 못
   // 됐다"(`tryAcquire` 가 false)였는데 원인은 코드가 아니라 픽스처였다.
@@ -227,6 +244,19 @@ export async function reset(db: Db): Promise<void> {
  * 먼저 지울 수 있다(`PRAGMA foreign_keys` 는 트랜잭션 밖에서만 바뀐다).
  */
 export async function freshSchema(db: Db): Promise<void> {
+  if (db.dialect.name === 'mysql') {
+    // MySQL 은 스키마 = DB 다. DB 를 지우면 풀의 연결이 DB 없이 남는다 — 표만 모두 지운다(트리거는 표와 같이 간다).
+    await db.tx(async (c) => {
+      await c.query('SET FOREIGN_KEY_CHECKS = 0');
+      try {
+        const ts = (await c.query(`SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()`)).rows;
+        for (const t of ts) await c.query(`DROP TABLE IF EXISTS \`${String(t['t'])}\``);
+      } finally {
+        await c.query('SET FOREIGN_KEY_CHECKS = 1');
+      }
+    });
+    return;
+  }
   if (db.dialect.name !== 'sqlite') {
     await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
     return;
@@ -281,4 +311,86 @@ async function resetSqlite(db: Db): Promise<void> {
        VALUES (1, '{"listeners":[],"httpRoutes":[],"passthroughRoutes":[],"pools":[],"backends":[]}', 'system', '최초 리비전 — 빈 모델')`);
     await c.query(`INSERT INTO config_head (revision) VALUES (1)`);
   });
+}
+
+// ── MySQL · MariaDB ─────────────────────────────────────────────────────────
+
+/**
+ * 서버 컨테이너는 종류(+ `BARY_TEST_PG_TAG`)마다 **하나**이고, 파일마다 자기 DB 를 쓴다. MySQL 은 처음 뜨는 데 수십 초가
+ * 걸린다 — 57 파일이 하나씩 띄우면 묶음이 반 시간이다. DB 하나가 PG 의 컨테이너 하나와 같은 격리다(`reset` 이 남의 파일
+ * 데이터를 못 지운다). 포트는 PG 와 같은 구간(20000–23999)에서 종류 · 태그로 뽑는다.
+ */
+function mysqlFor(key: string, tag: string): PgHandle {
+  const kind = TEST_DB as 'mysql' | 'mariadb';
+  const server = tag === '' ? `bary-${kind}` : `bary-${kind}-${tag}`;
+  let h = 0;
+  for (const ch of `${server}#server`) h = (h * 31 + ch.charCodeAt(0)) % 4000;
+  const port = 20000 + h;
+  let d = 0;
+  for (const ch of key) d = (d * 31 + ch.charCodeAt(0)) % 1_000_000_007;
+  const database = `bary_${key.replace(/[^a-z0-9]/gi, '_').slice(0, 40)}_${d.toString(36)}`;
+  return { name: server, port, dsn: `${kind}://root:bary@127.0.0.1:${port}/${database}`, database };
+}
+
+const mysqlCli = (): string => (TEST_DB === 'mariadb' ? 'mariadb' : 'mysql');
+
+function mysqlExec(server: string, sql: string): string {
+  return docker('exec', server, mysqlCli(), '-h', '127.0.0.1', '-uroot', '-pbary', '-N', '-e', sql);
+}
+
+function startMysql(h: PgHandle): void {
+  const running = ((): boolean => {
+    try {
+      return docker('inspect', '-f', '{{.State.Running}}', h.name) === 'true';
+    } catch {
+      return false;
+    }
+  })();
+  if (!running) {
+    try { docker('rm', '-f', h.name); } catch { /* 없으면 그만 */ }
+    const image = TEST_DB === 'mariadb' ? 'docker.io/library/mariadb:11' : 'docker.io/library/mysql:8.4';
+    const env = TEST_DB === 'mariadb' ? 'MARIADB_ROOT_PASSWORD=bary' : 'MYSQL_ROOT_PASSWORD=bary';
+    try {
+      // 데이터 디렉터리는 tmpfs — 시험 DB 는 버린다. 내구성 설정(`innodb_flush_log_at_trx_commit=1`)은 기본 그대로다.
+      docker('run', '-d', '--name', h.name, '--tmpfs', '/var/lib/mysql:rw', '-e', env, '-p', `${h.port}:3306`, image);
+    } catch (e) {
+      // 다른 작업자가 같은 이름을 먼저 띄웠다 — 그쪽이 뜨기를 기다린다.
+      if (!/Conflict|already in use/i.test(String(e))) throw e;
+    }
+  }
+  // **바깥에서 붙는 길(TCP)로 묻는다** — PG 의 `-h 127.0.0.1` 과 같은 이유(초기화 중의 임시 서버는 소켓만 연다).
+  const deadline = Date.now() + 180_000;
+  for (;;) {
+    try {
+      mysqlExec(h.name, 'SELECT 1');
+      break;
+    } catch (e) {
+      if (Date.now() > deadline) throw new Error(`${TEST_DB} 기동 실패: ${String(e)}`);
+      execFileSync('sleep', ['0.5']);
+    }
+  }
+  const db = h.database ?? '';
+  mysqlExec(h.name, `DROP DATABASE IF EXISTS \`${db}\`; CREATE DATABASE \`${db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`);
+}
+
+/** PG 의 `reset` 과 같은 끝 상태 — 같은 표 목록(+ PG 의 CASCADE 가 데려가는 ACME 주문 · 도전)을 비우고 카운터 · 씨앗 행을 되돌린다. */
+async function resetMysql(db: Db): Promise<void> {
+  const tables = ['audit', 'operations', 'plans', 'changesets', 'http_routes', 'passthrough_routes', 'backends', 'listeners',
+    'pools', 'sni_certificate_bindings', 'certificates', 'tls_policies', 'engine_settings', 'backend_drain', 'backend_health',
+    'secret_materials', 'health_events', 'health_cursor', 'address_sets', 'address_set_refresh', 'leadership', 'config_head',
+    'config_revisions', 'acme_orders', 'acme_challenges'];
+  await db.tx(async (c) => {
+    await c.query('SET FOREIGN_KEY_CHECKS = 0');
+    try {
+      for (const t of tables) await c.query(`TRUNCATE TABLE ${t}`);
+    } finally {
+      await c.query('SET FOREIGN_KEY_CHECKS = 1');
+    }
+  });
+  await db.query(`INSERT INTO health_cursor () VALUES ()`);
+  await db.query("UPDATE bary_sequences SET `last_value` = CASE name WHEN 'config_revision_seq' THEN 1 ELSE 0 END");
+  await db.query(
+    `INSERT INTO config_revisions (revision, model, created_by, note)
+     VALUES (1, '{"listeners":[],"httpRoutes":[],"passthroughRoutes":[],"pools":[],"backends":[]}', 'system', '최초 리비전 — 빈 모델')`);
+  await db.query(`INSERT INTO config_head (revision) VALUES (1)`);
 }

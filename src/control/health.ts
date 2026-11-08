@@ -375,6 +375,7 @@ async function emit(
   const cur = (await c.query(byDialect(c, {
     postgres: 'SELECT next_seq::text AS n FROM health_cursor FOR UPDATE',
     sqlite: 'SELECT CAST(next_seq AS TEXT) AS n FROM health_cursor',
+    mysql: 'SELECT CAST(next_seq AS CHAR) AS n FROM health_cursor FOR UPDATE',
   }),
   )).rows[0];
   const seq = String(cur?.['n'] ?? '1');
@@ -415,6 +416,7 @@ export class HealthProber {
       const row = (await this.db.query(byDialect(this.db, {
         postgres: 'SELECT COALESCE(MAX(probe_start_seq), 0)::text AS m FROM backend_health',
         sqlite: 'SELECT CAST(COALESCE(MAX(probe_start_seq), 0) AS TEXT) AS m FROM backend_health',
+        mysql: 'SELECT CAST(COALESCE(MAX(probe_start_seq), 0) AS CHAR) AS m FROM backend_health',
       }))).rows[0];
       this.#next = Number(row?.['m'] ?? 0) + 1;
     }
@@ -494,6 +496,8 @@ export class HealthProber {
             WHERE backend_key = $1 FOR UPDATE`,
           sqlite: `SELECT state, probe_start_seq, consecutive, last_ok FROM backend_health
             WHERE backend_key = $1`,
+          mysql: `SELECT state, probe_start_seq, consecutive, last_ok FROM backend_health
+            WHERE backend_key = $1 FOR UPDATE`,
         }), [r.key],
         )).rows[0];
         const prevSeq = row === undefined ? 0 : Number(row['probe_start_seq']);
@@ -523,14 +527,24 @@ export class HealthProber {
         if (ok && prevState !== 'healthy' && streak >= riseN) next = 'healthy';
         if (!ok && prevState !== 'unhealthy' && streak >= failN) next = 'unhealthy';
 
-        await c.query(
-          `INSERT INTO backend_health
+        const upsert = `INSERT INTO backend_health
              (backend_key, state, probe_start_seq, consecutive, last_ok, observed_at, detail)
            VALUES ($1,$2,$3,$4,$5,now(),$6)
            ON CONFLICT (backend_key) DO UPDATE SET
              state=EXCLUDED.state, probe_start_seq=EXCLUDED.probe_start_seq,
              consecutive=EXCLUDED.consecutive, last_ok=EXCLUDED.last_ok,
-             observed_at=now(), detail=EXCLUDED.detail`,
+             observed_at=now(), detail=EXCLUDED.detail`;
+        await c.query(byDialect(c, {
+          postgres: upsert,
+          sqlite: upsert,
+          mysql: `INSERT INTO backend_health
+             (backend_key, state, probe_start_seq, consecutive, last_ok, observed_at, detail)
+           VALUES ($1,$2,$3,$4,$5,now(),$6)
+           ON DUPLICATE KEY UPDATE
+             state=VALUES(state), probe_start_seq=VALUES(probe_start_seq),
+             consecutive=VALUES(consecutive), last_ok=VALUES(last_ok),
+             observed_at=now(), detail=VALUES(detail)`,
+        }),
           [r.key, next, String(r.seq), streak, ok, r.reason ?? null],
         );
         if (next === prevState) return undefined;

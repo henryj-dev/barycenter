@@ -51,7 +51,7 @@ import type {
   RateLimit,
   RealIpHeaderName,
 } from '../model/provisional.js';
-import { byDialect, dialectOf, type Database, type Queryable, type Row } from './db.js';
+import { byDialect, dialectOf, type ByDialect, type Database, type Queryable, type Row } from './db.js';
 import { referencedSets, referencedSetsOfRoute } from '../model/address-sets.js';
 import { routeActions } from '../model/route-rules.js';
 import {
@@ -321,20 +321,50 @@ const list = (r: Row, k: string): string[] => (Array.isArray(r[k]) ? (r[k] as st
 // SQLite 의 쓰기 트랜잭션은 `BEGIN IMMEDIATE` 라 DB 전체가 한 잠금이다 — 모든 `db.tx` 가 이미 줄을 선다.
 // 그래서 PG 의 `FOR UPDATE` 는 SQLite 문장에서 뺀다. 시퀀스는 `bary_sequences` 표다(같은 트랜잭션 안의 쓰기).
 
-const HEAD_FOR_UPDATE = { postgres: 'SELECT revision FROM config_head FOR UPDATE', sqlite: 'SELECT revision FROM config_head' };
+const HEAD_FOR_UPDATE = {
+  postgres: 'SELECT revision FROM config_head FOR UPDATE', sqlite: 'SELECT revision FROM config_head',
+  mysql: 'SELECT revision FROM config_head FOR UPDATE',
+};
 
 const NEXTVAL_REVISION = {
   postgres: `SELECT nextval('config_revision_seq') AS v`,
   sqlite: `UPDATE bary_sequences SET last_value = last_value + 1 WHERE name = 'config_revision_seq' RETURNING CAST(last_value AS TEXT) AS v`,
+  mysql: "UPDATE bary_sequences SET `last_value` = LAST_INSERT_ID(`last_value` + 1) WHERE name = 'config_revision_seq'",
 };
 const NEXTVAL_EPOCH = {
   postgres: `SELECT nextval('activation_epoch_seq') AS v`,
   sqlite: `UPDATE bary_sequences SET last_value = last_value + 1 WHERE name = 'activation_epoch_seq' RETURNING CAST(last_value AS TEXT) AS v`,
+  mysql: "UPDATE bary_sequences SET `last_value` = LAST_INSERT_ID(`last_value` + 1) WHERE name = 'activation_epoch_seq'",
 };
+
+/**
+ * 시퀀스의 다음 값. MySQL 은 두 문장이다 — `LAST_INSERT_ID(expr)` 는 연결마다의 값이라 같은 트랜잭션 연결에서
+ * 곧바로 읽는다.
+ */
+async function nextval(c: Queryable, seq: ByDialect<string>): Promise<string> {
+  const r = await c.query(byDialect(c, seq));
+  if (dialectOf(c).name !== 'mysql') return text(r.rows[0] ?? {}, 'v');
+  return text((await c.query('SELECT CAST(LAST_INSERT_ID() AS CHAR) AS v')).rows[0] ?? {}, 'v');
+}
 
 /** `now() + ($n || ' milliseconds')::interval` 의 SQLite 짝. */
 const sqliteNowPlusMs = (n: number): string =>
   `strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+' || ($${n} / 1000.0) || ' seconds')`;
+/** 같은 식의 MySQL 짝. 인자는 문자열로 온다 — 수로 바꿔 곱한다. */
+const mysqlNowPlusMs = (n: number): string =>
+  `DATE_ADD(now(), INTERVAL (CAST($${n} AS SIGNED) * 1000) MICROSECOND)`;
+
+/**
+ * `INSERT … ON CONFLICT (key) DO UPDATE SET c=EXCLUDED.c` 의 MySQL 짝을 **같은 글에서** 만든다 — 열이 서른 개인
+ * 문장을 두 벌 두면 언젠가 갈린다. MySQL 은 과녁 키를 못 고르지만, 이 표들의 다른 유일 키(`(id, protocol)` 같은
+ * 복합 FK 과녁)는 새로 뽑은 `id` 를 품어 부딪히지 않는다 — 부딪히는 것은 `key`(또는 `only_one`) 하나다.
+ */
+function upsertSql(c: Queryable, pg: string): string {
+  if (dialectOf(c).name !== 'mysql') return pg;
+  const head = /ON CONFLICT \((?:key|only_one)\) DO UPDATE SET/;
+  if (!head.test(pg)) throw new Error('upsertSql: ON CONFLICT … DO UPDATE SET 가 없다');
+  return pg.replace(head, 'ON DUPLICATE KEY UPDATE').replace(/EXCLUDED\.(\w+)/g, 'VALUES($1)');
+}
 
 // ── 모델 읽기 ────────────────────────────────────────────────────────────
 
@@ -713,7 +743,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
   const b = obj(op.body);
   switch (op.kind) {
     case 'pool':
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO pools (id,key,name,protocol_class,algorithm,hash_key,send_proxy_protocol,
                             health_check,upstream_tls,discovery,created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$9,$10,$11,$7,$7,$8)
@@ -725,7 +755,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            upstream_tls=EXCLUDED.upstream_tls,
            discovery=EXCLUDED.discovery,
            version=pools.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
-           revision=EXCLUDED.revision`,
+           revision=EXCLUDED.revision`),
         [op.key, b['name'] ?? op.key, b['protocolClass'], b['algorithm'],
           b['hashKey'] ?? null, b['sendProxyProtocol'] ?? null, by, revision,
           b['healthCheck'] === undefined ? null : JSON.stringify(b['healthCheck']),
@@ -738,13 +768,13 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
 
     case 'backend': {
       const [poolId] = await poolRef(c, String(b['pool']), `backend '${op.key}'`);
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO backends (id,key,pool_id,host,port,weight,created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$6,$7)
          ON CONFLICT (key) DO UPDATE SET
            pool_id=EXCLUDED.pool_id, host=EXCLUDED.host, port=EXCLUDED.port,
            weight=EXCLUDED.weight, version=backends.version+1, updated_at=now(),
-           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
+           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`),
         [op.key, poolId, b['host'], b['port'], b['weight'] ?? 1, by, revision],
       );
       return;
@@ -776,7 +806,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
               `listener '${op.key}' 의 tls.defaultCertificate`),
           }
         : undefined;
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO listeners (id,key,name,protocol,bind,port,enabled,accept_proxy_cidrs,
                                 udp_preset,http_default_pool_id,http_default_pool_cls,
                                 http_default_reject,on_unmatched_sni_pool,on_unmatched_sni_cls,
@@ -818,7 +848,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            hosts=EXCLUDED.hosts,
            http_redirect_port=EXCLUDED.http_redirect_port,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
-           revision=EXCLUDED.revision`,
+           revision=EXCLUDED.revision`),
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
           // §4.7 — 신뢰 경계 없이는 켤 수 없다. 해독기가 모양을 이미 봤다.
           obj(b['acceptProxyProtocol'])['trustedCidrs'] ?? null,
@@ -868,7 +898,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       const kind = String(action['kind']);
       const pool = kind === 'proxy'
         ? await poolRef(c, String(action['pool']), `route '${op.key}'`) : undefined;
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO http_routes (id,key,listener_id,listener_protocol,hosts,priority,path_prefix,
                                   action_kind,pool_id,pool_cls,websocket,redirect_to,status,
                                   request_headers,rewrite_prefix,path_prefixes,source_rules,
@@ -882,7 +912,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            websocket=EXCLUDED.websocket, redirect_to=EXCLUDED.redirect_to, status=EXCLUDED.status,
            request_headers=EXCLUDED.request_headers, rewrite_prefix=EXCLUDED.rewrite_prefix,
            version=http_routes.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
-           revision=EXCLUDED.revision`,
+           revision=EXCLUDED.revision`),
         [op.key, lid, lproto, b['hosts'] ?? [], b['priority'] ?? 0, b['pathPrefix'] ?? null,
           kind, pool?.[0] ?? null, pool?.[1] ?? null,
           kind === 'proxy' ? action['websocket'] ?? false : null,
@@ -907,7 +937,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       const kind = String(action['kind']);
       const pool = kind === 'proxy'
         ? await poolRef(c, String(action['pool']), `route '${op.key}'`) : undefined;
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO passthrough_routes (id,key,listener_id,listener_protocol,snis,priority,
                                          action_kind,pool_id,pool_cls,created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10)
@@ -916,7 +946,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            snis=EXCLUDED.snis, priority=EXCLUDED.priority, action_kind=EXCLUDED.action_kind,
            pool_id=EXCLUDED.pool_id, pool_cls=EXCLUDED.pool_cls,
            version=passthrough_routes.version+1, updated_at=now(),
-           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
+           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`),
         [op.key, lid, lproto, b['snis'] ?? [], b['priority'] ?? 0, kind,
           pool?.[0] ?? null, pool?.[1] ?? null, by, revision],
       );
@@ -925,7 +955,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
     case 'certificate':
       // **자료가 아니라 참조가 들어온다.** `materialRef` 는 SecretStore 가 이미 자료를
       // 받아 두고 돌려준 불변 버전이다 (§4.8). 개인키는 이 경로를 지나지 않는다.
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO certificates (id,key,name,material_ref,chain_digest,key_digest,
                                    acme_account,acme_domains,
                                    created_by,updated_by,revision)
@@ -935,7 +965,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            chain_digest=EXCLUDED.chain_digest, key_digest=EXCLUDED.key_digest,
            acme_account=EXCLUDED.acme_account, acme_domains=EXCLUDED.acme_domains,
            version=certificates.version+1, updated_at=now(),
-           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
+           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`),
         [op.key, b['name'] ?? op.key,
           b['materialRef'] ?? null, b['chainDigest'] ?? null, b['keyDigest'] ?? null,
           obj(b['acme'])['account'] ?? null, obj(b['acme'])['domains'] ?? null,
@@ -944,7 +974,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       return;
 
     case 'tlsPolicy':
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO tls_policies (id,key,name,min_version,max_version,
                                    sni_host_mismatch,cipher_policy,hsts,
                                    created_by,updated_by,revision)
@@ -955,7 +985,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            sni_host_mismatch=EXCLUDED.sni_host_mismatch,
            cipher_policy=EXCLUDED.cipher_policy, hsts=EXCLUDED.hsts,
            version=tls_policies.version+1, updated_at=now(),
-           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
+           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`),
         [op.key, b['name'] ?? op.key, b['minVersion'], b['maxVersion'] ?? null,
           b['sniHostMismatch'] ?? null, b['cipherPolicy'] ?? null,
           b['hsts'] === undefined ? null : JSON.stringify(b['hsts']),
@@ -965,7 +995,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
 
     case 'engine':
       // **키가 하나뿐이다.** 해독기가 이미 모양을 봤다(`decodeEngineSettings`).
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO engine_settings (only_one, worker_shutdown_timeout_s,
                                       membership_dict_kb, acme_dict_kb, updated_by, revision)
          VALUES (true,$1,$4,$5,$2,$3)
@@ -973,20 +1003,20 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            worker_shutdown_timeout_s=EXCLUDED.worker_shutdown_timeout_s,
            membership_dict_kb=EXCLUDED.membership_dict_kb,
            acme_dict_kb=EXCLUDED.acme_dict_kb,
-           updated_at=now(), updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
+           updated_at=now(), updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`),
         [b['workerShutdownTimeoutS'] ?? null, by, revision,
           b['membershipDictKb'] ?? null, b['acmeDictKb'] ?? null],
       );
       return;
 
     case 'addressSet': {
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO address_sets (id,key,cidrs,source,source_options,created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$6,$4,$4,$5)
          ON CONFLICT (key) DO UPDATE SET
            cidrs=EXCLUDED.cidrs, source=EXCLUDED.source, source_options=EXCLUDED.source_options,
            version=address_sets.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
-           revision=EXCLUDED.revision`,
+           revision=EXCLUDED.revision`),
         [op.key, b['cidrs'], b['source'] ?? null, by, revision,
           b['sourceOptions'] === undefined ? null : JSON.stringify(b['sourceOptions'])],
       );
@@ -1000,7 +1030,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       const ovr = obj(b['override']);
       // `listener_proto` 를 함께 넣는 이유는 복합 FK 다 — DB 가 "https 리스너에만"
       // 을 스스로 보장한다 (008 의 `sni_binding_is_https`).
-      await c.query(
+      await c.query(upsertSql(c,
         `INSERT INTO sni_certificate_bindings (id,key,listener_id,listener_proto,certificate_id,
                                                hosts,ovr_min_version,ovr_max_version,
                                                created_by,updated_by,revision)
@@ -1010,7 +1040,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            certificate_id=EXCLUDED.certificate_id, hosts=EXCLUDED.hosts,
            ovr_min_version=EXCLUDED.ovr_min_version, ovr_max_version=EXCLUDED.ovr_max_version,
            version=sni_certificate_bindings.version+1, updated_at=now(),
-           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`,
+           updated_by=EXCLUDED.updated_by, revision=EXCLUDED.revision`),
         [op.key, lid, lproto, cert, b['hosts'], ovr['minVersion'] ?? null,
           ovr['maxVersion'] ?? null, by, revision],
       );
@@ -1213,7 +1243,7 @@ export class ConfigStore {
     const collection = HISTORY_COLLECTIONS[kind];
     const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 50), 1), 500);
     const scan = Math.min(Math.max(Math.trunc(opts.scan ?? 500), 1), 5000);
-    if (dialectOf(this.db).name === 'sqlite') return this.#resourceHistorySqlite(collection, key, limit, scan);
+    if (dialectOf(this.db).name !== 'postgres') return this.#resourceHistoryInJs(collection, key, limit, scan);
     const rows = (await this.db.query(
       `WITH recent AS (
          SELECT r.revision, r.parent, r.rollback_of, r.created_at, r.created_by, r.note,
@@ -1255,13 +1285,14 @@ export class ConfigStore {
   }
 
   /**
-   * `resourceHistory` 의 SQLite 짝. 창의 리비전에서 항목을 `json_each` 로 꺼내고, 이웃 비교(PG 의 `LAG` 와
-   * `IS DISTINCT FROM`)는 JS 에서 한다 — SQLite 의 JSON 은 텍스트라 `=` 가 키 순서를 탄다. jsonb 의 `=` 처럼
-   * 키 순서를 무시하려고 `isDeepStrictEqual` 로 잰다.
+   * `resourceHistory` 의 SQLite · MySQL 짝. 창의 리비전에서 항목을 `json_each`(MySQL 은 `JSON_TABLE`)로 꺼내고,
+   * 이웃 비교(PG 의 `LAG` 와 `IS DISTINCT FROM`)는 JS 에서 한다 — SQLite · MariaDB 의 JSON 은 텍스트라 `=` 가 키
+   * 순서를 탄다. jsonb 의 `=` 처럼 키 순서를 무시하려고 `isDeepStrictEqual` 로 잰다.
    */
-  async #resourceHistorySqlite(collection: string, key: string, limit: number, scan: number): Promise<ResourceChange[]> {
-    const rows = (await this.db.query(
-      `SELECT x.revision, x.parent, x.rollback_of, x.created_at, x.created_by, x.note, x.item, c.id AS changeset
+  async #resourceHistoryInJs(collection: string, key: string, limit: number, scan: number): Promise<ResourceChange[]> {
+    const rows = (await this.db.query(byDialect(this.db, {
+      postgres: '', // PG 는 위의 한 문장(LAG)이다 — 여기 오지 않는다.
+      sqlite: `SELECT x.revision, x.parent, x.rollback_of, x.created_at, x.created_by, x.note, x.item, c.id AS changeset
          FROM (SELECT r.revision, r.parent, r.rollback_of, r.created_at, r.created_by, r.note,
                       (SELECT json(e.value) FROM json_each(COALESCE(json_extract(r.model, '$.' || $1), '[]')) e
                         WHERE json_extract(e.value, '$.key') = $2 LIMIT 1) AS item
@@ -1269,10 +1300,23 @@ export class ConfigStore {
                 ORDER BY r.revision DESC
                 LIMIT $3) x
          LEFT JOIN changesets c ON c.committed_revision = x.revision
-        ORDER BY x.revision`, [collection, key, scan],
+        ORDER BY x.revision`,
+      mysql: `SELECT x.revision, x.parent, x.rollback_of, x.created_at, x.created_by, x.note, x.item, c.id AS changeset
+         FROM (SELECT r.revision, r.parent, r.rollback_of, r.created_at, r.created_by, r.note,
+                      (SELECT e.v FROM JSON_TABLE(COALESCE(JSON_EXTRACT(r.model, CONCAT('$.', $1)), JSON_ARRAY()),
+                                                  '$[*]' COLUMNS (v JSON PATH '$')) e
+                        WHERE JSON_VALUE(e.v, '$.key') COLLATE utf8mb4_bin = $2 LIMIT 1) AS item
+                 FROM config_revisions r
+                ORDER BY r.revision DESC
+                LIMIT $3) x
+         LEFT JOIN changesets c ON c.committed_revision = x.revision
+        ORDER BY x.revision`,
+    }), [collection, key, scan],
     )).rows;
+    // SQLite 는 늘 텍스트, MySQL 은 파싱한 값, MariaDB 는 텍스트로 준다.
     const parse = (v: unknown): Record<string, unknown> | null =>
-      v === null || v === undefined ? null : (JSON.parse(String(v)) as Record<string, unknown>);
+      v === null || v === undefined ? null
+        : (typeof v === 'string' ? JSON.parse(v) : v) as Record<string, unknown>;
     const out: ResourceChange[] = [];
     // 같은 리비전이 changeset 여럿과 이어지면 행이 여럿이다(PG 의 LEFT JOIN 과 같다). 이웃은 리비전 단위로 본다.
     let prevRevision: string | undefined;
@@ -1395,6 +1439,10 @@ export class ConfigStore {
         WHERE id = $1 AND state = 'open'
           AND json_array_length(patch) + $3 <= $4
         RETURNING id`,
+      // MySQL: `RETURNING` 없이 맞은 행 수로 본다. WHERE 는 고치기 전의 patch 를 본다.
+      mysql: `UPDATE changesets SET patch = JSON_MERGE_PRESERVE(patch, $2)
+        WHERE id = $1 AND state = 'open'
+          AND JSON_LENGTH(patch) + $3 <= $4`,
     }),
       [id, JSON.stringify(ops), ops.length, MAX_CHANGESET_OPS],
     );
@@ -1403,6 +1451,7 @@ export class ConfigStore {
         byDialect(this.db, {
           postgres: 'SELECT state, jsonb_array_length(patch) AS n FROM changesets WHERE id=$1',
           sqlite: 'SELECT state, json_array_length(patch) AS n FROM changesets WHERE id=$1',
+          mysql: 'SELECT state, JSON_LENGTH(patch) AS n FROM changesets WHERE id=$1',
         }), [id],
       )).rows[0];
       if (cur === undefined) throw new StoreError(404, 'unknown_changeset', `changeset ${id} 이 없다`);
@@ -1476,6 +1525,9 @@ export class ConfigStore {
         sqlite: `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
                             renderer_version,expires_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,${sqliteNowPlusMs(8)})`,
+        mysql: `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
+                            renderer_version,expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,${mysqlNowPlusMs(8)})`,
       }),
         [id, changesetId, baseRevision, JSON.stringify(model), JSON.stringify(impact),
           rendered.digest, RENDERER_VERSION, String(PLAN_TTL_MS)],
@@ -1511,6 +1563,8 @@ export class ConfigStore {
       postgres: `SELECT revision::text AS revision FROM operations
         WHERE phase = 'activated' ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
       sqlite: `SELECT CAST(revision AS TEXT) AS revision FROM operations
+        WHERE phase = 'activated' ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
+      mysql: `SELECT CAST(revision AS CHAR) AS revision FROM operations
         WHERE phase = 'activated' ORDER BY activation_epoch DESC, created_at DESC LIMIT 1`,
     }))).rows[0];
     return r === undefined ? undefined : String(r['revision']);
@@ -1617,7 +1671,7 @@ export class ConfigStore {
       if (head !== revision) {
         throw new StoreError(409, 'PLAN_STALE', `head 가 r${head} 로 바뀌었다 — 그 리비전을 적용한다`);
       }
-      const epoch = text((await c.query(byDialect(c, NEXTVAL_EPOCH))).rows[0] ?? {}, 'v');
+      const epoch = await nextval(c, NEXTVAL_EPOCH);
       await c.query(byDialect(c, {
         postgres: `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
                             renderer_version,expires_at,state,target_revision,activation_epoch)
@@ -1625,6 +1679,9 @@ export class ConfigStore {
         sqlite: `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
                             renderer_version,expires_at,state,target_revision,activation_epoch)
          VALUES ($1,NULL,$2,$3,$4,$5,$6,${sqliteNowPlusMs(7)},'committed',$2,$8)`,
+        mysql: `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
+                            renderer_version,expires_at,state,target_revision,activation_epoch)
+         VALUES ($1,NULL,$2,$3,$4,$5,$6,${mysqlNowPlusMs(7)},'committed',$2,$8)`,
       }),
         [planId, revision, JSON.stringify(model), JSON.stringify(impact), rendered.digest,
           RENDERER_VERSION, String(PLAN_TTL_MS), epoch],
@@ -1636,8 +1693,12 @@ export class ConfigStore {
   /** sealed → open. plan 을 무효화한다 (§5.2 reopen). */
   async reopen(changesetId: string, by: string): Promise<void> {
     await this.db.tx(async (c) => {
-      const r = await c.query(
-        `UPDATE changesets SET state='open', sealed_at=NULL WHERE id=$1 AND state='sealed' RETURNING id`,
+      // MySQL 은 `RETURNING` 이 없다 — 행 수만 본다.
+      const r = await c.query(byDialect(c, {
+        postgres: `UPDATE changesets SET state='open', sealed_at=NULL WHERE id=$1 AND state='sealed' RETURNING id`,
+        sqlite: `UPDATE changesets SET state='open', sealed_at=NULL WHERE id=$1 AND state='sealed' RETURNING id`,
+        mysql: `UPDATE changesets SET state='open', sealed_at=NULL WHERE id=$1 AND state='sealed'`,
+      }),
         [changesetId],
       );
       if (r.rowCount === 0) {
@@ -1667,9 +1728,14 @@ export class ConfigStore {
    */
   async discardChangeset(changesetId: string, by: string): Promise<void> {
     await this.db.tx(async (c) => {
-      const r = await c.query(
-        `UPDATE changesets SET state='discarded'
+      const r = await c.query(byDialect(c, {
+        postgres: `UPDATE changesets SET state='discarded'
           WHERE id=$1 AND state IN ('open','sealed') RETURNING id`,
+        sqlite: `UPDATE changesets SET state='discarded'
+          WHERE id=$1 AND state IN ('open','sealed') RETURNING id`,
+        mysql: `UPDATE changesets SET state='discarded'
+          WHERE id=$1 AND state IN ('open','sealed')`,
+      }),
         [changesetId],
       );
       if (r.rowCount === 0) {
@@ -1706,6 +1772,8 @@ export class ConfigStore {
            FROM plans p WHERE p.id = $1 FOR UPDATE`,
         sqlite: `SELECT p.state, p.base_revision, p.model, p.changeset_id, p.expires_at
            FROM plans p WHERE p.id = $1`,
+        mysql: `SELECT p.state, p.base_revision, p.model, p.changeset_id, p.expires_at
+           FROM plans p WHERE p.id = $1 FOR UPDATE`,
       }), [planId],
       )).rows[0];
       if (plan === undefined) throw new StoreError(404, 'unknown_plan', `plan ${planId} 이 없다`);
@@ -1731,8 +1799,7 @@ export class ConfigStore {
       const ops = (await c.query('SELECT patch FROM changesets WHERE id=$1', [changesetId]))
         .rows[0]?.['patch'] as PatchOp[];
 
-      const revision = text(
-        (await c.query(byDialect(c, NEXTVAL_REVISION))).rows[0] ?? {}, 'v');
+      const revision = await nextval(c, NEXTVAL_REVISION);
 
       for (const op of ops) await applyOp(c, op, revision, by).catch(translate);
 
@@ -1744,8 +1811,7 @@ export class ConfigStore {
       this.assertBindsLocal(model);
       const rendered = renderOrThrow(model, this.caps);
 
-      const epoch = text(
-        (await c.query(byDialect(c, NEXTVAL_EPOCH))).rows[0] ?? {}, 'v');
+      const epoch = await nextval(c, NEXTVAL_EPOCH);
 
       await c.query(
         `INSERT INTO config_revisions (revision,parent,model,created_by,note)
@@ -1835,8 +1901,7 @@ export class ConfigStore {
 
       // **테이블을 그 시점 모델로 되돌린다.** 지우고 다시 넣는다 — 부분 갱신으로는
       // "그 시점에 없던 리소스" 를 없앨 수 없다.
-      const target = text(
-        (await c.query(byDialect(c, NEXTVAL_REVISION))).rows[0] ?? {}, 'v');
+      const target = await nextval(c, NEXTVAL_REVISION);
       // 참조하는 쪽부터 지운다. 라우트 → 리스너 → 풀 순서다.
       //
       // **`backends` 는 명시적으로 안 지운다** — `pools` 삭제가 CASCADE 로 데려간다
@@ -1868,8 +1933,7 @@ export class ConfigStore {
       this.assertBindsLocal(restored);
       renderOrThrow(restored, this.caps);
 
-      const epoch = text(
-        (await c.query(byDialect(c, NEXTVAL_EPOCH))).rows[0] ?? {}, 'v');
+      const epoch = await nextval(c, NEXTVAL_EPOCH);
       await c.query(
         `INSERT INTO config_revisions (revision,parent,rollback_of,model,created_by,note)
          VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -1888,6 +1952,9 @@ export class ConfigStore {
         sqlite: `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
                             renderer_version,expires_at,state,target_revision,activation_epoch)
          VALUES ($1,NULL,$2,$3,$4,$5,$6,strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+24 hours'),'committed',$7,$8)`,
+        mysql: `INSERT INTO plans (id,changeset_id,base_revision,model,impact,render_digest,
+                            renderer_version,expires_at,state,target_revision,activation_epoch)
+         VALUES ($1,NULL,$2,$3,$4,$5,$6,DATE_ADD(now(), INTERVAL 24 HOUR),'committed',$7,$8)`,
       }),
         [planId, head, JSON.stringify(restored),
           JSON.stringify({ rollbackOf: revision }), renderOrThrow(restored, this.caps).digest,

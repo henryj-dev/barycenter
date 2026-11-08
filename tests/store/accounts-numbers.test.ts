@@ -101,11 +101,13 @@ describe('세션 — 유휴 30분 · 절대 12시간', () => {
     await db.query(byDialect(db, {
       postgres: `UPDATE sessions SET last_seen_at = now() - interval '29 minutes'`,
       sqlite: `UPDATE sessions SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-29 minutes')`,
+      mysql: `UPDATE sessions SET last_seen_at = DATE_SUB(now(), INTERVAL 29 MINUTE)`,
     }));
     expect((await fetch(`${A}/api/v1/me`, { headers: { cookie } })).status).toBe(200);
     await db.query(byDialect(db, {
       postgres: `UPDATE sessions SET last_seen_at = now() - interval '31 minutes'`,
       sqlite: `UPDATE sessions SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-31 minutes')`,
+      mysql: `UPDATE sessions SET last_seen_at = DATE_SUB(now(), INTERVAL 31 MINUTE)`,
     }));
     expect((await fetch(`${A}/api/v1/me`, { headers: { cookie } })).status).toBe(401);
   });
@@ -122,6 +124,7 @@ describe('MFA 최근성 10분 · TOTP 등록 24시간', () => {
     await db.query(byDialect(db, {
       postgres: `UPDATE mfa_totp SET created_at = now() - interval '25 hours'`,
       sqlite: `UPDATE mfa_totp SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-25 hours')`,
+      mysql: `UPDATE mfa_totp SET created_at = DATE_SUB(now(), INTERVAL 25 HOUR)`,
     }));
     await expect(accounts.confirmTotp(userId, codeFor(secret))).rejects.toMatchObject({ code: 'totp_setup_expired' });
     // 다시 시작하면 된다
@@ -144,6 +147,7 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
     await db.query(byDialect(db, {
       postgres: `UPDATE auth_throttle SET blocked_until = now() + interval '1 minute'`,
       sqlite: `UPDATE auth_throttle SET blocked_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+1 minute')`,
+      mysql: `UPDATE auth_throttle SET blocked_until = DATE_ADD(now(), INTERVAL 1 MINUTE)`,
     }));
     // 인스턴스 B 에서 **맞는** 비밀번호 — 그래도 429 (프로세스마다 따로 세지 않는다, 검증 전에 막는다)
     const ok = await post(B, '/api/v1/session/login', { username: 'op', password: PASS });
@@ -152,6 +156,7 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
     await db.query(byDialect(db, {
       postgres: `UPDATE auth_throttle SET blocked_until = now() - interval '1 second'`,
       sqlite: `UPDATE auth_throttle SET blocked_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second')`,
+      mysql: `UPDATE auth_throttle SET blocked_until = DATE_SUB(now(), INTERVAL 1 SECOND)`,
     }));
     expect((await post(B, '/api/v1/session/login', { username: 'op', password: PASS })).status).toBe(200);
   });
@@ -172,12 +177,14 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
     await db.query(byDialect(db, {
       postgres: `UPDATE users SET locked_until = now() + interval '1 minute'`,
       sqlite: `UPDATE users SET locked_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+1 minute')`,
+      mysql: `UPDATE users SET locked_until = DATE_ADD(now(), INTERVAL 1 MINUTE)`,
     }));
     // 잠긴 동안은 비밀번호 단계부터 거절
     expect((await accounts.login('mfa', PASS)).kind).toBe('denied');
     await db.query(byDialect(db, {
       postgres: `UPDATE users SET locked_until = now() - interval '1 second'`,
       sqlite: `UPDATE users SET locked_until = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second')`,
+      mysql: `UPDATE users SET locked_until = DATE_SUB(now(), INTERVAL 1 SECOND)`,
     }));
     const pending = await wrong();
     expect((await accounts.completeMfa(pending, codeFor(secret, Date.now() + 30_000))).kind).toBe('session');
@@ -189,6 +196,7 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
       const r = (await db.query(byDialect(db, {
         postgres: `SELECT extract(epoch from blocked_until - last_failure_at)::int AS s FROM auth_throttle WHERE key='t'`,
         sqlite: `SELECT CAST(round((julianday(blocked_until) - julianday(last_failure_at)) * 86400) AS INTEGER) AS s FROM auth_throttle WHERE key='t'`,
+        mysql: `SELECT CAST(ROUND(TIMESTAMPDIFF(MICROSECOND, last_failure_at, blocked_until) / 1000000) AS SIGNED) AS s FROM auth_throttle WHERE key='t'`,
       }))).rows[0]!;
       return Number(r['s']);
     };
@@ -203,6 +211,7 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
     await db.query(byDialect(db, {
       postgres: `UPDATE auth_throttle SET last_failure_at = now() - interval '16 minutes'`,
       sqlite: `UPDATE auth_throttle SET last_failure_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-16 minutes')`,
+      mysql: `UPDATE auth_throttle SET last_failure_at = DATE_SUB(now(), INTERVAL 16 MINUTE)`,
     }));
     expect(await accounts.throttleFail('t')).toBeUndefined();
   });
@@ -213,6 +222,7 @@ describe('시도 제한 — 계정·IP, 공용 저장소, 영구 잠금 없음',
     await db.query(byDialect(db, {
       postgres: `UPDATE users SET last_failed_at = now() - interval '16 minutes'`,
       sqlite: `UPDATE users SET last_failed_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-16 minutes')`,
+      mysql: `UPDATE users SET last_failed_at = DATE_SUB(now(), INTERVAL 16 MINUTE)`,
     }));
     expect((await accounts.login('op', 'wrong-Pass-1')).kind).toBe('denied');
     const u = (await db.query(`SELECT failed_logins, locked_until FROM users WHERE username='op'`)).rows[0]!;
@@ -226,6 +236,7 @@ describe('보존 · 재해시 · 본문 상한', () => {
     await db.query(byDialect(db, {
       postgres: `INSERT INTO account_audit (at, actor, action) VALUES (now() - interval '366 days', 'x', 'old'), (now() - interval '364 days', 'x', 'young')`,
       sqlite: `INSERT INTO account_audit (at, actor, action) VALUES (strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-366 days'), 'x', 'old'), (strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-364 days'), 'x', 'young')`,
+      mysql: `INSERT INTO account_audit (at, actor, action) VALUES (DATE_SUB(now(), INTERVAL 366 DAY), 'x', 'old'), (DATE_SUB(now(), INTERVAL 364 DAY), 'x', 'young')`,
     }));
     expect(await accounts.purgeExpired()).toEqual({ audit: 1 });
     const left = (await db.query(`SELECT action FROM account_audit WHERE actor='x'`)).rows.map((r) => r['action']);

@@ -315,6 +315,114 @@ DB 에서 지역 API 가 이 호스트가 아님(이름을 풀어 이 호스트�
 - 제약 오류의 SQLSTATE 대응도 드라이버에 둔다(MySQL `1062` → `23505` · `1452` → `23503` · `3819` → `23514`).
 - MySQL 의 DDL 은 트랜잭션이 아니다 — 최종 모양 한 파일로 시작하는 방식은 MySQL 에서 더 값지다(반쯤 적용될 단계가 하나다).
 
+## 3단계 — MySQL/MariaDB (2026-11-06)
+
+### 드라이버: `mysql2` 하나
+
+MySQL 와이어 프로토콜을 직접 구현할 이유가 없고, `mysql2` 는 MySQL 과 MariaDB 를 모두 알며(MariaDB 의 확장 열 메타데이터로 `JSON`
+별칭을 알아본다) 의존성이 작다. 다른 후보 `mariadb`(커넥터)는 MariaDB 중심이고 MySQL 8 의 인증 · `JSON` 형에서 갈린다. **열 때**
+`import('mysql2/promise')` 로 가져온다 — PG 만 쓰는 데몬은 이 패키지를 싣지 않는다(`node:sqlite` 와 같은 방식). 판은 고정한다(`3.24.6`).
+
+MariaDB 는 **같은 구현의 한 종류**다(`mariadb:` 스킴도 `MysqlDb`). 저장소의 MySQL 문장은 **두 서버 모두에서 도는 것만** 쓴다 — 서버
+종류로 가르는 것은 드라이버의 오류 번호 하나(MariaDB 의 CHECK 위반 `4025` 는 MySQL 에서 다른 뜻이다)뿐이다.
+
+### 세션 설정 (연결마다)
+
+| 설정 | 값 | 이유 |
+|---|---|---|
+| 격리 | `READ COMMITTED` | PG 의 기본. 기본 REPEATABLE READ 는 잠그지 않은 읽기가 트랜잭션 시작 시점의 스냅숏이다 — 머리를 `FOR UPDATE` 로 잡은 뒤 읽는 다른 행이 PG 와 다르게 보인다 |
+| 문자 | `utf8mb4` · 연결 collation `utf8mb4_bin` | 4 바이트 UTF-8. 표도 `utf8mb4_bin` — 비교가 바이트라 PG `text` 처럼 대소문자를 가른다(기본 `_ai_ci` 는 `'a' = 'A'` 다 — 유일 키의 뜻이 바뀐다) |
+| 시간대 | `time_zone='+00:00'` · 드라이버 `timezone: 'Z'` | `DATETIME(6)` 에는 시간대가 없다. 저장 · 기본값(`CURRENT_TIMESTAMP(6)`) · 읽기를 모두 UTC 로 |
+| `sql_mode` | `STRICT_ALL_TABLES, NO_ZERO_IN_DATE, NO_ZERO_DATE, ERROR_FOR_DIVISION_BY_ZERO, NO_ENGINE_SUBSTITUTION, ANSI_QUOTES, PIPES_AS_CONCAT, NO_BACKSLASH_ESCAPES` | 엄격: 잘린 값 · 0 날짜 · 0 나누기가 경고가 아니라 오류(PG 처럼). 뒤의 셋은 PG 문장과 **같은 뜻**이 되게 한다 — `"이름"` 은 이름, `\|\|` 는 이어 붙이기(없으면 논리 OR 라 조용히 다른 값), `\` 는 문자열의 보통 글자 |
+
+`ONLY_FULL_GROUP_BY` 는 넣지 않았다 — MariaDB 의 것은 함수 종속(기본 키로 묶고 다른 열을 고르는 PG 의 합법 문장)을 몰라 PG 가 받는 문장을
+거절한다. PG 가 이미 검사한 문장이라 빼도 잃는 것이 없다.
+
+### 드라이버가 맞추는 것 (SQL 을 만들지 않는다 — SQLite 드라이버와 같은 층)
+
+| 맞춘다 | 어떻게 |
+|---|---|
+| 자리 표시 `$n` | 그 자리에 인자의 **리터럴**을 넣는다(되풀이 · 순서 무관). 문자열 · 따옴표 이름 · 주석 안은 그대로. 리터럴은 `NO_BACKSLASH_ESCAPES` 아래의 표준 문자열이라 이스케이프가 따옴표 두 번 하나뿐이다. 서버 쪽 준비 문장(`execute`)은 `LIMIT ?` 의 형 문제와 연결당 문장 상한이 있어 쓰지 않았다 |
+| `now()` | 트랜잭션 안: 처음 쓸 때 `SET @bary_now = UTC_TIMESTAMP(6)` → `CAST(@bary_now AS DATETIME(6))` — **트랜잭션 안에서 한 값**(PG 와 같다). 밖: `UTC_TIMESTAMP(6)`. 둘 다 DB 의 시계(PG 와 같다 — SQLite 만 프로세스 시계) |
+| `gen_random_uuid()` | v4 리터럴. MySQL 의 `UUID()` 는 v1 이다(DDL 의 기본값에만 쓴다 — 그 id 들은 비밀이 아니다) |
+| 예약어 이름 | PG 문장의 열 `key` · `before` 가 MySQL 의 예약어다(스키마의 모든 이름을 두 서버에 넣어 보고 골랐다). 따옴표를 친다. `ON DUPLICATE KEY` 처럼 문법 자리의 `KEY` 는 그대로 |
+| 인자 | boolean → `TRUE`/`FALSE` · Date · ISO-8601 UTC 문자열(`…Z`) → `'YYYY-MM-DD HH:MM:SS.fff'`(`DATETIME` 은 `Z` 를 거절한다) · 배열/객체 → JSON 텍스트 · Buffer → `X'…'` |
+| 결과 | `BIGINT` · `DECIMAL` → 문자열(`supportBigNumbers` · `bigNumberStrings` — pg 의 OID 20 과 같다) · `INT` → number · `BOOLEAN`(`TINYINT(1)`) → boolean · `DATETIME` → Date · `JSON` → 파싱(MariaDB 도) |
+| `rowCount` | `UPDATE` 는 **맞은 행**(OK 패킷의 `Rows matched`) — PG 와 같다. `FOUND_ROWS` 는 끈다 — `ON DUPLICATE KEY UPDATE` 의 「그대로」 가 0 이어야 `DO NOTHING` 의 수와 같다 |
+| 제약 오류 | PG SQLSTATE(`1062`→`23505` · `1451/1452`→`23503` · `3819`/MariaDB `4025`→`23514` · `1048/1364`→`23502`, 그 밖 `22001` · `22P02` · `22007` · `40P01` · `55P03`). **제약 이름은 PG 와 같다** — MySQL 계열이 PG 의 이름으로 만들었다(기본 키는 `<표>_pkey`). SQLite 와 달리 이름을 보는 갈래도 그대로 선다 |
+
+식에는 선언 형이 없다 — 식의 참/거짓은 MySQL 에서 `'1'`(BIGINT 문자열), MariaDB 에서 `1` 이다. 저장소 갈래는 `String(v) === '1'` 로 읽는다.
+ISO 문자열의 변환은 **모든** 문자열 인자에 걸린다 — 텍스트 열에 `…Z` 꼴 문자열을 그대로 두는 자리는 없다(시각은 모두 `DATETIME` 열이다).
+
+### `RETURNING` · `ON CONFLICT`
+
+- **`RETURNING` → 같은 트랜잭션 안에서 다시 읽는다**(모든 자리를 하나로). MariaDB 의 `INSERT/DELETE … RETURNING` 은 쓰지 않는다 — MySQL 에
+  없고 `UPDATE` 에는 MariaDB 에도 없어 갈래가 셋이 된다. id 가 DB 기본값이면 MySQL 갈래가 JS 에서 v4 를 만들어 넣고 그 id 로 읽는다.
+  `AUTO_INCREMENT` 는 같은 연결의 `LAST_INSERT_ID()`. 쿼리 수가 PG 보다 는다(ADR 「접근」 (b) 가 미리 받아들인 대가다).
+- **`ON CONFLICT` → `ON DUPLICATE KEY UPDATE c = VALUES(c)`.** `VALUES()` 는 MySQL 8.0.20 부터 「낡음」 이지만 두 서버에 다 있다(MySQL 의
+  `AS new` 별칭은 MariaDB 에 없다). **대상 키를 고를 수 없다** — 어느 유일 키에 걸려도 갱신한다. 그래서 갈래마다 그 표의 유일 키를 셌다:
+  유일 키가 하나뿐인 표는 뜻이 같고, 둘 이상인 표(`pools` 의 `key` · `(id, protocol_class)` 처럼)는 갈래의 주석에 왜 같은지 적었다(다른 키는
+  같은 행의 것이라 다른 행과 부딪칠 수 없다 등). `DO NOTHING` 은 `pk = pk`(수가 0) — **`INSERT IGNORE` 는 쓰지 않는다**(FK · CHECK · 잘림
+  오류까지 경고로 삼킨다).
+- `FOR UPDATE` · `SKIP LOCKED` 는 그대로다(InnoDB, MySQL 8 · MariaDB 10.6). 교착(`1213`)은 `40P01` 로 온다.
+
+### 리더: `GET_LOCK` 세션 잠금
+
+PG advisory lock 과 **같은 뜻**인 것: 세션 잠금이고, 쥔 연결이 끊기면 서버가 푼다(프로세스 죽음 · 네트워크 · `KILL`). 기다리지 않는
+형태(`GET_LOCK(name, 0)`)가 있다. 그래서 같은 모양이다 — 전용 연결 하나를 프로세스 수명 동안 쥔다(풀의 연결로 쥐면 반납하는 순간 다른
+요청이 그 세션을 쓰고, 풀이 닫으면 조용히 풀린다).
+
+다른 것과 처리:
+
+| 차이 | 처리 |
+|---|---|
+| 이름이 **서버 전체**에 하나다(advisory 키는 DB 마다) | 이름에 DB 이름을 넣는다 — `bary.leader.<db>`(64 자를 넘으면 해시). 한 서버의 두 배포가 서로를 막지 않는다(시험이 잰다) |
+| 쉬는 세션을 서버가 끊는다(`wait_timeout`) | 리더 세션의 `wait_timeout` 을 올리고, **2 초마다** `IS_USED_LOCK(name) = CONNECTION_ID()` 를 묻는다. 묻지 못하거나 주인이 아니면 그 순간 리더가 아니다. 소켓이 닫히지 않은 채 상대가 사라진 것도 이 상한 안에 안다(PG 쪽은 소켓 사건만 본다) |
+| Galera · Group Replication 다중 기본은 이름 잠금을 노드끼리 나누지 않는다 | 모든 노드가 **같은 기본 서버 하나**에 붙는 것이 배치의 전제다(런북). 코드로는 알아낼 수 없다 |
+
+토큰: 잠금을 쥔 뒤 같은 연결에서 한 트랜잭션으로 `UPDATE bary_sequences SET last_value = LAST_INSERT_ID(last_value + 1)` → `SELECT LAST_INSERT_ID()`
+→ `leadership` 에 적는다. 카운터 행의 갱신은 행 잠금이라 둘이 같은 값을 받을 수 없고, 커밋한 값은 되돌아가지 않는다
+(`innodb_flush_log_at_trx_commit=1` 을 기동이 확인한다) — 엄격 단조. 시험(`tests/dialect/mysql-boundary.test.ts`): 동시 시도 여섯 중 하나 ·
+놓고 다시 쥘 때마다 커지는 토큰 · 다른 **프로세스**가 쥔 잠금 · 그 프로세스의 SIGKILL 뒤 쥐기 · 리더 연결을 `KILL` 하면 리더가 아니게 되고
+다른 쪽이 더 큰 토큰으로 쥐기 · DB 마다 따로인 잠금 · `released_at`. **클러스터 모드가 된다** — SQLite 와 달리 거부하지 않는다
+(`cluster-follow` 묶음이 MySQL 에서 돈다).
+
+### 마이그레이션 — DDL 이 트랜잭션이 아니다
+
+MySQL 의 DDL 은 문장마다 암묵 커밋이다(`Dialect.transactionalDdl: false`). 파일 하나가 중간에 깨지면 앞 문장은 남는다. 두 길이 있었다 —
+(1) 파일을 「다시 돌려도 안전」 하게 쓰기, (2) 최종 모양 한 파일. **둘 다 한다:** MySQL 계열의 `001_init.sql` · `001_accounts.sql` 이 PG 33 · 8 단계 뒤의
+최종 모양이고(SQLite 계열과 같은 결정, `002`~ 는 주석 파일), 그 파일의 **모든 문장이 두 번 돌아도 같은 끝 상태**다 — `CREATE TABLE IF NOT EXISTS`
+(색인 · 제약은 표 안에 — 표 하나는 원자적으로 생긴다) · `CREATE TRIGGER IF NOT EXISTS` · 씨앗 행은 `ON DUPLICATE KEY UPDATE`. 실행기는 문장을
+차례로 돌고 **모두 성공한 뒤에 기록**한다 — 깨진 파일은 기록이 없으니 다음 기동이 처음부터 다시 돈다. 오류는 「N/M 번째 문장 · 앞 문장은
+적용됐다 · 고치고 다시 띄운다」 를 말한다. 시험이 001 을 두 번 돌리고(기록을 지우고 다시) 모양 · 씨앗이 같음을 잰다. 실제로 권한이 모자란 사용자로
+반쯤 적용된 DB(표 16 개)에서 권한을 고치고 다시 띄워 끝까지 간 것을 확인했다. 동시 실행은 `GET_LOCK('bary.mg.….<db>', 10)` 을 **기다려서** 쥔다.
+034 부터는 한 파일이 한 단계이고 같은 규칙(문장마다 다시 돌려도 안전)을 따른다.
+
+PG 와 다른 표기(파일 머리말에 자세히):
+
+- 형: `text`(키 · 색인) → `varchar(255)`(URL 768) · 그 밖 `longtext` · `uuid` → `char(36)` · `timestamptz` → `datetime(6)` UTC · `jsonb` / `text[]` → `JSON` +
+  열 주석 `bary:json` / `bary:array`(MariaDB 의 `JSON` 은 `longtext` 별칭이라 모양 읽기가 주석으로 논리 형을 안다) · enum → `ENUM(…)`(선언 순서 = PG 의 순서) · `bytea` → `longblob`.
+- 정규식 CHECK → `REGEXP` + 「마지막 글자도 허용 집합 안」(`$` 가 끝 줄바꿈 앞에서도 맞는다. `\z` 는 CHECK 의 식이 저장될 때 역슬래시가 다시
+  이스케이프되어 `sql_mode` 에 따라 뜻이 바뀐다 — MySQL 8.4 에서 정상 키를 거절하는 것을 잡았다).
+- **부분 유일 색인**(`acme_order_live_uq … WHERE state IN (…)`) → 생성 열 `live_certificate_id` + 유일 색인(NULL 은 유일 검사에서 빠진다). 모양 읽기는 생성 열을 뺀다.
+  MariaDB 는 `CHAR` 열을 읽는 식을 생성 열에 못 쓴다(1901) — 그 바탕 열 하나만 `varchar(36)` + `bary:uuid` 주석이다. 성능용 부분 색인은 그냥 색인이다.
+- **트리거:** InnoDB 는 FK 의 연쇄 삭제에서 트리거를 깨우지 않는다 — PG 013 의 「백엔드가 지워지면 운영 상태도」 를 풀 삭제에서도 지키려고 `pools` 의
+  BEFORE DELETE 트리거가 더 있다. MySQL 은 CHECK 가 보는 열 · 생성 열의 바탕 열에 연쇄 FK 를 못 건다(3823) — `sni_certificate_bindings` 와
+  `acme_orders.certificate_id` 의 연쇄 삭제를 `listeners` · `certificates` 의 BEFORE DELETE 트리거가 한다(끝 상태는 PG 와 같다).
+- `users_idp_scopes`(`<@ ARRAY[…]`): CHECK 에 하위 질의를 못 쓰므로 SQLite 와 같은 「허용 낱말을 지우면 `[]`」(MySQL 의 JSON 텍스트에는 쉼표 뒤 공백이 있어 공백도 지운다).
+
+### 방언 차이로 남긴 것
+
+- 문자열 비교는 바이트지만 MariaDB 의 `utf8mb4_bin` 은 PAD SPACE 라 끝 공백을 무시한다(키 문법이 공백을 받지 않는다).
+- 키 · 이름 열에 길이 상한이 있다(`varchar(255)`). 넘으면 `22001` — 앱의 문법 검사가 먼저 훨씬 좁게 거절한다.
+- uuid 열은 텍스트다. 경로의 uuid 는 API 가 먼저 검사하고 정규형으로 맞춘다(위 2단계 절의 「모든 방언에서 400」).
+- `GET_LOCK` 은 다중 기본 클러스터에서 뜻이 없다(배치의 전제 — 위).
+- 트리거 생성에 바이너리 로그가 켜진 MySQL 은 `SUPER` 또는 `log_bin_trust_function_creators=1` 이 필요하다(런북).
+
+### 완료 조건 — 3단계의 결과
+
+MYSQL_RESULT
+
 ## 결과
 
 - 좋다: PG 경로는 이 단계에서 문장도 쿼리 수도 그대로다. 방언 추가는 함수 단위로 리뷰할 수 있다.

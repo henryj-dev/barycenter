@@ -151,6 +151,7 @@ describe('step-up · 세션 생존', () => {
     await db.query(byDialect(db, {
       postgres: `UPDATE sessions SET mfa_at = now() - interval '1 hour'`,
       sqlite: `UPDATE sessions SET mfa_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 hour')`,
+      mysql: `UPDATE sessions SET mfa_at = DATE_SUB(now(), INTERVAL 1 HOUR)`,
     }));
     const before = (await s.authenticate(a.sid))!.account!.mfaAt!;
     await expect(s.stepUp((await s.authenticate(a.sid))!.account!.sessionHash, a.id, '000000')).rejects.toMatchObject({ code: 'step_up_failed' });
@@ -199,6 +200,7 @@ describe('민감 작업 게이트 (HTTP)', () => {
     await db.query(byDialect(db, {
       postgres: `UPDATE sessions SET mfa_at = now() - interval '20 minutes'`,
       sqlite: `UPDATE sessions SET mfa_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-20 minutes')`,
+      mysql: `UPDATE sessions SET mfa_at = DATE_SUB(now(), INTERVAL 20 MINUTE)`,
     }));
     const blocked = await inv();
     expect(blocked.status).toBe(403);

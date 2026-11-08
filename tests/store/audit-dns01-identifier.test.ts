@@ -45,7 +45,7 @@ import { AcmeRunner, type ChallengePlacer } from '../../src/control/acme-runner.
 import { FileDns01 } from '../../src/control/dns01.js';
 import { newEcKey } from '../../src/acme/der.js';
 import { FsSecretStore } from '../../src/dp/secrets.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, IS_MYSQL, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('dns01-identifier');
 
@@ -116,10 +116,19 @@ afterAll(async () => {
   }
 });
 
+/** 인증서 행을 넣고 id 를 돌려준다. MySQL 에는 `RETURNING` 이 없다 — 유일한 `key` 로 다시 읽는다. */
+async function insertCert(sql: string, params: unknown[], key: string): Promise<string> {
+  if (!IS_MYSQL) return String((await db.query(sql, params)).rows[0]?.['id']);
+  await db.query(sql.replace(/\s+RETURNING id$/, ''), params);
+  return String((await db.query('SELECT id FROM certificates WHERE key=$1', [key])).rows[0]?.['id']);
+}
+
 beforeEach(async () => {
   await reset(db);
   // SQLite 의 `reset` 은 acme 표도 비운다(TRUNCATE 가 없다).
-  if (TEST_DB !== 'sqlite') await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  if (TEST_DB !== 'sqlite' && !IS_MYSQL) await db.query('TRUNCATE acme_challenges, acme_orders, acme_accounts CASCADE');
+  // MySQL 의 `reset` 은 주문 · 도전까지 비운다 — 계정만 남는다(FK 가 있어 TRUNCATE 는 못 한다).
+  if (IS_MYSQL) await db.query('DELETE FROM acme_accounts');
   const ref = await secrets.putKey(
     `acct-${Math.random().toString(36).slice(2)}`,
     newEcKey().export({ type: 'pkcs8', format: 'pem' }).toString(),
@@ -127,12 +136,11 @@ beforeEach(async () => {
   await store.upsertAccount({
     key: 'le', directoryUrl: 'https://ca.test/dir', accountKeyRef: ref.ref, by: 't',
   });
-  const r = await db.query(
+  certId = await insertCert(
     `INSERT INTO certificates (id,key,name,acme_account,acme_domains,created_by,updated_by,revision)
      VALUES (gen_random_uuid(),'cert-a','cert-a','le',$1,'t','t',1) RETURNING id`,
-    [['a.test', '*.b.test']],
+    [['a.test', '*.b.test']], 'cert-a',
   );
-  certId = String(r.rows[0]?.['id']);
 });
 
 const DOMAINS = ['a.test', '*.b.test'];

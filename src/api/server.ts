@@ -1181,6 +1181,9 @@ const ROUTES: Route[] = [
         ORDER BY id DESC LIMIT $1`,
       sqlite: `SELECT id, at, principal, action, subject, revision, after ->> '$.trigger' AS trigger FROM audit
         ORDER BY id DESC LIMIT $1`,
+      // MariaDB 에는 `->>` 가 없다. `trigger` 는 MySQL 예약어라 따옴표를 친다.
+      mysql: `SELECT id, at, principal, action, subject, revision, JSON_UNQUOTE(JSON_EXTRACT(after, '$.trigger')) AS "trigger" FROM audit
+        ORDER BY id DESC LIMIT $1`,
     }), [limit],
     )).rows;
     // 본문(before/after)은 안 준다. `trigger` 한 칸만 꺼낸다 — 자동 적용을 사람이 누른 적용과 가르는 표시다.

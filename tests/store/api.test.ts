@@ -29,6 +29,7 @@ import { TokenAuth } from '../../src/api/auth.js';
 import { LeaderElection } from '../../src/control/leader.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import { byDialect } from '../../src/store/db.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('api');
@@ -84,7 +85,7 @@ beforeAll(async () => {
   await db.migrate();
   store = new ConfigStore(db, { streamRealip: false });
 
-  const election = new LeaderElection(PG.dsn, 'api-test');
+  const election = new LeaderElection(openLeaderLockForTest(PG.dsn), 'api-test');
   // **리더가 돼야 쓰기 스코프가 열린다** — 스탠바이는 비-read 요청에 503 을 준다 (§3.5).
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   const control = new ControlPlane(db, store, driver, election,
@@ -178,8 +179,8 @@ describe('§5.2 읽기 엔드포인트', () => {
 describe('픽스처', () => {
   it('**reset 이 TLS 테이블도 비운다** — 앞 테스트가 만든 행이 안 남는다', async () => {
     for (const table of ['certificates', 'tls_policies', 'sni_certificate_bindings']) {
-      const n = (await db.query(byDialect(db, { postgres: `SELECT count(*)::int AS n FROM ${table}`, sqlite: `SELECT count(*) AS n FROM ${table}` }))).rows[0]?.['n'];
-      expect(n, table).toBe(0);
+      const n = (await db.query(byDialect(db, { postgres: `SELECT count(*)::int AS n FROM ${table}`, sqlite: `SELECT count(*) AS n FROM ${table}`, mysql: `SELECT count(*) AS n FROM ${table}` }))).rows[0]?.['n'];
+      expect(Number(n), table).toBe(0);
     }
   });
 });

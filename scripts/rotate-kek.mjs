@@ -171,9 +171,10 @@ const rows = (await db.query(
 )).rows;
 
 const done = (await db.query(
-  db.dialect.name === 'sqlite'
-    ? 'SELECT count(*) AS n FROM secret_materials WHERE kek_id = $1'
-    : 'SELECT count(*)::int AS n FROM secret_materials WHERE kek_id = $1', [toId],
+  // `::int` 는 PG 만 안다. 다른 방언은 그대로 센다(값은 찍기만 한다 — 문자열이어도 된다).
+  db.dialect.name === 'postgres'
+    ? 'SELECT count(*)::int AS n FROM secret_materials WHERE kek_id = $1'
+    : 'SELECT count(*) AS n FROM secret_materials WHERE kek_id = $1', [toId],
 )).rows[0]?.['n'] ?? 0;
 
 console.log(`대상 ${rows.length} 행 · 이미 ${toId} 인 행 ${done} 개`);
