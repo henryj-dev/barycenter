@@ -30,6 +30,7 @@ import { ModelValidationError, validateModel } from '../validate/model.js';
 import { expandAddressSets } from '../model/address-sets.js';
 import { redirectListenerOf } from '../model/redirect.js';
 import { decodeModel } from '../model/decode.js';
+import { errorPageHttpNodes, errorPageServerNodes, locationErrorPageNodes } from './error-pages.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
 import { routePathKey, routePaths } from '../model/route-paths.js';
@@ -116,6 +117,21 @@ export type RenderCapabilities = {
    * 없으면 그 소켓에 호스트 없는 리스너가 있어야 한다 — 검증기가 막는다.
    */
   sslRejectHandshake?: boolean;
+  /**
+   * `headers-more-nginx-module` — `more_set_headers` 로 `Server` 응답 헤더를 `barycenter/<버전>` 으로 바꾼다
+   * (§4.10 「응답 이름과 오류 페이지」). OpenResty 는 기본으로 갖고 있다.
+   *
+   * **없으면 `server_tokens off` 만 낸다** — 헤더는 `Server: nginx` 로 남는다(버전은 감춰진다). 조용한 기능 저하지만
+   * 사용자가 켠 것이 아니라 고정 기본값이라 괜찮다: 켜 달라고 한 사람이 없으니 「켰는데 안 된다」 가 생기지 않는다.
+   * `http2` 처럼 명시 값을 검증기가 막아야 하는 경우와 다르다.
+   */
+  headersMore?: boolean;
+  /**
+   * `Server` 헤더에 실을 **barycenter 데몬 자신의 버전**(`package.json`). 엔진 능력은 아니지만 렌더 입력이고,
+   * 렌더러가 받는 문맥은 이것 하나라 여기 둔다 — `renderCapsOf` 가 채운다. 시험은 값을 고정해 넘긴다
+   * (같은 입력 → 같은 digest). 없으면 버전 없이 `barycenter` 만 낸다.
+   */
+  serverVersion?: string;
 };
 
 /** capability 를 모르면 없는 쪽으로 가정한다. 모르는 것을 할 수 있다고 하지 않는다. */
@@ -322,6 +338,8 @@ function withSourceRules(
       ...inner,
     ]));
   });
+  // 자기 `error_page`(570 번대)가 생긴 location 은 server 의 오류 페이지를 잃는다 — 한 벌을 다시 낸다.
+  if (named.length > 0) head.unshift(...locationErrorPageNodes());
   return { body: [...head, ...(body.length > 0 ? body : [directive('return', [num(503)])])], named };
 }
 
@@ -907,6 +925,7 @@ function httpServerBlocks(
       ...responseHeaderNodes(listener.http?.headers?.response),
       ...rateLimitNodes(listener.key, listener.http?.rateLimit),
       ...(acme ? [acmeChallengeLocation()] : []),
+      ...errorPageServerNodes(),
       ...locations,
     ]);
     // 내려간 것은 **계획이 준 순서**로 뒤에 모은다. 안 내린 것은 원래대로 호스트 순.
@@ -1561,12 +1580,15 @@ function syntheticDefaultServer(l: HttpListener | HttpsListener, acme: boolean):
       listen,
       directive('server_name', [lit('_')]),
       directive('ssl_reject_handshake', [lit('on')]),
+      // 핸드셰이크는 끊지만 **평문 요청은 받는다** — nginx 가 497(HTTPS 포트에 평문)을 400 으로 낸다. 그 본문도 바꾼다.
+      ...errorPageServerNodes(),
     ]);
   }
   return block('server', [], [
     listen,
     directive('server_name', [lit('_')]),
     ...(acme ? [acmeChallengeLocation()] : []),
+    ...errorPageServerNodes(),
     block('location', [lit('/')], [directive('return', [num(444)])]),
   ]);
 }
@@ -1613,6 +1635,7 @@ function defaultServerBlock(
     ...responseHeaderNodes(listener.http?.headers?.response),
     ...rateLimitNodes(listener.key, listener.http?.rateLimit),
     ...(acme ? [acmeChallengeLocation()] : []),
+    ...errorPageServerNodes(),
     ...body,
   ]);
 }
@@ -1927,12 +1950,22 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
      * 이 배열보다 **뒤**에 붙는다.
      */
     const children: ConfNode[] = [
+      // **응답 이름** (§4.10, 2026-11-08). 어느 엔진에서도 버전을 감추고, 모듈이 있으면 이름을 바꾼다.
+      // http 블록에 한 번이다 — admin 조각의 server 도 같은 이름으로 답한다.
       ...httpListeners.flatMap((l) => rateLimitZoneNodes(l.key, l.http?.rateLimit)),
       // 출발지 제한의 `geo` 도 http 블록에만 있을 수 있다. server 블록보다 앞이면 된다.
       ...httpListeners.flatMap((l) => sourceAllowGeo(l)),
       // 라우트 출발지 규칙의 `geo` 도 여기다 (2026-11-02). 평문 리다이렉트 소켓은 리스너 키가 따로라 라우트가 없다.
       ...httpListeners.flatMap((l) => (routesByListener.get(l.key) ?? []).flatMap(routeSourceGeos)),
       adminInclude,
+      // **응답 이름** (§4.10, 2026-11-08). 어느 엔진에서도 버전을 감추고, 모듈이 있으면 이름을 바꾼다.
+      // http 블록에 한 번이다 — admin 조각의 server 도 같은 이름으로 답한다.
+      directive('server_tokens', [lit('off')]),
+      ...(caps.headersMore === true
+        ? [directive('more_set_headers', [lit(`Server: barycenter${caps.serverVersion === undefined ? '' : `/${caps.serverVersion}`}`)])]
+        : []),
+      // 오류 페이지의 변수들. `error_page` 와 named location 은 server 마다다(`errorPageServerNodes`).
+      ...errorPageHttpNodes(),
     ];
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).
     if (caps.httpLua === true) {

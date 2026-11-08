@@ -129,7 +129,8 @@ describe('렌더', () => {
 
   it('규칙 없는 라우트의 산출물은 그대로다', () => {
     const plain = ok(base([{ key: 'app', listener: 'web', hosts: ['app.test'], priority: 0, pathPrefix: '/api/', action: { kind: 'proxy', pool: 'pub', websocket: false } }]));
-    expect(render(plain, caps).conf).not.toMatch(/bary_rsrc_|error_page/);
+    // 오류 페이지의 `error_page`(server 레벨, 2026-11-08)는 있다 — 규칙의 570 번대 · 그 location 의 재선언이 없다.
+    expect(render(plain, caps).conf).not.toMatch(/bary_rsrc_|error_page 57\d|recursive_error_pages/);
   });
 
   it('프록시 규칙의 경로 바꾸기는 rewrite … break 다 — named location 의 proxy_pass 에는 URI 를 못 붙인다', () => {

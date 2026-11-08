@@ -1016,6 +1016,89 @@ EOF
   fi
 fi
 
+# ── E66. 오류 페이지 · 응답 이름의 전제 (§4.10 「응답 이름과 오류 페이지」, 2026-11-08) ──
+#
+# 렌더러는 `error_page <코드들> $변수` 로 named location 에 넘기고 거기서 `return 200 <map 값>` 을 낸다.
+# 그 모양이 서는 엔진 사실을 고정한다:
+#   E66.1  변수 값이 `@이름` 이면 named location 으로 간다. `=` 가 없으면 **원래 상태가 나간다**(200 이 아니라 502).
+#   E66.1b `server_tokens off` 면 Server 에 버전이 없다.
+#   E66.2  `error_page 570 = @x` 로 한 번 넘어간 뒤 난 오류는 `recursive_error_pages on` 없이는 다시 안 잡힌다.
+#   E66.3  headers-more 가 있으면 `more_set_headers` 가 `Server` 를 바꾼다 — 오류 응답에서도.
+log ""
+log "[E66] 오류 페이지 · 응답 이름 (§4.10)"
+P=$(mkprefix E66)
+cat > "$P/conf/nginx.conf" <<'EOF'
+events {}
+error_log logs/err.log warn;
+pid logs/nginx.pid;
+http {
+  access_log off;
+  server_tokens off;
+  map $http_accept $err_loc { default @err_html; }
+  map $status $err_body { default "custom-$status"; }
+  server {
+    listen 19766;
+    error_page 404 502 $err_loc;
+    location @err_html { types { } default_type text/html; return 200 $err_body; }
+    location /dead { proxy_pass http://127.0.0.1:1; }
+    location /rule { error_page 570 = @rule; error_page 404 502 $err_loc; if ($arg_r) { return 570; } return 404; }
+    location /rule2 { recursive_error_pages on; error_page 570 = @rule; error_page 404 502 $err_loc; if ($arg_r) { return 570; } return 404; }
+    location @rule { proxy_pass http://127.0.0.1:1; }
+  }
+}
+EOF
+if start_ng "$P"; then
+  r1=$(GET 19766 /dead a.test)
+  if echo "$r1" | head -1 | grep -q ' 502 ' && echo "$r1" | grep -q 'custom-502'; then
+    ok E66.1 "변수 → named location — 상태 502 가 그대로, 본문은 우리 것('custom-502')"
+  else
+    bad E66.1 "예상 밖: $(echo "$r1" | tr '\r\n' '  ' | cut -c1-160)"
+  fi
+  srv=$(echo "$r1" | tr -d '\r' | sed -n 's/^Server: //p')
+  case "$srv" in
+    *[0-9]*) bad E66.1b "server_tokens off 인데 Server 에 버전이 있다: '$srv'" ;;
+    *) ok E66.1b "server_tokens off — Server 에 버전이 없다('$srv')" ;;
+  esac
+  r2=$(GET 19766 '/rule?r=1' a.test)
+  r3=$(GET 19766 '/rule2?r=1' a.test)
+  if echo "$r2" | grep -q '<center>' && echo "$r3" | grep -q 'custom-502'; then
+    ok E66.2 "570 → named 뒤의 502 — 재귀가 없으면 엔진 기본 페이지, recursive_error_pages on 이면 우리 페이지"
+  else
+    bad E66.2 "예상 밖: 재귀없음=$(echo "$r2" | tail -c 80 | tr '\r\n' '  ') / 재귀=$(echo "$r3" | tail -c 40 | tr '\r\n' '  ')"
+  fi
+  stop_ng "$P"
+else
+  bad E66.1 "기동 실패: $(tail -2 "$P/logs/err.log" 2>/dev/null | tr '\n' ' ' | cut -c1-140)"
+fi
+
+if "$BIN" -V 2>&1 | grep -q -- '--add-module=[^ ]*headers-more-nginx-module'; then
+  P=$(mkprefix E66c)
+  cat > "$P/conf/nginx.conf" <<'EOF'
+events {}
+error_log logs/err.log warn;
+pid logs/nginx.pid;
+http {
+  access_log off;
+  server_tokens off;
+  more_set_headers "Server: barycenter/0.0.0-e66";
+  server { listen 19767; location / { return 404; } }
+}
+EOF
+  if start_ng "$P"; then
+    srv=$(GET 19767 / a.test | tr -d '\r' | sed -n 's/^Server: //p')
+    if [ "$srv" = "barycenter/0.0.0-e66" ]; then
+      ok E66.3 "more_set_headers 가 Server 를 바꾼다 — 오류 응답에서도('$srv')"
+    else
+      bad E66.3 "Server='$srv'"
+    fi
+    stop_ng "$P"
+  else
+    bad E66.3 "기동 실패: $(tail -2 "$P/logs/err.log" 2>/dev/null | tr '\n' ' ' | cut -c1-140)"
+  fi
+else
+  skip E66.3 "빌드에 headers-more 가 없다 — 렌더러는 more_set_headers 를 안 낸다(caps.headersMore)"
+fi
+
 log ""
 log "=============================================================="
 log " PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP"

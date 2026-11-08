@@ -40,6 +40,12 @@ export type EngineCapabilities = {
     sslRejectHandshake: boolean;
     /** upstream `server ... resolve` — 1.27.3 부터 OSS. §7.3 대안 B 의 전제. */
     dnsResolve: boolean;
+    /**
+     * `headers-more-nginx-module` 이 **정적으로** 들어 있는가 — `more_set_headers` 로 `Server` 응답 헤더를 바꾸는
+     * 유일한 길이다(core 는 `server_tokens` 로 버전만 감춘다). OpenResty 는 기본으로 넣는다. 동적 모듈은
+     * `load_module` 이 있어야 쓸 수 있어 치지 않는다 — 위 `dynamicModules` 와 같은 규칙이다.
+     */
+    headersMore: boolean;
     runtimeMembership: { http: boolean; stream: boolean };
   };
 };
@@ -102,6 +108,7 @@ export function parseEngineCapabilities(nginxV: string): EngineCapabilities {
       sslConfCommand: atLeast(version, '1.19.4'),
       sslRejectHandshake: atLeast(version, '1.19.4'),
       dnsResolve: atLeast(version, '1.27.3'),
+      headersMore: /--add-module=\S*headers-more-nginx-module/.test(nginxV),
       runtimeMembership: { http: httpLua, stream: streamLua },
     },
   };
