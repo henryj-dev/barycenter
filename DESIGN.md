@@ -548,6 +548,36 @@ nginx 기본값(무한)이 안전한 쪽이고, 켜는 것은 사람이 정한�
 - **상한이 없는 배포에는 이 보호가 없다.** 숨기지 않는다 — `undefined` 를 "안전하다" 로
   읽지 않는다. 그 경우 개수 상한만 남고, 대가는 위에 적은 그대로다.
 
+#### 응답 이름과 오류 페이지 — 고정 기본값 (2026-11-08)
+
+설정 필드가 아니다. 모델 · API · DDL 이 없고 끌 수도 없다. 렌더러가 http 블록과 server 마다 늘 낸다.
+
+- **`Server` 헤더.** `server_tokens off` 를 늘 낸다(어느 엔진이든 버전을 감춘다). 엔진에 headers-more 가 정적으로
+  있으면(`caps.headersMore`, OpenResty 기본) `more_set_headers "Server: barycenter/<버전>"` 을 더한다. 버전은
+  `package.json` 의 `version` 이고 `renderCapsOf` 가 넣는다. 모듈이 없으면 `Server: nginx` 로 남는다. 이것은 조용한
+  기능 저하다. 그래도 받아들인다: 사용자가 켠 값이 아니라 고정 기본값이라 「켰는데 안 된다」 가 생기지 않는다.
+- **오류 페이지.** nginx 가 스스로 만드는 오류(400 · 403 · 404 · 405 · 413 · 414 · 421 · 429 · 494–497 · 500–504)의
+  본문을 자체 페이지로 바꾼다. 상태 코드는 그대로다. `Accept` 에 json 이 있으면 짧은 JSON 을 준다.
+  - **방식: conf 안의 `map` 값 + named location.** `error_page <코드들> $bary_err_loc` 가 `@bary_err_html` /
+    `@bary_err_json` 으로 넘기고, 거기서 `return 200 <map 값>` 을 낸다. `=` 가 없으니 nginx 가 원래 상태로 덮는다.
+  - **정적 파일을 안 쓴 이유.** 설치 · 빌드 · 엔진 이미지 · 세대 디렉터리마다 파일이 있어야 하고, 없으면 오류 페이지가
+    404 가 된다. conf 안에 있으면 렌더 결과 하나가 전부이고 digest 가 본문을 덮는다. `$request_id` 도 넣을 수 있다.
+  - **named location 인 이유.** URI 로 넘기면 내부 리다이렉트가 server rewrite 단계부터 다시 돌아 server 레벨
+    `if`(421 · 출발지 444)가 또 걸린다. 두 번째 오류는 엔진 기본 페이지로 떨어진다.
+  - **map 값 하나는 4 KB 미만이다**(nginx 설정 파서의 토큰 버퍼). 그래서 본문을 머리 · 가운데 · 꼬리로 나눈다.
+  - **업스트림 오류는 그대로 통과한다.** `proxy_intercept_errors` 를 켜지 않는다.
+  - **응답 헤더는 그대로다.** named location 에 `add_header` 를 두지 않는다(§4.6 HSTS 의 대체 함정). 그래서
+    `Cache-Control` 도 안 붙인다.
+  - `error_page` 도 상속이 아니라 대체다. 출발지 규칙의 570 번대 `error_page` 를 가진 location 에는 한 벌을 다시 내고
+    `recursive_error_pages on` 을 켠다 — 570 으로 named location 에 넘어간 뒤 난 502 가 다시 `error_page` 를 타게.
+  - 속도 제한은 nginx 기본인 503 을 낸다. 429 로 바꾸지 않았다(상태 코드를 안 바꾼다). 429 문구는 미래를 위해 둔다.
+- **모양.** 방문자가 보는 페이지다. 큰 상태 코드 · 짧은 제목 · 설명 한 줄(영어) + 한 줄(한국어) · 「홈으로」 또는
+  「다시 시도」 · 작은 `barycenter` 표시와 요청 id. 시스템 글꼴 · 인라인 SVG/CSS 뿐이고 외부 요청 · 스크립트가 없다.
+  `prefers-color-scheme` 로 밝은/어두운 테마를 고른다. 페이지당 약 2.5 KB.
+- **digest 가 바뀐다.** 이 렌더를 담은 버전으로 올리면 다음 적용에서 세대가 한 번 바뀐다. 버전 문자열도 렌더 입력이라
+  `package.json` 의 버전을 올리면 같은 일이 생긴다(headers-more 가 있을 때).
+- 시험: `tests/unit/error-pages.test.ts`(문자열) · `tests/golden/error-pages.test.ts`(실제 엔진 응답).
+
 ### 4.9 HTTP 버전 — 무엇을 말할 수 있는가
 
 > **이 절은 실측 위에 있다 (2026-08-18).** 아래 표의 "실측" 열은 엔진에 직접 물어본

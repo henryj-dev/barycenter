@@ -16,6 +16,7 @@
  */
 import type { RenderCapabilities } from '../conf/render.js';
 import type { EngineProbe } from './probe.js';
+import { BARYCENTER_VERSION } from '../version.js';
 
 /** capability 를 모르면 없는 쪽으로 가정한다. */
 const CONSERVATIVE: RenderCapabilities = { streamRealip: false };
@@ -36,5 +37,8 @@ export function renderCapsOf(probe: EngineProbe): RenderCapabilities {
     sslConfCommand: s.sslConfCommand,
     // ADR-VHOST — 호스트 리스너만 있는 HTTPS 소켓의 기본 server 가 인증서 없이 끊는다.
     sslRejectHandshake: s.sslRejectHandshake,
+    // `Server: barycenter/<버전>` — 모듈이 있을 때만 낸다. 버전은 엔진이 아니라 데몬 자신의 것이다.
+    headersMore: s.headersMore,
+    ...(BARYCENTER_VERSION === undefined ? {} : { serverVersion: BARYCENTER_VERSION }),
   };
 }

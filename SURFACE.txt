@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 125 심볼 · sha256:518a07fe37172a79ce80336f3c3c38509c0c950dd5840b88f311624ef8324978
+# 125 심볼 · sha256:8d8228acd9b90375d35a28a3c52a05c508c13c112b59e9a8a9ecf7f00d91c78a
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -636,6 +636,8 @@ export type RenderCapabilities = {
     sslConfCommand?: boolean;
     http2?: boolean;
     sslRejectHandshake?: boolean;
+    headersMore?: boolean;
+    serverVersion?: string;
 };
 ── RenderedConfig
 export type RenderedConfig = {

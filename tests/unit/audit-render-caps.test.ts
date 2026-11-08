@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseEngineCapabilities } from '../../src/engine/capabilities.js';
 import { renderCapsOf } from '../../src/engine/render-caps.js';
+import { BARYCENTER_VERSION } from '../../src/version.js';
 import type { EngineProbe } from '../../src/engine/probe.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -56,6 +57,8 @@ describe('렌더 capability 매핑 (검수 B-02)', () => {
       http2: s?.http2,
       sslRejectHandshake: s?.sslRejectHandshake,
       sslConfCommand: s?.sslConfCommand,
+      headersMore: s?.headersMore,
+      serverVersion: BARYCENTER_VERSION,
     });
     // 이 이미지는 http2 와 ssl_conf_command 를 낼 수 있다 — 그런데 런타임은
     // 그 사실을 못 받고 있었다.
