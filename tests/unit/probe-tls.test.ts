@@ -104,7 +104,15 @@ describe('실제 HTTPS 백엔드', () => {
 
   it('SNI 이름이 인증서와 다르면 실패한다 — 이름도 검증한다', async () => {
     expect(await probeHttp('127.0.0.1', port, 2000, { path: '/', tls: { servername: 'other.test', ca: CA } }))
-      .toMatch(/인증서를 검증하지 못했다/);
+      .toMatch(/인증서 이름이 맞지 않는다/);
+  });
+
+  it('**이름이 안 맞으면 SNI 를 먼저 권한다** — tcp_connect 는 앱 상태를 못 보는 차선이다', async () => {
+    // 운영 장애(2026-11-08): sni 없이 IP 로 찔러 ERR_TLS_CERT_ALTNAME_INVALID. 고칠 길은 SNI 다.
+    const r = await probeHttp('127.0.0.1', port, 2000, { path: '/', tls: { ca: CA } }) ?? '';
+    expect(r).toMatch(/ALTNAME/);
+    expect(r.indexOf('SNI')).toBeGreaterThan(-1);
+    expect(r.indexOf('SNI')).toBeLessThan(r.indexOf('tcp_connect'));
   });
 
   it('지정한 hostHeader 가 SNI 이름보다 이긴다', async () => {

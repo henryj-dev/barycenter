@@ -168,6 +168,28 @@ describe('§5.4 capabilityWarnings — 엔진이 못 하는 것을 조용히 넘
     const plan = await s.plan(cs, 't');
     expect(kinds(plan.impact)).toContain('no_http2');
   });
+
+  it('**헬스 프로브가 인증서 이름을 IP 로 검증하면 SNI 를 넣으라고 알린다** (2026-11-08)', async () => {
+    // 운영 장애: upstreamTls 켬 · sni 없음 · http 프로브 · IP 백엔드 → ALTNAME 으로 늘 unhealthy, 풀이 비어 500.
+    await commitAll(two);
+    const plan = await planOf([
+      PUT('pool', 'web', {
+        protocolClass: 'http', algorithm: 'round_robin',
+        upstreamTls: { enabled: true }, healthCheck: { protocol: 'http', path: '/api/health' },
+      }),
+    ]);
+    const w = plan.impact.capabilityWarnings.find((x) => x.kind === 'probe_tls_no_sni');
+    expect(w?.message).toMatch(/web-1/);
+    expect(w?.message).toMatch(/SNI/);
+
+    const fixed = await planOf([
+      PUT('pool', 'web', {
+        protocolClass: 'http', algorithm: 'round_robin',
+        upstreamTls: { enabled: true, sni: 'web.example.test' }, healthCheck: { protocol: 'http' },
+      }),
+    ]);
+    expect(kinds(fixed.impact)).not.toContain('probe_tls_no_sni');
+  });
 });
 
 describe('§5.4 routeOrderChanges — 엔진이 고르는 순서와 그림자', () => {
