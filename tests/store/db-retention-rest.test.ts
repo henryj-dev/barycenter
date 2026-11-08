@@ -50,8 +50,8 @@ beforeEach(async () => {
 const num = async (sql: string): Promise<number> =>
   Number((await db.query(sql)).rows[0]!['n']);
 
-const countOps = (): Promise<number> => num(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM operations', sqlite: 'SELECT count(*) AS n FROM operations' }));
-const countRevs = (): Promise<number> => num(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM config_revisions', sqlite: 'SELECT count(*) AS n FROM config_revisions' }));
+const countOps = (): Promise<number> => num(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM operations', sqlite: 'SELECT count(*) AS n FROM operations', mysql: 'SELECT count(*) AS n FROM operations' }));
+const countRevs = (): Promise<number> => num(byDialect(db, { postgres: 'SELECT count(*)::int AS n FROM config_revisions', sqlite: 'SELECT count(*) AS n FROM config_revisions', mysql: 'SELECT count(*) AS n FROM config_revisions' }));
 
 /** 리비전 하나를 만든다 — 커밋까지 가면 head 가 옮겨진다. */
 async function newRevision(key: string): Promise<string> {
@@ -81,6 +81,11 @@ async function seedOperation(
      VALUES (gen_random_uuid(), $1, $2, 1, 'g', $3,
              strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $4 || ' days'),
              strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $4 || ' days'), 't')`,
+    mysql: `INSERT INTO operations (id, plan_id, revision, activation_epoch, generation, phase,
+                             created_at, updated_at, created_by)
+     VALUES (gen_random_uuid(), $1, $2, 1, 'g', $3,
+             DATE_SUB(now(), INTERVAL $4 DAY),
+             DATE_SUB(now(), INTERVAL $4 DAY), 't')`,
   }),
     [planId, revision, phase, String(ageDays)],
   );
@@ -153,7 +158,7 @@ describe('config_revisions 보존', () => {
   it('**커밋된 plan 이 가리키면 안 지운다** — 롤백 수단이다', async () => {
     await newRevision('a');
     await newRevision('b');
-    await db.query(byDialect(db, { postgres: "UPDATE config_revisions SET created_at = now() - interval '3650 days'", sqlite: "UPDATE config_revisions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')" }));
+    await db.query(byDialect(db, { postgres: "UPDATE config_revisions SET created_at = now() - interval '3650 days'", sqlite: "UPDATE config_revisions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')", mysql: 'UPDATE config_revisions SET created_at = DATE_SUB(now(), INTERVAL 3650 DAY)' }));
     const before = await countRevs();
     const r = await sweepDatabase({ db, revisionDays: 1 });
     expect(r.revisions, '롤백 수단인 리비전이 지워졌다').toBe(0);
@@ -161,7 +166,7 @@ describe('config_revisions 보존', () => {
   });
 
   it('head 는 안 지운다', async () => {
-    await db.query(byDialect(db, { postgres: "UPDATE config_revisions SET created_at = now() - interval '3650 days'", sqlite: "UPDATE config_revisions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')" }));
+    await db.query(byDialect(db, { postgres: "UPDATE config_revisions SET created_at = now() - interval '3650 days'", sqlite: "UPDATE config_revisions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')", mysql: 'UPDATE config_revisions SET created_at = DATE_SUB(now(), INTERVAL 3650 DAY)' }));
     const before = await countRevs();
     expect((await sweepDatabase({ db, revisionDays: 1 })).revisions).toBe(0);
     expect(await countRevs()).toBe(before);
@@ -178,13 +183,14 @@ describe('config_revisions 보존', () => {
     await newRevision('a');
     await newRevision('b');
     await newRevision('c');
-    await db.query(byDialect(db, { postgres: "UPDATE config_revisions SET created_at = now() - interval '3650 days'", sqlite: "UPDATE config_revisions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')" }));
+    await db.query(byDialect(db, { postgres: "UPDATE config_revisions SET created_at = now() - interval '3650 days'", sqlite: "UPDATE config_revisions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')", mysql: 'UPDATE config_revisions SET created_at = DATE_SUB(now(), INTERVAL 3650 DAY)' }));
     // changeset 이 전부를 붙잡고 있으면 이 검사가 무엇을 재는지 흐려진다 — 걷어낸다.
     await db.query('DELETE FROM changesets');
     // 가장 오래된 리비전을 operation 으로 붙잡는다.
     const oldest = String((await db.query(byDialect(db, {
       postgres: 'SELECT min(revision)::text AS m FROM config_revisions',
       sqlite: 'SELECT CAST(min(revision) AS TEXT) AS m FROM config_revisions',
+      mysql: 'SELECT CAST(min(revision) AS CHAR) AS m FROM config_revisions',
     }),
     )).rows[0]!['m']);
     // plan 은 changeset 과 함께 CASCADE 로 사라졌다 — 오퍼레이션을 매달 자리를 새로 만든다.
@@ -192,6 +198,8 @@ describe('config_revisions 보존', () => {
       postgres: `INSERT INTO changesets (id, base_revision, state, created_at, created_by)
        VALUES (gen_random_uuid(), $1::bigint, 'discarded', now(), 't')`,
       sqlite: `INSERT INTO changesets (id, base_revision, state, created_at, created_by)
+       VALUES (gen_random_uuid(), $1, 'discarded', now(), 't')`,
+      mysql: `INSERT INTO changesets (id, base_revision, state, created_at, created_by)
        VALUES (gen_random_uuid(), $1, 'discarded', now(), 't')`,
     }), [oldest],
     );
@@ -209,6 +217,11 @@ describe('config_revisions 보존', () => {
                           target_revision, activation_epoch)
        VALUES (gen_random_uuid(), $1, 'operation_bound', $2, '{}', '{}', 'd', 'v',
                strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+1 day'), $2, 1)`,
+      mysql: `INSERT INTO plans (id, changeset_id, state, base_revision, model, impact,
+                          render_digest, renderer_version, expires_at,
+                          target_revision, activation_epoch)
+       VALUES (gen_random_uuid(), $1, 'operation_bound', $2, '{}', '{}', 'd', 'v',
+               DATE_ADD(now(), INTERVAL 1 DAY), $2, 1)`,
     }), [csId, oldest],
     );
     const planId = String((await db.query(
@@ -232,7 +245,7 @@ describe('config_revisions 보존', () => {
     await newRevision('a');
     await newRevision('b');
     await newRevision('c');
-    await db.query(byDialect(db, { postgres: "UPDATE config_revisions SET created_at = now() - interval '3650 days'", sqlite: "UPDATE config_revisions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')" }));
+    await db.query(byDialect(db, { postgres: "UPDATE config_revisions SET created_at = now() - interval '3650 days'", sqlite: "UPDATE config_revisions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-3650 days')", mysql: 'UPDATE config_revisions SET created_at = DATE_SUB(now(), INTERVAL 3650 DAY)' }));
     /**
      * 붙잡는 것을 전부 걷어낸다 — 이 테스트는 **사슬 규칙**을 재지 plan·changeset 규칙을
      * 재지 않는다. changeset 은 `base_revision`·`committed_revision` 둘로 붙잡으므로
@@ -255,6 +268,7 @@ describe('config_revisions 보존', () => {
     const headRow = (await db.query(byDialect(db, {
       postgres: 'SELECT count(*)::int AS n FROM config_revisions r JOIN config_head h ON h.revision = r.revision',
       sqlite: 'SELECT count(*) AS n FROM config_revisions r JOIN config_head h ON h.revision = r.revision',
+      mysql: 'SELECT count(*) AS n FROM config_revisions r JOIN config_head h ON h.revision = r.revision',
     }),
     )).rows[0]!;
     expect(Number(headRow['n']), 'head 가 사라졌다').toBe(1);

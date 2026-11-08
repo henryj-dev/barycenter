@@ -94,12 +94,24 @@ export class ClusterNode {
         ?? (st.published.kind === 'owned' ? st.published.record.generation
           : st.published.kind === 'inconsistent' ? st.published.generation : undefined);
     } catch { /* 모르면 비워 둔다 — 지어내지 않는다 */ }
-    await this.db.query(
-      `INSERT INTO cluster_nodes (name,url,role,active_epoch,active_generation,state,last_error,last_seen,updated_at)
+    await this.db.query(byDialect(this.db, {
+      postgres: `INSERT INTO cluster_nodes (name,url,role,active_epoch,active_generation,state,last_error,last_seen,updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,now(),now())
        ON CONFLICT (name) DO UPDATE SET url=EXCLUDED.url, role=EXCLUDED.role,
          active_epoch=EXCLUDED.active_epoch, active_generation=EXCLUDED.active_generation,
          state=EXCLUDED.state, last_error=EXCLUDED.last_error, last_seen=now(), updated_at=now()`,
+      sqlite: `INSERT INTO cluster_nodes (name,url,role,active_epoch,active_generation,state,last_error,last_seen,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,now(),now())
+       ON CONFLICT (name) DO UPDATE SET url=EXCLUDED.url, role=EXCLUDED.role,
+         active_epoch=EXCLUDED.active_epoch, active_generation=EXCLUDED.active_generation,
+         state=EXCLUDED.state, last_error=EXCLUDED.last_error, last_seen=now(), updated_at=now()`,
+      // 유일 키가 PK(name) 하나라 대상이 같다.
+      mysql: `INSERT INTO cluster_nodes (name,url,role,active_epoch,active_generation,state,last_error,last_seen,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,now(),now())
+       ON DUPLICATE KEY UPDATE url=VALUES(url), role=VALUES(role),
+         active_epoch=VALUES(active_epoch), active_generation=VALUES(active_generation),
+         state=VALUES(state), last_error=VALUES(last_error), last_seen=now(), updated_at=now()`,
+    }),
       [this.name, this.url ?? null, isLeader ? 'leader' : 'follower',
         epoch === undefined || epoch === '0' ? null : epoch, generation ?? null, state, this.#lastError ?? null],
     ).catch((e: unknown) => log.warn('cluster.report.failed', { node: this.name, error: String(e) }));
@@ -126,10 +138,13 @@ export async function listClusterNodes(db: Database, staleAfterMs: number): Prom
     sqlite: `SELECT name, url, role, CAST(active_epoch AS TEXT) AS epoch, active_generation, state, last_error,
             last_seen, (julianday(now()) - julianday(last_seen)) * 86400000.0 > CAST($1 AS REAL) AS stale
        FROM cluster_nodes ORDER BY name`,
+    mysql: `SELECT name, url, role, CAST(active_epoch AS CHAR) AS epoch, active_generation, state, last_error,
+            last_seen, TIMESTAMPDIFF(MICROSECOND, last_seen, now()) > $1 * 1000 AS stale
+       FROM cluster_nodes ORDER BY name`,
   }), [String(staleAfterMs)],
   )).rows;
-  // SQLite 의 비교식은 0/1 을 준다(선언 형이 없다). PG 는 boolean 이다.
-  const isStale = (v: unknown): boolean => (dialectOf(db).name === 'sqlite' ? Number(v) === 1 : v === true);
+  // SQLite · MySQL 의 비교식은 1/0 을 준다(선언 형이 없다 — MySQL 은 '1', MariaDB 는 1). PG 는 boolean 이다.
+  const isStale = (v: unknown): boolean => (dialectOf(db).name === 'postgres' ? v === true : String(v) === '1');
   const leaderEpoch = rows.find((r) => r['role'] === 'leader' && r['epoch'] != null)?.['epoch'];
   return rows.map((r) => ({
     name: String(r['name']),
@@ -164,6 +179,9 @@ export async function nodeHistory(db: Database, name: string, limit = 20): Promi
       WHERE principal = $1 AND action = 'cluster.follow'
       ORDER BY at DESC LIMIT $2`,
     sqlite: `SELECT at, CAST(revision AS TEXT) AS revision, after FROM audit
+      WHERE principal = $1 AND action = 'cluster.follow'
+      ORDER BY at DESC LIMIT $2`,
+    mysql: `SELECT at, CAST(revision AS CHAR) AS revision, after FROM audit
       WHERE principal = $1 AND action = 'cluster.follow'
       ORDER BY at DESC LIMIT $2`,
   }), [`cluster:${name}`, limit],

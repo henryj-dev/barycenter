@@ -171,9 +171,10 @@ const rows = (await db.query(
 )).rows;
 
 const done = (await db.query(
-  db.dialect.name === 'sqlite'
-    ? 'SELECT count(*) AS n FROM secret_materials WHERE kek_id = $1'
-    : 'SELECT count(*)::int AS n FROM secret_materials WHERE kek_id = $1', [toId],
+  // `::int` 는 PG 만 안다. 다른 방언은 그대로 센다(값은 찍기만 한다 — 문자열이어도 된다).
+  db.dialect.name === 'postgres'
+    ? 'SELECT count(*)::int AS n FROM secret_materials WHERE kek_id = $1'
+    : 'SELECT count(*) AS n FROM secret_materials WHERE kek_id = $1', [toId],
 )).rows[0]?.['n'] ?? 0;
 
 console.log(`대상 ${rows.length} 행 · 이미 ${toId} 인 행 ${done} 개`);
@@ -258,3 +259,5 @@ if (failed.length > 0) {
 console.log('');
 console.log(`끝났다. 이제 KEK 출처를 새 것으로 바꾸고 **데몬을 재기동한다** —`);
 console.log(`그 전까지 데몬은 옛 KEK 를 들고 있어 자료를 못 연다.`);
+// 저장소를 닫는다 — mysql2 의 풀은 쉬는 연결을 끝까지 쥐어 프로세스가 안 끝난다(pg 의 풀은 쉬는 연결을 스스로 닫는다).
+await db.close();

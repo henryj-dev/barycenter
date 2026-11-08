@@ -32,7 +32,7 @@
  *
  * 남기는 쪽으로 틀린다. `secret-gc.ts` 가 개인키에 대해 세운 것과 같은 원칙이다.
  */
-import { byDialect, type Database } from './db.js';
+import { byDialect, dialectOf, type Database } from './db.js';
 import { TERMINAL_PHASES } from '../dp/operation.js';
 
 /** SQL 배열로 넘길 종단 상태 이름들. 목록을 두 벌 두면 반드시 갈라진다. */
@@ -136,7 +136,12 @@ function checkDays(label: string, value: number): number {
  * 상한에 걸려 일부만 지워질 때 최신 행이 먼저 사라지면 안 된다.
  *
  * SQLite 는 `ctid` 자리에 `rowid` 를 쓴다(WITHOUT ROWID 표가 없다). 보존 일수의 경계 시각은 `strftime` 으로 낸다.
+ * MySQL 은 행 주소가 없다 — 한 표 `DELETE … ORDER BY … LIMIT` 가 같은 일을 한다. `LIMIT` 은 수만 받는다(`limitArg`).
  */
+/** `LIMIT $n` 의 인자. MySQL 은 따옴표 친 문자열을 `LIMIT` 에 못 받는다 — 수로 넘긴다. PG · SQLite 는 전과 같다. */
+const limitArg = (db: Pick<Database, 'query'>, limit: number): string | number =>
+  dialectOf(db).name === 'mysql' ? limit : String(limit);
+
 async function prune(
   db: Pick<Database, 'query'>, table: 'health_events' | 'audit', order: 'seq' | 'id',
   days: number, limit: number,
@@ -150,8 +155,11 @@ async function prune(
        SELECT rowid FROM ${table}
        WHERE at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days')
        ORDER BY ${order} LIMIT CAST($2 AS INTEGER))`,
+    mysql: `DELETE FROM ${table}
+       WHERE at < DATE_SUB(now(), INTERVAL $1 DAY)
+       ORDER BY ${order} LIMIT $2`,
   }),
-    [String(days), String(limit)],
+    [String(days), limitArg(db, limit)],
   );
   return out.rowCount ?? 0;
 }
@@ -210,8 +218,12 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
        WHERE state IN ('planned', 'expired')
          AND expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days')
        ORDER BY created_at LIMIT CAST($2 AS INTEGER))`,
+    mysql: `DELETE FROM plans
+       WHERE state IN ('planned', 'expired')
+         AND expires_at < DATE_SUB(now(), INTERVAL $1 DAY)
+       ORDER BY created_at LIMIT $2`,
   }),
-    [String(planDays), String(limit)],
+    [String(planDays), limitArg(opts.db, limit)],
   )).rowCount ?? 0;
 
   /**
@@ -231,8 +243,12 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
        WHERE state = 'discarded'
          AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $1 || ' days')
        ORDER BY created_at LIMIT CAST($2 AS INTEGER))`,
+    mysql: `DELETE FROM changesets
+       WHERE state = 'discarded'
+         AND created_at < DATE_SUB(now(), INTERVAL $1 DAY)
+       ORDER BY created_at LIMIT $2`,
   }),
-    [String(changesetDays), String(limit)],
+    [String(changesetDays), limitArg(opts.db, limit)],
   )).rowCount ?? 0;
 
   /**
@@ -259,8 +275,14 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
          AND o.updated_at < strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-' || $2 || ' days')
          AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = o.revision)
        ORDER BY o.updated_at LIMIT CAST($3 AS INTEGER))`,
+    // 한 표 DELETE 에 별칭을 안 쓴다 — MariaDB 가 못 읽는다.
+    mysql: `DELETE FROM operations
+       WHERE phase IN (SELECT jt.v FROM JSON_TABLE($1, '$[*]' COLUMNS (v VARCHAR(768) PATH '$')) jt)
+         AND updated_at < DATE_SUB(now(), INTERVAL $2 DAY)
+         AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = operations.revision)
+       ORDER BY updated_at LIMIT $3`,
   }),
-    [TERMINAL_PHASE_NAMES, String(operationDays), String(limit)],
+    [TERMINAL_PHASE_NAMES, String(operationDays), limitArg(opts.db, limit)],
   )).rowCount ?? 0;
 
   const revisions = revisionDays === undefined
@@ -322,8 +344,19 @@ async function pruneRevisionPrefix(
                             OR c.committed_revision = r.revision)
       ORDER BY r.revision
       LIMIT CAST($2 AS INTEGER)`,
+    mysql: `SELECT CAST(r.revision AS CHAR) AS revision
+       FROM config_revisions r
+      WHERE r.created_at < DATE_SUB(now(), INTERVAL $1 DAY)
+        AND NOT EXISTS (SELECT 1 FROM config_head h WHERE h.revision = r.revision)
+        AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.target_revision = r.revision)
+        AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.revision = r.revision)
+        AND NOT EXISTS (SELECT 1 FROM changesets c
+                         WHERE c.base_revision = r.revision
+                            OR c.committed_revision = r.revision)
+      ORDER BY r.revision
+      LIMIT $2`,
   }),
-    [String(days), String(limit)],
+    [String(days), limitArg(db, limit)],
   )).rows.map((x) => String(x['revision']));
   if (rows.length === 0) return 0;
 
@@ -335,6 +368,7 @@ async function pruneRevisionPrefix(
   const oldest = (await db.query(byDialect(db, {
     postgres: 'SELECT min(revision)::text AS m FROM config_revisions',
     sqlite: 'SELECT CAST(min(revision) AS TEXT) AS m FROM config_revisions',
+    mysql: 'SELECT CAST(min(revision) AS CHAR) AS m FROM config_revisions',
   }),
   )).rows[0];
   const first = oldest === undefined || oldest['m'] === null ? undefined : String(oldest['m']);
@@ -358,6 +392,9 @@ async function pruneRevisionPrefix(
     sqlite: `SELECT CAST(min(rollback_of) AS TEXT) AS m FROM config_revisions
       WHERE rollback_of IS NOT NULL AND rollback_of <= CAST($1 AS INTEGER)
         AND revision > CAST($1 AS INTEGER)`,
+    mysql: `SELECT CAST(min(rollback_of) AS CHAR) AS m FROM config_revisions
+      WHERE rollback_of IS NOT NULL AND rollback_of <= CAST($1 AS SIGNED)
+        AND revision > CAST($1 AS SIGNED)`,
   }),
     [cut],
   )).rows[0];
@@ -374,12 +411,19 @@ async function pruneRevisionPrefix(
     sqlite: `UPDATE config_revisions SET parent = NULL
       WHERE parent IN (SELECT CAST(value AS INTEGER) FROM json_each($1))
         AND revision NOT IN (SELECT CAST(value AS INTEGER) FROM json_each($1))`,
+    mysql: `UPDATE config_revisions SET parent = NULL
+      WHERE parent IN (SELECT CAST(jt.v AS SIGNED) FROM JSON_TABLE($1, '$[*]' COLUMNS (v VARCHAR(32) PATH '$')) jt)
+        AND revision NOT IN (SELECT CAST(jt.v AS SIGNED) FROM JSON_TABLE($1, '$[*]' COLUMNS (v VARCHAR(32) PATH '$')) jt)`,
   }),
     [finalPrefix],
   );
   return (await db.query(byDialect(db, {
     postgres: 'DELETE FROM config_revisions WHERE revision = ANY($1::bigint[])',
     sqlite: 'DELETE FROM config_revisions WHERE revision IN (SELECT CAST(value AS INTEGER) FROM json_each($1))',
+    // InnoDB 는 자기 참조 FK 를 행마다 본다 — 새 것부터 지워야 지울 부모를 가리키는 자식이 먼저 사라진다.
+    mysql: `DELETE FROM config_revisions
+      WHERE revision IN (SELECT CAST(jt.v AS SIGNED) FROM JSON_TABLE($1, '$[*]' COLUMNS (v VARCHAR(32) PATH '$')) jt)
+      ORDER BY revision DESC`,
   }),
     [finalPrefix],
   )).rowCount ?? 0;

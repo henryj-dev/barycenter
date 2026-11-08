@@ -8,7 +8,7 @@
  * 수치는 메모리 구현(`AuthFailureLimiter`)과 같다. 판정은 **한 문장의 upsert** 로 한다 — 두 노드가 동시에 더해도
  * 하나도 잃지 않는다(행 잠금).
  */
-import { byDialect, type Queryable } from '../../store/db.js';
+import { byDialect, dialectOf, type Database, type Queryable } from '../../store/db.js';
 import type { LimitResult, RateLimitStore } from './store.js';
 
 export type PgRateLimitOptions = {
@@ -21,6 +21,12 @@ export type PgRateLimitOptions = {
   prefix?: string;
   now?: () => number;
 };
+
+/** 받은 것이 `Database` 면 트랜잭션을 열고, 이미 트랜잭션의 연결이면 그대로 쓴다. */
+function inTx<T>(q: Queryable, fn: (c: Queryable) => Promise<T>): Promise<T> {
+  const tx = (q as Partial<Database>).tx;
+  return typeof tx === 'function' ? tx.call(q, fn) as Promise<T> : fn(q);
+}
 
 export function pgRateLimit(o: PgRateLimitOptions): RateLimitStore {
   const max = o.maxFailures ?? 5;
@@ -37,7 +43,7 @@ export function pgRateLimit(o: PgRateLimitOptions): RateLimitStore {
       const t = now();
       try {
         // 마지막 실패에서 ttl 이 지났으면 1 부터. 대기는 같은 문장에서 정한다 — 읽고 다시 쓰는 사이에 끼어들 틈이 없다.
-        const r = (await o.db.query(byDialect(o.db, {
+        const text = byDialect(o.db, {
           postgres: `INSERT INTO auth_throttle (key, failures, last_failure_at, blocked_until)
            VALUES ($1, 1, $2, CASE WHEN 1 >= $4 THEN $2::timestamptz + make_interval(secs => $5::double precision / 1000) END)
            ON CONFLICT (key) DO UPDATE SET
@@ -61,9 +67,26 @@ export function pgRateLimit(o: PgRateLimitOptions): RateLimitStore {
                  $5 * pow(2, (CASE WHEN auth_throttle.last_failure_at <= $3 THEN 1 ELSE auth_throttle.failures + 1 END) - $4)) / 1000.0) || ' seconds')
                END
            RETURNING failures`,
-        }),
-          [`${prefix}${key}`, new Date(t), new Date(t - ttl), max, base, cap],
-        )).rows[0];
+          // MySQL: RETURNING 이 없어 같은 트랜잭션에서 다시 읽는다. SET 은 왼쪽부터라 failures 를 먼저 새 값으로 두고
+          // blocked_until 이 그 새 값을 본다(PG 는 같은 CASE 를 되풀이한다). last_failure_at 은 둘 다 옛 값을 본 뒤에 바꾼다.
+          mysql: `INSERT INTO auth_throttle (key, failures, last_failure_at, blocked_until)
+           VALUES ($1, 1, $2, CASE WHEN 1 >= $4 THEN DATE_ADD(CAST($2 AS DATETIME(6)), INTERVAL CAST($5 * 1000 AS SIGNED) MICROSECOND) END)
+           ON DUPLICATE KEY UPDATE
+             failures = CASE WHEN last_failure_at <= $3 THEN 1 ELSE failures + 1 END,
+             blocked_until = CASE
+               WHEN failures >= $4
+               THEN DATE_ADD(CAST($2 AS DATETIME(6)),
+                 INTERVAL CAST(LEAST($6, $5 * POWER(2, failures - $4)) * 1000 AS SIGNED) MICROSECOND)
+               END,
+             last_failure_at = VALUES(last_failure_at)`,
+        });
+        const v = [`${prefix}${key}`, new Date(t), new Date(t - ttl), max, base, cap];
+        const r = dialectOf(o.db).name === 'mysql'
+          ? await inTx(o.db, async (c) => {
+            await c.query(text, v);
+            return (await c.query(`SELECT failures FROM auth_throttle WHERE key=$1`, [v[0]])).rows[0];
+          })
+          : (await o.db.query(text, v)).rows[0];
         const n = Number(r?.['failures']);
         if (!Number.isFinite(n)) return { ok: false, reason: 'unavailable', detail: 'auth_throttle 이 계수를 돌려주지 않았다' };
         if (n < max) return { ok: true };

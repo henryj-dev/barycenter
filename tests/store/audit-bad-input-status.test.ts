@@ -20,8 +20,9 @@ import { ConfigStore } from '../../src/store/config-store.js';
 import { ControlPlane } from '../../src/control/plane.js';
 import { TokenAuth } from '../../src/api/auth.js';
 import { LeaderElection } from '../../src/control/leader.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
 const PG = pgFor('audit-status');
 const TOKEN = 'audit-status-token';
@@ -62,7 +63,7 @@ beforeAll(async () => {
   await db.migrate();
   store = new ConfigStore(db, { streamRealip: false });
 
-  const election = new LeaderElection(PG.dsn, 'audit-status-test');
+  const election = new LeaderElection(openLeaderLockForTest(PG.dsn), 'audit-status-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   const control = new ControlPlane(db, store, driver, election,
     { prefix: '/tmp/bary-audit-status', adminSocket: '/tmp/bary-admin-test.sock' });
@@ -104,12 +105,13 @@ describe('깨진 입력의 상태 코드 (검수 B-11)', () => {
 
     // ④ 같은 부류가 하나 더 있었다 — `plans.id` 는 uuid 컬럼이라 uuid 가 아닌
     //    경로 파라미터가 PG 의 22P02 로 500 이 됐다. 그 자리도 400 이다.
-    //    SQLite 의 uuid 열은 텍스트라 22P02 가 없다 — 모양이 틀린 id 는 행을 못 찾아 404 다. 500 이 아닌 것은 같다.
-    const notUuidStatus = TEST_DB === 'sqlite' ? 404 : 400;
-    const notUuid = await req('GET', '/api/v1/plans/does-not-exist');
-    expect(notUuid.status).toBe(notUuidStatus);
-    const notUuidCs = await req('GET', '/api/v1/changesets/nope');
-    expect(notUuidCs.status).toBe(notUuidStatus);
+    //    **모든 방언에서 400 이다** — SQLite · MySQL 의 uuid 열은 텍스트라 DB 는 「행이 없다」 고 답한다. 경로가 DB 전에 본다.
+    for (const path of ['/api/v1/plans/does-not-exist', '/api/v1/changesets/nope', '/api/v1/operations/nope',
+      '/api/v1/acme/orders/nope', '/api/v1/acme/challenges/nope']) {
+      const r = await req('GET', path);
+      expect(r.status, path).toBe(400);
+      expect(r.body, path).toEqual({ code: 'malformed', message: '경로나 본문의 값이 그 자리의 타입이 아니다' });
+    }
   });
 
   it('정상 입력은 그대로다', async () => {
@@ -120,6 +122,15 @@ describe('깨진 입력의 상태 코드 (검수 B-11)', () => {
     // **모양이 맞는데 없는 것**은 404 다 — 400 과 구분돼야 한다.
     const missing = await req('GET', '/api/v1/plans/00000000-0000-4000-8000-000000000000');
     expect(missing.status).toBe(404);
+
+    // PG 가 받는 다른 uuid 표기(대문자 · 중괄호 · 하이픈 없음)는 같은 행을 찾는다 — 방언과 무관하게.
+    const cs = await req('POST', '/api/v1/changesets', {});
+    expect(cs.status).toBe(201);
+    const id = String((cs.body as { id: string }).id);
+    for (const form of [id.toUpperCase(), `{${id}}`, id.replace(/-/g, '')]) {
+      const r = await req('GET', `/api/v1/changesets/${encodeURIComponent(form)}`);
+      expect(r.status, form).toBe(200);
+    }
 
     const gone = await req('POST', '/api/v1/rollback', { to_revision: '999999' });
     expect(gone.status).toBe(404);

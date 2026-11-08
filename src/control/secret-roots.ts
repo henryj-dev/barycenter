@@ -100,6 +100,8 @@ export async function collectSecretRoots(opts: RootsOptions): Promise<Set<string
       WHERE state <> 'abandoned' OR updated_at > now() - interval '7 days'`,
     sqlite: `SELECT issued_ref, cert_key_ref FROM acme_orders
       WHERE state <> 'abandoned' OR updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-7 days')`,
+    mysql: `SELECT issued_ref, cert_key_ref FROM acme_orders
+      WHERE state <> 'abandoned' OR updated_at > DATE_SUB(now(), INTERVAL 7 DAY)`,
   }))).rows) {
     for (const k of ['issued_ref', 'cert_key_ref']) {
       const v = r[k];

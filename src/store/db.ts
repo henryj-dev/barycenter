@@ -5,8 +5,8 @@
  * 도우미로 감추면 쿼리 수와 잠금의 뜻이 바뀐다. 그래서 이 경계는 연결 · 트랜잭션 · 시뮬레이션
  * 롤백 · 마이그레이션 · 닫기만 감싸고, 방언별 SQL 은 저장소 함수 안에 나란히 둔다(ADR 의 (b)).
  *
- * 저장소 함수는 `db.dialect.name` 으로 자기 문장을 고른다. 지금 구현은 PostgreSQL 하나다
- * (`./pg.ts`). `pg` 패키지는 그 구현 파일에만 있다.
+ * 저장소 함수는 `db.dialect.name` 으로 자기 문장을 고른다. 구현은 PostgreSQL(`./pg.ts`) · SQLite(`./sqlite.ts`) ·
+ * MySQL/MariaDB(`./mysql.ts`)다. 드라이버 패키지는 각자의 구현 파일에만 있다.
  */
 
 export type Row = Record<string, unknown>;
@@ -58,21 +58,21 @@ export function dialectOf(q: Queryable): Dialect {
 }
 
 /**
- * 방언마다 나란히 둔 문장(또는 값). **지금 구현이 있는 방언만** 적는다 — 3단계가 `mysql` 을 더하면
- * 이 형에 `mysql` 을 더하고, 타입 검사가 문장을 빠뜨린 자리를 모두 가리킨다(기본 갈래를 두지 않는 이유).
+ * 방언마다 나란히 둔 문장(또는 값). 기본 갈래를 두지 않는다 — 방언을 더하면 이 형에 그 방언을 더하고,
+ * 타입 검사가 문장을 빠뜨린 자리를 모두 가리킨다(3단계가 `mysql` 을 이렇게 더했다).
  *
- * PG 문장이 SQLite 에서 **그대로** 뜻이 같은 자리(자리 표시 · `now()` 는 드라이버가 맞춘다)는 이것을 쓰지
+ * PG 문장이 SQLite · MySQL 에서 **그대로** 뜻이 같은 자리(자리 표시 · `now()` 는 드라이버가 맞춘다)는 이것을 쓰지
  * 않고 문장 하나를 둔다. 이것을 쓰는 자리는 문법이나 뜻이 갈리는 자리다 — `FOR UPDATE` · `::형` ·
  * `= ANY($n)` · `jsonb` 연산 · `interval` · 시퀀스.
  */
-export type ByDialect<T> = { readonly postgres: T; readonly sqlite: T };
+export type ByDialect<T> = { readonly postgres: T; readonly sqlite: T; readonly mysql: T };
 
 export function byDialect<T>(q: Queryable, m: ByDialect<T>): T {
   const d = dialectOf(q).name;
   switch (d) {
     case 'postgres': return m.postgres;
     case 'sqlite': return m.sqlite;
-    case 'mysql': throw new Error('mysql 방언의 문장이 아직 없다 (docs/adr-multi-db.md 「단계」 3)');
+    case 'mysql': return m.mysql;
   }
 }
 

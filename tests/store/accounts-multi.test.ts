@@ -23,7 +23,7 @@ import type { ConfigStore } from '../../src/store/config-store.js';
 import type { ControlPlane } from '../../src/control/plane.js';
 import type { LeaderElection } from '../../src/control/leader.js';
 import { byDialect } from '../../src/store/db.js';
-import { Db, dockerAvailable, pgFor, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, IS_MYSQL, pgFor, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('accounts-multi');
 const ADMIN_TOKEN = 'machine-admin-token';
@@ -127,6 +127,7 @@ describe('공용 계정 PG — 인스턴스를 넘는 세션·철회', () => {
     const rows = (await db.query(byDialect(db, {
       postgres: `SELECT actor, action, detail::text AS d, subject_user FROM account_audit WHERE action LIKE 'global.%' ORDER BY id DESC LIMIT 1`,
       sqlite: `SELECT actor, action, CAST(detail AS TEXT) AS d, subject_user FROM account_audit WHERE action LIKE 'global.%' ORDER BY id DESC LIMIT 1`,
+      mysql: `SELECT actor, action, CAST(detail AS CHAR) AS d, subject_user FROM account_audit WHERE action LIKE 'global.%' ORDER BY id DESC LIMIT 1`,
     }))).rows;
     expect(rows[0]).toMatchObject({ actor: 'user:viewer', action: 'global.view' });
     expect(JSON.parse(String(rows[0]!['d']))).toEqual({ region: null, path: 'regions' });
@@ -135,8 +136,9 @@ describe('공용 계정 PG — 인스턴스를 넘는 세션·철회', () => {
 
   it('**계정 PG 가 죽으면 세 인스턴스 모두 503 으로 거부한다** — 토큰은 그대로 통한다', async () => {
     const { cookie } = await operator('outage');
-    if (TEST_DB === 'sqlite') {
+    if (TEST_DB === 'sqlite' || IS_MYSQL) {
       // SQLite 는 멈출 서버가 없다 — 인스턴스들의 연결을 닫아 「계정 저장소에 못 묻는다」를 만든다(같은 불변식).
+      // MySQL · MariaDB 의 서버는 시험 파일들이 나눠 쓴다 — 멈추지 않고 같은 방법을 쓴다.
       for (const d of dbs) await d.close();
     } else {
       execFileSync('docker', ['stop', '-t', '1', PG.name], { stdio: 'ignore' });

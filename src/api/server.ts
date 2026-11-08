@@ -275,7 +275,37 @@ type Route<A = ApiOptions> = {
    * 403 `mfa_step_up_required` — 화면이 코드를 받아 `/session/step-up` 하고 다시 보낸다. 기계 토큰엔 없다.
    */
   sensitive?: boolean;
+  /** uuid 열에 묻는 경로 인자. `route()` 가 경로에서 정한다(`UUID_ID_PATH`). */
+  uuidParams?: readonly string[];
 };
+
+/**
+ * `:id` 가 **uuid 열**에 그대로 묻는 경로 — 설정 DB 의 changeset · plan · operation · ACME 주문 · 챌린지.
+ *
+ * PG 는 uuid 가 아닌 문자열을 `22P02` 로 거절하고 우리는 그것을 400 으로 답해 왔다(검수 B-11). SQLite · MySQL 의 uuid 열은
+ * 텍스트라 같은 입력이 행을 못 찾아 404 가 된다 — **방언이 API 의 답을 바꾼다.** 그래서 DB 에 묻기 전에 경로에서 모양을
+ * 본다. 계정 경로(`/users/:id` …)는 서비스가 이미 모양을 보고 자기 답(404)을 낸다 — 그 계약은 그대로 둔다.
+ */
+const UUID_ID_PATH = /^\/api\/v1\/(?:changesets|plans|operations|acme\/orders|acme\/challenges)\/:id(?:\/|$)/;
+
+/**
+ * PG 의 uuid 입력 문법 그대로 읽고 정규형(소문자 8-4-4-4-12)으로 돌려준다. 아니면 `undefined`.
+ *
+ * PG 는 대문자 · `{…}` · 하이픈 없음 · 네 자리마다의 하이픈을 받는다(`uuid_in`). 이것을 좁히면 PG 에서 찾던 행을 400 으로
+ * 거절하게 된다 — PG 의 답을 바꾸지 않으려고 같은 집합을 받는다. 정규형으로 바꿔 넘기면 텍스트 uuid 열(SQLite · MySQL)도
+ * PG 와 같은 행을 찾는다.
+ */
+export function canonicalUuid(raw: string): string | undefined {
+  const braced = raw.startsWith('{');
+  if (braced !== raw.endsWith('}')) return undefined;
+  const inner = braced ? raw.slice(1, -1) : raw;
+  if (!/^[0-9a-fA-F]{4}(?:-?[0-9a-fA-F]{4}){7}$/.test(inner)) return undefined;
+  const h = inner.replace(/-/g, '').toLowerCase();
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** 값이 그 자리의 형이 아니다 — PG `22P02` 의 답과 같은 몸(경로의 uuid 검사도 이것을 낸다). */
+const MALFORMED_VALUE = { code: 'malformed', message: '경로나 본문의 값이 그 자리의 타입이 아니다' } as const;
 
 const json = (res: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}): void => {
   const body = JSON.stringify(value, null, 2);
@@ -304,6 +334,7 @@ function route<A = ApiOptions>(
   );
   return {
     method, path, pattern, keys, scope, handle,
+    ...(UUID_ID_PATH.test(path) ? { uuidParams: ['id'] } : {}),
     ...(opts.leaderFree === true ? { leaderFree: true } : {}),
     ...(opts.sensitive === true ? { sensitive: true } : {}),
   };
@@ -1149,6 +1180,9 @@ const ROUTES: Route[] = [
       postgres: `SELECT id, at, principal, action, subject, revision, after->>'trigger' AS trigger FROM audit
         ORDER BY id DESC LIMIT $1`,
       sqlite: `SELECT id, at, principal, action, subject, revision, after ->> '$.trigger' AS trigger FROM audit
+        ORDER BY id DESC LIMIT $1`,
+      // MariaDB 에는 `->>` 가 없다. `trigger` 는 MySQL 예약어라 따옴표를 친다.
+      mysql: `SELECT id, at, principal, action, subject, revision, JSON_UNQUOTE(JSON_EXTRACT(after, '$.trigger')) AS "trigger" FROM audit
         ORDER BY id DESC LIMIT $1`,
     }), [limit],
     )).rows;
@@ -2027,6 +2061,15 @@ async function dispatch<A>(
   try {
     const body = req.method === 'GET' || req.method === 'DELETE'
       ? null : await readBody(req, max);
+    // DB 에 묻기 전에 — PG 가 `22P02` 로 내던 400 을 방언과 무관하게 같은 몸으로 낸다(`UUID_ID_PATH`).
+    for (const k of hit.r.uuidParams ?? []) {
+      const u = canonicalUuid(params[k] ?? '');
+      if (u === undefined) {
+        json(res, 400, MALFORMED_VALUE);
+        return;
+      }
+      params[k] = u;
+    }
     await hit.r.handle({ req, res, url, who, body, params }, api);
   } catch (e) {
     if (e instanceof StoreError) {
@@ -2059,10 +2102,7 @@ async function dispatch<A>(
      * 서버 로그를 뒤진다 — 정작 고칠 것은 요청에 있는데 (검수 B-11).
      */
     if ((e as { code?: string }).code === '22P02') {
-      json(res, 400, {
-        code: 'malformed',
-        message: '경로나 본문의 값이 그 자리의 타입이 아니다',
-      });
+      json(res, 400, MALFORMED_VALUE);
       return;
     }
     throw e;

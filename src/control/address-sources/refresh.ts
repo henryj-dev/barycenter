@@ -129,14 +129,25 @@ async function record(
 ): Promise<void> {
   // 성공이면 `refreshed_at` 을 지금으로, 실패면 앞의 값을 남긴다(「마지막 갱신」 은 마지막 **성공**이다).
   // `revision` 은 바뀌어 커밋한 때만 바꾼다.
-  await db.query(
-    `INSERT INTO address_set_refresh (key, checked_at, ok, reason, detail, refreshed_at, revision, by_actor)
+  const upsert = `INSERT INTO address_set_refresh (key, checked_at, ok, reason, detail, refreshed_at, revision, by_actor)
      VALUES ($1, now(), $2, $3, $4, CASE WHEN $2 THEN now() END, $5, $6)
      ON CONFLICT (key) DO UPDATE SET
        checked_at = now(), ok = EXCLUDED.ok, reason = EXCLUDED.reason, detail = EXCLUDED.detail,
        refreshed_at = CASE WHEN EXCLUDED.ok THEN now() ELSE address_set_refresh.refreshed_at END,
        revision = COALESCE(EXCLUDED.revision, address_set_refresh.revision),
-       by_actor = EXCLUDED.by_actor`,
+       by_actor = EXCLUDED.by_actor`;
+  await db.query(byDialect(db, {
+    postgres: upsert,
+    sqlite: upsert,
+    // 오른쪽 식은 `VALUES(…)` 만 본다 — MySQL 은 SET 을 왼쪽부터 적용해 뒤 식이 바뀐 열을 본다.
+    mysql: `INSERT INTO address_set_refresh (key, checked_at, ok, reason, detail, refreshed_at, revision, by_actor)
+     VALUES ($1, now(), $2, $3, $4, CASE WHEN $2 THEN now() END, $5, $6)
+     ON DUPLICATE KEY UPDATE
+       checked_at = now(), ok = VALUES(ok), reason = VALUES(reason), detail = VALUES(detail),
+       refreshed_at = CASE WHEN VALUES(ok) THEN now() ELSE refreshed_at END,
+       revision = COALESCE(VALUES(revision), revision),
+       by_actor = VALUES(by_actor)`,
+  }),
     [r.key, r.ok, r.reason ?? null, r.detail === undefined ? null : r.detail.slice(0, 1000), r.revision ?? null, r.by],
   );
 }
@@ -148,6 +159,9 @@ export async function refreshRows(db: Queryable, keys: readonly string[]): Promi
        FROM address_set_refresh WHERE key = ANY($1) ORDER BY key`,
     sqlite: `SELECT key, checked_at, ok, reason, detail, refreshed_at, CAST(revision AS TEXT) AS revision, by_actor
        FROM address_set_refresh WHERE key IN (SELECT value FROM json_each($1)) ORDER BY key`,
+    mysql: `SELECT key, checked_at, ok, reason, detail, refreshed_at, CAST(revision AS CHAR) AS revision, by_actor
+       FROM address_set_refresh
+      WHERE key IN (SELECT jt.v FROM JSON_TABLE($1, '$[*]' COLUMNS (v VARCHAR(768) PATH '$')) jt) ORDER BY key`,
   }), [keys],
   )).rows;
   const iso = (v: unknown): string => new Date(String(v)).toISOString();

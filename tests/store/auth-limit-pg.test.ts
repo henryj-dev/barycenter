@@ -64,8 +64,8 @@ describe('공유 인증 실패 제한 — 두 인스턴스, 같은 PG', () => {
     for (let i = 0; i < 2; i++) s.push((await fetch(`${B}/api/v1/config/head`, { headers: WRONG })).status);
     expect(s).toEqual([401, 401, 401, 401, 429]);
     const row = (await db.query(`SELECT key, failures, blocked_until IS NOT NULL AS blocked FROM auth_throttle`)).rows
-      // 식이 낸 boolean 은 SQLite 에서 1/0 이다.
-      .map((r) => ({ ...r, blocked: r['blocked'] === true || r['blocked'] === 1 }));
+      // 식이 낸 boolean 은 SQLite · MariaDB 에서 1/0, MySQL 에서 '1'/'0' 이다.
+      .map((r) => ({ ...r, blocked: r['blocked'] === true || r['blocked'] === 1 || r['blocked'] === '1' }));
     expect(row).toEqual([{ key: 'api:127.0.0.1', failures: 5, blocked: true }]);
   });
 

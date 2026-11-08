@@ -13,7 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { HealthProber, currentHealth, reduceMembership } from '../../src/control/health.js';
 import type { Model } from '../../src/model/provisional.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, IS_MYSQL, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('health');
 let db: Db;
@@ -54,8 +54,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await reset(db);
-  await db.query(TEST_DB === 'sqlite' ? 'DELETE FROM backend_health' : 'TRUNCATE backend_health, health_events');
-  if (TEST_DB === 'sqlite') await db.query('DELETE FROM health_events');
+  // MySQL 의 TRUNCATE 는 표 하나씩이다 — SQLite 처럼 지운다.
+  const del = TEST_DB === 'sqlite' || IS_MYSQL;
+  await db.query(del ? 'DELETE FROM backend_health' : 'TRUNCATE backend_health, health_events');
+  if (del) await db.query('DELETE FROM health_events');
   await db.query('UPDATE health_cursor SET next_seq = 1');
 });
 
@@ -110,18 +112,21 @@ describe('헬스 프로버', () => {
     await prober.sweep(model());
     const rows = (await db.query(TEST_DB === 'sqlite'
       ? 'SELECT CAST(seq AS TEXT) AS s FROM health_events ORDER BY seq'
+      : IS_MYSQL ? 'SELECT CAST(seq AS CHAR) AS s FROM health_events ORDER BY seq'
       : 'SELECT seq::text AS s FROM health_events ORDER BY seq')).rows;
     expect(rows.map((r) => r['s'])).toEqual(['1', '2']);
     // 잠금 행이 다음 번호를 들고 있다.
     const cur = (await db.query(TEST_DB === 'sqlite'
       ? 'SELECT CAST(next_seq AS TEXT) AS n FROM health_cursor'
+      : IS_MYSQL ? 'SELECT CAST(next_seq AS CHAR) AS n FROM health_cursor'
       : 'SELECT next_seq::text AS n FROM health_cursor')).rows[0];
     expect(cur?.['n']).toBe('3');
   }, 60_000);
 
   // PG 전용 — `pg` 연결 둘로 `FOR UPDATE` 의 행 잠금을 잰다. SQLite 는 행 잠금이 없고 쓰기 트랜잭션이
-  // 한 줄이다 — 아래 SQLite 판이 같은 불변식(두 발급이 같은 번호를 못 본다)을 잰다.
-  it.skipIf(TEST_DB === 'sqlite')('**커서 발급이 직렬화된다** — `FOR UPDATE` 가 그걸 한다 (§6.6)', async () => {
+  // 한 줄이다 — 아래 SQLite 판이 같은 불변식(두 발급이 같은 번호를 못 본다)을 잰다. MySQL 은 아래 MySQL 판이
+  // `Db` 의 트랜잭션 둘로 같은 인터리빙을 만든다.
+  it.skipIf(TEST_DB === 'sqlite' || IS_MYSQL)('**커서 발급이 직렬화된다** — `FOR UPDATE` 가 그걸 한다 (§6.6)', async () => {
     // `Promise.all` 로 두 sweep 을 돌리는 것으로는 못 잰다 — 트랜잭션이 겹칠지가 **운**이고,
     // 안 겹치면 `FOR UPDATE` 를 빼도 통과한다. 실제로 그렇게 짰다가 변이가 안 잡혔다.
     //
@@ -162,6 +167,33 @@ describe('헬스 프로버', () => {
       await A.end();
       await B.end();
     }
+  }, 60_000);
+
+  it.runIf(IS_MYSQL)('**커서 발급이 직렬화된다** — MySQL 도 `FOR UPDATE` 가 그걸 한다 (§6.6)', async () => {
+    // PG 판과 같은 인터리빙: A 가 잠금 읽기를 하고 멈춘 사이에 B 가 같은 읽기를 한다 — A 가 커밋해야 풀린다.
+    const seen: string[] = [];
+    let go!: () => void;
+    const gate = new Promise<void>((r) => { go = r; });
+    const issue = (who: string, wait?: Promise<void>): Promise<string> => db.tx(async (c) => {
+      const n = String((await c.query('SELECT CAST(next_seq AS CHAR) AS n FROM health_cursor FOR UPDATE')).rows[0]?.['n']);
+      seen.push(`${who}:read`);
+      if (wait !== undefined) await wait;
+      await c.query('UPDATE health_cursor SET next_seq = next_seq + 1');
+      await c.query(`INSERT INTO health_events (seq, backend_key, state) VALUES ($1,$2,'healthy')`, [n, who]);
+      seen.push(`${who}:commit`);
+      return n;
+    });
+    const a = issue('a', gate);
+    await new Promise((r) => setTimeout(r, 100));
+    const b = issue('b');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(seen, 'B 가 A 의 커밋 전에 읽었다 — 잠금이 안 걸렸다').toEqual(['a:read']);
+    go();
+    const [na, nb] = await Promise.all([a, b]);
+    expect(nb).not.toBe(na);
+    expect(seen).toEqual(['a:read', 'a:commit', 'b:read', 'b:commit']);
+    const rows = (await db.query('SELECT CAST(seq AS CHAR) AS s FROM health_events ORDER BY seq')).rows;
+    expect(rows.map((r) => r['s']), '이벤트가 유실됐다').toEqual(['1', '2']);
   }, 60_000);
 
   it.skipIf(TEST_DB !== 'sqlite')('**커서 발급이 직렬화된다** — SQLite 는 `BEGIN IMMEDIATE` 가 그걸 한다 (§6.6)', async () => {

@@ -235,6 +235,7 @@ describe('관리', () => {
     const rows = (await db.query(byDialect(db, {
       postgres: 'SELECT detail::text AS d FROM account_audit',
       sqlite: 'SELECT CAST(detail AS TEXT) AS d FROM account_audit',
+      mysql: 'SELECT CAST(detail AS CHAR) AS d FROM account_audit',
     }))).rows.map((r) => String(r['d']));
     expect(rows.join(' ')).not.toMatch(/admin-password-1|scrypt\$/);
   });

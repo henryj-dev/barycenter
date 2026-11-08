@@ -12,6 +12,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ControlPlane } from '../../src/control/plane.js';
 import { LeaderElection } from '../../src/control/leader.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import { ConfigStore, StoreError, type PatchOp } from '../../src/store/config-store.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
@@ -33,7 +34,7 @@ beforeAll(async () => {
   db = new Db(PG.dsn);
   await db.migrate();
   store = new ConfigStore(db, { streamRealip: false });
-  election = new LeaderElection(PG.dsn, 'bind-transition-test');
+  election = new LeaderElection(openLeaderLockForTest(PG.dsn), 'bind-transition-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   control = new ControlPlane(db, store, driver, election,
     { prefix: join(dir, 'prefix'), adminSocket: join(dir, 'admin.sock') });

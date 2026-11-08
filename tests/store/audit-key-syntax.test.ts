@@ -109,6 +109,18 @@ describe('리소스 key 문법 (검수 S-01b)', () => {
         `INSERT INTO config_revisions (revision, model, created_by, note) VALUES ($1, $2, 'legacy', '옛 리비전')`,
         [rev, JSON.stringify(legacy)],
       );
+    } else if (db.dialect.name === 'mysql') {
+      // MySQL 의 nextval 은 두 문장이다 — 같은 연결이어야 `LAST_INSERT_ID()` 가 그 값이다.
+      rev = await db.tx(async (c) => {
+        await c.query(
+          "UPDATE bary_sequences SET `last_value` = LAST_INSERT_ID(`last_value` + 1) WHERE name = 'config_revision_seq'");
+        const v = (await c.query('SELECT CAST(LAST_INSERT_ID() AS CHAR) AS v')).rows[0]?.['v'] as string;
+        await c.query(
+          `INSERT INTO config_revisions (revision, model, created_by, note) VALUES ($1, $2, 'legacy', '옛 리비전')`,
+          [v, JSON.stringify(legacy)],
+        );
+        return v;
+      });
     } else {
       await db.query(
         `INSERT INTO config_revisions (revision, model, created_by, note)

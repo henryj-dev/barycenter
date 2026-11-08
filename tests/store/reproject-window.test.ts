@@ -35,6 +35,8 @@ import { join } from 'node:path';
 import { ConfigStore, type PatchOp } from '../../src/store/config-store.js';
 import { ControlPlane } from '../../src/control/plane.js';
 import { LeaderElection } from '../../src/control/leader.js';
+import { openLeaderLockForTest } from '../../src/store/open.js';
+import { byDialect } from '../../src/store/db.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import type { ApplyOperation, ApplyResult, Plane } from '../../src/dp/operation.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
@@ -113,12 +115,24 @@ const MODEL: PatchOp[] = [
 
 /** 헬스 표를 **직접** 쓴다. 프로버를 태우면 언제 뒤집힐지가 다시 불확정이 된다. */
 async function setHealth(key: string, state: 'healthy' | 'unhealthy'): Promise<void> {
-  await db.query(
-    `INSERT INTO backend_health
+  await db.query(byDialect(db, {
+    postgres: `INSERT INTO backend_health
        (backend_key, state, probe_start_seq, consecutive, last_ok, observed_at, detail)
      VALUES ($1,$2,'1',1,$3,now(),'테스트가 직접 썼다')
      ON CONFLICT (backend_key) DO UPDATE SET
        state=EXCLUDED.state, observed_at=now(), detail=EXCLUDED.detail`,
+    sqlite: `INSERT INTO backend_health
+       (backend_key, state, probe_start_seq, consecutive, last_ok, observed_at, detail)
+     VALUES ($1,$2,'1',1,$3,now(),'테스트가 직접 썼다')
+     ON CONFLICT (backend_key) DO UPDATE SET
+       state=EXCLUDED.state, observed_at=now(), detail=EXCLUDED.detail`,
+    // 유일 키는 PK(backend_key) 하나다.
+    mysql: `INSERT INTO backend_health
+       (backend_key, state, probe_start_seq, consecutive, last_ok, observed_at, detail)
+     VALUES ($1,$2,'1',1,$3,now(),'테스트가 직접 썼다')
+     ON DUPLICATE KEY UPDATE
+       state=VALUES(state), observed_at=now(), detail=VALUES(detail)`,
+  }),
     [key, state, state === 'healthy'],
   );
 }
@@ -142,7 +156,7 @@ beforeAll(async () => {
   db = new Db(PG.dsn);
   await db.migrate();
   store = new ConfigStore(db, { streamRealip: false });
-  const election = new LeaderElection(PG.dsn, 'reproject-test');
+  const election = new LeaderElection(openLeaderLockForTest(PG.dsn), 'reproject-test');
   if (!(await election.tryAcquire())) throw new Error('리더 획득 실패');
   election0 = election;
 }, 240_000);
@@ -222,9 +236,14 @@ describe('▲ staging 과 활성화 사이의 헬스 변화', () => {
     await setHealth('a', 'healthy');
     await setHealth('b', 'healthy');
     duringApply = async () => {
-      await db.query(
-        `INSERT INTO backend_drain (backend_key, started_at, started_by)
+      await db.query(byDialect(db, {
+        postgres: `INSERT INTO backend_drain (backend_key, started_at, started_by)
          VALUES ('b', now(), 't') ON CONFLICT (backend_key) DO NOTHING`,
+        sqlite: `INSERT INTO backend_drain (backend_key, started_at, started_by)
+         VALUES ('b', now(), 't') ON CONFLICT (backend_key) DO NOTHING`,
+        mysql: `INSERT INTO backend_drain (backend_key, started_at, started_by)
+         VALUES ('b', now(), 't') ON DUPLICATE KEY UPDATE backend_key = backend_key`,
+      }),
       );
     };
 

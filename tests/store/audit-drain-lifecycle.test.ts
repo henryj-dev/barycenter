@@ -24,7 +24,7 @@ import { LeaderElection } from '../../src/control/leader.js';
 import { deadlineExceededKeys, drainKeys, isDraining, startDrain } from '../../src/control/drain.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import { openLeaderLockForTest } from '../../src/store/open.js';
-import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, pgFor, reset, startPg, stopPg, IS_MYSQL, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('audit-drain');
 const TOKEN = 'audit-drain-token';
@@ -142,6 +142,7 @@ describe('드레인 수명 (검수 B-04 · B-10)', () => {
     expect([...await drainKeys(db)]).toEqual(['a-11']);
     await db.query(TEST_DB === 'sqlite'
       ? `UPDATE backend_drain SET deadline_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second')`
+      : IS_MYSQL ? 'UPDATE backend_drain SET deadline_at = DATE_SUB(now(), INTERVAL 1 SECOND)'
       : `UPDATE backend_drain SET deadline_at = now() - interval '1 second'`);
     expect([...await drainKeys(db)], '만료가 드레인을 풀었다 — 트래픽이 돌아온다')
       .toEqual(['a-11']);

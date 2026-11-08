@@ -27,7 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { sqlitePathOf } from '../../src/store/sqlite.js';
 
-import { Db, dockerAvailable, freshSchema, pgFor, startPg, stopPg, TEST_DB } from './pg-fixture.js';
+import { Db, dockerAvailable, freshSchema, IS_MYSQL, pgFor, startPg, stopPg, TEST_DB } from './pg-fixture.js';
 
 const PG = pgFor('migrate-lock');
 
@@ -44,7 +44,7 @@ afterAll(() => {
 async function wipe(): Promise<void> {
   const db = new Db(PG.dsn);
   try {
-    if (TEST_DB === 'sqlite') {
+    if (TEST_DB === 'sqlite' || IS_MYSQL) {
       await freshSchema(db);
     } else {
       await db.query('DROP SCHEMA public CASCADE');
@@ -123,8 +123,8 @@ describe('동시 기동', () => {
     }
   }, 120_000);
 
-  // PG 의 advisory 잠금을 `pg_locks` 로 잰다 — SQLite 에는 그 잠금이 없다. SQLite 의 짝은 바로 아래 시험이다.
-  it.skipIf(TEST_DB === 'sqlite')('잠금을 놓는다 — 다음 기동이 안 매달린다', async () => {
+  // PG 의 advisory 잠금을 `pg_locks` 로 잰다 — SQLite · MySQL 에는 그 잠금이 없다. 짝은 아래 SQLite · MySQL 시험이다.
+  it.skipIf(TEST_DB === 'sqlite' || IS_MYSQL)('잠금을 놓는다 — 다음 기동이 안 매달린다', async () => {
     // 앞 테스트가 잠금을 안 놓았으면 여기서 영영 안 끝난다. 마감이 그것을 잡는다.
     const db = new Db(PG.dsn);
     try {
@@ -133,6 +133,23 @@ describe('동시 기동', () => {
         `SELECT count(*)::int AS n FROM pg_locks
           WHERE locktype = 'advisory' AND granted`)).rows[0];
       expect(Number(held?.['n'] ?? 0)).toBe(0);
+    } finally {
+      await db.close();
+    }
+  }, 120_000);
+
+  // MySQL 의 마이그레이션 잠금은 이름 잠금(`GET_LOCK`)이다. 끝난 뒤 그 이름이 비었는지 `IS_FREE_LOCK` 으로 잰다 —
+  // 같은 풀의 연결이 쥐고 있어도 0 이다.
+  it.runIf(IS_MYSQL)('잠금을 놓는다 — 다음 기동이 안 매달린다 (MySQL)', async () => {
+    const { lockNameFor, mysqlConfigOf } = await import('../../src/store/mysql.js');
+    const { CONFIG_MIGRATIONS } = await import('../../src/store/migration-sets.js');
+    const [hi, lo] = CONFIG_MIGRATIONS.lock;
+    const name = lockNameFor(mysqlConfigOf(PG.dsn).database, `mg.${hi.toString(16)}.${lo.toString(16)}`);
+    const db = new Db(PG.dsn);
+    try {
+      await db.migrate();
+      const free = (await db.query('SELECT IS_FREE_LOCK($1) AS f', [name])).rows[0]?.['f'];
+      expect(String(free)).toBe('1');
     } finally {
       await db.close();
     }

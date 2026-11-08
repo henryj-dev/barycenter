@@ -101,13 +101,12 @@ describe('방언 계열', () => {
     expect(await runMigrations(fake(DIALECTS.sqlite), set)).toEqual(['001_a.sql']);
   });
 
-  it('저장소의 방언 자리 — sqlite 는 PG 계열과 같은 이름으로 채웠고(2단계), mysql 은 비어 있다(3단계)', async () => {
+  it('저장소의 방언 자리 — sqlite(2단계) · mysql(3단계) 모두 PG 계열과 같은 이름으로 채웠다', async () => {
     const { CONFIG_MIGRATIONS } = await import('../../src/store/migration-sets.js');
     const { ACCOUNT_MIGRATIONS } = await import('../../src/accounts/migrations.js');
     for (const set of [CONFIG_MIGRATIONS, ACCOUNT_MIGRATIONS]) {
       expect(migrationDirFor(set, DIALECTS.sqlite)).toBe(set.dialectDirs?.sqlite);
-      expect(set.dialectDirs?.mysql).toBeDefined();
-      expect(() => migrationDirFor(set, DIALECTS.mysql)).toThrow(/빠진 것: 001_/);
+      expect(migrationDirFor(set, DIALECTS.mysql)).toBe(set.dialectDirs?.mysql);
     }
   });
 });
