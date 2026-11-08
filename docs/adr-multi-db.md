@@ -1,7 +1,7 @@
 # ADR-MULTI-DB — 저장소를 PostgreSQL · MySQL(MariaDB) · SQLite 로 고른다
 
 날짜: 2026-11-05
-상태: 채택 — 1단계(공통 기반) · 2단계(SQLite, 아래 「2단계 — SQLite」) 구현. 데몬이 `sqlite:` 를 연다. 3단계(MySQL/MariaDB)는 아직이다
+상태: 채택 — 1단계(공통 기반) · 2단계(SQLite) · 3단계(MySQL/MariaDB, 아래 「3단계 — MySQL/MariaDB」) 구현. 데몬이 넷을 모두 연다
 바꾸는 결정: DESIGN.md §11.2 「v0 는 PostgreSQL 하나만」
 
 ## 결론
@@ -49,8 +49,8 @@ LISTEN/NOTIFY 가 없다. SSE(`src/api/events.ts`)는 **프로세스 안** `Even
 | DB | 최소 버전 | 이유 |
 |---|---|---|
 | PostgreSQL | 지금 시험하는 17 (하한은 지금과 같다) | 기준 구현 |
-| MySQL | 8.0+ | `SKIP LOCKED` · CTE · `JSON` · `CHECK` 강제(8.0.16+) |
-| MariaDB | 10.6+ | `SKIP LOCKED`(10.6) · `JSON`(LONGTEXT 별칭 + `JSON_VALID`) |
+| MySQL | 8.0.29+ (시험 8.4) | `SKIP LOCKED` · CTE · `JSON` · `CHECK` 강제(8.0.16+) · 식 기본값 · `JSON_TABLE` · `CREATE TRIGGER IF NOT EXISTS`(8.0.29) |
+| MariaDB | 10.6+ (시험 11) | `SKIP LOCKED`(10.6) · `JSON`(LONGTEXT 별칭 + `JSON_VALID`) · `JSON_TABLE`(10.6) |
 | SQLite | 3.35+ | `RETURNING`(3.35) · upsert(3.24) · `json_*` 내장 |
 
 ## 방언 차이
@@ -421,7 +421,27 @@ PG 와 다른 표기(파일 머리말에 자세히):
 
 ### 완료 조건 — 3단계의 결과
 
-MYSQL_RESULT
+`tests/store` 57 파일 + `tests/dialect` 3 파일, 2026-11-08 `origin/main`(c04bf43) 위에서 잼:
+
+| 방언 | 통과 | 건너뜀 |
+|---|---|---|
+| PostgreSQL 17 | 500 | 18 — MySQL 경계 13 · MySQL 짝 2 · SQLite 짝 3 |
+| SQLite | 494 | 24 — 2단계와 같은 9 + MySQL 경계 13 · MySQL 짝 2 |
+| MySQL 8.4 | 513 | 5 — 아래 PG 고유 2 · SQLite 짝 3 |
+| MariaDB 11 | 513 | 5 — 같다 |
+
+MySQL 에서 건너뛰는 PG 고유 시험 2 — 둘 다 같은 불변식을 재는 MySQL 짝이 같은 파일에 있다:
+
+- `health` 「커서 발급이 직렬화된다」: `pg.Client` 둘로 PG 행 잠금을 잰다 → MySQL 짝은 엇갈린 `db.tx` 둘(한쪽이 `FOR UPDATE` 로 커서를
+  쥔 동안 다른 쪽이 못 읽고, 이벤트를 잃지 않는다).
+- `audit-migrate-lock` 「잠금을 놓는다」: PG 의 `pg_locks` 를 본다 → MySQL 짝은 마이그레이션 뒤 `IS_FREE_LOCK(<계열 잠금 이름>) = 1`.
+
+**클러스터 모드의 묶음(`cluster-follow` 7)은 MySQL · MariaDB 에서 돈다**(SQLite 는 건너뛴다). 데몬 둘을 같은 서버에
+`BARY_CLUSTER=1` 로 띄워 손으로도 쟀다(두 서버 모두): 마이그레이션 33 + 8 · 첫 노드가 토큰 1 로 리더 · 둘째는 스탠바이(쓰기 503) ·
+첫 노드를 멈추면 둘째가 토큰 2 로 승격(첫 토큰의 `released_at` 이 적힘) · `/healthz` 200.
+
+PG 로 나가는 SQL: `origin/main` 의 `src` · `scripts` 에 있던 SQL 리터럴 387 개가 모두 바이트 그대로 남았다(지운 줄은 문장을 `const` 로
+옮기거나 `byDialect` 로 감싼 경계뿐이다).
 
 ## 결과
 

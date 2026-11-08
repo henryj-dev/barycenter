@@ -245,7 +245,7 @@ SQLite 와 PG 사이를 옮기는 행 단위 이주 도구는 없다 — `bary b
 PG 대신 MySQL 8 · MariaDB 를 쓸 때다. 서버 DB 라 **클러스터 모드(`BARY_CLUSTER=1`)도 된다** — 노드들이 같은 서버 하나를
 함께 쓴다. 설계와 한계는 [`adr-multi-db.md`](./adr-multi-db.md) 「3단계 — MySQL/MariaDB」 다.
 
-> **상태(3단계, 2026-11-06):** MYSQL_STATUS
+> **상태(3단계, 2026-11-06):** 데몬이 `mysql:` · `mariadb:` DSN 을 받는다. 같은 저장소 시험 묶음과 방언 적합성 묶음이 `BARY_TEST_DB=mysql` · `=mariadb` 로 통과한다(CI 의 `verify (render · mysql)` · `verify (render · mariadb)`). 클러스터 모드를 데몬 둘로 쟀다(리더 승격 · 스탠바이 503).
 
 ```
 BARY_DSN=mysql://bary:<비밀번호>@db.internal:3306/bary            # 설정 DB. MariaDB 는 mariadb:// (같은 구현이다)
