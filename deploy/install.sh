@@ -1005,7 +1005,10 @@ cp -R "$DEPS_DIR/node_modules" "$APP_DIR/node_modules"
 install -d -m 0755 "$APP_DIR/gui"
 cp -R "$BUILD_DIR/gui/build" "$APP_DIR/gui/build"
 cp -R "$BUILD_DIR/drivers" "$APP_DIR/drivers"
-cp "$REPO/package.json" "$APP_DIR/package.json"
+# **`install -m 0644` 로 쓴다 — `cp` 가 아니다.** `cp` 는 이미 있는 파일에 덮어쓰면 그 파일의
+# 모드를 지킨다. 옛 umask 로 0600 이 된 파일이 남아 있으면 데몬 사용자가 이 파일을 못 읽어
+# 버전(`Server: barycenter/<버전>`)을 잃는다 — 운영 실측(2026-11-08). 이 파일에는 비밀이 없다.
+install -m 0644 "$REPO/package.json" "$APP_DIR/package.json"
 chown -R root:root "$APP_DIR"
 ok "$APP_DIR (dist · node_modules · gui/build · drivers)"
 

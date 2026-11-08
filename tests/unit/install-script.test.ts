@@ -709,3 +709,14 @@ describe('API 소켓 유닛 (2026-11-02, 소켓 활성화)', () => {
     expect(flow.indexOf('svc_start "$SVC_NAME"')).toBeGreaterThan(0);
   });
 });
+
+describe('설치된 package.json 의 모드', () => {
+  /**
+   * 데몬 사용자가 `$APP_DIR/package.json` 의 버전을 읽어 `Server` 헤더에 싣는다. `cp` 는 이미 있는
+   * 파일의 모드(옛 umask 로 생긴 0600)를 지켜, 재설치가 그 파일을 못 고쳤다 — 운영 실측(2026-11-08).
+   */
+  it('package.json 은 cp 가 아니라 install -m 0644 로 쓴다', () => {
+    expect(src).toMatch(/^install -m 0644 "\$REPO\/package\.json" "\$APP_DIR\/package\.json"$/m);
+    expect(src).not.toMatch(/^cp "\$REPO\/package\.json" "\$APP_DIR\/package\.json"$/m);
+  });
+});
