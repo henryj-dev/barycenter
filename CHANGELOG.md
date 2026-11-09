@@ -17,6 +17,8 @@ vulnerability it fixes.
 
 ### Upgrade impact
 
+- The `Server` response header now reads `barycenter/<version>` (was `openresty/<version>`), and the
+  development line is versioned `0.1.0-dev` (was `0.0.0`) until the first release tag.
 - The daemon applies database migrations at start-up; the newest are `031_route_path_prefixes.sql` and
   `032_route_source_rules.sql` (additive, no data rewrite).
 - `deploy/install.sh` now installs `barycenterd.socket` (systemd socket activation) next to the
