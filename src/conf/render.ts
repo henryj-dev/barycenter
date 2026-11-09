@@ -1057,7 +1057,49 @@ function rateLimitZoneNodes(listenerKey: string, rl: RateLimit | undefined): Con
   return out;
 }
 
-/** zone **적용** — server 레벨. */
+/** `Retry-After` 값을 담는 변수. 엔진이 낸 429 에서만 `1`, 그 밖에는 빈 값이다. */
+const RETRY_AFTER_VAR = 'bary_retry_after';
+const RETRY_AFTER_UPSTREAM_VAR = 'bary_retry_after_up';
+
+/**
+ * 제한에 걸린 429 의 `Retry-After` 값 — http 블록의 `map` 둘 (2026-11-09).
+ *
+ * **값이 비면 nginx 는 `add_header` 를 안 낸다.** 그래서 헤더는 server 레벨에 늘 두고, 값으로 고른다:
+ *
+ *   · `$status` 가 429 이고 `$upstream_status` 가 비었을 때만 `1` 이다. 업스트림 상태가 비었다는 것은 엔진이
+ *     스스로 낸 응답이라는 뜻이다 — 백엔드가 보낸 429 에는 덧붙이지 않는다(백엔드가 자기 `Retry-After` 를 안다).
+ *   · 렌더러가 429 를 내는 자리는 `limit_req` · `limit_conn` 뿐이다. 라우트 `reject` 는 403/404/444 다.
+ *
+ * **`1` 인 이유.** `rate` 는 초당 정수 개라 다음 자리는 늦어도 1 초 뒤에 난다. 연결 제한은 언제 풀릴지 엔진이
+ * 모른다 — 1 초는 「곧 다시」 의 정직한 하한이다. 사용자 값으로 열지 않는다.
+ *
+ * map 이 둘인 이유: map 의 원천에 두 변수를 이어 붙이려면 리터럴 안에 `$` 를 써야 한다. 값 자리에는 변수를 쓸
+ * 수 있으므로 둘로 나눈다.
+ */
+function retryAfterMapNodes(): ConfNode[] {
+  return [
+    block('map', [variable('upstream_status'), variable(RETRY_AFTER_UPSTREAM_VAR)], [
+      entry(lit('default'), lit('')),
+      entry(lit(''), num(1)),
+    ]),
+    block('map', [variable('status'), variable(RETRY_AFTER_VAR)], [
+      entry(lit('default'), lit('')),
+      entry(num(429), variable(RETRY_AFTER_UPSTREAM_VAR)),
+    ]),
+  ];
+}
+
+/**
+ * zone **적용** — server 레벨.
+ *
+ * **걸린 요청은 429 다** (2026-11-09). nginx 기본은 503 이고, 503 은 「서버가 잠시 못 받는다」 다 — 백엔드 장애와
+ * 한 숫자로 섞인다. 클라이언트가 많이 보낸 탓이면 429 가 맞다(RFC 6585 §4). `limit_*_status` 는 적용과 같은 자리에
+ * 둔다 — 제한이 없는 server 에는 안 난다. 본문은 자체 오류 페이지(429 문구)다(`error-pages.ts`).
+ *
+ * `Retry-After` 는 **server 레벨 `add_header`** 다. location 에 두면 HSTS · 사용자 응답 헤더가 사라진다
+ * (`hstsNode` 주석). server 레벨에서는 HSTS · 응답 헤더 규칙과 같은 층이라 서로를 지우지 않는다. 값은
+ * `retryAfterMapNodes` 가 고른다 — 빈 값이면 헤더가 안 나간다.
+ */
 function rateLimitNodes(listenerKey: string, rl: RateLimit | undefined): ConfNode[] {
   if (rl === undefined) return [];
   const out: ConfNode[] = [];
@@ -1067,9 +1109,14 @@ function rateLimitNodes(listenerKey: string, rl: RateLimit | undefined): ConfNod
     // **기본값을 우리가 안 고른다** — `nodelay` 는 백엔드가 받는 부하의 *모양*을 바꾼다.
     if (rl.nodelay === true) args.push(lit('nodelay'));
     out.push(directive('limit_req', args));
+    out.push(directive('limit_req_status', [num(429)]));
   }
   if (rl.maxConnections !== undefined) {
     out.push(directive('limit_conn', [lit(connZoneName(listenerKey)), num(rl.maxConnections)]));
+    out.push(directive('limit_conn_status', [num(429)]));
+  }
+  if (out.length > 0) {
+    out.push(directive('add_header', [lit('Retry-After'), variable(RETRY_AFTER_VAR), lit('always')]));
   }
   return out;
 }
@@ -1953,6 +2000,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       // **응답 이름** (§4.10, 2026-11-08). 어느 엔진에서도 버전을 감추고, 모듈이 있으면 이름을 바꾼다.
       // http 블록에 한 번이다 — admin 조각의 server 도 같은 이름으로 답한다.
       ...httpListeners.flatMap((l) => rateLimitZoneNodes(l.key, l.http?.rateLimit)),
+      // 제한에 걸린 429 의 `Retry-After` 값. 제한을 쓰는 리스너가 있을 때만 — 없으면 렌더 바이트가 그대로다.
+      ...(httpListeners.some((l) => l.http?.rateLimit !== undefined) ? retryAfterMapNodes() : []),
       // 출발지 제한의 `geo` 도 http 블록에만 있을 수 있다. server 블록보다 앞이면 된다.
       ...httpListeners.flatMap((l) => sourceAllowGeo(l)),
       // 라우트 출발지 규칙의 `geo` 도 여기다 (2026-11-02). 평문 리다이렉트 소켓은 리스너 키가 따로라 라우트가 없다.
