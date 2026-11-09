@@ -1,6 +1,6 @@
 {
   "name": "barycenter",
-  "version": "0.0.0",
+  "version": "0.1.0-dev",
   "private": true,
   "description": "Control plane for nginx — HTTP/TCP/UDP reverse proxying and load balancing",
   "license": "Apache-2.0",
