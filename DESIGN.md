@@ -570,13 +570,23 @@ nginx 기본값(무한)이 안전한 쪽이고, 켜는 것은 사람이 정한�
     `Cache-Control` 도 안 붙인다.
   - `error_page` 도 상속이 아니라 대체다. 출발지 규칙의 570 번대 `error_page` 를 가진 location 에는 한 벌을 다시 내고
     `recursive_error_pages on` 을 켠다 — 570 으로 named location 에 넘어간 뒤 난 502 가 다시 `error_page` 를 타게.
-  - 속도 제한은 nginx 기본인 503 을 낸다. 429 로 바꾸지 않았다(상태 코드를 안 바꾼다). 429 문구는 미래를 위해 둔다.
+  - **속도 제한 · 연결 제한에 걸리면 429 다**(2026-11-09). nginx 기본은 503 이다. 렌더러가 `limit_req` · `limit_conn`
+    옆에 `limit_req_status 429` · `limit_conn_status 429` 를 낸다. 제한이 없는 server 에는 안 난다. 503 은 「엔진 ·
+    백엔드가 못 받는다」 로만 남는다. stream 에는 연결 제한이 없고 상태 코드도 없다.
+  - **`Retry-After: 1`** 을 엔진이 낸 429 에만 붙인다. 제한이 있는 server 에 `add_header Retry-After $bary_retry_after
+    always` 를 둔다. 값은 http 블록의 `map` 이 고른다: `$status` 가 429 이고 `$upstream_status` 가 비었을 때만 `1`, 그
+    밖에는 빈 값이다. 빈 값이면 nginx 가 헤더를 안 낸다. 그래서 통과한 응답 · 백엔드가 보낸 429 에는 안 붙는다.
+    server 레벨이라 HSTS · 응답 헤더 규칙과 같은 층이다 — 서로 지우지 않는다(location 에는 여전히 `add_header` 가
+    없다). 값이 1 인 이유: `rate` 는 초당 정수라 다음 자리는 늦어도 1 초 뒤다. 연결 제한은 풀릴 때를 엔진이 모른다.
+  - 사용자가 응답 헤더 규칙으로 `Retry-After` 를 적으면 엔진이 낸 429 에 두 줄이 나간다. 예약 이름으로 막지 않았다 —
+    이미 저장된 설정을 해독 오류로 만들지 않으려고. 규칙으로 적을 이유가 거의 없다.
 - **모양.** 방문자가 보는 페이지다. 큰 상태 코드 · 짧은 제목 · 설명 한 줄(영어) + 한 줄(한국어) · 「홈으로」 또는
   「다시 시도」 · 작은 `barycenter` 표시와 요청 id. 시스템 글꼴 · 인라인 SVG/CSS 뿐이고 외부 요청 · 스크립트가 없다.
   `prefers-color-scheme` 로 밝은/어두운 테마를 고른다. 페이지당 약 2.5 KB.
 - **digest 가 바뀐다.** 이 렌더를 담은 버전으로 올리면 다음 적용에서 세대가 한 번 바뀐다. 버전 문자열도 렌더 입력이라
   `package.json` 의 버전을 올리면 같은 일이 생긴다(headers-more 가 있을 때).
-- 시험: `tests/unit/error-pages.test.ts`(문자열) · `tests/golden/error-pages.test.ts`(실제 엔진 응답).
+- 시험: `tests/unit/error-pages.test.ts`(문자열) · `tests/golden/error-pages.test.ts`(실제 엔진 응답) ·
+  `tests/unit/rate-limit.test.ts` · `tests/golden/rate-limit-429.test.ts`(제한 초과 429 · 본문 · HSTS · `Retry-After`).
 
 ### 4.9 HTTP 버전 — 무엇을 말할 수 있는가
 
