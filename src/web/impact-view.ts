@@ -48,12 +48,36 @@ export type ImpactView = {
   sessions: string[];
   certificates: string[];
   routeWarnings: string[];
+  /** 머리말까지 붙은 줄 (`capabilityWarningLine`). */
   capabilityWarnings: string[];
   /** 이것이 있으면 적용이 막힌다 — reload 로 못 여는 소켓. */
   bindBlockers: string[];
   /** 롤백 plan 이면 되돌아가는 리비전. 이때 위 목록은 비어 있다 — 「없다」 가 아니라 「재지 않았다」 다. */
   rollbackOf?: string;
 };
+
+/**
+ * plan 경고(`capabilityWarnings`)의 머리말 — kind 마다 (2026-11-09). **GUI 적용 화면과 CLI 가 이 표 하나를 쓴다.**
+ *
+ * 전에는 둘 다 모든 줄 앞에 「엔진 —」 을 붙였다. 헬스 프로브의 SNI 경고나 와일드카드 리스너 경고는 엔진 한계가 아니다.
+ * **모르는 kind 는 머리말 없이 낸다** — 틀린 말보다 낫다. 서버에 kind 를 더하면 여기도 더한다(시험이 지킨다).
+ */
+export const CAPABILITY_WARNING_LABEL: Readonly<Record<string, string>> = {
+  no_membership_plane: '엔진',
+  no_http2: '엔진',
+  no_ssl_conf_command: '엔진',
+  wildcard_also_on: '리스너',
+  wildcard_shadowed: '리스너',
+  probe_tls_no_sni: '헬스 체크',
+};
+
+/** 경고 한 줄 — 아는 kind 면 `머리말 — 문장`, 모르면 문장만. */
+export function capabilityWarningLine(w: { kind?: unknown; message: string }): string {
+  const label = typeof w.kind === 'string' && Object.hasOwn(CAPABILITY_WARNING_LABEL, w.kind)
+    ? CAPABILITY_WARNING_LABEL[w.kind]
+    : undefined;
+  return label === undefined ? w.message : `${label} — ${w.message}`;
+}
 
 const CHANGE_WORD: Record<string, string> = {
   added: '추가', removed: '삭제', changed: '변경', replaced: '교체',
@@ -134,7 +158,7 @@ export function viewOfImpact(pending: PendingApply, impact: Impact): ImpactView 
         + (c.notAfter === undefined ? '' : ` — ${day(c.notAfter)} 만료`),
     ),
     routeWarnings: (impact.routeOrderChanges?.warnings ?? []).map((w) => w.message),
-    capabilityWarnings: (impact.capabilityWarnings ?? []).map((w) => w.message),
+    capabilityWarnings: (impact.capabilityWarnings ?? []).map(capabilityWarningLine),
     bindBlockers: (impact.bindTransitions ?? []).map((b) => b.message),
   };
 }

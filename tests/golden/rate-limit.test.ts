@@ -6,7 +6,7 @@
  * 같다. 그리고 `rate=1r/s` 를 적었는데 안 막히면 이 기능은 없는 것과 같다.
  *
  *   ① `nginx -t` — 선언과 적용이 이름·순서로 맞물리는가
- *   ② **실제로 503 이 나는가** — 초당 1 개로 좁히고 여러 번 친다
+ *   ② **실제로 429 가 나는가** — 초당 1 개로 좁히고 여러 번 친다(nginx 기본 503 이 아니다 — `limit_req_status 429`)
  */
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -93,12 +93,12 @@ describe('레이트리밋이 실제 엔진에 선다 (제안 #6)', () => {
     expect(r.ok, r.out).toBe(true);
   }, 180_000);
 
-  it('**실제로 막는다** — 초당 1 개에 여러 번 치면 503 이 난다', () => {
+  it('**실제로 막는다** — 초당 1 개에 여러 번 치면 429 가 난다', () => {
     /**
      * 통과분과 막힌 분이 **둘 다 숫자 있는 응답**이어야 판정이 선다.
      *
      * 백엔드가 안 뜬 프록시 라우트를 쓴다: 통과하면 502(업스트림에 못 붙음), 막히면
-     * 503. 둘이 겹치지 않는다.
+     * 429. 둘이 겹치지 않는다.
      *
      * ⚠️ `reject`(444) 로는 못 잰다 — 응답 없이 끊으므로 curl 이 `000` 을 보고, 그건
      * 레이트리밋에 막힌 것과 구분되지 않는다. 실제로 한 번 그렇게 물렸다.
@@ -117,7 +117,8 @@ describe('레이트리밋이 실제 엔진에 선다 (제안 #6)', () => {
       done
       echo
     `);
-    expect(out, out).toContain('503');
+    expect(out, out).toContain('429');
+    expect(out, out).not.toContain('503');
   }, 180_000);
 
   /**
@@ -147,6 +148,6 @@ describe('레이트리밋이 실제 엔진에 선다 (제안 #6)', () => {
       echo
     `);
     // 전부 통과한다. 이것이 현재의 계약이다.
-    expect(out, out).not.toContain('503');
+    expect(out, out).not.toContain('429');
   }, 180_000);
 });

@@ -87,7 +87,7 @@ describe('영향 요약', () => {
     expect(view.sessions.some((s) => s.includes('tcp'))).toBe(false);
     expect(view.certificates).toEqual(['site 교체 — 2026-06-01 만료', 'old 삭제']);
     expect(view.routeWarnings).toEqual(['매치 클래스가 priority 를 이긴다']);
-    expect(view.capabilityWarnings).toEqual(['h2 를 못 낸다']);
+    expect(view.capabilityWarnings).toEqual(['엔진 — h2 를 못 낸다']);
   });
 
   it('옛 plan 에 없는 항목은 없는 대로 그린다', () => {

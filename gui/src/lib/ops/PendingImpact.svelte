@@ -76,7 +76,7 @@
     ...view.socketsRemoved.map((s) => ({ tone: 'danger' as const, icon: '✕', text: `소켓을 닫아요: ${s}` })),
     ...view.sessions.filter((s) => !calmSession(s)).map((s) => ({ tone: 'warn' as const, icon: '▲', text: s })),
     ...view.routeWarnings.map((s) => ({ tone: 'warn' as const, icon: '▲', text: `라우트 순서 — ${s}` })),
-    ...view.capabilityWarnings.map((s) => ({ tone: 'warn' as const, icon: '▲', text: `엔진 — ${s}` })),
+    ...view.capabilityWarnings.map((s) => ({ tone: 'warn' as const, icon: '▲', text: s })),
     ...view.certificates.map((s) => ({ tone: 'warn' as const, icon: '▲', text: `인증서 — ${s}` })),
   ]);
   /**

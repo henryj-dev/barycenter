@@ -41,8 +41,8 @@ import { block, directive, entry, lit, num, regex, variable, type ConfNode } fro
  * | 405 · 501 | 엔진이 받지 않는 메서드 · 전송 방식 |
  * | 413 · 414 | `client_max_body_size` 초과 · 너무 긴 요청 줄 |
  * | 421 | SNI↔Host 불일치 (`reject_421`) |
- * | 429 | 지금 렌더러는 안 낸다(속도 제한은 nginx 기본 503) — 낼 날을 위해 문구만 둔다 |
- * | 500 · 502 · 503 · 504 | 엔진 내부 · 백엔드 연결 실패 · 백엔드 없음 · 속도 제한 · 백엔드 시간 초과 |
+ * | 429 | 속도 제한 · 연결 제한 초과 (`limit_req_status` · `limit_conn_status 429`, render.ts `rateLimitNodes`) |
+ * | 500 · 502 · 503 · 504 | 엔진 내부 · 백엔드 연결 실패 · 백엔드 없음 · 백엔드 시간 초과 |
  */
 export const ERROR_PAGE_CODES = [
   400, 403, 404, 405, 413, 414, 421, 429, 494, 495, 496, 497, 500, 501, 502, 503, 504,
