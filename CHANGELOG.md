@@ -8,17 +8,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 [Semantic Versioning](https://semver.org/) tags (`vX.Y.Z`), cut by
 [`.github/workflows/release.yml`](./.github/workflows/release.yml).
 
-**No version has been released yet.** The API and database schema are not frozen
-([DESIGN.md §9.1.1](./DESIGN.md)), so anything under *Unreleased* may still change shape before
-the first tag. When a release is cut, its section will also list every publicly known
-vulnerability it fixes.
+**Only pre-releases exist so far.** The API and database schema are not frozen
+([DESIGN.md §9.1.1](./DESIGN.md)), so `0.x` and `-alpha` releases may still change shape. Each
+release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
+
+## [0.1.0-alpha.1] - 2026-11-15
+
+First pre-release. The release workflow builds the bundle from this tag and attaches build
+provenance (`gh attestation verify <file> --repo henryj-dev/barycenter`).
 
 ### Upgrade impact
 
 - The `Server` response header now reads `barycenter/<version>` (was `openresty/<version>`), and the
-  development line is versioned `0.1.0-dev` (was `0.0.0`) until the first release tag.
+  version line is `0.1.0-alpha.1` (was `0.0.0`, then `0.1.0-dev`).
 - The daemon applies database migrations at start-up; the newest are `031_route_path_prefixes.sql` and
   `032_route_source_rules.sql` (additive, no data rewrite).
 - `deploy/install.sh` now installs `barycenterd.socket` (systemd socket activation) next to the
@@ -92,6 +96,8 @@ vulnerability it fixes.
 
 ### Security
 
+- No publicly known vulnerabilities are fixed in this release (no published advisories).
+
 - Account passwords are hashed with scrypt and a per-user salt; tokens and secrets are compared in
   constant time.
 - Stored secrets use envelope encryption (AES-256-GCM) in PostgreSQL, with a pluggable key
@@ -115,4 +121,5 @@ Built before this changelog existed; see the [Roadmap](./README.md#roadmap) and
 - **v0.6** TLS termination, ACME http-01 and dns-01 with renewal, certificate rollback.
 - **v0.7** Driver loader, reference kit, boot pins.
 
-[Unreleased]: https://github.com/henryj-dev/barycenter/commits/main
+[Unreleased]: https://github.com/henryj-dev/barycenter/compare/v0.1.0-alpha.1...main
+[0.1.0-alpha.1]: https://github.com/henryj-dev/barycenter/releases/tag/v0.1.0-alpha.1
