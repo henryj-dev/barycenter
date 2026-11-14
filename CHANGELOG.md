@@ -29,8 +29,15 @@ vulnerability it fixes.
   **429 Too Many Requests** with `Retry-After: 1` and the engine error page, not nginx's default 503.
   If your monitoring counts 503 to detect rate limiting, count 429 instead; 503 now means only
   engine or backend trouble (DESIGN.md §4.10).
+- The rendered config gains the `X-Served-By` slot (empty unless `BARY_SERVED_BY` is set), so the
+  next apply after upgrading writes a new generation and reloads the engine once.
 
 ### Added
+
+- **`X-Served-By` response header (opt-in).** Set `BARY_SERVED_BY=<alias>` (or `@hostname`) per node and
+  every response carries `X-Served-By: <alias>`; engine error pages show it next to the request ID. Off by
+  default. The value lives in a per-node generation fragment, so the rendered config and its digest stay
+  identical across nodes (DESIGN.md §4.10).
 
 - **Routes**
   - One route can match several path prefixes (`pathPrefixes`) (#183).

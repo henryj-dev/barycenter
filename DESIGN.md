@@ -580,6 +580,20 @@ nginx 기본값(무한)이 안전한 쪽이고, 켜는 것은 사람이 정한�
     없다). 값이 1 인 이유: `rate` 는 초당 정수라 다음 자리는 늦어도 1 초 뒤다. 연결 제한은 풀릴 때를 엔진이 모른다.
   - 사용자가 응답 헤더 규칙으로 `Retry-After` 를 적으면 엔진이 낸 429 에 두 줄이 나간다. 예약 이름으로 막지 않았다 —
     이미 저장된 설정을 해독 오류로 만들지 않으려고. 규칙으로 적을 이유가 거의 없다.
+- **응답한 노드의 이름 — `X-Served-By`** (2026-11-14). 위와 달리 **기본은 끈다** — 노드 이름은 내부 구조를 드러낸다.
+  운영자가 노드마다 `BARY_SERVED_BY=<별칭>`(예: `icn-a1`, `@hostname` 이면 호스트 이름)을 준다. 별칭은 영숫자 ·
+  `.` · `-` · `_` 64 자까지이고, 틀리면 데몬이 기동하지 않는다.
+  - **값은 렌더 결과가 아니라 세대 조각에 있다.** 노드마다 다른 값이 `nginx.conf` 에 들어가면 같은 모델이 노드마다 다른
+    digest 가 된다(`adminInclude` 와 같은 이유). 렌더러는 `map $status $bary_served_by { include admin/served-by.map*; }`
+    로 자리만 낸다. 각 노드가 세대를 만들 때 `admin/served-by.map`(`default "<별칭>";`)을 쓴다. 파일이 없으면 map 이
+    비어 값이 빈 문자열이다 — `nginx -t` 를 통과하고 헤더가 안 나간다(실측).
+  - **헤더는 headers-more 가 있을 때만**(`more_set_headers "X-Served-By: $bary_served_by"`, http 블록 한 번). core 의
+    `add_header` 는 자기 `add_header` 가 있는 server · location 에서 사라진다(§4.6 대체 함정) — 반쪽 헤더를 내지 않는다.
+    모듈 없이 켜면 데몬이 `served_by.no_header` 경고를 남긴다. 업스트림 응답 · 오류에도 붙는다.
+  - **오류 페이지.** 요청 id 옆에 ` · <code>별칭</code>`, JSON 에 `"served_by"`. 값이 없으면 자리가 남지 않는다.
+  - 별칭을 바꾸면 다음 적용(또는 `apply/rerender`)에서 반영된다. digest 는 안 바뀌므로 바꾸기만 해서는 새 세대가 안 생긴다.
+  - 시험: `tests/unit/served-by.test.ts` · `tests/store/served-by-fragment.test.ts`(조각 · 같은 nginx.conf) ·
+    `tests/golden/error-pages.test.ts`(실제 엔진 응답).
 - **모양.** 방문자가 보는 페이지다. 큰 상태 코드 · 짧은 제목 · 설명 한 줄(영어) + 한 줄(한국어) · 「홈으로」 또는
   「다시 시도」 · 작은 `barycenter` 표시와 요청 id. 시스템 글꼴 · 인라인 SVG/CSS 뿐이고 외부 요청 · 스크립트가 없다.
   `prefers-color-scheme` 로 밝은/어두운 테마를 고른다. 페이지당 약 2.5 KB.

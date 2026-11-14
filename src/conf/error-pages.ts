@@ -30,6 +30,7 @@
  *   · 444 는 응답이 없으므로 대상이 아니다.
  */
 import { block, directive, entry, lit, num, regex, variable, type ConfNode } from './ast.js';
+import { servedByWhenSet } from './served-by.js';
 
 /**
  * 바꾸는 코드. 렌더러가 실제로 내는 자리와 nginx 가 스스로 내는 자리다.
@@ -91,7 +92,7 @@ const FALLBACK: Copy = { title: 'Something went wrong', text: 'The request could
 /** 변수 이름. 렌더러의 다른 변수와 겹치지 않게 `bary_err_` 로 시작한다. */
 const V = {
   loc: 'bary_err_loc', title: 'bary_err_title', head: 'bary_err_head', main: 'bary_err_main',
-  foot: 'bary_err_foot', json: 'bary_err_jbody',
+  foot: 'bary_err_foot', json: 'bary_err_jbody', served: 'bary_err_served', jserved: 'bary_err_jserved',
 } as const;
 const LOC_HTML = '@bary_err_html';
 const LOC_JSON = '@bary_err_json';
@@ -134,9 +135,10 @@ const HEAD = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
 
 /**
  * 요청 id 는 방문자가 운영자에게 알려 줄 수 있는 유일한 손잡이다 — 접근 기록과 맞춰 볼 수 있다. 작게 둔다.
+ * 노드 이름(`BARY_SERVED_BY`, served-by.ts)이 있으면 그 옆에 붙는다 — 어느 노드의 기록을 볼지 같이 알려 준다.
  */
 const FOOT = `<footer><span class="brand">${MARK}barycenter</span>`
-  + '<span>Request ID <code>$request_id</code></span></footer></main></body></html>';
+  + '<span>Request ID <code>$request_id</code>$bary_err_served</span></footer></main></body></html>';
 
 /** `href=""` 는 지금 주소를 다시 연다(GET). 스크립트 없이 「다시 시도」 가 된다. */
 const ACTION: Record<Copy['action'], string> = {
@@ -147,16 +149,22 @@ const ACTION: Record<Copy['action'], string> = {
 const mainOf = (c: Copy): string =>
   `<h1>${c.title}</h1><p>${c.text}</p><p class="ko" lang="ko">${c.ko}</p>${ACTION[c.action]}`;
 
-const JSON_BODY = '{"status":$status,"error":"$bary_err_title","request_id":"$request_id"}';
+const JSON_BODY = '{"status":$status,"error":"$bary_err_title","request_id":"$request_id"$bary_err_jserved}';
 
 const statusEntries = (f: (c: Copy) => string): ConfNode[] => [
   ...Object.entries(COPY).map(([code, c]) => entry(num(Number(code)), lit(f(c)))),
   entry(lit('default'), lit(f(FALLBACK))),
 ];
 
-/** **http 블록**에 한 번 — 변수들. 쓰는 server 가 없어도 낸다(부트스트랩 포함, 렌더가 모델 모양에 덜 기댄다). */
+/**
+ * **http 블록**에 한 번 — 변수들. 쓰는 server 가 없어도 낸다(부트스트랩 포함, 렌더가 모델 모양에 덜 기댄다).
+ * `$bary_served_by` 를 읽으므로 `servedByHttpNodes()` 뒤에 둔다.
+ */
 export function errorPageHttpNodes(): ConfNode[] {
   return [
+    // 노드 이름이 없으면 빈 문자열 — 자리가 남지 않는다.
+    servedByWhenSet(V.served, ' · <code>$bary_served_by</code>'),
+    servedByWhenSet(V.jserved, ',"served_by":"$bary_served_by"'),
     // `Accept` 에 json 이 있으면 JSON 이다. 브라우저의 `Accept` 에는 없다.
     block('map', [variable('http_accept'), variable(V.loc)], [
       entry(lit('default'), lit(LOC_HTML)),
