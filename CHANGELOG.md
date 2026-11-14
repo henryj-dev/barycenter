@@ -14,6 +14,9 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- The development line on `main` is versioned `0.1.0-dev` again; only tagged releases carry a
+  release version.
+
 ## [0.1.0-alpha.1] - 2026-11-15
 
 First pre-release. The release workflow builds the bundle from this tag and attaches build
