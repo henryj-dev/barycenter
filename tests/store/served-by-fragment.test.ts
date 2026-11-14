@@ -9,7 +9,8 @@
  *
  *   npm run test:store     (도커 필요)
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -18,7 +19,7 @@ import { ConfigStore, type PatchOp } from '../../src/store/config-store.js';
 import { ControlPlane } from '../../src/control/plane.js';
 import { LeaderElection } from '../../src/control/leader.js';
 import { openLeaderLockForTest } from '../../src/store/open.js';
-import { SERVED_BY_FILE } from '../../src/conf/served-by.js';
+import { SERVED_BY_FILE, servedByFragment } from '../../src/conf/served-by.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
 import { Db, dockerAvailable, pgFor, reset, startPg, stopPg } from './pg-fixture.js';
 
@@ -29,6 +30,8 @@ let db: Db;
 let store: ConfigStore;
 let election: LeaderElection;
 const prefixes: string[] = [];
+/** 엔진이 서빙 중이라고 말하는 epoch. 활성 plan 을 적을 때 맞춘다. */
+let liveEpoch = '0';
 
 /** 세대를 다 쓴 뒤 엔진에 넘기는 자리에서 멈춘다 — 엔진은 없다. */
 class Stop extends Error {}
@@ -43,8 +46,8 @@ const driver = {
   status: () => Promise.resolve({
     maxLeaderToken: '0',
     planes: {
-      http: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
-      stream: { activationEpoch: '0', membershipRevision: '0', payloadDigest: '' },
+      http: { activationEpoch: liveEpoch, membershipRevision: '1', payloadDigest: '' },
+      stream: { activationEpoch: liveEpoch, membershipRevision: '1', payloadDigest: '' },
     },
     published: { kind: 'none' }, lastEvidence: undefined, unfinished: undefined,
   }),
@@ -109,5 +112,61 @@ describe('노드 이름 — 세대 조각', () => {
     expect(conf).toBe(readFileSync(join(bare, 'nginx.conf'), 'utf8'));
     expect(conf).not.toContain('icn-a1');
     expect(conf).toContain(`include ${SERVED_BY_FILE}*;`);
+  }, 240_000);
+});
+
+/**
+ * **별칭만 바꾸고 다시 적용하면 새 세대를 낸다** (2026-11-14, web-01).
+ *
+ * 렌더 결과가 같으면 apply 는 멤버십만 옮긴다(`rerender-served.test.ts`). 조각은 digest 밖이라 그 판정만 보면 별칭을
+ * 넣고 다시 적용해도 세대가 안 바뀌어 헤더가 영영 안 나간다. 서빙 중인 세대(`current/`)의 조각을 함께 본다.
+ */
+describe('노드 이름 — 별칭만 바뀐 다시 적용', () => {
+  /** 리비전을 커밋하고 활성으로 적는다. 서빙 중인 conf 와 렌더가 같다(같은 렌더러). */
+  async function activePlan(): Promise<string> {
+    await reset(db);
+    const head = await store.head();
+    const cs = await store.createChangeset(head.revision, 't');
+    await store.patchChangeset(cs, MODEL, 't');
+    const plan = await store.plan(cs, 't');
+    const out = await store.commit(cs, plan.id, 't');
+    const epoch = String(out.activationEpoch);
+    liveEpoch = epoch;
+    await db.query(
+      `INSERT INTO operations (id, plan_id, revision, activation_epoch, generation, phase, detail, created_by)
+       VALUES ($1, $2, $3, $4, $5, 'activated', '{"phase":"activated"}', 't')`,
+      [randomUUID(), plan.id, String(out.revision), epoch, `r${String(out.revision)}-e${epoch}`],
+    );
+    await db.query(`UPDATE plans SET state = 'applied' WHERE id = $1`, [plan.id]);
+    return (await store.replanActiveHead('t')).planId;
+  }
+
+  /** `current/` 에 조각을 둔(또는 안 둔) 노드에서 apply 가 어느 길로 가는가. */
+  async function pathOf(planId: string, servedBy: string | undefined, current: string | undefined): Promise<string> {
+    const prefix = mkdtempSync(join(tmpdir(), 'bary-servedby-'));
+    prefixes.push(prefix);
+    mkdirSync(join(prefix, 'current', 'admin'), { recursive: true });
+    if (current !== undefined) writeFileSync(join(prefix, 'current', SERVED_BY_FILE), servedByFragment(current));
+    const control = new ControlPlane(db, store, driver, election, {
+      prefix, adminSocket: join(prefix, 'admin.sock'), renderCaps: CAPS,
+      ...(servedBy === undefined ? {} : { servedBy }),
+    });
+    const out = await control.apply(planId, 't').catch((e: unknown) => e);
+    if (out instanceof Stop) return out.message;
+    throw new Error(`드라이버까지 안 갔다: ${String(out instanceof Error ? out : JSON.stringify(out))}`);
+  }
+
+  it('별칭을 새로 켜면 렌더가 같아도 새 세대를 낸다 (멤버십만 옮기지 않는다)', async () => {
+    expect(await pathOf(await activePlan(), 'az01-icn-own', undefined)).toBe('config');
+  }, 240_000);
+
+  it('별칭을 바꿔도, 끄도 새 세대를 낸다', async () => {
+    expect(await pathOf(await activePlan(), 'icn-b2', 'icn-a1')).toBe('config');
+    expect(await pathOf(await activePlan(), undefined, 'icn-a1')).toBe('config');
+  }, 240_000);
+
+  it('서빙 중인 조각이 원하는 것과 같으면 전처럼 멤버십만 옮긴다', async () => {
+    expect(await pathOf(await activePlan(), 'icn-a1', 'icn-a1')).toBe('membership');
+    expect(await pathOf(await activePlan(), undefined, undefined)).toBe('membership');
   }, 240_000);
 });
