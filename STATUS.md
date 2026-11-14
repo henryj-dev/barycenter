@@ -1,7 +1,31 @@
-# 현재 상태 (2026-08-23)
+# 현재 상태 (2026-11-15)
 
 무엇이 있고, 무엇이 열려 있고, 무엇을 안 하는가. 설계는 `DESIGN.md`, 테스트는
 `TESTS.md`, 실행은 `scripts/verify.sh` 다.
+
+**§0 은 2026-09-02 뒤에 더해진 것이다.** §1 아래 본문은 대부분 2026-08 말의 기록이다 —
+낡은 문장은 고쳤지만, 세부의 정본은 `DESIGN.md` 와 각 ADR · 런북이다.
+
+## 0. 2026-09 이후 더해진 것
+
+| 영역 | 무엇 | 근거 |
+|---|---|---|
+| 사람 계정 | 자체 계정 PG · 서버 세션(해시만 저장) · 초대 · 재설정 · TOTP MFA · 민감 작업 step-up · 개인 API 토큰. SSO 연결과 JIT, IdP 권한 정본(roles · entitlements), **Role Change 즉시 반영**, IdP(lodestar) OTP | #77~#89 · #204 · #206 · #208 · #209 · [`docs/runbook-accounts.md`](docs/runbook-accounts.md) |
+| 전역 화면 | 별도 프로세스 없이 지역 `barycenterd` 가 Host 로 전역을 고른다. 기본은 **모든 지역 합산**, 쓰기는 한 번에 한 지역. 로그인 세션을 전역 · 지역이 함께 쓴다(`BARY_SESSION_DOMAIN`) | #164 · #168 · #170 · #199 · [`docs/adr-host-dispatch.md`](docs/adr-host-dispatch.md) · [`docs/runbook-global.md`](docs/runbook-global.md) |
+| 클러스터 | 설정 PG 하나를 쓰는 N 대가 **같은 세대를 서빙한다**(팔로워 적용). 쓰기는 리더 하나 | #119 · #121 · [`docs/adr-cluster.md`](docs/adr-cluster.md) |
+| 저장소 | 설정 · 계정 DB 가 PG · SQLite · MySQL 8 · MariaDB 를 연다 | #210 · #211 · #216 · [`docs/adr-multi-db.md`](docs/adr-multi-db.md) |
+| 모델 | 호스트 리스너(server_name) · 주소 집합(`@cloudflare`) · 출발지 제한 · 원본 IP 헤더 · HTTPS 리다이렉트 · 라우트 경로 여럿 · 출발지 규칙 · 요청 헤더/경로 바꾸기 | #105 · #110 · #115 · #145 · #149 · #179 · #180 · [`docs/adr-vhost.md`](docs/adr-vhost.md) |
+| 엔진 | `Server: barycenter/<버전>` · 자체 오류 페이지 · 제한에 걸리면 429 + Retry-After · `X-Served-By`(`BARY_SERVED_BY`, 기본 꺼짐) | #212 · #223 · #224 · #225 |
+| 연동 | DNS-01 공급자 · 메일 전송 · 알림 어댑터, 서비스 디스커버리 · 주소 집합 출처 어댑터 | #205 · #207 · [`docs/runbook-dns01.md`](docs/runbook-dns01.md) · [`docs/runbook-notify.md`](docs/runbook-notify.md) · [`docs/runbook-data-sources.md`](docs/runbook-data-sources.md) |
+| ACME | GUI 에서 자동 발급 · 갱신, 진행을 이벤트 스트림으로, CA 바꾸면 다시 발급 | #137 · #139 · #143 · #146 |
+| GUI | 디자인 시스템과 시안 1:1 로 다시 만들었다. 리소스별 「적용 대기」 | #126 · #128~#203 · #198 |
+| 배포 | 엔진을 별도 systemd 유닛으로 · API 소켓 활성화 · 배포 뒤 점검 `deploy/check.sh` | #123 · #182 · #215 |
+
+**남은 것은 기능이 아니다:**
+
+- **첫 릴리스 태그가 없다.** 태그 전에 A 표면 동결을 선언해야 한다(§9.1.1 · 아래 「동결」).
+  `release.yml` 은 아직 한 번도 안 돌았다.
+- KMS · Vault 전용 KEK 드라이버는 **안 만든다** — `BARY_SECRET_KEK_CMD` 가 그 이음매다(§4.8.2).
 
 회차 일기(검수·스파이크·화면을 연 날)는
 [`docs/archive/STATUS-log.md`](./docs/archive/STATUS-log.md) 로 옮겼다.
@@ -39,7 +63,7 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 | 동결 | B(구현된 OpenAPI · DDL). **A 는 이 회차에 풀렸다** — W3 설정 셋을 들이려고. 근거가 `SURFACE.txt` 머리에 남는다 | 미구현 계약 |
 | 멤버십 | 이중 zone 슬롯, Lua 밸런서, HTTP 상태코드 프로브(풀별 정의) · TCP connect(L4), SSE `health`, 드레인 제외, **두 평면의 peer inflight 관측** | — |
 | TLS | 업로드 자료, https 렌더, SNI 선택, 세대 결박 롤백, GUI SNI 바인딩 · 인증서·정책 삭제 | — |
-| 시크릿 | 드라이버 **둘**. `fs`(기본, 평문 0400)와 `pg`(봉투 암호화 AES-256-GCM · KEK 는 DB 밖). 참조·digest·재업로드 수리 계약을 두 드라이버가 **같이** 낸다 (검수 2026-08-29). GC 정책은 한 자리(`partitionForSweep`). **KEK 의 출처는 이음매다** (2026-09-01 · §4.8.2) — 값을 그대로 주거나(`BARY_SECRET_KEK`) 명령의 stdout 으로 받는다(`BARY_SECRET_KEK_CMD`). 후자면 키가 `$PREFIX/env` 에 **파일로 안 남는다**. **회전도 생겼다** (2026-09-01 · §4.8.3) — `scripts/rotate-kek.mjs` 가 DEK 를 다시 감싼다. 자료 바이트를 안 읽고, `kek_id` 가 진행 상황이라 중간에 죽어도 이어받는다 | 벤더별 드라이버 |
+| 시크릿 | 드라이버 **둘**. `fs`(기본, 평문 0400)와 `pg`(봉투 암호화 AES-256-GCM · KEK 는 DB 밖). 참조·digest·재업로드 수리 계약을 두 드라이버가 **같이** 낸다 (검수 2026-08-29). GC 정책은 한 자리(`partitionForSweep`). **KEK 의 출처는 이음매다** (2026-09-01 · §4.8.2) — 값을 그대로 주거나(`BARY_SECRET_KEK`) 명령의 stdout 으로 받는다(`BARY_SECRET_KEK_CMD`). 후자면 키가 `$PREFIX/env` 에 **파일로 안 남는다**. **회전도 생겼다** (2026-09-01 · §4.8.3) — `scripts/rotate-kek.mjs` 가 DEK 를 다시 감싼다. 자료 바이트를 안 읽고, `kek_id` 가 진행 상황이라 중간에 죽어도 이어받는다 | — (벤더 SDK 는 안 들인다 · §4.8.2) |
 | ACME | http-01 러너, dns-01 파일 프로바이더, 주문·챌린지 GET, EAB, Retry-After 백오프, 만료 30일 전 갱신 틱 | — |
 | CLI | `bary-dp-agent`(원격 DP 창구). `changeset` 단계(discard·reopen 포함), `commit --plan`, `apply --plan`, export/import, backup/restore, status/rollback/recover, listener·풀·라우트·백엔드·TLS 정책·인증서·SNI create, listener·라우트·백엔드·SNI·풀·인증서·정책 delete, get(인증서·정책·SNI·헬스·오퍼레이션·plan·metrics·주문·`backends/status`), backend drain/drain-status. **리스너 옵션 플래그**(`--rate`·`--header`·`--max-body`·타임아웃) | — |
 | GUI | Kit 경로(로그인 포함). 폴링하지 않는다. **리스너 옵션 폼**·**왜 트래픽을 안 받나**·패스스루 두 폴백(`on_no_sni` 포함) | 아래 §2 |
@@ -59,8 +83,14 @@ plan → commit → apply 다. 게시는 세대이고 활성화는 증거로 판
 인증은 정적 SPA와 같은 출처의 데몬 세션을 사용한다. OIDC 교환 전의 state·PKCE
 verifier·nonce는 데몬 메모리의 짧은 수명 로그인 세션에 있고 브라우저에는 opaque
 `bary_login` 쿠키만 간다. 교환 뒤 ID Token은 응답 본문에 내보내지 않고
-`bary_session` HttpOnly·SameSite=Lax 쿠키로 바꾼다(HTTPS에서는 Secure). 세션은 인스턴스
+`bary_session` HttpOnly·SameSite=Lax 쿠키로 바꾼다(HTTPS에서는 Secure). 이 OIDC 세션은 인스턴스
 메모리라 재시작·다중 인스턴스 사이에 공유되지 않는다.
+
+**계정 DB 를 켜면 사람 세션은 계정 DB 에 산다**(§0 사람 계정) — 재시작 · 여러 인스턴스 · 전역과
+지역 사이에서 이어진다. 저장하는 것은 세션 id 의 해시뿐이다.
+
+> 위 GUI 서술과 아래 쓰기 표는 2026-08 기준이다. GUI 는 #126 에서 시안대로 다시 만들었고 쓰기
+> 범위는 이 표보다 넓다(§0).
 
 | 쓰기 | 계약 |
 |---|---|
@@ -149,6 +179,10 @@ B(구현된 API·DDL) 드리프트를 둘 다 막는다.
 **그 상태를 이미 한 번 겪었다.** 파일에 남아 있는 해제 근거가 그것이다 —
 *"동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)."* 같은 값을 두 번
 치르지 않는다. **필드를 먼저 들이고, 그 뒤에 다시 쌓는다.**
+
+**그 필드들은 2026-08-31 에 들어왔다**(§2 의 표). 그 뒤로도 기능이 `Model` 을 계속 넓혀서
+카운터는 다시 0 부터다 — 지금 값은 `SURFACE.txt` 머리가 답한다. 남은 것은 **회차를 다시 쌓고
+선언하는 것**이고, 그것이 첫 릴리스 태그의 선결 조건이다(§9.1.1).
 
 **`--freeze-gate` 의 자리는 정해졌다** (셋째 회차 C). 기본 게이트에 `--freeze-status` 로
 들어간다 — 미선언 상태에서도 **카운터와 회차 근거가 맞물리는지**를 재고, 선언되면 거기에
@@ -289,7 +323,9 @@ block 등급 S8 · S11 · S12 는 열려 지나갔다. S13 은 원장을 안 짓
 - 모델에 h3 / `transportOf()`
 - `on_nxdomain` · `on_timeout` 모델 필드
 - OCSP stapling
-- 멀티 노드 HA · 기존 세션 강제 종료
+- 쓰기 경로의 HA · 기존 세션 강제 종료 — 데이터 플레인은 클러스터로 여러 대가 서빙한다(ADR-CLUSTER).
+  쓰기 · 커밋은 리더 하나이고, 리더를 잃으면 ADR-SPOF 의 수동 절차다
+- KMS · Vault 전용 KEK 드라이버 — `BARY_SECRET_KEK_CMD` 가 이음매다(§4.8.2)
 - raw nginx 편집 UI
 - GUI 폴링
 
