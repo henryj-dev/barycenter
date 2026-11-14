@@ -1,6 +1,6 @@
 {
   "name": "barycenter",
-  "version": "0.0.0",
+  "version": "0.1.0-dev",
   "private": true,
   "description": "Control plane for nginx — HTTP/TCP/UDP reverse proxying and load balancing",
   "license": "Apache-2.0",
@@ -40,7 +40,7 @@
     "fast-check": "4.10.2",
     "typescript": "^7.0.2",
     "typescript-5": "npm:typescript@^5.9.3",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
     "mysql2": "3.24.6",

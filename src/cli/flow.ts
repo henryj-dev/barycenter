@@ -7,6 +7,8 @@
  *
  * 프로세스를 여기서 죽이지 않는다. 종료 코드는 `bary.ts` 의 몫이다.
  */
+import { capabilityWarningLine } from '../web/impact-view.js';
+
 export type HttpResult = { status: number; body: unknown };
 export type Http = (method: string, path: string, body?: unknown) => Promise<HttpResult>;
 
@@ -97,7 +99,7 @@ export function planSummary(impact: PlanImpact): string[] {
       + (c.notAfter === undefined ? '' : ` — ${c.notAfter.slice(0, 10)} 만료`));
   }
   for (const w of impact.routeOrderChanges?.warnings ?? []) lines.push(`라우트 — ${w.message}`);
-  for (const w of impact.capabilityWarnings ?? []) lines.push(`엔진 — ${w.message}`);
+  for (const w of impact.capabilityWarnings ?? []) lines.push(capabilityWarningLine(w));
   for (const b of impact.bindTransitions ?? []) lines.push(`적용 불가 — ${b.message}`);
   return lines;
 }

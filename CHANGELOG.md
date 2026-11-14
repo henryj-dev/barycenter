@@ -17,12 +17,18 @@ vulnerability it fixes.
 
 ### Upgrade impact
 
+- The `Server` response header now reads `barycenter/<version>` (was `openresty/<version>`), and the
+  development line is versioned `0.1.0-dev` (was `0.0.0`) until the first release tag.
 - The daemon applies database migrations at start-up; the newest are `031_route_path_prefixes.sql` and
   `032_route_source_rules.sql` (additive, no data rewrite).
 - `deploy/install.sh` now installs `barycenterd.socket` (systemd socket activation) next to the
   service. Re-run the installer once so the API port is held by systemd across daemon restarts.
 - The engine (nginx/OpenResty) runs as its own systemd unit, so restarting the daemon no longer
   stops traffic (#122, #123).
+- Requests over a listener's rate limit (`limit_req`) or connection limit (`limit_conn`) now get
+  **429 Too Many Requests** with `Retry-After: 1` and the engine error page, not nginx's default 503.
+  If your monitoring counts 503 to detect rate limiting, count 429 instead; 503 now means only
+  engine or backend trouble (DESIGN.md §4.10).
 
 ### Added
 

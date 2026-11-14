@@ -86,7 +86,7 @@ describe('레이트리밋·커넥션 제한 (제안 #6)', () => {
     expect(conf).toContain('limit_conn_zone');
   });
 
-  it('zone 크기를 정할 수 있다 — 차면 nginx 가 503 을 낸다', () => {
+  it('zone 크기를 정할 수 있다 — 차면 nginx 가 거부한다(429)', () => {
     const conf = render(base({ requestsPerSecond: 10, zoneKb: 1024 }), ON).conf;
     expect(conf).toContain('zone=bary_req_web:1m ');
   });
@@ -112,6 +112,54 @@ describe('레이트리밋·커넥션 제한 (제안 #6)', () => {
     const conf = render(two, ON).conf;
     expect(conf).toContain('zone=bary_req_web:');
     expect(conf).toContain('zone=bary_req_other:');
+  });
+
+  describe('제한에 걸린 요청은 429 다 — nginx 기본 503 이 아니다', () => {
+    /**
+     * 503 은 「서버가 잠시 못 받는다」 다. 클라이언트가 많이 보낸 탓이면 429 가 맞다(RFC 6585 §4).
+     * 503 으로 두면 백엔드 장애 경보와 한 숫자로 섞인다.
+     */
+    it('`limit_req` 옆에 `limit_req_status 429` 가 난다', () => {
+      const conf = render(base({ requestsPerSecond: 10 }), ON).conf;
+      expect(conf).toContain('limit_req zone=bary_req_web;\n        limit_req_status 429;');
+      expect(conf).not.toContain('limit_conn_status');
+    });
+
+    it('`limit_conn` 옆에 `limit_conn_status 429` 가 난다', () => {
+      const conf = render(base({ maxConnections: 100 }), ON).conf;
+      expect(conf).toContain('limit_conn bary_conn_web 100;\n        limit_conn_status 429;');
+      expect(conf).not.toContain('limit_req_status');
+    });
+
+    it('`Retry-After` 는 엔진이 낸 429 에만 — 값이 비면 nginx 가 헤더를 안 낸다', () => {
+      const conf = render(base({ requestsPerSecond: 10, maxConnections: 100 }), ON).conf;
+      // 업스트림 상태가 비어 있어야 한다 — 백엔드가 보낸 429 에는 덧붙이지 않는다.
+      expect(conf).toContain('map $upstream_status $bary_retry_after_up {\n        default "";\n        "" 1;\n    }');
+      expect(conf).toContain('map $status $bary_retry_after {\n        default "";\n        429 $bary_retry_after_up;\n    }');
+      // server 레벨이다 — location 에 add_header 를 내면 HSTS 가 사라진다.
+      expect(conf).toContain('limit_conn_status 429;\n        add_header Retry-After $bary_retry_after always;');
+      expect(conf.match(/map \$status \$bary_retry_after /g)?.length).toBe(1);
+    });
+
+    it('**안 적으면 아무것도 안 난다** — 지시어도 map 도 add_header 도', () => {
+      const conf = render(base(), ON).conf;
+      expect(conf).not.toContain('limit_req_status');
+      expect(conf).not.toContain('limit_conn_status');
+      expect(conf).not.toContain('bary_retry_after');
+      expect(conf).not.toContain('Retry-After');
+    });
+
+    it('제한이 있는 리스너의 server 에만 — 옆 리스너는 그대로다', () => {
+      const two = base({ requestsPerSecond: 10 });
+      two.listeners = [
+        two.listeners[0]!,
+        { key: 'other', protocol: 'http', bind: '0.0.0.0', port: 81, enabled: true,
+          http: { defaultAction: { pool: 'app' } } } as typeof two.listeners[0],
+      ];
+      const conf = render(two, ON).conf;
+      expect(conf.match(/limit_req_status 429;/g)?.length).toBe(1);
+      expect(conf.match(/add_header Retry-After/g)?.length).toBe(1);
+    });
   });
 
   describe('해독기가 경계에서 막는다', () => {
