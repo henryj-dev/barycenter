@@ -20,12 +20,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { dropScratch } from '../scratch.js';
 import { toolsImage } from './tools-image.js';
 import { render, type RenderCapabilities } from '../../src/conf/render.js';
+import { SERVED_BY_FILE, servedByFragment } from '../../src/conf/served-by.js';
 import type { Model } from '../../src/model/provisional.js';
 
 const PORT = 18991;
 const BACKEND = 18992;
 const V = 'e'.repeat(32);
 const VERSION = '9.9.9-test';
+const ALIAS = 'golden-a1';
 
 function dockerAvailable(): boolean {
   try { execFileSync('docker', ['info'], { stdio: 'ignore' }); return true; } catch { return false; }
@@ -77,7 +79,7 @@ events {}
 http { server { listen ${BACKEND}; location / { default_type text/plain; return 502 "backend-own-502"; } } }
 `;
 
-/** 한 요청 — `KEY|상태|형식|Server|HSTS|XFO|본문 표식` 한 줄. */
+/** 한 요청 — `KEY|상태|형식|Server|HSTS|XFO|본문 표식|바이트|X-Served-By|본문의 노드 이름` 한 줄. */
 const PROBE = `
 one() {  # one <key> <path> [accept]
   acc=\${3:-text/html}
@@ -86,7 +88,8 @@ one() {  # one <key> <path> [accept]
   st=$(head -1 /tmp/hdr | awk '{print $2}')
   mark=$(grep -o '<p class="code">[0-9]*</p>\\|backend-own-502\\|"status":[0-9]*\\|openresty' /tmp/body | head -1)
   bytes=$(wc -c < /tmp/body | tr -d ' ')
-  echo "$1|$st|$(h content-type)|$(h server)|$(h strict-transport-security)|$(h x-frame-options)|$mark|$bytes"
+  sby=$(grep -c '<code>${ALIAS}</code>\\|"served_by":"${ALIAS}"' /tmp/body)
+  echo "$1|$st|$(h content-type)|$(h server)|$(h strict-transport-security)|$(h x-frame-options)|$mark|$bytes|$(h x-served-by)|$sby"
 }
 one own /own
 one dead /dead
@@ -96,7 +99,8 @@ one rule /rule
 one json /dead application/json
 `;
 
-function serve(conf: string): string {
+/** `servedBy` 가 있으면 노드가 세대에 쓰는 조각(`admin/served-by.map`)을 같은 자리에 둔다. */
+function serve(conf: string, servedBy?: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'bary-errpage-'));
   chmodSync(dir, 0o777);
   try {
@@ -104,6 +108,10 @@ function serve(conf: string): string {
     mkdirSync(join(dir, 'logs'), { recursive: true });
     writeFileSync(join(dir, 'conf', 'nginx.conf'), `daemon off;\n${conf}`, 'utf8');
     writeFileSync(join(dir, 'conf', 'backend.conf'), BACKEND_CONF, 'utf8');
+    if (servedBy !== undefined) {
+      mkdirSync(join(dir, 'conf', 'admin'), { recursive: true });
+      writeFileSync(join(dir, 'conf', SERVED_BY_FILE), servedByFragment(servedBy), 'utf8');
+    }
     writeFileSync(join(dir, 'probe.sh'), PROBE, 'utf8');
     return execFileSync('docker',
       ['run', '--rm', '-v', `${dir}:/prefix:Z`, '--entrypoint', '/bin/sh', toolsImage(), '-c',
@@ -121,10 +129,14 @@ function serve(conf: string): string {
   }
 }
 
-type Row = { status: string; type: string; server: string; hsts: string; xfo: string; mark: string; bytes: number };
+type Row = {
+  status: string; type: string; server: string; hsts: string; xfo: string; mark: string; bytes: number;
+  servedBy: string; servedInBody: number;
+};
 const rows = (out: string): Map<string, Row> => new Map(out.split('\n').filter((l) => l.includes('|')).map((l) => {
-  const [k, status, type, server, hsts, xfo, mark, bytes] = l.split('|');
-  return [k!, { status: status!, type: type!, server: server!, hsts: hsts!, xfo: xfo!, mark: mark!, bytes: Number(bytes) }];
+  const [k, status, type, server, hsts, xfo, mark, bytes, servedBy, sby] = l.split('|');
+  return [k!, { status: status!, type: type!, server: server!, hsts: hsts!, xfo: xfo!, mark: mark!, bytes: Number(bytes),
+    servedBy: servedBy!, servedInBody: Number(sby) }];
 }));
 
 describe('응답 이름과 오류 페이지 — 엔진이 내는 응답으로 판정한다', () => {
@@ -132,6 +144,10 @@ describe('응답 이름과 오류 페이지 — 엔진이 내는 응답으로 �
   let plain = '';
   let r = new Map<string, Row>();
   let p = new Map<string, Row>();
+  let named = '';
+  let n = new Map<string, Row>();
+  let namedPlain = '';
+  let np = new Map<string, Row>();
 
   beforeAll(() => {
     if (!dockerAvailable()) return;
@@ -139,7 +155,39 @@ describe('응답 이름과 오류 페이지 — 엔진이 내는 응답으로 �
     plain = serve(render(model, base).conf);
     r = rows(out);
     p = rows(plain);
-  }, 300_000);
+    // 같은 렌더 결과 + 노드 조각. 렌더 입력에는 노드 이름이 없다 — digest 가 노드마다 같다.
+    named = serve(render(model, { ...base, headersMore: true, serverVersion: VERSION }).conf, ALIAS);
+    namedPlain = serve(render(model, base).conf, ALIAS);
+    n = rows(named);
+    np = rows(namedPlain);
+  }, 600_000);
+
+  it.runIf(dockerAvailable())('노드 조각이 없으면 `X-Served-By` 도 본문의 노드 이름도 없다 (기본은 끈다)', () => {
+    for (const [k, row] of r) {
+      expect(row.servedBy, `${k}\n${out}`).toBe('');
+      expect(row.servedInBody, `${k}\n${out}`).toBe(0);
+    }
+  });
+
+  it.runIf(dockerAvailable())('노드 조각이 있으면 모든 응답에 `X-Served-By: <별칭>` — 업스트림 오류 · 정상 응답 포함', () => {
+    for (const k of ['own', 'dead', 'deny', 'nf', 'rule', 'json']) {
+      expect(n.get(k)?.servedBy, `${k}\n${named}`).toBe(ALIAS);
+    }
+    expect(named).not.toMatch(/\[emerg\]|\[alert\]/);
+  });
+
+  it.runIf(dockerAvailable())('엔진이 만든 오류 페이지 · JSON 에 노드 이름이 붙는다 — 업스트림 본문은 손대지 않는다', () => {
+    for (const k of ['dead', 'deny', 'nf', 'rule', 'json']) {
+      expect(n.get(k)?.servedInBody, `${k}\n${named}`).toBe(1);
+    }
+    expect(n.get('own')?.servedInBody, named).toBe(0);
+    expect(n.get('own')?.mark, named).toBe('backend-own-502');
+  });
+
+  it.runIf(dockerAvailable())('headers-more 가 없으면 헤더는 없고 오류 페이지에만 나간다', () => {
+    expect(np.get('dead')?.servedBy, namedPlain).toBe('');
+    expect(np.get('dead')?.servedInBody, namedPlain).toBe(1);
+  });
 
   it.runIf(dockerAvailable())('`Server: barycenter/<버전>` — 정상 응답과 오류 응답 모두', () => {
     for (const k of ['own', 'dead', 'deny', 'nf', 'rule', 'json']) {

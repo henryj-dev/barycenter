@@ -66,7 +66,9 @@ describe('응답 이름 — `server_tokens` · `more_set_headers`', () => {
   it('headers-more 가 있으면 `Server: barycenter/<버전>` 이 http 블록에 정확히 한 번이다', () => {
     const conf = render(model, { ...caps, headersMore: true, serverVersion: '1.2.3' }).conf;
     expect(count(conf, /^ {4}more_set_headers "Server: barycenter\/1\.2\.3";$/)).toBe(1);
-    expect(count(conf, /more_set_headers/)).toBe(1);
+    expect(count(conf, /more_set_headers "Server/)).toBe(1);
+    // 나머지 하나는 노드 이름(served-by.ts) — 값이 비면 헤더가 안 나간다.
+    expect(count(conf, /more_set_headers/)).toBe(2);
   });
 
   it('버전을 모르면 이름만 낸다 — 지어낸 버전을 내지 않는다', () => {
@@ -140,7 +142,7 @@ describe('오류 페이지 — `error_page` · named location', () => {
     const maps = conf.split('\n').filter((l) => /^\s+(default|\d{3}) ".*"[;]$/.test(l) && l.includes('<'));
     expect(maps.length).toBeGreaterThan(0);
     const vars = new Set(maps.flatMap((l) => [...l.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1])));
-    for (const v of vars) expect(['status', 'request_id', 'bary_err_title']).toContain(v);
+    for (const v of vars) expect(['status', 'request_id', 'bary_err_title', 'bary_err_served', 'bary_served_by']).toContain(v);
   });
 
   it('외부 요청이 없다 — 글꼴 · 스크립트 · 이미지 · 링크', () => {

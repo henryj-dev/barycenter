@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
+import { SERVED_BY_FILE, servedByFragment } from '../conf/served-by.js';
 import { adminFetch, adminTalk } from './admin-client.js';
 import { eligibleWithDiscovery, type DiscoveryIntake } from './discovery.js';
 import { drainKeys, observationPeerOf, observePeerFromAdmin, observeStreamPeer } from './drain.js';
@@ -51,6 +52,11 @@ export type ControlPlaneOptions = {
    */
   adminSocket: string;
   renderCaps?: RenderCapabilities;
+  /**
+   * 이 노드의 이름 — `X-Served-By` 헤더와 오류 페이지 (`BARY_SERVED_BY`, conf/served-by.ts). 없으면 끈다.
+   * **노드마다 다르다** — 렌더 결과가 아니라 세대마다 쓰는 `admin/served-by.map` 조각에 들어간다(digest 밖).
+   */
+  servedBy?: string;
   /** 조회한 엔진 정보. `status()` 가 그대로 드러낸다. */
   engine?: unknown;
   /**
@@ -641,6 +647,7 @@ export class ControlPlane {
         // **인증서 바이트를 세대 안에 넣는다** (§7.2, S8·S19). 바깥 mutable 경로를
         // 가리키거나 symlink 로 걸면 롤백이 거짓말이 된다.
         ...certFiles.files,
+        ...(this.opts.servedBy === undefined ? {} : { [SERVED_BY_FILE]: servedByFragment(this.opts.servedBy) }),
         ...(membership === undefined
           ? { 'admin/marker.conf': markerConf(generation, this.opts.adminSocket) }
           : {

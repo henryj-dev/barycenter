@@ -77,6 +77,7 @@ import { dataplaneCapabilitiesOf } from '../engine/native-dns.js';
 import { probeEngine } from '../engine/probe.js';
 import { hostAddresses } from '../engine/host-addresses.js';
 import { renderCapsOf } from '../engine/render-caps.js';
+import { servedByFromEnv } from '../conf/served-by.js';
 import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '../control/data-sources-boot.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
@@ -989,8 +990,16 @@ export async function main(): Promise<void> {
   retry.unref();
 
   const dataSources = createDataSources(dataSourcesCfg, renderCaps.httpLua === true || renderCaps.streamLua === true);
+  // **응답한 노드의 이름** (conf/served-by.ts). 모양이 틀리면 여기서 죽는다 — 운영자가 바로 안다.
+  const servedBy = servedByFromEnv(process.env['BARY_SERVED_BY'], hostname);
+  if (servedBy !== undefined) {
+    if (renderCaps.headersMore === true) log.info('served_by.enabled', { alias: servedBy });
+    // 헤더는 못 내고 오류 페이지에만 나간다 — 켰는데 반만 되는 것을 조용히 두지 않는다.
+    else log.warn('served_by.no_header', { alias: servedBy, why: '엔진에 headers-more 가 없다 — 오류 페이지에만 나간다' });
+  }
   const control = new ControlPlane(db, store, driver, election,
-    { prefix, adminSocket, streamAdminSocket, renderCaps, engine: engineInfo, driver: driverBoot, secrets,
+    { prefix, adminSocket, streamAdminSocket, renderCaps, ...(servedBy === undefined ? {} : { servedBy }),
+      engine: engineInfo, driver: driverBoot, secrets,
       discovery: dataSources.intake });
 
   // **기동 시 멤버십을 되돌려 놓는다** (§6.4). shared dict 는 프로세스 수명이라 엔진이

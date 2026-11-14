@@ -31,6 +31,7 @@ import { expandAddressSets } from '../model/address-sets.js';
 import { redirectListenerOf } from '../model/redirect.js';
 import { decodeModel } from '../model/decode.js';
 import { errorPageHttpNodes, errorPageServerNodes, locationErrorPageNodes } from './error-pages.js';
+import { servedByHttpNodes } from './served-by.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
 import { routePathKey, routePaths } from '../model/route-paths.js';
@@ -2013,6 +2014,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       ...(caps.headersMore === true
         ? [directive('more_set_headers', [lit(`Server: barycenter${caps.serverVersion === undefined ? '' : `/${caps.serverVersion}`}`)])]
         : []),
+      // **응답한 노드의 이름** (served-by.ts). 값은 노드가 세대마다 쓰는 조각에서 온다 — 렌더 결과는 노드마다 같다.
+      ...servedByHttpNodes(caps.headersMore === true),
       // 오류 페이지의 변수들. `error_page` 와 named location 은 server 마다다(`errorPageServerNodes`).
       ...errorPageHttpNodes(),
     ];
