@@ -11,6 +11,8 @@
  * 담으면 같은 내용의 롤백이 옛 세대 디렉토리를 재사용하게 된다.
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { render, type RenderCapabilities } from '../conf/render.js';
 import { SERVED_BY_FILE, servedByFragment } from '../conf/served-by.js';
@@ -434,7 +436,8 @@ export class ControlPlane {
      */
     if (membership !== undefined) {
       const live = await this.activeRenderDigest();
-      if (live !== undefined && live.digest === rendered.digest) {
+      // 노드 이름 조각은 digest 밖이다 — 별칭만 바뀌었으면 렌더가 같아도 새 세대를 내야 조각이 바뀐다.
+      if (live !== undefined && live.digest === rendered.digest && this.servedByIsCurrent()) {
         return this.applyMembershipOnly(plan, membership, live.epoch, planId, by);
       }
     }
@@ -546,6 +549,28 @@ export class ControlPlane {
    *   · 오퍼레이션 id 는 리더의 것을 그대로 쓴다. 노드마다 저널이 따로라 겹치지 않고,
    *     같은 id 로 다시 부르면 에이전트가 진행된 만큼 건너뛴다(재진입).
    */
+  /**
+   * **서빙 중인 세대의 노드 이름 조각이 지금 원하는 것과 같은가** (conf/served-by.ts).
+   *
+   * 조각은 렌더 결과가 아니라 digest 가 그것을 못 본다. 「digest 가 같으면 멤버십만 옮긴다」 만 보면 `BARY_SERVED_BY` 를
+   * 바꾸고 다시 적용해도 세대가 안 바뀌어 옛 이름이 남는다(2026-11-14, web-01 에서 켜려다 찾았다).
+   * 못 읽으면(파일 없음 밖의 오류) 다르다고 본다 — 세대를 한 번 더 내는 것이 옛 이름을 남기는 것보다 싸다.
+   *
+   * 팔로워(`followActive`)는 세대 이름을 리더에게서 받으므로 같은 이름으로 내용만 바꿔 다시 쓰지 않는다 — 별칭은
+   * 리더가 낸 다음 세대에서 반영된다.
+   */
+  private servedByIsCurrent(): boolean {
+    const want = this.opts.servedBy === undefined ? undefined : servedByFragment(this.opts.servedBy);
+    let have: string | undefined;
+    try {
+      have = readFileSync(join(this.opts.prefix, 'current', SERVED_BY_FILE), 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      have = undefined;
+    }
+    return have === want;
+  }
+
   async followActive(
     by: string,
     /** 활성화를 **시작하기 직전**에 부른다 — 노드 상태를 「따라가는 중」으로 적는 자리다 (#120). */

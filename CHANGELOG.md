@@ -37,7 +37,8 @@ vulnerability it fixes.
 - **`X-Served-By` response header (opt-in).** Set `BARY_SERVED_BY=<alias>` (or `@hostname`) per node and
   every response carries `X-Served-By: <alias>`; engine error pages show it next to the request ID. Off by
   default. The value lives in a per-node generation fragment, so the rendered config and its digest stay
-  identical across nodes (DESIGN.md §4.10).
+  identical across nodes (DESIGN.md §4.10). Changing the alias and re-applying (`apply/rerender`) now
+  writes a new generation even when the rendered config is unchanged.
 
 - **Routes**
   - One route can match several path prefixes (`pathPrefixes`) (#183).

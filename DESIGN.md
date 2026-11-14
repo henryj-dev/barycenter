@@ -591,7 +591,10 @@ nginx 기본값(무한)이 안전한 쪽이고, 켜는 것은 사람이 정한�
     `add_header` 는 자기 `add_header` 가 있는 server · location 에서 사라진다(§4.6 대체 함정) — 반쪽 헤더를 내지 않는다.
     모듈 없이 켜면 데몬이 `served_by.no_header` 경고를 남긴다. 업스트림 응답 · 오류에도 붙는다.
   - **오류 페이지.** 요청 id 옆에 ` · <code>별칭</code>`, JSON 에 `"served_by"`. 값이 없으면 자리가 남지 않는다.
-  - 별칭을 바꾸면 다음 적용(또는 `apply/rerender`)에서 반영된다. digest 는 안 바뀌므로 바꾸기만 해서는 새 세대가 안 생긴다.
+  - 별칭을 바꾸면 데몬 재시작 뒤 다음 적용(또는 `apply/rerender`)에서 반영된다. 조각은 digest 밖이므로, 리더는
+    「digest 가 같으면 멤버십만 옮긴다」 전에 서빙 중인 세대(`current/admin/served-by.map`)의 조각도 본다 — 다르면 새
+    세대를 낸다(2026-11-14). plan 의 영향 미리보기는 조각을 모르므로 이때 「reload 없음」 으로 보일 수 있다.
+    팔로워는 세대 이름을 리더에게서 받으므로, 별칭은 리더가 낸 다음 세대에서 반영된다.
   - 시험: `tests/unit/served-by.test.ts` · `tests/store/served-by-fragment.test.ts`(조각 · 같은 nginx.conf) ·
     `tests/golden/error-pages.test.ts`(실제 엔진 응답).
 - **모양.** 방문자가 보는 페이지다. 큰 상태 코드 · 짧은 제목 · 설명 한 줄(영어) + 한 줄(한국어) · 「홈으로」 또는
