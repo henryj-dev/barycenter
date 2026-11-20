@@ -14,6 +14,12 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- The status screen has a **저장소** panel, and `GET /api/v1/system/storage` (read scope; relayed in
+  global mode; `bary get system/storage`) reports it: the config and accounts database kinds and the
+  config server version, the secret store driver (files or encrypted in the database, and whether a
+  KEK is set — never its value), the retention window of each table (or "kept forever"), and the
+  last database, generation and secret clean-up results. Clean-ups run only on the leader, so a
+  follower says it has no result instead of reporting zero. No DSN, host or key material is returned.
 - **Traffic statistics.** On OpenResty, the engine now counts requests (connections for TCP/UDP),
   status classes (1xx–5xx), bytes in/out and time per listener, HTTP route, passthrough route,
   pool and backend, in a separate `lua_shared_dict` (`bary_http_traffic` · `bary_stream_traffic`,

@@ -33,6 +33,8 @@ export const RELAY_PATHS: readonly string[] = [
   'config/pending-resources',
   // 트래픽 통계 (2026-11-20). 지역 노드가 센 것을 그대로 읽는다.
   'traffic', 'traffic/:kind/:id',
+  // 저장소 상태 (2026-11-20). 비밀을 싣지 않는다 — 종류 · 판 · 보존 일수 · 마지막 청소뿐이다.
+  'system/storage',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */

@@ -16,6 +16,7 @@ import {
 } from '@web/routes-view';
 import { viewOfCertificates, type CertificateFact, type CertsView, type OrderFact } from '@web/certs-view';
 import { viewOfStatus, type StatusView } from '@web/status-view';
+import type { StorageBodyView } from '@web/storage-view';
 import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { RECONNECT_GRACE_MS, backoffMs, hasStream, isTransientStatus } from '@web/reconnect';
@@ -881,6 +882,16 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     return r.ok ? asList<unknown>(await r.json()) : undefined;
   };
 
+  /** `/ops/status` — 저장소 상태(DB 종류 · 보존 · 마지막 청소, 2026-11-20). 못 읽으면 `undefined`. */
+  const systemStorage = async (): Promise<StorageBodyView | undefined> => {
+    try {
+      const r = await fetch(api('/api/v1/system/storage'), { headers: auth() });
+      return r.ok ? await r.json() as StorageBodyView : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   /** `/ops/cluster` — 노드 상태. */
   const clusterNodes = async (): Promise<Record<string, unknown> | undefined> => {
     const r = await fetch(api('/api/v1/cluster/nodes'), { headers: auth() });
@@ -1295,6 +1306,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     revisions,
     rollback,
     clusterNodes,
+    systemStorage,
     clusterHistory,
     proxyFromUrl,
     get traffic() { return traffic; },
