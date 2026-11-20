@@ -71,14 +71,12 @@
   const editKey = $derived(edit ? page.params['key'] ?? '' : '');
   const item = $derived(edit ? itemOf(desk.model, 'httpRoute', editKey) : undefined);
   let loaded = $state<string | undefined>();
-  let lossy = $state(false);
   let orig = $state('');
   $effect(() => {
     if (!edit || item === undefined || loaded === editKey) return;
     const s = httpRouteStateOf(item);
     f = s.state;
     orig = JSON.stringify(s.state);
-    lossy = s.lossy;
     exPath = '';
     problem = undefined;
     loaded = editKey;
@@ -88,9 +86,9 @@
   $effect(() => { if (f.hosts.trim() !== '') hostTouched = true; });
 
   const sets = $derived(setCidrsOf(itemsOf(desk.model, 'addressSet')));
-  const rulesBad = $derived(rulesBlocked(f.rules, sets));
   /** 경로 목록 — 비면 `/` 하나다(`routePaths`). 같은 경로는 한 번(`pathFieldsOf`). */
   const paths = $derived(((ps) => (ps.length === 0 ? ['/'] : ps))([...new Set(fromTokens(f.pathPrefix))]));
+  const rulesBad = $derived(rulesBlocked(f.rules, sets, paths));
   const rw = $derived(f.rewritePrefix.trim());
   const rwErr = $derived(f.action === 'proxy' ? rewriteError(rw, paths) : undefined);
   // 예시 요청 → 백엔드로 가는 경로. 시안 「예시 요청」 미리보기.
@@ -113,7 +111,7 @@
   )));
   const headerWarn = $derived(f.headers.some((h) => plainHeader(h.name)));
   const ready = $derived(
-    (edit ? item !== undefined && !lossy : filled(name, keyError)) && f.listener !== undefined
+    (edit ? item !== undefined : filled(name, keyError)) && f.listener !== undefined
     && routeHostsError(f.hosts) === undefined && pathErr === undefined && prioErr === undefined
     && (f.action !== 'proxy' || f.pool !== undefined)
     && (f.action !== 'redirect' || filled(f.to))
@@ -233,7 +231,7 @@
 
   <FormSection title="출발지별 동작">
     <FormRow label="규칙" error={f.rules.length > 20 ? '규칙은 20개까지예요.' : rulesBad ? '잘못된 규칙이 있어요. 표시된 행을 고쳐요.' : undefined} help={RULES_HELP}>
-      <SourceRulesField bind:rules={f.rules} {pools} />
+      <SourceRulesField bind:rules={f.rules} {pools} {paths} />
     </FormRow>
   </FormSection>
 {/snippet}
@@ -243,9 +241,6 @@
     <div class="edit">
       <Writable>
         <Form onsubmit={save}>
-          {#if lossy}
-            <Banner tone="warn">출발지 규칙의 동작에 이 폼에 없는 칸(요청 헤더 · 경로 바꾸기)이 있어요. 폼으로 저장하면 그 칸이 사라져요. 아래 JSON으로 고쳐요.</Banner>
-          {/if}
           {@render fields()}
           {#if problem !== undefined}<Banner tone="danger">{problem}</Banner>{/if}
           <RouteEditFoot {dirty} invalid={dirty && !ready} {pending} saving={desk.editing} onrevert={reset} />

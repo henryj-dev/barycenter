@@ -96,7 +96,9 @@ const actLabel = (r: Pick<RuleRow, 'kind' | 'pool' | 'websocket' | 'to' | 'redir
 
 /** 시안 규칙 칸 — 「규칙 1 · 10.0.0.0/8 (연결 주소) → 풀 api」. */
 const ruleLines = (l: string, rules: unknown): ViewField =>
-  lines(l, ruleRowsOf(rules).rows.map((r, i) => `규칙 ${i + 1} · ${r.from || '그 밖의 출발지'}${r.address === 'connection' ? ' (연결 주소)' : ''} → ${actLabel(r)}`));
+  lines(l, ruleRowsOf(rules).rows.map((r, i) => `규칙 ${i + 1} · ${r.from || '그 밖의 출발지'}${r.address === 'connection' ? ' (연결 주소)' : ''} → ${actLabel(r)}`
+    + (r.rewritePrefix === '' ? '' : ` · 경로 바꾸기 ${r.rewritePrefix}`)
+    + (r.headers.length === 0 ? '' : ` · 요청 헤더 ${r.headers.map((h) => h.name).join(', ')}`)));
 
 /** ms → 「30 s」 · 「1500 ms」. 안 적었으면 「—」(nginx 기본값 — GUI 는 모른다). */
 const msText = (l: string, v: unknown): ViewField => {
@@ -150,6 +152,7 @@ function listenerSecs(model: ModelLike, key: string, m: Obj): ViewSection[] {
     secs.push({ t: '레이트리밋', f: [toggle('레이트리밋', rl !== undefined), ...(rl === undefined ? [] : [
       text('초당 요청', rl['requestsPerSecond'], { unit: 'req/s' }), text('burst', rl['burst'], { unit: 'req' }),
       toggle('nodelay', rl['nodelay'] === true), text('동시 연결', rl['maxConnections'], { unit: '개' }),
+      text('zone 크기', rl['zoneKb'] ?? 10240, { unit: 'KB' }),
     ])] });
     secs.push({ t: 'priority 정책', f: [toggle('priority 우선', h['strictPriority'] === true)] });
   } else if (p === 'tcp') {
@@ -243,7 +246,7 @@ function policySecs(key: string, p: Obj): ViewSection[] {
   const f = policyForm(p);
   return [
     { t: '기본', f: [text('이름', key), select('최소 버전', f.min, VERSIONS, false), select('최대 버전', f.max, MAX_VERSIONS, false), select('암호군', f.cipher, CIPHERS)] },
-    { t: 'HSTS', f: [toggle('HSTS', f.hsts), ...(f.hsts ? [text('max-age', f.maxAge, { unit: 's' }), toggle('하위 도메인', f.subdomains)] : [])] },
+    { t: 'HSTS', f: [toggle('HSTS', f.hsts), ...(f.hsts ? [text('max-age', f.maxAge, { unit: 's' }), toggle('하위 도메인', f.subdomains), toggle('preload', f.preload)] : [])] },
     { t: '검증', f: [select('SNI-Host 불일치', f.mismatch, MISMATCH, false)] },
   ];
 }
@@ -261,6 +264,8 @@ export function viewSecsOf(model: ModelLike, kind: ResourceKind, key: string, ct
     case 'backend': return [{ t: '기본', f: [
       text('이름', key), text('풀', item['pool']), text('호스트', item['host']), text('포트', item['port']),
       text('가중치', item['weight'] ?? 1), toggle('드레인', ctx.draining),
+    ] }, { t: '고급', f: [
+      text('동시 연결 기준', item['softMaxConns'], { unit: '개' }), toggle('예비 백엔드', item['isBackup'] === true),
     ] }];
     case 'addressSet': return [{ t: '기본', f: [text('이름', key), lines('대역 목록', strs(item['cidrs']))] }];
     case 'httpRoute': return httpRouteSecs(key, item);
@@ -269,6 +274,9 @@ export function viewSecsOf(model: ModelLike, kind: ResourceKind, key: string, ct
     case 'tlsPolicy': return policySecs(key, item);
     case 'sniBinding': return [{ t: '기본', f: [
       text('이름', key), text('리스너', item['listener']), lines('호스트 목록', strs(item['hosts'])), text('인증서', item['certificate']),
+    ] }, { t: 'TLS 버전 덮어쓰기', f: [
+      text('최소 버전', obj(item['override'])?.['minVersion'] ?? '정책을 따라요'),
+      text('최대 버전', obj(item['override'])?.['maxVersion'] ?? '정책을 따라요'),
     ] }];
   }
 }

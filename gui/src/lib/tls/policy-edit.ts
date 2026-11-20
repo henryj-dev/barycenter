@@ -21,11 +21,16 @@ export const HSTS_MAX = 63_072_000;
 export type PolicyForm = {
   min: TlsVersion; max: MaxVersion; cipher: Cipher; mismatch: Mismatch;
   hsts: boolean; maxAge: string | number; subdomains: boolean;
+  /** 브라우저 preload 목록에 올려도 된다는 표시. max-age 1년 이상 · 하위 도메인 켜짐이 필요하다(`invalid_hsts`). */
+  preload: boolean;
 };
+
+/** preload 가 요구하는 최소 max-age(1년). 해독기 · 검증기와 같은 값이다. */
+export const PRELOAD_MIN_AGE = 31_536_000;
 
 /** head 의 정책 → 폼 값. */
 export const policyForm = (p: Item | undefined): PolicyForm => {
-  const h = p?.['hsts'] as { maxAgeSeconds?: number; includeSubdomains?: boolean } | undefined;
+  const h = p?.['hsts'] as { maxAgeSeconds?: number; includeSubdomains?: boolean; preload?: boolean } | undefined;
   return {
     min: p?.['minVersion'] === '1.3' ? '1.3' : '1.2',
     max: p?.['maxVersion'] === '1.2' || p?.['maxVersion'] === '1.3' ? p['maxVersion'] : 'none',
@@ -34,6 +39,7 @@ export const policyForm = (p: Item | undefined): PolicyForm => {
     hsts: h !== undefined,
     maxAge: String(h?.maxAgeSeconds ?? 31_536_000),
     subdomains: h?.includeSubdomains === true,
+    preload: h?.preload === true,
   };
 };
 
@@ -45,20 +51,52 @@ export const ageError = (f: Pick<PolicyForm, 'hsts' | 'maxAge'>): string | undef
   : !/^\d+$/.test(String(f.maxAge).trim()) ? '초 단위 정수를 입력해요.'
   : Number(f.maxAge) > HSTS_MAX ? `${HSTS_MAX}초(2년)까지예요.` : undefined);
 
+/** preload 의 조건 — max-age 1년 이상과 하위 도메인. */
+export const preloadError = (f: Pick<PolicyForm, 'hsts' | 'maxAge' | 'preload' | 'subdomains'>): string | undefined => (!f.hsts || !f.preload ? undefined
+  : !f.subdomains ? 'preload 는 하위 도메인을 켜야 해요.'
+  : Number(f.maxAge) < PRELOAD_MIN_AGE ? `preload 는 max-age 가 ${PRELOAD_MIN_AGE}초(1년) 이상이어야 해요.` : undefined);
+
 /**
- * 폼 값 → 모델 몸체(키 뺌). `base` 는 head 의 정책 — 폼에 없는 칸(HSTS `preload` …)은 그대로 둔다.
+ * 폼 값 → 모델 몸체(키 뺌). `base` 는 head 의 정책 — 폼에 없는 칸은 그대로 둔다.
  * 기본값과 같은 칸은 싣지 않는다(최대 버전 제한 없음 · intermediate · 허용 · HSTS 꺼짐).
  */
 export const policyBody = (f: PolicyForm, base?: Item): Record<string, unknown> => {
   const { key: _k, minVersion: _a, maxVersion: _b, cipherPolicy: _c, sniHostMismatch: _d, hsts: oldHsts, ...rest } = base ?? {};
   const keepHsts = (oldHsts ?? {}) as Record<string, unknown>;
-  const { maxAgeSeconds: _m, includeSubdomains: _s, ...hstsRest } = keepHsts;
+  const { maxAgeSeconds: _m, includeSubdomains: _s, preload: _p, ...hstsRest } = keepHsts;
   return {
     ...rest,
     minVersion: f.min,
     ...(f.max === 'none' ? {} : { maxVersion: f.max }),
     ...(f.cipher === 'intermediate-2026' ? {} : { cipherPolicy: f.cipher }),
     ...(f.mismatch === 'allow' ? {} : { sniHostMismatch: f.mismatch }),
-    ...(f.hsts ? { hsts: { ...hstsRest, maxAgeSeconds: Number(f.maxAge), ...(f.subdomains ? { includeSubdomains: true } : {}) } } : {}),
+    ...(f.hsts ? { hsts: { ...hstsRest, maxAgeSeconds: Number(f.maxAge), ...(f.subdomains ? { includeSubdomains: true } : {}), ...(f.preload ? { preload: true } : {}) } } : {}),
   };
+};
+
+// ── SNI 바인딩의 TLS 버전 덮어쓰기 (2026-11-20) ──────────────────────────────
+
+/** TLS 버전 덮어쓰기 — 빈 값은 「정책을 따라요」. */
+export type OverrideText = { min: '' | '1.2' | '1.3'; max: '' | '1.2' | '1.3' };
+
+/** 모델의 `override` → 폼 값. */
+export const overrideOf = (item: Readonly<Record<string, unknown>> | undefined): OverrideText => {
+  const o = item?.['override'] as { minVersion?: unknown; maxVersion?: unknown } | undefined;
+  const v = (x: unknown): OverrideText['min'] => (x === '1.2' || x === '1.3' ? x : '');
+  return { min: v(o?.minVersion), max: v(o?.maxVersion) };
+};
+
+/** 폼 값 → 모델의 `override`. 둘 다 비면 없다. */
+export const overrideBody = (o: OverrideText): { minVersion?: '1.2' | '1.3'; maxVersion?: '1.2' | '1.3' } | undefined =>
+  o.min === '' && o.max === '' ? undefined : { ...(o.min === '' ? {} : { minVersion: o.min }), ...(o.max === '' ? {} : { maxVersion: o.max }) };
+
+/**
+ * 실제로 쓰일 범위가 비었나. 덮지 않은 쪽은 리스너 정책 값이다(렌더러와 같은 규칙: `override ?? policy`).
+ * 최소가 최대보다 크면 그 호스트는 어느 버전으로도 손을 못 잡는다.
+ */
+export const overrideError = (o: OverrideText, policy: { min?: string; max?: string }): string | undefined => {
+  const min = o.min === '' ? policy.min : o.min;
+  const max = o.max === '' ? policy.max : o.max;
+  if (min === undefined || max === undefined) return undefined;
+  return Number(min) > Number(max) ? `최소 TLS ${min} 이 최대 TLS ${max} 보다 높아요. 이 호스트는 연결할 수 없어요.` : undefined;
 };

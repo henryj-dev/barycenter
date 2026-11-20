@@ -99,7 +99,7 @@ describe('만들기 드로어 — 시안 fieldsFor(…, true, \'drawer\')', () =
   it('TLS 정책: 기본 · HSTS · 검증 / SNI: 기본', () => {
     const t = src('lib/forms/TlsPolicyForm.svelte');
     expect([...t.matchAll(/<FormSection title="([^"]+)"/g)].map((m) => m[1])).toEqual(['기본', 'HSTS', '검증']);
-    expect([...t.matchAll(/<FormRow label="([^"]+)"/g)].map((m) => m[1])).toEqual(['이름', '최소 버전', '최대 버전', '암호군', 'HSTS', 'max-age', '하위 도메인', 'SNI-Host 불일치']);
+    expect([...t.matchAll(/<FormRow label="([^"]+)"/g)].map((m) => m[1])).toEqual(['이름', '최소 버전', '최대 버전', '암호군', 'HSTS', 'max-age', '하위 도메인', 'preload', 'SNI-Host 불일치']);
     const p = src('lib/tls/policy-edit.ts');
     expect(p).toContain("[{ value: 'reject_421', label: '거절' }, { value: 'allow', label: '허용' }]");
     const n = src('lib/forms/SniBindingForm.svelte');

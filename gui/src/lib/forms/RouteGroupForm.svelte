@@ -28,7 +28,7 @@
   import CreateForm from './CreateForm.svelte';
   import { filled, keyError, words } from './checks';
   import { fromTokens, groupKeyOf, setCidrsOf, sourceRuleErrors } from './source-rules';
-  import { NAME_ERROR, routeHostsError, routePathsError } from './route-edit';
+  import { NAME_ERROR, PRIORITY_HELP, priorityError, routeHostsError, routePathsError } from './route-edit';
   import SourceRulesField, { emptyRule, type PathRuleRow } from './SourceRulesField.svelte';
 
   /** 줄 수 상한 — 시안과 같다. 라우트 하나의 규칙은 해독기가 20개로 막는다. */
@@ -46,6 +46,9 @@
   let key = $state('');
   let listener = $state<string | undefined>();
   let hosts = $state('');
+  /** 펼친 라우트 모두의 우선순위 — 라우트 만들기와 같은 기본값(100)으로 연다. */
+  let priority = $state('100');
+  const prioErr = $derived(priorityError(priority));
   // 시안 `openGroup`: 줄 하나(풀로 보내기 · 첫 풀)로 연다.
   let rows = $state<Row[]>([{ ...emptyRule(), paths: '' }]);
   $effect(() => { const p = pools[0]?.value; if (p !== undefined && rows.length === 1 && rows[0]!.pool === undefined && rows[0]!.kind === 'proxy') rows[0]!.pool = p; });
@@ -74,19 +77,21 @@
   });
 
   /** 펼친 결과 — 저장 전에 보인다. 못 펼치면 그 이유다. */
-  const preview = $derived.by((): { routes: { key: string; paths: string; rules: number; action: string }[]; error?: string } => {
+  const preview = $derived.by((): { routes: { key: string; paths: string; priority: number; rules: number; action: string }[]; error?: string } => {
     if (key.trim() === '' || listener === undefined || routeHostsError(hosts) !== undefined) return { routes: [], error: '이름 · 리스너 · 호스트를 넣으면 만들 라우트가 보여요.' };
     try {
       const ops = routeGroupPatch({
         key: key.trim(), listener, hosts: words(hosts), lines: rows.map(lineOf),
         ...(fallback === undefined ? {} : { fallback }),
+        ...(prioErr === undefined ? { priority: Number(priority.trim()) } : {}),
       });
       return {
         routes: ops.map((o) => {
-          const b = o.body as { pathPrefix?: string; pathPrefixes?: string[]; sourceRules?: unknown[]; action: { kind: string; pool?: string; status?: number; websocket?: boolean; to?: string } };
+          const b = o.body as { priority: number; pathPrefix?: string; pathPrefixes?: string[]; sourceRules?: unknown[]; action: { kind: string; pool?: string; status?: number; websocket?: boolean; to?: string } };
           return {
             key: o.key,
             paths: (b.pathPrefixes ?? [b.pathPrefix ?? '/']).join(', '),
+            priority: b.priority,
             rules: b.sourceRules?.length ?? 0,
             // 시안 `actLabel`.
             action: b.action.kind === 'proxy' ? `풀 ${b.action.pool ?? ''}${b.action.websocket === true ? ' · WebSocket' : ''}`
@@ -139,13 +144,14 @@
   const planReady = $derived(filled(key, keyError) && listener !== undefined && routeHostsError(hosts) === undefined && !linesBad && preview.error === undefined);
   /** 다 넣었는데 펼치지 못했다 — 그 까닭(해요체). */
   const planErr = $derived(!linesBad && preview.error !== undefined && key.trim() !== '' && listener !== undefined && routeHostsError(hosts) === undefined ? preview.error : undefined);
-  const ready = $derived(filled(key, keyError) && listener !== undefined && routeHostsError(hosts) === undefined && !linesBad && preview.error === undefined && preview.routes.length > 0);
+  const ready = $derived(filled(key, keyError) && listener !== undefined && routeHostsError(hosts) === undefined && prioErr === undefined && !linesBad && preview.error === undefined && preview.routes.length > 0);
 
   const submit = (): void => {
     if (listener === undefined) return;
     void desk.insertRouteGroup({
       key: key.trim(), listener, hosts: words(hosts), lines: rows.map(lineOf),
       ...(fallback === undefined ? {} : { fallback }),
+      priority: Number(priority.trim()),
     }).then(after(resourcePath('httpRoute', key.trim()), `라우트 ${preview.routes.length}개를 커밋했어요`));
   };
 </script>
@@ -161,6 +167,9 @@
     <FormRow label="호스트" for="rg-hosts" error={hostErr} help="정확한 이름이나 *.example.com 형태예요. 쉼표나 공백으로 여러 개를 입력해요.">
       <TextInput id="rg-hosts" bind:value={hosts} invalid={hostErr !== undefined} autocomplete="off" />
     </FormRow>
+    <FormRow label="우선순위" for="rg-prio" error={prioErr} help={`${PRIORITY_HELP} 만들 라우트 모두가 이 값을 써요.`}>
+      <TextInput id="rg-prio" bind:value={priority} invalid={prioErr !== undefined} inputmode="numeric" width="160px" />
+    </FormRow>
   </FormSection>
 
   <FormSection title="경로별 동작">
@@ -174,7 +183,7 @@
     <FormRow label="라우트" error={planErr} help={planReady ? undefined : '이름 · 리스너 · 호스트를 넣으면 만들 라우트가 보여요.'}>
       <div class="res">
         {#each planReady ? preview.routes : [] as r (r.key)}
-          <div class="ri"><span class="k">{r.key}</span><span class="v">{r.paths} · 출발지 규칙 {r.rules}개 · 기본 동작 {r.action}</span></div>
+          <div class="ri"><span class="k">{r.key}</span><span class="v">{r.paths} · 우선순위 {r.priority} · 출발지 규칙 {r.rules}개 · 기본 동작 {r.action}</span></div>
         {/each}
       </div>
     </FormRow>

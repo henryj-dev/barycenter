@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
    * SNI 바인딩 설정 탭 — 콘솔 시안 `fieldsFor('sni', v, false, 'form')`: 구획 「기본」 의 이름(잠김) · 리스너 · 호스트 목록 · 인증서.
-   * `put` 은 통째로 덮는다 — 폼에 없는 칸(`override` …)은 head 값 그대로 싣는다.
+   * 「TLS 버전 덮어쓰기」(`override`)도 고친다. 비우면 리스너 정책을 따른다.
+   * `put` 은 통째로 덮는다 — 폼에 없는 칸은 head 값 그대로 싣는다.
    */
   import { getContext, untrack } from 'svelte';
   import { page } from '$app/state';
@@ -12,7 +13,9 @@
   import { isPendingResource } from '#lib/pending';
   import SettingsFrame from '#lib/detail/SettingsFrame.svelte';
   import { viewSecsOf } from '#lib/detail/view-secs';
-  import { boundCerts, hostsError, hostsHelp, httpsListeners, listRows, parseHosts } from './sni-edit.ts';
+  import { boundCerts, hostsError, hostsHelp, httpsListeners, listRows, listenerPolicyVersions, parseHosts } from './sni-edit.ts';
+  import { overrideBody, overrideOf, type OverrideText } from './policy-edit.ts';
+  import SniOverrideSection from './SniOverrideSection.svelte';
   import { sniHosts } from './tls-view.ts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -22,33 +25,39 @@
     listener: String(item0?.['listener'] ?? ''),
     hosts: item0 === undefined ? '' : sniHosts(item0).join('\n'),
     cert: String(item0?.['certificate'] ?? ''),
+    override: overrideOf(item0),
   };
   let listener = $state<string | undefined>(init.listener || undefined);
   let hosts = $state(init.hosts);
   let cert = $state<string | undefined>(init.cert || undefined);
+  let override = $state<OverrideText>({ ...init.override });
+  let overrideBad = $state(false);
+  const policy = $derived(listenerPolicyVersions(desk, listener));
   let saving = $state(false);
   // 지금 값이 거름(HTTPS · 자료 있음)에 걸려도 고른 값으로 보이게 둔다.
   const listeners = $derived([...httpsListeners(desk).filter((l) => l.value !== init.listener), ...(init.listener === '' ? [] : [{ value: init.listener }])]);
   const certs = $derived(boundCerts(desk, init.cert));
 
   const err = $derived(hostsError(hosts));
-  const dirty = $derived((listener ?? '') !== init.listener || (cert ?? '') !== init.cert || parseHosts(hosts).join('\n') !== parseHosts(init.hosts).join('\n'));
+  const dirty = $derived((listener ?? '') !== init.listener || (cert ?? '') !== init.cert || parseHosts(hosts).join('\n') !== parseHosts(init.hosts).join('\n')
+    || override.min !== init.override.min || override.max !== init.override.max);
   const pending = $derived(isPendingResource(desk.pendingResources, 'sniBinding', key));
 
   const save = (): void => {
     const item = itemOf(desk.model, 'sniBinding', key);
     if (item === undefined || listener === undefined || cert === undefined) return;
-    const { key: _k, ...rest } = item;
+    const { key: _k, override: _o, ...rest } = item;
+    const o = overrideBody(override);
     saving = true;
-    void desk.putResource('sniBinding', key, { ...rest, listener, hosts: parseHosts(hosts), certificate: cert })
+    void desk.putResource('sniBinding', key, { ...rest, listener, hosts: parseHosts(hosts), certificate: cert, ...(o === undefined ? {} : { override: o }) })
       .then((ok) => { saving = false; after(resourcePath('sniBinding', key))(ok); });
   };
-  const revert = (): void => { listener = init.listener || undefined; hosts = init.hosts; cert = init.cert || undefined; };
+  const revert = (): void => { listener = init.listener || undefined; hosts = init.hosts; cert = init.cert || undefined; override = { ...init.override }; };
   /** 쓸 수 없을 때의 읽기 구획 — 분할 상세 보기 모드와 같은 `viewSecsOf`. */
   const view = $derived(viewSecsOf(desk.model, 'sniBinding', key));
 </script>
 
-<SettingsFrame {view} {dirty} invalid={err !== undefined} {pending} {saving} onsave={save} onrevert={revert}>
+<SettingsFrame {view} {dirty} invalid={err !== undefined || overrideBad} {pending} {saving} onsave={save} onrevert={revert}>
   <FormSection title="기본">
     <FormRow label="이름"><TextInput value={key} disabled /></FormRow>
     <FormRow label="리스너">
@@ -61,4 +70,5 @@
       <Select label="인증서" bind:value={cert} options={certs} width="100%" />
     </FormRow>
   </FormSection>
+  <SniOverrideSection bind:value={override} bind:invalid={overrideBad} {policy} />
 </SettingsFrame>

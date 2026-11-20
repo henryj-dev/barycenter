@@ -15,6 +15,7 @@
  *   · 한 경로가 서로 다른 묶음에 있으면 거절한다 — 같은 (호스트, 경로) 의 라우트가 둘이 되고, 검증기가 어차피 막는다.
  *     기본 동작을 두 번 적은 묶음도 거절한다.
  *   · 이름: 첫 묶음이 `이름`, 다음부터 `이름-p2`, `이름-p3` …
+ *   · 우선순위: 펼친 라우트가 모두 같은 값을 쓴다. 안 적으면 빌더 기본(0)이다.
  */
 import {
   putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch,
@@ -41,6 +42,8 @@ export type RouteGroupInput = {
   lines: GroupLine[];
   /** 리스너의 기본 동작 — 기본 동작을 안 적은 묶음이 따른다. 없으면 그런 묶음을 거절한다. */
   fallback?: GroupAction;
+  /** 펼친 라우트 모두의 우선순위(0–1000000). 없으면 0 이다. */
+  priority?: number;
 };
 
 /** 리스너 `http.defaultAction` → 묶음이 따를 동작. 리스너의 `reject` 는 444 로 끊는다. 모르는 모양이면 `undefined`. */
@@ -57,6 +60,9 @@ const clean = (xs: readonly string[]): string[] => [...new Set(xs.map((x) => x.t
 export function routeGroupPatch(input: RouteGroupInput): (PutHttpRouteOp | PutHttpRedirectOp | PutHttpRejectOp)[] {
   if (input.key.trim() === '') throw new Error('이름이 비어 있다');
   if (input.lines.length === 0) throw new Error('줄이 하나도 없다');
+  if (input.priority !== undefined && (!Number.isInteger(input.priority) || input.priority < 0 || input.priority > 1_000_000)) {
+    throw new Error('우선순위가 0–1000000 정수가 아니다');
+  }
 
   // 경로 목록이 같은 줄끼리 묶는다. 순서는 처음 나온 순서다.
   const groups: { paths: string[]; lines: GroupLine[] }[] = [];
@@ -92,6 +98,7 @@ export function routeGroupPatch(input: RouteGroupInput): (PutHttpRouteOp | PutHt
     }));
     const common = {
       key, listener: input.listener, hosts: input.hosts, pathPrefixes: g.paths,
+      ...(input.priority === undefined ? {} : { priority: input.priority }),
       ...(sourceRules.length === 0 ? {} : { sourceRules }),
     };
     switch (action.kind) {

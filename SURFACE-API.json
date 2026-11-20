@@ -375,6 +375,17 @@
         }
       }
     },
+    "/api/v1/engine": {
+      "get": {
+        "operationId": "GET:/api/v1/engine",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/tls-policies": {
       "get": {
         "operationId": "GET:/api/v1/tls-policies",
@@ -1103,6 +1114,17 @@
     "/api/v1/regions/{name}/tls-policies": {
       "get": {
         "operationId": "GET:/api/v1/regions/:name/tls-policies",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/engine": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/engine",
         "x-scope": "read",
         "responses": {
           "200": {

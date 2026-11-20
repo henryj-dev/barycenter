@@ -2,7 +2,8 @@
   /**
    * TLS 정책 설정 탭 — 콘솔 시안 `fieldsFor('tlspol', v, false, 'form')`: 기본(이름 잠김 · 최소 · 최대 버전 · 암호군) ·
    * HSTS(HSTS · max-age) · 검증(SNI-Host 불일치). 시안에 없는 기존 칸: 최대 버전 「제한 없음」 · 「하위 도메인」.
-   * `put` 은 통째로 덮는다 — 폼에 없는 칸(HSTS `preload` …)은 head 값 그대로 싣는다(`policyBody` 의 `base`).
+   * HSTS `preload` 도 고친다(max-age 1년 이상 · 하위 도메인이 필요하다).
+   * `put` 은 통째로 덮는다 — 폼에 없는 칸은 head 값 그대로 싣는다(`policyBody` 의 `base`).
    */
   import { getContext, untrack } from 'svelte';
   import { page } from '$app/state';
@@ -13,7 +14,7 @@
   import { isPendingResource } from '#lib/pending';
   import SettingsFrame from '#lib/detail/SettingsFrame.svelte';
   import { viewSecsOf } from '#lib/detail/view-secs';
-  import { CIPHERS, HSTS_MAX, MAX_VERSIONS, MISMATCH, VERSIONS, ageError, policyBody, policyForm, rangeError, type PolicyForm } from './policy-edit.ts';
+  import { CIPHERS, HSTS_MAX, MAX_VERSIONS, MISMATCH, VERSIONS, ageError, policyBody, policyForm, preloadError, rangeError, type PolicyForm } from './policy-edit.ts';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
   const key = untrack(() => page.params['key'] ?? '');
@@ -23,6 +24,7 @@
 
   const range = $derived(rangeError(f));
   const age = $derived(ageError(f));
+  const preload = $derived(preloadError(f));
   const dirty = $derived((Object.keys(initial) as (keyof PolicyForm)[]).some((k) => String(f[k]) !== String(initial[k])));
   const pending = $derived(isPendingResource(desk.pendingResources, 'tlsPolicy', key));
 
@@ -35,7 +37,7 @@
   const view = $derived(viewSecsOf(desk.model, 'tlsPolicy', key));
 </script>
 
-<SettingsFrame {view} {dirty} invalid={range !== undefined || age !== undefined} {pending} {saving} onsave={save} onrevert={() => { f = { ...initial }; }}>
+<SettingsFrame {view} {dirty} invalid={range !== undefined || age !== undefined || preload !== undefined} {pending} {saving} onsave={save} onrevert={() => { f = { ...initial }; }}>
   <FormSection title="기본">
     <FormRow label="이름"><TextInput value={key} disabled /></FormRow>
     <FormRow label="최소 버전">
@@ -59,6 +61,10 @@
       </FormRow>
       <FormRow label="하위 도메인">
         <Switch bind:checked={f.subdomains}>{f.subdomains ? '켜짐' : '꺼짐'}</Switch>
+      </FormRow>
+      <FormRow label="preload" error={preload}
+        help="켜면 브라우저 preload 목록에 올려도 된다고 알려요. max-age 1년 이상 · 하위 도메인이 필요해요. 목록에 오르면 빼기가 몇 달 걸려요.">
+        <Switch bind:checked={f.preload}>{f.preload ? '켜짐' : '꺼짐'}</Switch>
       </FormRow>
     {/if}
   </FormSection>

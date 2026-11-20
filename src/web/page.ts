@@ -11,7 +11,7 @@ export type Place =
   | 'dashboard' | 'impact'
   | 'listeners' | 'routes' | 'pools' | 'backends' | 'addressSets'
   | 'certificates' | 'tlsPolicies' | 'sniBindings'
-  | 'status' | 'cluster' | 'rendered' | 'audit'
+  | 'status' | 'cluster' | 'rendered' | 'engine' | 'audit'
   | 'login' | 'invite' | 'account' | 'users' | 'reset' | 'email' | 'regions' | 'design';
 
 /** 리소스가 사이드바의 어느 자리에 불이 들어오나. 두 라우트는 한 메뉴(라우트)다. */
@@ -56,6 +56,7 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'status', path: '/ops/status' },
   { place: 'cluster', path: '/ops/cluster' },
   { place: 'rendered', path: '/ops/rendered' },
+  { place: 'engine', path: '/ops/engine' },
   { place: 'audit', path: '/ops/audit' },
   { place: 'users', path: '/admin/user' },
   { place: 'login', path: '/login' },
@@ -126,6 +127,7 @@ export function pageOf(pathname: string): Place {
   if (under(pathname, '/ops/status')) return 'status';
   if (under(pathname, '/ops/cluster')) return 'cluster';
   if (under(pathname, '/ops/rendered')) return 'rendered';
+  if (under(pathname, '/ops/engine')) return 'engine';
   if (under(pathname, '/ops/audit')) return 'audit';
   if (under(pathname, '/admin/user')) return 'users';
   if (under(pathname, '/login')) return 'login';
