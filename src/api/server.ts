@@ -38,6 +38,7 @@ import {
 } from '../control/drain.js';
 import { healthHistory, healthRows, HEALTH_HISTORY_MAX } from '../control/health.js';
 import type { DiscoveryPoolView } from '../control/discovery/runner.js';
+import type { Model } from '../model/provisional.js';
 import { addressSources, type AddressSources } from '../control/address-sources/registry.js';
 import { refreshAddressSet, refreshRows } from '../control/address-sources/refresh.js';
 import { count, render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
@@ -174,6 +175,8 @@ export type ApiOptions = {
     intervalMs?: number;
     views(): DiscoveryPoolView[];
     view(pool: string): DiscoveryPoolView | undefined;
+    /** 「지금 다시 찾기」 (2026-11-20). 러너가 없으면 없다. */
+    refresh?: ((model: Model, pool: string) => Promise<{ view: DiscoveryPoolView; changed: boolean } | undefined>) | undefined;
   };
   /** 주소 집합 출처 (2026-11-05). 없으면 전역 fetch 로 받는다 — 시험이 주입한다. */
   addressSources?: AddressSources;
@@ -953,6 +956,13 @@ const ROUTES: Route[] = [
       };
     }));
   }),
+  /**
+   * 엔진 전역 설정 (2026-11-20) — GUI 「엔진 설정」 이 읽는다. 없으면 `settings` 는 빈 객체다(엔진 기본값).
+   * 쓰기는 여기 없다 — 다른 리소스처럼 changeset 의 `put engine` 을 지난다(§5.3).
+   */
+  route('GET', '/api/v1/engine', 'read', async (c, api) => {
+    json(c.res, 200, { settings: (await api.store.modelAt((await api.store.head()).revision)).engine ?? {} });
+  }),
   route('GET', '/api/v1/tls-policies', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).tlsPolicies);
   }),
@@ -1038,6 +1048,58 @@ const ROUTES: Route[] = [
         ? { error: { reason: 'unconfigured', detail: api.discovery?.reason ?? '이 데몬에 디스커버리 러너가 없다' } }
         : {}),
     });
+  }),
+  /**
+   * 「지금 다시 찾기」 (2026-11-20). 이 노드의 러너가 그 풀의 출처를 **지금** 묻는다 — 주기 바퀴와 같은 처리다
+   * (이벤트 · 지표 · 멤버십 투영). 리비전을 만들지 않는다 — 출처의 목록은 운영 상태다.
+   *
+   * 출처가 실패하면 502 다. 마지막 성공 값은 그대로 쓰인다 — 몸의 `view` 가 그것을 말한다.
+   * 오류 문장은 정해진 말만 싣는다(러너의 `viewOf`) — 출처가 준 예외 문장은 데몬 로그에만 있다.
+   */
+  route('POST', '/api/v1/pools/:id/discovery/refresh', 'write', async (c, api) => {
+    const key = c.params['id'] ?? '';
+    const model = await api.store.modelAt((await api.store.head()).revision);
+    const pool = model.pools.find((p) => p.key === key);
+    if (pool === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `풀 '${key}' 가 없다` });
+      return;
+    }
+    if (pool.discovery === undefined) {
+      json(c.res, 409, { error: 'no_discovery', message: `풀 '${key}' 에 백엔드 출처가 없다 — 정적 백엔드만 쓴다` });
+      return;
+    }
+    const d = api.discovery;
+    if (d?.refresh === undefined || !d.enabled) {
+      json(c.res, 409, { error: 'discovery_disabled', message: d?.reason ?? '이 데몬에 디스커버리 러너가 없다' });
+      return;
+    }
+    const before = d.view(key);
+    const out = await d.refresh(model, key);
+    if (out === undefined) {
+      // 그 사이에 출처가 빠졌다 — 위에서 본 모델로 물었으니 생기지 않는다. 그래도 닫는다.
+      json(c.res, 409, { error: 'no_discovery', message: `풀 '${key}' 에 백엔드 출처가 없다` });
+      return;
+    }
+    const v = out.view;
+    await api.store.audit(c.who.name, 'discovery.refresh', key,
+      before === undefined ? undefined : { state: before.state, advertised: before.advertised, endpoints: before.endpoints.length },
+      { state: v.state, advertised: v.advertised, endpoints: v.endpoints.length, changed: out.changed,
+        ...(v.error === undefined ? {} : { reason: v.error.reason }) });
+    // 바뀌지 않았어도 화면이 다시 읽게 한 번 알린다(바뀐 것 · 실패는 러너 처리가 이미 알렸다).
+    if (!out.changed && v.state === 'ok') eventsOf(api).publish('discovery', { pool: key, state: v.state });
+    if (v.state === 'unconfigured') {
+      json(c.res, 409, { error: 'source_unconfigured', reason: 'unconfigured', message: v.error?.detail ?? '이 데몬에 그 출처가 설정되지 않았다', view: v });
+      return;
+    }
+    if (v.state === 'error') {
+      json(c.res, 502, {
+        error: 'discovery_source_failed', reason: v.error?.reason ?? 'unavailable',
+        message: `출처에서 목록을 받지 못했다 (${v.error?.reason ?? 'unavailable'}) — ${v.advertised ? '마지막 목록을 쓴다' : '정적 백엔드를 쓴다'}. 자세한 내용은 데몬 로그 discovery.source_failed`,
+        view: v,
+      });
+      return;
+    }
+    json(c.res, 200, { ...v, changed: out.changed });
   }),
   route('GET', '/api/v1/sni-bindings', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).sniBindings);
@@ -1707,6 +1769,7 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/routes', 'read', relayTo('routes')),
   route('GET', '/api/v1/regions/:name/certificates', 'read', relayTo('certificates')),
   route('GET', '/api/v1/regions/:name/tls-policies', 'read', relayTo('tls-policies')),
+  route('GET', '/api/v1/regions/:name/engine', 'read', relayTo('engine')),
   route('GET', '/api/v1/regions/:name/sni-bindings', 'read', relayTo('sni-bindings')),
   route('GET', '/api/v1/regions/:name/acme/orders', 'read', relayTo('acme/orders')),
   route('GET', '/api/v1/regions/:name/audit', 'read', relayTo('audit')),
@@ -1729,6 +1792,9 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/sockets', 'read', relayTo('sockets')),
   route('GET', '/api/v1/regions/:name/health/backends', 'read', relayTo('health/backends')),
   route('GET', '/api/v1/regions/:name/config/pending-resources', 'read', relayTo('config/pending-resources')),
+  // GUI 가 이미 부르던 것 (2026-11-20). 빠져 있어 전역에서 풀의 출처 · 주소 집합 갱신 기록이 404 였다.
+  route('GET', '/api/v1/regions/:name/pools/:id/discovery', 'read', relayTo('pools/:id/discovery')),
+  route('GET', '/api/v1/regions/:name/address-sets/refresh-status', 'read', relayTo('address-sets/refresh-status')),
   route('GET', '/api/v1/regions/:name/backends/:id/health-history', 'read', relayTo('backends/:id/health-history')),
   route('GET', '/api/v1/regions/:name/pools/:id/health-history', 'read', relayTo('pools/:id/health-history')),
   /**
@@ -1744,6 +1810,8 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('POST', '/api/v1/regions/:name/acme/accounts', 'write', relayTo('acme/accounts', 'POST')),
   route('POST', '/api/v1/regions/:name/certificates/:id/acme/retry', 'write', relayTo('certificates/:id/acme/retry', 'POST')),
   route('POST', '/api/v1/regions/:name/certificates/:id/acme/renew', 'write', relayTo('certificates/:id/acme/renew', 'POST')),
+  route('POST', '/api/v1/regions/:name/address-sets/:id/refresh', 'write', relayTo('address-sets/:id/refresh', 'POST')),
+  route('POST', '/api/v1/regions/:name/pools/:id/discovery/refresh', 'write', relayTo('pools/:id/discovery/refresh', 'POST')),
   route('POST', '/api/v1/regions/:name/backends/:id/drain', 'write', relayTo('backends/:id/drain', 'POST')),
   route('DELETE', '/api/v1/regions/:name/backends/:id/drain', 'write', relayTo('backends/:id/drain', 'DELETE')),
   route('POST', '/api/v1/regions/:name/apply', 'apply', relayTo('apply', 'POST')),

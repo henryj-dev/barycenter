@@ -562,7 +562,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
 
   const insertBackend = async (
     key: string,
-    body: { pool: string; host: string; port: number; weight?: number },
+    body: { pool: string; host: string; port: number; weight?: number; softMaxConns?: number; isBackup?: boolean },
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -720,6 +720,26 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     }
   };
 
+  /** 엔진 전역 설정 — `GET /api/v1/engine` (2026-11-20). 비었으면 `{}`(엔진 기본값). 못 읽으면 undefined. */
+  const engineSettings = async (): Promise<Record<string, unknown> | undefined> => {
+    const r = await fetch(api('/api/v1/engine'), { headers: auth() });
+    if (!r.ok) return undefined;
+    const body = (await r.json()) as { settings?: Record<string, unknown> };
+    return body.settings ?? {};
+  };
+  /** 엔진 설정 저장 — 다른 리소스처럼 changeset 의 `put engine` 이다(key 는 `engine` 하나). 적용은 따로다. */
+  const putEngine = async (body: Record<string, unknown>): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch([{ op: 'put', kind: 'engine', key: 'engine', body }]);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
   /**
    * ACME 계정 (DESIGN §8.2.1). 계정 키는 서버가 만들어 시크릿에 둔다 — 화면은 키를 보지 않는다.
    * CA 등록은 첫 주문 때 러너가 한다(`registered`). 못 읽으면 undefined.
@@ -829,6 +849,31 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
       }
       await refreshCerts();
       return { ok: true, order: String(r.body['order'] ?? ''), state: String(r.body['state'] ?? ''), created: r.body['created'] === true };
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    } finally {
+      editing = false;
+    }
+  };
+  /**
+   * 「지금 다시 찾기」 (2026-11-20) — `POST /api/v1/pools/:id/discovery/refresh`. 그 풀의 출처를 지금 묻는다.
+   * 리비전을 만들지 않는다 — 받은 목록은 멤버십으로 바로 간다(주기 바퀴와 같다).
+   * 출처가 실패해도 서버는 그 풀의 상태(`view`)를 함께 준다 — 마지막 목록을 계속 쓰는지 보인다.
+   */
+  const refreshDiscovery = async (key: string): Promise<
+    | { ok: true; view: DiscoveryPoolView; changed: boolean }
+    | { ok: false; message: string; view?: DiscoveryPoolView }
+  > => {
+    editing = true;
+    try {
+      const r = await call('POST', `/api/v1/pools/${encodeURIComponent(key)}/discovery/refresh`, {});
+      if (!r.ok) {
+        const msg = r.body['message'];
+        const view = r.body['view'] as DiscoveryPoolView | undefined;
+        return { ok: false, message: typeof msg === 'string' ? msg : `다시 찾기 ${r.status}`, ...(view === undefined ? {} : { view }) };
+      }
+      const { changed, ...view } = r.body as DiscoveryPoolView & { changed?: boolean };
+      return { ok: true, view, changed: changed === true };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     } finally {
@@ -981,6 +1026,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
 
   const insertSniBinding = async (input: {
     key: string; listener: string; hosts: string[]; certificate: string;
+    override?: { minVersion?: TlsVersion; maxVersion?: TlsVersion };
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -1320,6 +1366,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     trafficSummary,
     addressSetRefreshStatus,
     refreshAddressSet,
+    refreshDiscovery,
     createAcmeAccount,
     acmeAction,
     historyOf,
@@ -1338,6 +1385,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     insertHttpRedirect,
     insertHttpReject,
     insertRouteGroup,
+    engineSettings,
+    putEngine,
     insertPassthroughRoute,
     insertPassthroughReject,
     disconnect() { stop?.(); },

@@ -90,6 +90,9 @@ export class DiscoveryRunner {
   readonly #pools = new Map<string, PoolState>();
   #timer: ReturnType<typeof setTimeout> | undefined;
   #stopped = false;
+  #chain: Promise<unknown> = Promise.resolve();
+  /** 투영이 실패해 다음 바퀴에 다시 넘길 풀. */
+  #retry: string[] = [];
 
   constructor(private readonly o: DiscoveryRunnerOptions) {}
 
@@ -100,70 +103,100 @@ export class DiscoveryRunner {
   /**
    * 한 바퀴. 모델에서 출처가 있는 풀을 모두 (함께) 묻는다. **던지지 않는다** — 출처 하나의 고장이 다른 풀을 막지 않는다.
    */
-  async tick(model: Model): Promise<TickResult> {
-    const now = (this.o.now ?? (() => new Date()))().toISOString();
-    const changed: string[] = [];
-    const failed: DiscoveryPoolView[] = [];
-    const recovered: string[] = [];
+  tick(model: Model): Promise<TickResult> {
+    return this.#serial(async () => {
+      const now = (this.o.now ?? (() => new Date()))().toISOString();
+      const acc: TickResult = { changed: [], failed: [], recovered: [] };
 
-    const wanted = new Map(model.pools.flatMap((p) => (p.discovery === undefined ? [] : [[p.key, p.discovery] as const])));
-    // 출처가 없어진 풀 — 들던 값을 버린다. 쓰고 있었다면 멤버십이 정적으로 돌아간다.
-    for (const [pool, s] of this.#pools) {
-      if (!wanted.has(pool)) {
-        this.#pools.delete(pool);
-        if (s.advertised) changed.push(pool);
+      const wanted = new Map(model.pools.flatMap((p) => (p.discovery === undefined ? [] : [[p.key, p.discovery] as const])));
+      // 출처가 없어진 풀 — 들던 값을 버린다. 쓰고 있었다면 멤버십이 정적으로 돌아간다.
+      for (const [pool, s] of this.#pools) {
+        if (!wanted.has(pool)) {
+          this.#pools.delete(pool);
+          if (s.advertised) acc.changed.push(pool);
+        }
+      }
+      await Promise.all([...wanted].map(([pool, d]) => this.#runPool(pool, d, now, acc)));
+      return { changed: [...new Set(acc.changed)].sort(), failed: acc.failed, recovered: acc.recovered };
+    });
+  }
+
+  /**
+   * 풀 하나를 **지금** 묻는다 (2026-11-20, 「지금 다시 찾기」). 주기 바퀴와 겹치지 않는다 — 돌고 있는 바퀴가
+   * 끝난 뒤에 묻는다. 모델에 그 풀의 출처가 없으면 `undefined`. 결과의 모양은 `tick` 과 같다(그 풀만 담긴다).
+   */
+  refresh(model: Model, pool: string): Promise<{ result: TickResult; view: DiscoveryPoolView } | undefined> {
+    return this.#serial(async () => {
+      const d = model.pools.find((p) => p.key === pool)?.discovery;
+      if (d === undefined) return undefined;
+      const now = (this.o.now ?? (() => new Date()))().toISOString();
+      const acc: TickResult = { changed: [], failed: [], recovered: [] };
+      await this.#runPool(pool, d, now, acc);
+      return { result: { changed: [...new Set(acc.changed)], failed: acc.failed, recovered: acc.recovered }, view: viewOf(this.#pools.get(pool)!) };
+    });
+  }
+
+  /**
+   * 투영이 실패한 풀을 다음 주기 바퀴에 다시 넘긴다. 「지금 다시 찾기」 의 투영이 실패했을 때 부른다 —
+   * 주기 바퀴의 실패와 같은 길이다.
+   */
+  retryLater(pools: readonly string[]): void {
+    this.#retry = [...new Set([...this.#retry, ...pools])].sort();
+  }
+
+  /** 바퀴와 「지금 다시 찾기」 를 한 줄로 세운다 — 같은 풀의 상태를 둘이 함께 고치지 않게. */
+  #serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.#chain.then(fn, fn);
+    this.#chain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  async #runPool(pool: string, d: PoolDiscovery, now: string, acc: TickResult): Promise<void> {
+    const spec = specOf(d);
+    let s = this.#pools.get(pool);
+    if (s === undefined || s.spec !== spec) {
+      if (s?.advertised === true) acc.changed.push(pool);
+      s = { pool, source: d.source, query: d.query, state: 'pending', advertised: false, endpoints: [], spec };
+      this.#pools.set(pool, s);
+    }
+    const before = { advertised: s.advertised, endpoints: s.endpoints, state: s.state, reason: s.error?.reason };
+    s.lastAttemptAt = now;
+
+    const source = this.o.sources(d.source);
+    if (source === undefined) {
+      s.state = 'unconfigured';
+      s.error = { reason: 'unconfigured', detail: `이 데몬에 ${d.source} 출처가 설정되지 않았다 — 정적 백엔드를 쓴다 (docs/runbook-data-sources.md)` };
+    } else {
+      let r: Awaited<ReturnType<DiscoverySource['resolve']>>;
+      try {
+        r = await source.resolve(d.query);
+      } catch (e) {
+        // 어댑터는 던지지 않게 썼다. 그래도 빠져나온 것은 실패로 닫는다 — 마지막 값을 지킨다.
+        r = { ok: false, reason: 'unavailable', detail: `출처 어댑터가 예외를 냈다: ${e instanceof Error ? e.message : String(e)}` };
+      }
+      if (!r.ok) {
+        // **마지막 성공 값을 그대로 둔다.** `advertised` · `endpoints` 를 건드리지 않는다.
+        s.state = 'error';
+        s.error = { reason: r.reason, detail: r.detail };
+      } else {
+        const list = d.port === undefined ? r.endpoints : dedupe(r.endpoints.map((e) => ({ host: e.host, port: d.port! })));
+        s.state = 'ok';
+        delete s.error;
+        s.lastSuccessAt = now;
+        if (list.length === 0 && (d.emptyMeans ?? 'keep') === 'keep') {
+          s.keptEmpty = true;            // 앞의 목록(없으면 정적)을 지킨다
+        } else {
+          delete s.keptEmpty;
+          s.advertised = true;
+          s.endpoints = list;
+        }
       }
     }
 
-    await Promise.all([...wanted].map(async ([pool, d]) => {
-      const spec = specOf(d);
-      let s = this.#pools.get(pool);
-      if (s === undefined || s.spec !== spec) {
-        if (s?.advertised === true) changed.push(pool);
-        s = { pool, source: d.source, query: d.query, state: 'pending', advertised: false, endpoints: [], spec };
-        this.#pools.set(pool, s);
-      }
-      const before = { advertised: s.advertised, endpoints: s.endpoints, state: s.state, reason: s.error?.reason };
-      s.lastAttemptAt = now;
-
-      const source = this.o.sources(d.source);
-      if (source === undefined) {
-        s.state = 'unconfigured';
-        s.error = { reason: 'unconfigured', detail: `이 데몬에 ${d.source} 출처가 설정되지 않았다 — 정적 백엔드를 쓴다 (docs/runbook-data-sources.md)` };
-      } else {
-        let r: Awaited<ReturnType<DiscoverySource['resolve']>>;
-        try {
-          r = await source.resolve(d.query);
-        } catch (e) {
-          // 어댑터는 던지지 않게 썼다. 그래도 빠져나온 것은 실패로 닫는다 — 마지막 값을 지킨다.
-          r = { ok: false, reason: 'unavailable', detail: `출처 어댑터가 예외를 냈다: ${e instanceof Error ? e.message : String(e)}` };
-        }
-        if (!r.ok) {
-          // **마지막 성공 값을 그대로 둔다.** `advertised` · `endpoints` 를 건드리지 않는다.
-          s.state = 'error';
-          s.error = { reason: r.reason, detail: r.detail };
-        } else {
-          const list = d.port === undefined ? r.endpoints : dedupe(r.endpoints.map((e) => ({ host: e.host, port: d.port! })));
-          s.state = 'ok';
-          delete s.error;
-          s.lastSuccessAt = now;
-          if (list.length === 0 && (d.emptyMeans ?? 'keep') === 'keep') {
-            s.keptEmpty = true;            // 앞의 목록(없으면 정적)을 지킨다
-          } else {
-            delete s.keptEmpty;
-            s.advertised = true;
-            s.endpoints = list;
-          }
-        }
-      }
-
-      if (before.advertised !== s.advertised || !sameList(before.endpoints, s.endpoints)) changed.push(pool);
-      if ((s.state === 'error' || s.state === 'unconfigured')
-        && (before.state !== s.state || before.reason !== s.error?.reason)) failed.push(viewOf(s));
-      if (s.state === 'ok' && (before.state === 'error' || before.state === 'unconfigured')) recovered.push(pool);
-    }));
-
-    return { changed: [...new Set(changed)].sort(), failed, recovered };
+    if (before.advertised !== s.advertised || !sameList(before.endpoints, s.endpoints)) acc.changed.push(pool);
+    if ((s.state === 'error' || s.state === 'unconfigured')
+      && (before.state !== s.state || before.reason !== s.error?.reason)) acc.failed.push(viewOf(s));
+    if (s.state === 'ok' && (before.state === 'error' || before.state === 'unconfigured')) acc.recovered.push(pool);
   }
 
   /** 컨트롤 플레인이 받을 것. 출처의 목록을 쓰는 풀이 없으면 `undefined` — 정적 모델 그대로다. */
@@ -189,18 +222,17 @@ export class DiscoveryRunner {
    */
   start(getModel: () => Promise<Model | undefined>, onTick: (r: TickResult) => Promise<void>): void {
     this.#stopped = false;
-    let retry: string[] = [];
     const loop = async (): Promise<void> => {
       try {
         const model = await getModel();
         if (model !== undefined) {
           const r = await this.tick(model);
-          const merged = { ...r, changed: [...new Set([...retry, ...r.changed])].sort() };
+          const merged = { ...r, changed: [...new Set([...this.#retry, ...r.changed])].sort() };
+          this.#retry = [];
           try {
             await onTick(merged);
-            retry = [];
           } catch {
-            retry = merged.changed;
+            this.retryLater(merged.changed);
           }
         }
       } catch {

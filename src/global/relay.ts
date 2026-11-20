@@ -31,12 +31,16 @@ export const RELAY_PATHS: readonly string[] = [
   'acme/orders/:id', 'sockets', 'health/backends',
   // 리소스별 「적용 대기」 (#126 후속).
   'config/pending-resources',
+  // 엔진 전역 설정 (2026-11-20).
+  'engine',
   // 풀 · 백엔드 개요의 「헬스 기록」 (2026-11-20).
   'backends/:id/health-history', 'pools/:id/health-history',
   // 트래픽 통계 (2026-11-20). 지역 노드가 센 것을 그대로 읽는다.
   'traffic', 'traffic/:kind/:id',
   // 저장소 상태 (2026-11-20). 비밀을 싣지 않는다 — 종류 · 판 · 보존 일수 · 마지막 청소뿐이다.
   'system/storage',
+  // GUI 가 이미 부르던 것 (2026-11-20) — 빠져 있었다.
+  'pools/:id/discovery', 'address-sets/refresh-status',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */
@@ -51,6 +55,8 @@ export const RELAY_WRITES: readonly { method: 'POST' | 'PATCH' | 'DELETE'; path:
   { method: 'POST', path: 'acme/accounts', scope: 'write' },
   { method: 'POST', path: 'certificates/:id/acme/retry', scope: 'write' },
   { method: 'POST', path: 'certificates/:id/acme/renew', scope: 'write' },
+  { method: 'POST', path: 'address-sets/:id/refresh', scope: 'write' },
+  { method: 'POST', path: 'pools/:id/discovery/refresh', scope: 'write' },
   { method: 'POST', path: 'backends/:id/drain', scope: 'write' },
   { method: 'DELETE', path: 'backends/:id/drain', scope: 'write' },
   { method: 'POST', path: 'apply', scope: 'apply' },

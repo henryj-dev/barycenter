@@ -18,6 +18,8 @@ import { createApi } from '../../src/api/server.js';
 import { refreshAddressSet, refreshRows } from '../../src/control/address-sources/refresh.js';
 import type { AddressSources } from '../../src/control/address-sources/registry.js';
 import type { AddressFetchResult } from '../../src/control/address-sources/source.js';
+import { DiscoveryRunner } from '../../src/control/discovery/runner.js';
+import type { DiscoveryResult } from '../../src/control/discovery/source.js';
 import { LeaderElection } from '../../src/control/leader.js';
 import { ControlPlane } from '../../src/control/plane.js';
 import type { DataplaneDriver } from '../../src/dp/driver.js';
@@ -36,6 +38,12 @@ let base = '';
 /** API 가 쓰는 출처 — 시험마다 답을 바꾼다. */
 let answer: AddressFetchResult = { ok: false, reason: 'unavailable', detail: '아직' };
 const sources: AddressSources = (kind) => ({ kind: kind as 'cloudflare', fetch: async () => answer });
+/** 「지금 다시 찾기」 가 쓰는 러너 — 시험마다 출처의 답을 바꾼다. 없으면 러너가 없는 데몬이다. */
+let discoveryAnswer: DiscoveryResult = { ok: false, reason: 'unavailable', detail: '아직' };
+let runner: DiscoveryRunner | undefined;
+const freshRunner = (): DiscoveryRunner => new DiscoveryRunner({
+  sources: (k) => (k === 'consul' ? { kind: 'consul', resolve: async () => discoveryAnswer } : undefined), intervalMs: 30_000,
+});
 
 const driver: DataplaneDriver = new Proxy({} as DataplaneDriver, {
   get: (_t, prop) => () => { throw new Error(`이 테스트는 데이터 플레인을 안 태운다 (호출됨: ${String(prop)})`); },
@@ -94,6 +102,13 @@ beforeAll(async () => {
       view: (p) => (p === 'app'
         ? { pool: 'app', source: 'consul', query: 'api', state: 'ok', advertised: true, endpoints: [{ host: '10.1.0.1', port: 8080 }] }
         : undefined),
+      get refresh() {
+        const r = runner;
+        return r === undefined ? undefined : async (m: Parameters<DiscoveryRunner['refresh']>[0], p: string) => {
+          const out = await r.refresh(m, p);
+          return out === undefined ? undefined : { view: out.view, changed: out.result.changed.includes(p) };
+        };
+      },
     },
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -211,5 +226,38 @@ describe('API', () => {
     expect((await req('GET', '/api/v1/pools/other/discovery')).body).toEqual({ pool: 'other', source: null });
     expect((await req('GET', '/api/v1/pools/none/discovery')).status).toBe(404);
     expect((await req('GET', '/api/v1/discovery')).body).toEqual({ enabled: true, intervalMs: 30_000, pools: [] });
+  });
+
+  it('POST /pools/:id/discovery/refresh — 지금 묻는다 · 실패는 502 와 지키는 목록 · 출처 없음 409 · 감사', async () => {
+    await commitAll([...seed, PUT('pool', 'other', { protocolClass: 'http', algorithm: 'round_robin' }),
+      PUT('backend', 'o-1', { pool: 'other', host: '10.0.0.2', port: 80, weight: 1 })]);
+    runner = undefined;
+    expect((await req('POST', '/api/v1/pools/app/discovery/refresh', {})).body).toMatchObject({ error: 'discovery_disabled' });
+
+    runner = freshRunner();
+    discoveryAnswer = { ok: true, endpoints: [{ host: '10.1.0.1', port: 8080 }] };
+    const first = await req('POST', '/api/v1/pools/app/discovery/refresh', {});
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ pool: 'app', state: 'ok', advertised: true, endpoints: [{ host: '10.1.0.1', port: 8080 }], changed: true });
+    expect((await req('POST', '/api/v1/pools/app/discovery/refresh', {})).body).toMatchObject({ state: 'ok', changed: false });
+
+    discoveryAnswer = { ok: false, reason: 'unavailable', detail: '비밀 경로 /etc/x 에 닿지 못했다' };
+    const failed = await req('POST', '/api/v1/pools/app/discovery/refresh', {});
+    expect(failed.status).toBe(502);
+    expect(failed.body).toMatchObject({ error: 'discovery_source_failed', reason: 'unavailable', view: { state: 'error', advertised: true } });
+    // 출처가 준 오류 문장은 응답에 나가지 않는다 — 정해진 말만.
+    expect(JSON.stringify(failed.body)).not.toContain('/etc/x');
+
+    expect((await req('POST', '/api/v1/pools/other/discovery/refresh', {})).body).toMatchObject({ error: 'no_discovery' });
+    expect((await req('POST', '/api/v1/pools/other/discovery/refresh', {})).status).toBe(409);
+    expect((await req('POST', '/api/v1/pools/none/discovery/refresh', {})).status).toBe(404);
+
+    const rows = (await db.query(`SELECT principal, action, subject FROM audit WHERE action='discovery.refresh' ORDER BY id`)).rows;
+    expect(rows).toEqual([
+      { principal: 'tester', action: 'discovery.refresh', subject: 'app' },
+      { principal: 'tester', action: 'discovery.refresh', subject: 'app' },
+      { principal: 'tester', action: 'discovery.refresh', subject: 'app' },
+    ]);
+    runner = undefined;
   });
 });

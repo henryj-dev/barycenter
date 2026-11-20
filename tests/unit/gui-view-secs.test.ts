@@ -73,7 +73,7 @@ describe('viewSecsOf — 시안 viewSecs 9종', () => {
     expect(v['접근 제한']!['출발지 제한']).toBe('Cloudflare + 대역 1개 · @cf\n집합 cf\n10.0.0.0/8');
     expect(v['원본 IP']).toEqual({ 출처: 'HTTP 헤더', 헤더: 'CF-Connecting-IP', '신뢰 대역': 'Cloudflare만 (대역 2개) · @cf\n집합 cf' });
     expect(v['타임아웃과 본문']).toEqual({ '연결 타임아웃': '5 s', '읽기 타임아웃': '1500 ms', '쓰기 타임아웃': '—', '요청 본문 최대': '50 MB' });
-    expect(v['레이트리밋']).toEqual({ 레이트리밋: '켜짐', '초당 요청': '10 req/s', burst: '20 req', nodelay: '켜짐', '동시 연결': '—' });
+    expect(v['레이트리밋']).toEqual({ 레이트리밋: '켜짐', '초당 요청': '10 req/s', burst: '20 req', nodelay: '켜짐', '동시 연결': '—', 'zone 크기': '10240 KB' });
     expect(v['요청 헤더 규칙']).toEqual({ 규칙: 'X-Env: prod' });
     expect(v['응답 헤더 규칙']).toEqual({ 규칙: '없음' });
     expect(v['priority 정책']).toEqual({ 'priority 우선': '꺼짐' });
@@ -154,7 +154,7 @@ describe('viewSecsOf — 시안 viewSecs 9종', () => {
     const { viewSecsOf } = await load();
     expect(flat(viewSecsOf(model, 'tlsPolicy', 'modern'))).toEqual({
       기본: { 이름: 'modern', '최소 버전': 'TLS 1.2', '최대 버전': '제한 없음', 암호군: 'modern-2026' },
-      HSTS: { HSTS: '켜짐', 'max-age': '600 s', '하위 도메인': '꺼짐' },
+      HSTS: { HSTS: '켜짐', 'max-age': '600 s', '하위 도메인': '꺼짐', preload: '꺼짐' },
       검증: { 'SNI-Host 불일치': '허용' },
     });
     expect(flat(viewSecsOf(model, 'sniBinding', 's1'))['기본']).toEqual({ 이름: 's1', 리스너: 'web', '호스트 목록': '없음', 인증서: 'web-cert' });

@@ -10,7 +10,7 @@
    */
   import { getContext } from 'svelte';
   import { itemOf, itemsOf } from '@web/resources';
-  import { Banner, FormRow, FormSection, Select, TextInput } from '#lib/ui';
+  import { FormRow, FormSection, Select, TextInput } from '#lib/ui';
   import { after } from '#lib/after';
   import InlineEdit from '#lib/detail/InlineEdit.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
@@ -43,8 +43,7 @@
     [...itemsOf(desk.model, 'httpRoute'), ...itemsOf(desk.model, 'passthroughRoute')], proxy ? f?.pool : undefined, routeKey,
   )));
   const dirty = $derived(JSON.stringify(f) !== JSON.stringify(base));
-  const lossy = start?.lossy === true;
-  const invalid = $derived(lossy || hostErr !== undefined || pathErr !== undefined || prioErr !== undefined || rwErr !== undefined || (proxy && f?.pool === undefined));
+  const invalid = $derived(hostErr !== undefined || pathErr !== undefined || prioErr !== undefined || rwErr !== undefined || (proxy && f?.pool === undefined));
 
   const save = (): void => {
     if (start === undefined || f === undefined || desk.editing) return;
@@ -67,9 +66,6 @@
 
 {#if f !== undefined}
   <InlineEdit {dirty} {invalid} {pending} {saving} {detailHref} onsave={save} onrevert={reset}>
-    {#if lossy}
-      <Banner tone="warn">출발지 규칙의 동작에 이 폼에 없는 칸(요청 헤더 · 경로 바꾸기)이 있어요. 상세 페이지의 JSON으로 고쳐요.</Banner>
-    {/if}
     <FormSection title="기본">
       <FormRow label="호스트" for="hri-host" error={hostErr} help="정확한 이름이나 *.example.com 형태로 입력해요.">
         <TextInput id="hri-host" bind:value={f.hosts} invalid={hostErr !== undefined} autocomplete="off" />

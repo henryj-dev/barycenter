@@ -29,6 +29,7 @@
   import { LISTENER_ERR, filled, hostLine, portError } from '#lib/forms/checks';
   import BindField from '#lib/forms/BindField.svelte';
   import SettingsFrame, { sameBody } from '#lib/detail/SettingsFrame.svelte';
+  import { prereadError } from '#lib/forms/listener-create';
   import RealIpSection, { realIpOf, type RealIpHeader, type RealIpSource } from './RealIpSection.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
@@ -139,13 +140,6 @@
   const hostList = $derived(parseListenerHosts(hosts) ?? []);
   const hostsOk = $derived(hostList.every((h) => hostLine(h) === undefined));
   const redirectOk = $derived(protocol !== 'https' || !redirectOn || (filled(redirectPort, portError) && redirectPort.trim() !== port.trim()));
-  /** 해독기와 같은 범위 — 1–3600 초. 비우면 nginx 기본값이다. */
-  const prereadError = (v: string): string | undefined => {
-    const t = v.trim();
-    if (t === '') return undefined;
-    const n = Number(t);
-    return Number.isInteger(n) && n >= 1 && n <= 3600 ? undefined : '1–3600 사이의 정수(초)예요.';
-  };
   /** UDP 는 PROXY 수신이 없다. 헤더는 http 계열만. tcp · 패스스루의 PROXY 수신은 출발지 제한과 함께 못 쓴다. */
   const hasRealIp = $derived(protocol !== '' && protocol !== 'udp');
   const proxySrc = $derived(!isHttp && ipSource === 'proxy');
@@ -182,14 +176,10 @@
       const body = op.body;
 
       if (isHttp) {
-        // 옵션 — 폼이 그 칸의 주인이다. 지운 칸은 빠진다. zone 크기(`zoneKb`)는 폼에 없으니 남긴다.
+        // 옵션 — 폼이 그 칸의 주인이다(zone 크기 포함). 지운 칸은 빠진다.
         const parsed = parseListenerOptions(opts);
-        const { limits: _l, headers: _h, rateLimit: oldRate, strictPriority: _s, ...http } = obj(body['http']) ?? {};
-        const zoneKb = obj(oldRate)?.['zoneKb'];
-        body['http'] = {
-          ...http, ...parsed,
-          ...(parsed.rateLimit !== undefined && typeof zoneKb === 'number' ? { rateLimit: { ...parsed.rateLimit, zoneKb } } : {}),
-        };
+        const { limits: _l, headers: _h, rateLimit: _r, strictPriority: _s, ...http } = obj(body['http']) ?? {};
+        body['http'] = { ...http, ...parsed };
       }
       if (isHttps) {
         body['tls'] = { ...(obj(model['tls']) ?? {}), policy, defaultCertificate: certificate };
