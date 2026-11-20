@@ -742,7 +742,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
    * 트래픽 통계 (2026-11-20) — 이 화면이 붙은 노드가 센 것이다. 못 읽으면 undefined —
    * 「세지 않는다」(`unsupported`)와 다르다.
    */
-  const traffic = async (kind: TrafficKind, key: string): Promise<TrafficSeriesBody | undefined> => {
+  const trafficSeries = async (kind: TrafficKind, key: string): Promise<TrafficSeriesBody | undefined> => {
     const r = await fetch(api(`/api/v1/traffic/${kind}/${encodeURIComponent(key)}`), { headers: auth() }).catch(() => undefined);
     if (r === undefined || !r.ok) return undefined;
     return (await r.json().catch(() => undefined)) as TrafficSeriesBody | undefined;
@@ -1262,7 +1262,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     acmeAccounts,
     hostAddresses,
     poolDiscovery,
-    traffic,
+    trafficSeries,
     trafficSummary,
     addressSetRefreshStatus,
     refreshAddressSet,

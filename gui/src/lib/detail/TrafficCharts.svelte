@@ -29,7 +29,7 @@
     let stop = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async (): Promise<void> => {
-      const b = await desk.traffic(k, id).catch(() => undefined);
+      const b = await desk.trafficSeries(k, id).catch(() => undefined);
       if (stop) return;
       loaded = true;
       failed = b === undefined;
