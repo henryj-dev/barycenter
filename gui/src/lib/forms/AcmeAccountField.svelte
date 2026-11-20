@@ -59,8 +59,7 @@
     { value: NEW_ACCOUNT, label: '＋ 새 계정' },
   ]);
   const adding = $derived(account === NEW_ACCOUNT);
-  const keyBad = $derived(newKey.trim() === '' || keyError(newKey) === undefined ? undefined
-    : '이름은 영문·숫자로 시작하고 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 쓸 수 있어요. 63자까지예요.');
+  const keyBad = $derived(keyError(newKey));
   const mailOk = (v: string): boolean => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim().replace(/^mailto:/, ''));
   const mailBad = $derived(newMail.trim() === '' || mailOk(newMail) ? undefined : 'name@example.com 형식으로 입력해요.');
 

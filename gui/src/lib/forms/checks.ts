@@ -1,25 +1,14 @@
 /**
  * 만들기 폼의 칸 검사 (#126). 입력 바로 아래에 문구를 보이려고 화면에서 먼저 본다.
  *
- * **최종 판정은 서버다.** 여기 규칙은 저장소의 제약과 같은 것만 둔다(키 문법은
- * `012_key_syntax.sql`). 출발지 대역은 `parseSourceAllow` 를 그대로 쓴다 — 두 벌로 두지 않는다.
+ * **최종 판정은 서버다.** 여기 규칙은 저장소의 제약과 같은 것만 둔다 — 키 문법은 서버와
+ * **같은 정규식**을 가져다 쓴다(`src/validate/syntax.ts`, DB 는 `034_key_segments.sql`). 출발지 대역은 `parseSourceAllow` 를 그대로 쓴다 — 두 벌로 두지 않는다.
  * 빈 칸은 오류가 아니다. 비어 있으면 「만들기」 버튼만 잠근다.
  */
 import { parseSourceAllow } from '@web/edit';
+import { KEY_ERROR, KEY_HELP, keyError } from './key-rule';
 
-const KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
-
-export const KEY_HELP = '영문·숫자로 시작하고 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 쓸 수 있어요. 63자까지예요. 만든 뒤에는 바꿀 수 없어요.';
-
-/** 시안 `validate` 의 이름 오류. */
-export const KEY_ERROR = '이름은 영문·숫자로 시작하고 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 쓸 수 있어요. 63자까지예요.';
-
-/** 이름(키). 맞으면 undefined. */
-export const keyError = (v: string): string | undefined => {
-  const t = v.trim();
-  if (t === '' || KEY.test(t)) return undefined;
-  return KEY_ERROR;
-};
+export { KEY_ERROR, KEY_HELP, keyError };
 
 /** 포트 1–65535. 맞으면 undefined. */
 export const portError = (v: string | number): string | undefined => {

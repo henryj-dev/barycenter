@@ -28,6 +28,8 @@
  * | `1.2.3.4::` | 0 — 임베디드 IPv4 는 **꼬리**에만 온다 |
  */
 
+import { RESOURCE_KEY_SYNTAX } from './syntax.js';
+
 /** `0` = IP 아님 · `4` = IPv4 · `6` = IPv6. `net.isIP` 와 같은 값이다. */
 export function ipVersion(input: string): 0 | 4 | 6 {
   if (isIPv4(input)) return 4;
@@ -118,8 +120,9 @@ export function cidrVersion(input: string): 0 | 4 | 6 {
  * 브라우저에서도 돈다 — GUI 의 출발지 제한 입력이 같은 판정을 쓴다.
  */
 export function addressSetRef(input: string): string | undefined {
-  const m = /^@([A-Za-z0-9][A-Za-z0-9._-]{0,62})$/.exec(input);
-  return m === null ? undefined : m[1];
+  if (!input.startsWith('@')) return undefined;
+  const name = input.slice(1);
+  return RESOURCE_KEY_SYNTAX.test(name) ? name : undefined;
 }
 
 /** 주소 → 정수. IP 가 아니면 `undefined`. 존 ID 는 받지 않는다(`cidrVersion` 과 같다). */

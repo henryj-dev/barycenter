@@ -25,7 +25,7 @@ import { probeTlsNameGaps } from '../control/health.js';
 import {
   normalizeHost, validateBackendHost, validateHeaderValue, validatePathPrefix,
 } from '../validate/strings.js';
-import { PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
+import { RESOURCE_KEY_RULE, RESOURCE_KEY_SYNTAX } from '../validate/syntax.js';
 import { withRedirectListeners } from '../model/redirect.js';
 import { bindTransitionConflicts, type BindTransitionConflict } from '../validate/bind-transition.js';
 import { bindIsLocal, type HostAddressFacts } from '../engine/host-addresses.js';
@@ -82,20 +82,19 @@ export const ENGINE_KEY = 'engine';
 /**
  * 리소스 `key` 의 문법 (검수 S-01).
  *
- * 왜 이렇게 좁은가 — **key 가 파일 경로가 되기 때문이다.** 인증서는
+ * 왜 좁은가 — **key 가 파일 경로가 되기 때문이다.** 인증서는
  * `certs/<key>/<version>/privkey.pem` 으로 세대에 들어가고(`certPaths`),
- * ACME 는 `acme-<key>` 를 SecretStore 이름으로 쓴다. 그래서 `FsSecretStore` 가 이름에
- * 이미 쓰는 규칙(`^[A-Za-z0-9._-]+$`)과 **같은 문자 집합**으로 맞춘다 — 안 맞추면
+ * ACME 는 `acme-<key>` 를 SecretStore 이름으로 쓴다. 그래서 시크릿 이름 규칙
+ * (`SECRET_NAME_SYNTAX`)이 이 규칙의 글자를 **모두** 받게 맞춘다 — 안 맞추면
  * "모델에는 저장되는데 ACME 가 그 인증서만 발급 못 하는" 조합이 생긴다.
  *
  * 선두를 영숫자로 제한하는 것은 `.`·`..`·`-flag` 를 한 번에 막기 위해서다.
- * 63 자는 DNS 라벨과 같은 한도다 — 이름이 그보다 길면 읽는 사람이 없다.
+ * 구간을 `:` 로 잇고 127 자까지 받는다(2026-11-20) — `{호스트}:{서비스}[:{세부}][:{분산 구분}]`.
  *
- * **정규식은 여기 없다** (검수 N2). 원격 창구의 `targetGeneration` 이 같은 종류의
- * 자리라 같은 규칙을 쓰는데, 사본을 둘로 두면 언젠가 갈린다. `validate/syntax.ts`
- * 가 한 벌을 들고 있고 그 파일이 왜 거기 있는지도 적어 놨다.
+ * **정규식은 여기 없다** (검수 N2). `validate/syntax.ts` 가 한 벌을 들고 있고 그 파일이
+ * 왜 거기 있는지도 적어 놨다.
  */
-const KEY_SYNTAX = PATH_SEGMENT_SYNTAX;
+const KEY_SYNTAX = RESOURCE_KEY_SYNTAX;
 
 /**
  * **쓰기 경계에서만** 문법을 본다.
@@ -112,8 +111,7 @@ function assertKeySyntax(kind: ResourceKind, key: string): void {
   if (KEY_SYNTAX.test(key)) return;
   throw new StoreError(400, 'malformed',
     `${kind} 의 key 가 문법에 안 맞는다: ${JSON.stringify(key)} — `
-    + '영숫자로 시작하고 영숫자·점·밑줄·하이픈만, 63 자까지다 '
-    + '(key 는 인증서 파일 경로가 된다)');
+    + `${RESOURCE_KEY_RULE} (key 는 인증서 파일 경로가 된다)`);
 }
 
 export type PatchOp =

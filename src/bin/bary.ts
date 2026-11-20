@@ -153,7 +153,7 @@ const usage = (): never => {
                                  proxy 라우트는 둘을 더 받는다 (#109):
                                    --route-header 'Host: api.example.com'   (여러 번) 이 라우트에만. 같은 이름이면 리스너 것을 대신한다
                                    --rewrite-prefix /v1/                   맞은 --path-prefix 를 이 값으로 바꿔 보낸다 (끝 '/' 가 같아야 한다)
-                                   --source-rule '[conn:]대역,…=동작'      출발지 규칙 (여러 번, 위에서부터). 동작: pool:<풀>[:ws] · redirect:<코드>:<URL> · reject:<코드>
+                                   --source-rule '[conn:]대역,…=동작'      출발지 규칙 (여러 번, 위에서부터). 동작: pool:<풀>[,ws] · redirect:<코드>:<URL> · reject:<코드>
                                                                            예: --source-rule '@cloudflare-ips-v4,@cloudflare-ips-v6=reject:444'  (conn: 은 연결 주소)
   bary route delete              --name --host|--sni. HTTP 와 패스스루를 가른다
   bary address-set create        --name (--cidr a,b … | --cidr-file f | --cloudflare). commit 까지. apply 는 아니다 (#114)

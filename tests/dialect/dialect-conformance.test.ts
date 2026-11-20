@@ -9,6 +9,7 @@
  * 여기 SQL 은 방언마다 나란히 둔다(`byDialect`) — 저장소 함수가 하는 방식과 같다. 이 묶음은 **골격**이다:
  * 방언 하나의 완료 조건은 이것에 더해 `tests/store` 묶음 전체가 그 DB 로 통과하는 것이다.
  */
+import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -58,6 +59,20 @@ describe(`방언 적합성 (${process.env['BARY_TEST_DB'] ?? 'postgres'})`, () =
     const raw = Object.entries(shape).flatMap(([table, cols]) =>
       Object.entries(cols).filter(([, c]) => c.type.startsWith('raw:')).map(([col, c]) => `${table}.${col} ${c.type}`));
     expect(raw).toEqual([]);
+  });
+
+  it('**리소스 key 의 CHECK 가 세 방언에서 같은 판정을 한다** — `:` 구간 · 127 자 (034_key_segments)', async () => {
+    await db.migrate();
+    const pool = async (key: string): Promise<unknown> => db.query(
+      `INSERT INTO pools (id, key, name, protocol_class, algorithm, created_by, updated_by, revision)
+       VALUES ($1, $2, 'n', 'http', 'round_robin', 't', 't', 1)`, [randomUUID(), key]);
+    for (const ok of ['web-01.dc1:shop:api:01', 'a'.repeat(127), 'plain.key-1_A']) {
+      await pool(ok);
+      await db.query('DELETE FROM pools WHERE key = $1', [ok]);
+    }
+    for (const bad of ['a::b', ':a', 'a:', 'a:-b', 'a'.repeat(128), 'a~http', 'ok\n']) {
+      await expect(pool(bad), JSON.stringify(bad)).rejects.toMatchObject({ code: '23514', constraint: 'pools_key_syntax' });
+    }
   });
 
   it('**스키마 모양이 PG 의 모양과 같다** — 표 · 열 · 논리 형 · NULL 허용 (`schema-shape-pg.json`)', async () => {

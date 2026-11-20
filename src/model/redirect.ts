@@ -5,12 +5,14 @@
  * 모델에 따로 적히지 않지만 **리스너처럼 다룬다** — 검증기는 소켓 충돌 · 호스트 충돌을, 렌더러는 server 블록을,
  * 소켓 목록(배포 · 방화벽)과 plan 의 소켓 변화는 열 포트를 본다. 넷이 같은 함수를 써야 갈리지 않는다.
  *
- * 키는 `<리스너>:http` 다. `:` 는 리소스 키에 못 쓰는 글자라 사용자 리스너와 겹치지 않는다.
+ * 키는 `<리스너>~http` 다. `~` 는 리소스 키에 못 쓰는 글자라 사용자 리스너와 겹치지 않는다.
+ * 전에는 `<리스너>:http` 였다 — 리소스 key 가 `:` 로 구간을 잇게 되면서(2026-11-20) `x:http` 를
+ * 사용자가 지을 수 있게 됐고, 그러면 리스너 `x` 의 리다이렉트 소켓과 같은 키가 된다.
  * 기본 동작은 'reject' 로 두고, 렌더러가 리다이렉트로 바꿔 낸다(`redirectTargetPort`).
  */
 import type { HttpListener, RawListener } from './provisional.js';
 
-export const redirectKeyOf = (listenerKey: string): string => `${listenerKey}:http`;
+export const redirectKeyOf = (listenerKey: string): string => `${listenerKey}~http`;
 
 type WithRedirect = Pick<RawListener, 'key' | 'protocol' | 'bind' | 'enabled' | 'sourceAllow' | 'hosts' | 'httpRedirect'>;
 

@@ -25,7 +25,7 @@
   $effect(() => { const l = listeners[0]?.value; if (l !== undefined && untrack(() => listener) === undefined) listener = l; });
   $effect(() => { const c = certs[0]?.value; if (c !== undefined && untrack(() => certificate) === undefined) certificate = c; });
 
-  const keyBad = $derived(keyError(key) === undefined ? undefined : '이름은 영문·숫자로 시작하고 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 쓸 수 있어요. 63자까지예요.');
+  const keyBad = $derived(keyError(key));
   const hostsBad = $derived(hosts.trim() === '' ? undefined : hostsError(hosts));
   const ready = $derived(filled(key, keyError) && listener !== undefined && certificate !== undefined && parseHosts(hosts).length > 0);
   const submit = (): void => {

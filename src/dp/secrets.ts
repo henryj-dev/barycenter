@@ -37,6 +37,7 @@ import { join } from 'node:path';
 import { createPrivateKey } from 'node:crypto';
 
 import { inspectMaterial, type CertFacts } from './certinfo.js';
+import { isSecretName } from '../validate/syntax.js';
 
 /** 인증서 한 벌. */
 export type CertMaterial = {
@@ -76,7 +77,7 @@ export type SecretRef = {
 export type KeyRef = { ref: string; name: string; version: string; keyDigest: string };
 
 export function parseKeyRef(ref: string): { name: string; version: string } {
-  const m = /^key:\/\/([A-Za-z0-9._-]+)@([a-f0-9]{16,64})$/.exec(ref);
+  const m = /^key:\/\/([A-Za-z0-9._:-]+)@([a-f0-9]{16,64})$/.exec(ref);
   if (m === null) {
     throw new Error(`키 참조 모양이 아니다: ${JSON.stringify(ref)} (key://<name>@<version>)`);
   }
@@ -139,7 +140,7 @@ const sha256 = (s: string): string =>
 
 /** `store://name@version` 을 쪼갠다. */
 export function parseRef(ref: string): { name: string; version: string } {
-  const m = /^store:\/\/([A-Za-z0-9._-]+)@([a-f0-9]{16,64})$/.exec(ref);
+  const m = /^store:\/\/([A-Za-z0-9._:-]+)@([a-f0-9]{16,64})$/.exec(ref);
   if (m === null) {
     throw new Error(`시크릿 참조 모양이 아니다: ${JSON.stringify(ref)} (store://<name>@<version>)`);
   }
@@ -233,7 +234,7 @@ export class FsSecretStore implements SecretStore {
   constructor(private readonly root: string) {}
 
   async put(name: string, material: CertMaterial): Promise<SecretRef> {
-    if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+    if (!isSecretName(name)) {
       throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
     }
     // **저장소도 스스로 검증한다.** API 가 이미 `inspectMaterial` 을 부르지만, 그건
@@ -283,7 +284,7 @@ export class FsSecretStore implements SecretStore {
   }
 
   async putKey(name: string, privkey: string): Promise<KeyRef> {
-    if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+    if (!isSecretName(name)) {
       throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
     }
     // 진짜 키인지 확인한다 — 아무 문자열이나 받으면 finalize 시점에야 터진다.
