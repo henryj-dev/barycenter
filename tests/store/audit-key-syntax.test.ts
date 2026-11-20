@@ -59,7 +59,8 @@ async function patch(ops: PatchOp[]): Promise<void> {
 
 describe('리소스 key 문법 (검수 S-01b)', () => {
   it('경로가 되는 key 는 저장되지 않는다', async () => {
-    for (const bad of ['../../../../pwned', 'a/b', './x', '..', '', ' lead', 'x'.repeat(64)]) {
+    // 127 자까지 받는다(034_key_segments) — 상한은 128 자에서 잰다. `:` 는 구간 사이에만 온다.
+    for (const bad of ['../../../../pwned', 'a/b', './x', '..', '', ' lead', 'x'.repeat(128), 'a::b', ':a', 'a:', 'a:../b']) {
       await expect(patch([pool(bad)]), bad).rejects.toThrow(StoreError);
     }
     // 인증서가 특히 중요하다 — 이게 파일 경로가 된다.
@@ -71,7 +72,8 @@ describe('리소스 key 문법 (검수 S-01b)', () => {
 
   it('평범한 key 는 그대로 지난다', async () => {
     // 좁히다가 쓰던 것까지 막으면 안 된다.
-    await patch([pool('app'), pool('app-2'), pool('app_2'), pool('app.v2'), pool('A9')]);
+    await patch([pool('app'), pool('app-2'), pool('app_2'), pool('app.v2'), pool('A9'),
+      pool('web-01.dc1:shop:api:01'), pool('x'.repeat(127))]);
   });
 
   it('DB 도 스스로 막는다 — 애플리케이션을 우회해도', async () => {
