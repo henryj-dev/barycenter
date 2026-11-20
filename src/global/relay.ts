@@ -31,6 +31,8 @@ export const RELAY_PATHS: readonly string[] = [
   'acme/orders/:id', 'sockets', 'health/backends',
   // 리소스별 「적용 대기」 (#126 후속).
   'config/pending-resources',
+  // 풀 · 백엔드 개요의 「헬스 기록」 (2026-11-20).
+  'backends/:id/health-history', 'pools/:id/health-history',
   // 트래픽 통계 (2026-11-20). 지역 노드가 센 것을 그대로 읽는다.
   'traffic', 'traffic/:kind/:id',
   // GUI 가 이미 부르던 것 (2026-11-20) — 빠져 있었다.
