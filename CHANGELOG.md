@@ -14,6 +14,14 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Pools with a backend source can be re-queried on demand: `POST /api/v1/pools/:id/discovery/refresh`,
+  **지금 다시 찾기** in the pool's 「출처에서 받은 백엔드」 box, and `bary pool discovery-refresh <pool>`.
+  It runs the same handling as the periodic round (events, metrics, membership projection), never
+  creates a revision, and is audited as `discovery.refresh`. A source failure answers 502 with the pool
+  state; the last good list stays in use.
+- Global mode now relays three region endpoints the GUI already called, which answered 404 there:
+  `GET pools/:id/discovery`, `GET address-sets/refresh-status` and `POST address-sets/:id/refresh`.
+  A test now checks that every region API path in the GUI source is on the relay allow-list.
 - **Traffic statistics.** On OpenResty, the engine now counts requests (connections for TCP/UDP),
   status classes (1xx–5xx), bytes in/out and time per listener, HTTP route, passthrough route,
   pool and backend, in a separate `lua_shared_dict` (`bary_http_traffic` · `bary_stream_traffic`,

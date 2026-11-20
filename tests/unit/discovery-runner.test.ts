@@ -190,3 +190,77 @@ describe('멤버십 연결', () => {
     expect(stream).toEqual([[]]);
   });
 });
+
+describe('「지금 다시 찾기」 — 풀 하나를 지금 묻는다 (2026-11-20)', () => {
+  it('그 풀만 묻고, 결과의 모양은 바퀴와 같다', async () => {
+    const src = scripted([ok('10.1.0.1')]);
+    const pg = scripted([ok('10.9.0.1')]);
+    const r = new DiscoveryRunner({ sources: (k) => (k === 'consul' ? src : pg), intervalMs: 1_000, now: () => new Date('2026-11-20T00:00:00Z') });
+    const m = model([appPool({ source: 'consul', query: 'api' }), { ...pgPool, discovery: { source: 'dns-srv', query: '_pg._tcp' } }]);
+    const out = await r.refresh(m, 'app');
+    expect(out?.result).toEqual({ changed: ['app'], failed: [], recovered: [] });
+    expect(out?.view).toMatchObject({ pool: 'app', state: 'ok', advertised: true, endpoints: [{ host: '10.1.0.1', port: 8080 }] });
+    expect(src.calls).toEqual(['api']);
+    expect(pg.calls).toEqual([]);
+    expect(r.view('pg')).toBeUndefined();
+  });
+
+  it('같은 목록이면 바뀐 것이 없다 · 실패면 마지막 목록을 지키고 「새 실패」 로 한 번 말한다', async () => {
+    const src = scripted([ok('10.1.0.1'), ok('10.1.0.1'), fail(), fail()]);
+    const r = runnerWith(src);
+    const m = model([appPool({ source: 'consul', query: 'api' }), pgPool]);
+    await r.refresh(m, 'app');
+    expect((await r.refresh(m, 'app'))?.result.changed).toEqual([]);
+    const f1 = await r.refresh(m, 'app');
+    expect(f1?.result.failed.map((v) => v.pool)).toEqual(['app']);
+    expect(f1?.view).toMatchObject({ state: 'error', advertised: true, endpoints: [{ host: '10.1.0.1', port: 8080 }] });
+    expect((await r.refresh(m, 'app'))?.result.failed).toEqual([]);
+  });
+
+  it('출처가 없는 풀 · 없는 풀이면 undefined', async () => {
+    const r = runnerWith(scripted([]));
+    const m = model([appPool(), pgPool]);
+    expect(await r.refresh(m, 'app')).toBeUndefined();
+    expect(await r.refresh(m, 'none')).toBeUndefined();
+  });
+
+  it('돌고 있는 바퀴와 겹치지 않는다 — 바퀴가 끝난 뒤에 묻는다', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    const order: string[] = [];
+    let n = 0;
+    const src: DiscoverySource = {
+      kind: 'consul',
+      resolve: async () => {
+        const i = ++n;
+        order.push(`start ${i}`);
+        if (i === 1) await gate;
+        order.push(`end ${i}`);
+        return ok(`10.1.0.${i}`);
+      },
+    };
+    const r = runnerWith(src);
+    const m = model([appPool({ source: 'consul', query: 'api' }), pgPool]);
+    const tick = r.tick(m);
+    const refresh = r.refresh(m, 'app');
+    await Promise.resolve();
+    expect(order).toEqual(['start 1']);
+    release();
+    await tick;
+    const out = await refresh;
+    expect(order).toEqual(['start 1', 'end 1', 'start 2', 'end 2']);
+    expect(out?.view.endpoints).toEqual([{ host: '10.1.0.2', port: 8080 }]);
+  });
+
+  it('투영이 실패한 풀은 다음 주기 바퀴가 다시 넘긴다 (retryLater)', async () => {
+    const src = scripted([ok('10.1.0.1'), ok('10.1.0.1')]);
+    const r = runnerWith(src);
+    const m = model([appPool({ source: 'consul', query: 'api' }), pgPool]);
+    await r.refresh(m, 'app');
+    r.retryLater(['app']);
+    const seen = await new Promise<string[]>((res) => {
+      r.start(async () => m, async (t) => { r.stop(); res(t.changed); });
+    });
+    expect(seen).toEqual(['app']);
+  });
+});

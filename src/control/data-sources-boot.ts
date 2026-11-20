@@ -21,7 +21,8 @@ import type { Database } from '../store/db.js';
 import { addressSources, addressSourceScheduleFromEnv, type AddressSourceSchedule } from './address-sources/registry.js';
 import { refreshAllAddressSets } from './address-sources/refresh.js';
 import { configuredKinds, discoveryConfigFromEnv, discoverySources, type DiscoveryConfig } from './discovery/registry.js';
-import { DiscoveryRunner } from './discovery/runner.js';
+import { DiscoveryRunner, type DiscoveryPoolView, type TickResult } from './discovery/runner.js';
+import type { Model } from '../model/provisional.js';
 import type { ControlPlane } from './plane.js';
 
 /** 주기 갱신을 하는 「누가」. 감사 · 리비전의 작성자로 남는다. */
@@ -37,7 +38,14 @@ export function dataSourcesConfigFromEnv(env: NodeJS.ProcessEnv = process.env): 
 export type DataSources = {
   runner: DiscoveryRunner | undefined;
   /** `ApiOptions.discovery` 에 넘긴다. */
-  api: { enabled: boolean; reason?: string; intervalMs?: number; views: DiscoveryRunner['views']; view: DiscoveryRunner['view'] };
+  api: {
+    enabled: boolean; reason?: string; intervalMs?: number; views: DiscoveryRunner['views']; view: DiscoveryRunner['view'];
+    /**
+     * 「지금 다시 찾기」 (2026-11-20). 그 풀을 지금 묻고, 주기 바퀴와 **같은 처리**(이벤트 · 지표 · 멤버십 투영)를 한다.
+     * 러너가 없으면 없다. 모델에 그 풀의 출처가 없으면 `undefined`.
+     */
+    refresh?: (model: Model, pool: string) => Promise<{ view: DiscoveryPoolView; changed: boolean } | undefined>;
+  };
   /** `ControlPlaneOptions.discovery` 에 넘긴다. */
   intake: () => ReturnType<DiscoveryRunner['intake']>;
 };
@@ -48,12 +56,30 @@ export function createDataSources(cfg: DataSourcesConfig, membershipPlane: boole
     return { runner: undefined, api: { enabled: false, reason, views: () => [], view: () => undefined }, intake: () => undefined };
   }
   const runner = new DiscoveryRunner({ sources: discoverySources(cfg.discovery), intervalMs: cfg.discovery.intervalMs });
+  const refresh = async (model: Model, pool: string): Promise<{ view: DiscoveryPoolView; changed: boolean } | undefined> => {
+    const out = await runner.refresh(model, pool);
+    if (out === undefined) return undefined;
+    const handle = handlers.get(runner);
+    if (handle !== undefined) {
+      try {
+        await handle(out.result);
+      } catch (e) {
+        // 투영이 실패했다 — 주기 바퀴가 같은 풀을 다시 넘긴다. 받은 목록은 러너가 들고 있다.
+        runner.retryLater(out.result.changed);
+        log.error('discovery.project_failed', { pools: out.result.changed, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return { view: out.view, changed: out.result.changed.includes(pool) };
+  };
   return {
     runner,
-    api: { enabled: true, intervalMs: runner.intervalMs, views: () => runner.views(), view: (p) => runner.view(p) },
+    api: { enabled: true, intervalMs: runner.intervalMs, views: () => runner.views(), view: (p) => runner.view(p), refresh },
     intake: () => runner.intake(),
   };
 }
+
+/** 러너 → 바퀴 결과 처리. `startDataSources` 가 건다 — 「지금 다시 찾기」 도 같은 처리를 탄다. */
+const handlers = new WeakMap<DiscoveryRunner, (r: TickResult) => Promise<void>>();
 
 export type StartOptions = {
   db: Database;
@@ -71,36 +97,35 @@ export function startDataSources(cfg: DataSourcesConfig, ds: DataSources, o: Sta
 
   if (ds.runner !== undefined) {
     const runner = ds.runner;
-    runner.start(
-      () => o.control.headModel(),
-      async (r) => {
-        for (const f of r.failed) {
-          count(`bary_discovery_failure_total{reason="${f.error?.reason ?? 'unknown'}"}`);
-          // **알림 어댑터가 받을 이름** — 같은 실패를 매 주기 다시 말하지 않는다(새로 실패한 때만).
-          log.warn('discovery.source_failed', {
-            pool: f.pool, source: f.source, query: f.query, reason: f.error?.reason, detail: f.error?.detail,
-            keeping: f.advertised ? `마지막 목록 ${f.endpoints.length}개` : '정적 백엔드',
-          });
-          o.events.publish('discovery', { pool: f.pool, state: f.state, reason: f.error?.reason });
-        }
-        for (const pool of r.recovered) {
-          log.info('discovery.source_recovered', { pool });
-          o.events.publish('discovery', { pool, state: 'ok' });
-        }
-        if (r.changed.length === 0) return;
-        for (const pool of r.changed) {
-          const v = runner.view(pool);
-          log.info('discovery.changed', { pool, advertised: v?.advertised ?? false, endpoints: v?.endpoints.length ?? 0 });
-          o.events.publish('discovery', { pool, state: v?.state ?? 'removed', changed: true });
-        }
-        count('bary_discovery_change_total');
-        if (!o.isLeader() && !o.clusterOn) return;
-        // **기존 멤버십 투영 경로** — 헬스 · 드레인과 같은 자리다. 던지면 러너가 다음 바퀴에 같은 풀을 다시 넘긴다.
-        const out = await o.control.projectHealth();
-        if (out !== undefined) log.info('discovery.projected', { pools: r.changed, epochs: out.epochs, planes: out.planes });
-      },
-    );
-    stops.push(() => runner.stop());
+    const handle = async (r: TickResult): Promise<void> => {
+      for (const f of r.failed) {
+        count(`bary_discovery_failure_total{reason="${f.error?.reason ?? 'unknown'}"}`);
+        // **알림 어댑터가 받을 이름** — 같은 실패를 매 주기 다시 말하지 않는다(새로 실패한 때만).
+        log.warn('discovery.source_failed', {
+          pool: f.pool, source: f.source, query: f.query, reason: f.error?.reason, detail: f.error?.detail,
+          keeping: f.advertised ? `마지막 목록 ${f.endpoints.length}개` : '정적 백엔드',
+        });
+        o.events.publish('discovery', { pool: f.pool, state: f.state, reason: f.error?.reason });
+      }
+      for (const pool of r.recovered) {
+        log.info('discovery.source_recovered', { pool });
+        o.events.publish('discovery', { pool, state: 'ok' });
+      }
+      if (r.changed.length === 0) return;
+      for (const pool of r.changed) {
+        const v = runner.view(pool);
+        log.info('discovery.changed', { pool, advertised: v?.advertised ?? false, endpoints: v?.endpoints.length ?? 0 });
+        o.events.publish('discovery', { pool, state: v?.state ?? 'removed', changed: true });
+      }
+      count('bary_discovery_change_total');
+      if (!o.isLeader() && !o.clusterOn) return;
+      // **기존 멤버십 투영 경로** — 헬스 · 드레인과 같은 자리다. 던지면 러너가 다음 바퀴에 같은 풀을 다시 넘긴다.
+      const out = await o.control.projectHealth();
+      if (out !== undefined) log.info('discovery.projected', { pools: r.changed, epochs: out.epochs, planes: out.planes });
+    };
+    handlers.set(runner, handle);
+    runner.start(() => o.control.headModel(), handle);
+    stops.push(() => { runner.stop(); handlers.delete(runner); });
     log.info('discovery.started', { intervalMs: runner.intervalMs, sources: configuredKinds(cfg.discovery) });
   } else {
     log.info('discovery.disabled', { reason: ds.api.reason });

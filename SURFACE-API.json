@@ -419,6 +419,17 @@
         }
       }
     },
+    "/api/v1/pools/{id}/discovery/refresh": {
+      "post": {
+        "operationId": "POST:/api/v1/pools/:id/discovery/refresh",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/sni-bindings": {
       "get": {
         "operationId": "GET:/api/v1/sni-bindings",
@@ -1336,6 +1347,28 @@
         }
       }
     },
+    "/api/v1/regions/{name}/pools/{id}/discovery": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/pools/:id/discovery",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/address-sets/refresh-status": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/address-sets/refresh-status",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/regions/{name}/changesets": {
       "post": {
         "operationId": "POST:/api/v1/regions/:name/changesets",
@@ -1405,6 +1438,28 @@
     "/api/v1/regions/{name}/certificates/{id}/acme/renew": {
       "post": {
         "operationId": "POST:/api/v1/regions/:name/certificates/:id/acme/renew",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/address-sets/{id}/refresh": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/address-sets/:id/refresh",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/pools/{id}/discovery/refresh": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/pools/:id/discovery/refresh",
         "x-scope": "write",
         "responses": {
           "200": {

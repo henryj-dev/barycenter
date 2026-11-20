@@ -39,7 +39,7 @@ import { listenerCreate, listenerDelete, listenerUpdate, parseListenerOptions } 
 import { parseListenerHosts, parseSourceAllow } from '../web/edit.js';
 import { parseListen, proxyCreate } from '../cli/proxy.js';
 import { addressSetCreate, addressSetDelete, addressSetRefresh } from '../cli/address-set.js';
-import { poolCreate, poolDelete, poolDiscoverySet } from '../cli/pool.js';
+import { poolCreate, poolDelete, poolDiscoveryRefresh, poolDiscoverySet } from '../cli/pool.js';
 import {
   ADDRESS_SOURCE_KINDS, DISCOVERY_SOURCE_KINDS, type AddressSourceKind, type DiscoverySourceKind,
 } from '../model/provisional.js';
@@ -150,6 +150,7 @@ const usage = (): never => {
                                  백엔드 출처 (2026-11-05). head 의 그 풀에서 출처만 바꾼다. commit 까지. apply 는 아니다
                                    query: dns-srv 는 SRV 이름 · consul 은 서비스 · kubernetes 는 네임스페이스/서비스 · file 은 파일 이름
                                    --empty keep(기본): 출처가 빈 목록을 주면 마지막 목록을 지킨다. empty: 백엔드 0
+  bary pool discovery-refresh <이름>  풀의 백엔드 출처를 지금 묻는다. 리비전을 만들지 않는다. 출처가 실패하면 마지막 목록을 그대로 쓴다
                                  상태: bary get discovery · bary get pools/<풀>/discovery
   bary pool delete               --name
   bary route create              --name --listener --host|--sni --pool|--to|--reject [--status] [--path-prefix] [--websocket]. apply 는 아니다
@@ -500,6 +501,17 @@ async function main(): Promise<void> {
         try {
           const out = await poolDelete(call, name);
           console.error(`pool ${name} deleted r${out.revision}`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
+      if (sub === 'discovery-refresh') {
+        const name = flag(argv, '--name') ?? (arg2 !== undefined && !arg2.startsWith('--') ? arg2 : undefined) ?? usage();
+        try {
+          const out = await poolDiscoveryRefresh(call, name);
+          console.error(`pool ${name} 다시 찾기: ${out.state}, ${out.advertised ? `백엔드 ${out.endpoints.length}개` : '정적 백엔드'}${out.changed ? ' (바뀌었다)' : ''}`);
           show(out);
         } catch (e) {
           die(e);

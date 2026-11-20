@@ -5,16 +5,21 @@
    * `GET /api/v1/pools/:id/discovery` 를 읽는다: 지금 쓰는 목록(마지막으로 받은 것) · 마지막 갱신 · 오류 · 상태.
    * 출처가 아직 답하지 않았거나 이 데몬에 그 출처가 없으면 「정적 사용 중」 이다 — 아래 소속 백엔드 표가 그 목록이다.
    * 상태는 이 화면이 붙은 데몬의 것이다(데몬마다 따로 묻는다). 못 읽으면 그렇게 말하고 표는 그대로 둔다.
+   *
+   * 「지금 다시 찾기」 (2026-11-20): 주기를 기다리지 않고 지금 묻는다. 쓰기가 막혔으면 감춘다.
    */
   import { getContext } from 'svelte';
   import { DISCOVERY_SOURCES } from '@web/discovery';
-  import { Badge, FieldMessage } from '#lib/ui';
+  import { Badge, Button, FieldMessage, toast } from '#lib/ui';
+  import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { Tone } from '#lib/ui/tone.ts';
   import { whenText } from '#lib/ops/audit';
   import type { DiscoveryPoolView, createDesk } from '#lib/desk.svelte.ts';
 
   let { pool, source, query }: { pool: string; source: string; query: string } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
+  const scope = getContext<Scope | undefined>('scope');
+  const canWrite = $derived(scope?.blocked !== true);
 
   let view = $state<DiscoveryPoolView | undefined>();
   let failed = $state(false);
@@ -35,6 +40,21 @@
     return () => { stop = true; clearInterval(t); };
   });
 
+  let asked = $state<string | undefined>();
+  const findNow = async (): Promise<void> => {
+    const r = await desk.refreshDiscovery(pool);
+    if (r.view !== undefined) { view = r.view; failed = false; }
+    if (!r.ok) {
+      asked = r.message;
+      toast.fail('출처에서 받지 못했어요', r.message);
+      return;
+    }
+    asked = undefined;
+    const n = r.view.endpoints.length;
+    toast.ok(r.changed ? '새 목록을 받았어요' : '목록이 같아요',
+      r.view.advertised ? `${pool} — 백엔드 ${n}개를 써요` : `${pool} — 정적 백엔드를 써요`);
+  };
+
   const label = $derived(DISCOVERY_SOURCES.find((s) => s.value === source)?.label ?? source);
   const STATE: Record<DiscoveryPoolView['state'], { tone: Tone; text: string }> = {
     ok: { tone: 'ok', text: '받는 중' },
@@ -52,7 +72,11 @@
       <Badge tone={STATE[view.state].tone}>{STATE[view.state].text}</Badge>
       {#if !view.advertised}<Badge tone="neutral">정적 사용 중</Badge>{/if}
     {/if}
+    {#if canWrite}
+      <span class="act"><Button size="sm" variant="secondary" disabled={desk.editing} onclick={() => { void findNow(); }}>지금 다시 찾기</Button></span>
+    {/if}
   </div>
+  {#if asked !== undefined}<FieldMessage tone="error">{asked}</FieldMessage>{/if}
   {#if failed}
     <FieldMessage>출처 상태를 읽지 못했어요. 아래 표는 정적 백엔드예요.</FieldMessage>
   {:else if view !== undefined}
@@ -79,6 +103,7 @@
   .disc { border: 1px solid var(--bd); border-radius: var(--r-md); padding: 12px; margin-bottom: 12px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
   .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .t { font-weight: 600; }
+  .act { margin-left: auto; }
   .src { color: var(--tx2); }
   .mono { font-family: var(--mono); }
   .meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
