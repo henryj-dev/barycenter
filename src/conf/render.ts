@@ -22,6 +22,9 @@ import {
   type ConfNode, type ConfValue,
 } from './ast.js';
 import {
+  LISTENER_VAR, ROUTE_MAP_VAR, ROUTE_VAR, TRAFFIC_DICT, TRAFFIC_DICT_SIZE, trafficLogLua,
+} from './traffic.js';
+import {
   compileHostRoutes, hostPatternKey, planStrictPriority, type RouteInput,
 } from '../route/compile.js';
 import { coversHost, parseHostPattern } from '../validate/strings.js';
@@ -704,6 +707,8 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
             local chosen = ngx.ctx.bary_peers
             chosen[#chosen + 1] = peer
             d:incr("in:" .. peer, 1, 0)
+            -- 트래픽 카운터가 풀을 안다 (src/conf/traffic.ts).
+            ngx.ctx.bary_up = "${name}"
         `),
   ]);
 }
@@ -796,6 +801,11 @@ function pickExpression(pool: Pool): string {
  *   · 호스트마다 매치 클래스가 다를 수 있는데 하나만 보고 순서를 정했다.
  * 호스트를 독립 단위로 펼치면 둘 다 사라진다.
  */
+/** 트래픽 카운터가 읽는 이름 변수 (src/conf/traffic.ts). 이름 규칙상 인용이 필요 없다. */
+function nameVar(name: string, value: string): ConfNode {
+  return directive('set', [variable(name), lit(value)]);
+}
+
 function httpServerBlocks(
   listener: HttpListener | HttpsListener,
   routes: HttpRoute[],
@@ -806,6 +816,8 @@ function httpServerBlocks(
   certs: Map<string, Certificate>,
   /** 와일드카드 리스너면 함께 붙을 특정 주소 소켓들 (`alsoOnSockets`). */
   alsoOn: readonly AlsoOn[] = [],
+  /** 트래픽 카운터에 이름을 적는다 (src/conf/traffic.ts). */
+  count = false,
 ): ConfNode[] {
   // (호스트, 라우트) 쌍으로 펼친다.
   const byHost = new Map<string, HttpRoute[]>();
@@ -869,9 +881,13 @@ function httpServerBlocks(
 
     const locations: ConfNode[] = [];
     for (const { r, path } of ordered) {
-      const build = (action: HttpAction): ConfNode[] => locationBody(
-        { ...r, action }, poolsWithBackends, listener.http?.headers?.request, pools, certs,
-      );
+      const build = (action: HttpAction): ConfNode[] => {
+        const b = locationBody(
+          { ...r, action }, poolsWithBackends, listener.http?.headers?.request, pools, certs,
+        );
+        // **빈 본문에는 안 붙인다.** `set` 만 남은 location 은 파일을 서빙한다.
+        return count && b.length > 0 ? [nameVar(ROUTE_VAR, r.key), ...b] : b;
+      };
       // 출발지 규칙이 있으면 본문 앞에 규칙이 서고, 프록시 규칙의 named location 이 함께 선다 (2026-11-02).
       const { body, named } = withSourceRules(r, path, build(r.action), build);
       if (body.length > 0) locations.push(block('location', [lit(path)], body), ...named);
@@ -919,6 +935,8 @@ function httpServerBlocks(
       // 같은 포트의 특정 주소에서도 이 호스트에 답한다 — 그 주소 리스너가 이 호스트를 안 맡을 때만.
       ...alsoOn.filter((a) => !a.hosts.has(host)).map((a) => directive('listen', a.args)),
       directive('server_name', [nameArg]),
+      // 이름을 먼저 적는다 — 아래 가드의 `return` 은 rewrite 단계라 그 뒤의 `set` 은 안 돈다.
+      ...(count ? [nameVar(LISTENER_VAR, listener.key)] : []),
       ...tlsBody,
       ...realipNodes(listener),
       ...sourceAllowGuard(listener),
@@ -1648,6 +1666,7 @@ function defaultServerBlock(
   acme: boolean,
   pools: Map<string, Pool>,
   certs: Map<string, Certificate>,
+  count = false,
 ): ConfNode {
   const body = defaultActionLocations(listener, poolsWithBackends, pools, certs);
 
@@ -1671,6 +1690,7 @@ function defaultServerBlock(
   return block('server', [], [
     directive('listen', [...listenArgs(listener), lit('default_server')]),
     directive('server_name', [lit('_')]),
+    ...(count ? [nameVar(LISTENER_VAR, listener.key)] : []),
     ...tlsBody,
     ...realipNodes(listener),
     // **default_server 에도 낸다.** 모르는 Host 로 오면 여기로 온다 — 여기가 빠지면
@@ -1732,6 +1752,8 @@ function passthroughNodes(
   listener: PassthroughListener,
   routes: PassthroughRoute[],
   poolsWithBackends: Set<string>,
+  /** 트래픽 카운터에 리스너·라우트 이름을 적는다 (src/conf/traffic.ts). */
+  count = false,
 ): ConfNode[] {
   const sniVar = varName('bary_sni_', listener.key);
 
@@ -1748,6 +1770,8 @@ function passthroughNodes(
   const compiled = compileHostRoutes(inputs);
 
   const entries: ConfNode[] = [];
+  // 같은 SNI 열쇠로 라우트 **이름**을 낸다. map 은 게으르다 — log 단계에서 읽을 때 SNI 가 이미 있다.
+  const routeEntries: ConfNode[] = [];
   for (const c of compiled.order) {
     const route = owner.get(c.key)!;
     const target =
@@ -1766,6 +1790,7 @@ function passthroughNodes(
           // X.509 와일드카드는 한 라벨만 보장한다. 넓게 잡으면 인증서 오선택이 된다.
           regex(`~*^[^.]+\\.${reEscape(c.pattern.suffix)}$`);
     entries.push(entry(match, target));
+    routeEntries.push(entry(match, lit(route.key)));
   }
 
   /**
@@ -1794,8 +1819,14 @@ function passthroughNodes(
 
   const sniMap = block('map', [variable('ssl_preread_server_name'), variable(sniVar)], entries);
 
+  const routeVar = varName('bary_ptr_', listener.key);
+  const routeMap = count
+    ? [block('map', [variable('ssl_preread_server_name'), variable(routeVar)],
+      [...routeEntries, entry(lit('default'), lit(''))])]
+    : [];
   const server = block('server', [], [
     directive('listen', listenArgs(listener)),
+    ...(count ? [nameVar(LISTENER_VAR, listener.key), nameVar(ROUTE_MAP_VAR, routeVar)] : []),
     ...realipNodes(listener),
     ...sourceAllowStream(listener),
     directive('ssl_preread', [lit('on')]),
@@ -1807,12 +1838,13 @@ function passthroughNodes(
 
   // **notls map 이 sniMap 보다 앞에 온다.** nginx 는 map 정의 순서에 의존하지
   // 않지만, 읽는 사람은 의존한다 — 참조되는 변수가 먼저 정의돼 있어야 읽힌다.
-  return [...noSniNodes, sniMap, server];
+  return [...noSniNodes, sniMap, ...routeMap, server];
 }
 
 function streamServerBlock(
   listener: TcpListener | UdpListener, pool: Pool | undefined,
   certs: Map<string, Certificate> = new Map(),
+  count = false,
 ): ConfNode {
   const children: ConfNode[] = [];
   const isUdp = listener.protocol === 'udp';
@@ -1824,6 +1856,7 @@ function streamServerBlock(
     if (preset?.reuseport) args.push(lit('reuseport'));
   }
   children.push(directive('listen', args));
+  if (count) children.push(nameVar(LISTENER_VAR, listener.key));
   children.push(...realipNodes(listener));
   children.push(...sourceAllowStream(listener));
   children.push(directive('proxy_pass', [lit(upstreamName(listener.defaultPool))]));
@@ -2021,7 +2054,7 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
     ];
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).
     if (caps.httpLua === true) {
-      children.unshift(lua('log_by_lua_block', `
+      children.unshift(lua('log_by_lua_block', `${trafficLogLua('http')}
             -- **고른 것을 전부 내린다** (검수 D3). 전에는 \`ngx.ctx.bary_peer\` 하나였고,
             -- 그건 **마지막** peer 다 — 재시도한 요청에서 먼저 고른 peer 의 \`in:\` 이
             -- 영영 안 내려갔다. 그 누수는 N5(페일오버 없음)를 고치는 순간 살아난다.
@@ -2042,6 +2075,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       // (dict 는 LRU 로 밀어낸다) 그 실패는 "인증서 발급이 가끔 안 된다" 로 보인다.
       children.unshift(directive('lua_shared_dict',
         [lit(ACME_DICT), lit(dictSize(model.engine?.acmeDictKb, DEFAULT_ACME_KB))]));
+      // 트래픽 카운터 dict. 멤버십 dict 와 따로다 — 카운터가 `slot:` 을 밀어내면 안 된다.
+      children.unshift(directive('lua_shared_dict', [lit(TRAFFIC_DICT.http), lit(TRAFFIC_DICT_SIZE)]));
     }
     // E7 — 내장 변수가 아니므로 반드시 함께 렌더한다. 그리고 정확히 한 번만.
     if (anyWebsocket) {
@@ -2089,8 +2124,10 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       // ACME 예약 라우트는 **Lua 가 있어야** 낸다. 없으면 토큰을 conf 에 실어야 하고,
       // 그건 갱신마다 세대 전환이다 (§8.2 · ADR-ACME).
       const acme = caps.httpLua === true;
+      // 트래픽 카운터는 Lua 가 있을 때만 센다. 없으면 이름을 적는 `set` 도 안 낸다 — 렌더 바이트가 그대로다.
+      const count = caps.httpLua === true;
       if (l.hosts === undefined) {
-        children.push(defaultServerBlock(l, poolsWithBackends, tls, acme, pools, certs));
+        children.push(defaultServerBlock(l, poolsWithBackends, tls, acme, pools, certs, count));
       } else {
         // **이 소켓에 호스트 없는 리스너가 없으면 기본 server 를 만든다** (ADR-VHOST) — 소켓마다 한 번.
         const sk = vhostSocketKey(l);
@@ -2102,7 +2139,7 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       children.push(
         ...httpServerBlocks(
           l, routesByListener.get(l.key) ?? [], poolsWithBackends, tls, acme, pools, certs,
-          alsoOnSockets(l, httpListeners, routesByListener).alsoOn,
+          alsoOnSockets(l, httpListeners, routesByListener).alsoOn, count,
         ),
       );
     }
@@ -2149,7 +2186,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
     if (caps.streamLua === true) {
       children.push(directive('lua_shared_dict',
         [lit(MEMBERSHIP_DICT.stream), lit(dictSize(model.engine?.membershipDictKb, DEFAULT_MEMBERSHIP_KB))]));
-      children.push(lua('log_by_lua_block', `
+      children.push(directive('lua_shared_dict', [lit(TRAFFIC_DICT.stream), lit(TRAFFIC_DICT_SIZE)]));
+      children.push(lua('log_by_lua_block', `${trafficLogLua('stream')}
             -- 검수 D3 — http 평면과 같은 규칙이다. **고른 것을 전부 내린다.**
             local chosen = ngx.ctx.bary_peers
             if not chosen then return end
@@ -2171,9 +2209,9 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
     }
     for (const l of streamListeners) {
       if (l.protocol === 'tls_passthrough') {
-        children.push(...passthroughNodes(l, ptByListener.get(l.key) ?? [], poolsWithBackends));
+        children.push(...passthroughNodes(l, ptByListener.get(l.key) ?? [], poolsWithBackends, caps.streamLua === true));
       } else if (poolsWithBackends.has(l.defaultPool)) {
-        children.push(streamServerBlock(l, pools.get(l.defaultPool), certs));
+        children.push(streamServerBlock(l, pools.get(l.defaultPool), certs, caps.streamLua === true));
       }
     }
     if (children.length > 0) top.push(block('stream', [], children));

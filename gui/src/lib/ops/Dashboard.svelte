@@ -24,6 +24,7 @@
   import { loadRegions } from './fetch';
   import { nodeState, type ClusterBody } from './cluster';
   import { certOrder, mergeByTime, regionBadge, sumTally, tallyNotices, type Tally } from './aggregate-view';
+  import DashTraffic from './DashTraffic.svelte';
 
   type Desk = ReturnType<typeof createDesk>;
   const desk = getContext<Desk>('desk');
@@ -430,6 +431,9 @@
           {/each}
         {/if}
       </section>
+
+      <!-- 트래픽은 이 화면이 붙은 노드의 것이다 — 전역 합산에서는 지역마다 따로라 안 낸다. -->
+      {#if !agg.on}<DashTraffic />{/if}
 
       <section class="panel" aria-labelledby="dash-certs">
         <div class="phx"><span class="pt" id="dash-certs">인증서 만료</span><a class="more" href="/tls/certificate">자세히</a></div>

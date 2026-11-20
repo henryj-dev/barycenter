@@ -210,6 +210,18 @@ export class RemoteDataplaneDriver implements DataplaneDriver {
     return this.#call('status', {});
   }
 
+  /** 트래픽 카운터 덤프 (2026-11-20). 모양을 여기서 거른다 — 상대 프로세스를 못 믿는다(검수 N2). */
+  async readTraffic(): Promise<{ http?: string; stream?: string }> {
+    const raw = await this.#call<unknown>('readTraffic', {});
+    const out: { http?: string; stream?: string } = {};
+    if (raw !== null && typeof raw === 'object') {
+      const o = raw as Record<string, unknown>;
+      if (typeof o['http'] === 'string') out.http = o['http'];
+      if (typeof o['stream'] === 'string') out.stream = o['stream'];
+    }
+    return out;
+  }
+
   /** keep-alive 소켓을 놓는다. 안 부르면 프로세스가 안 끝난다. */
   close(): void {
     this.#agent.destroy();
