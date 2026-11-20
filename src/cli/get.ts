@@ -48,6 +48,9 @@ export function getPath(what: string): string | undefined {
   if (disc?.[1] !== undefined) return `/api/v1/pools/${encodeURIComponent(disc[1])}/discovery`;
   const pool = /^pools\/([^/]+)\/backends$/.exec(what);
   if (pool?.[1] !== undefined) return `/api/v1/pools/${encodeURIComponent(pool[1])}/backends`;
+  // 판정이 바뀐 기록 (2026-11-20).
+  const hist = /^(backends|pools)\/([^/]+)\/health-history$/.exec(what);
+  if (hist?.[1] !== undefined && hist[2] !== undefined) return `/api/v1/${hist[1]}/${encodeURIComponent(hist[2])}/health-history`;
   const backend = /^backends\/([^/]+)\/status$/.exec(what);
   if (backend?.[1] !== undefined) return `/api/v1/backends/${encodeURIComponent(backend[1])}/status`;
   const op = /^operations\/([^/]+)$/.exec(what);

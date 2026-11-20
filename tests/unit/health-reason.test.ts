@@ -62,7 +62,7 @@ describe('화면 — 풀 · 백엔드 개요가 「정상이 아닌 이유」 �
   const gui = (p: string): string => readFileSync(join(import.meta.dirname, '../../gui/src', p), 'utf8');
 
   it('개요가 풀 · 백엔드에 이유 블록을 붙인다', () => {
-    expect(gui('lib/detail/CellOverview.svelte')).toContain("{#if kind === 'pool' || kind === 'backend'}<HealthProblems {kind} />{/if}");
+    expect(gui('lib/detail/CellOverview.svelte')).toContain("{#if kind === 'pool' || kind === 'backend'}<HealthProblems {kind} /><HealthHistory {kind} />{/if}");
   });
 
   it('이유 블록은 `problemsOf` 하나에서 읽고, 정상이면 안 그린다', () => {
