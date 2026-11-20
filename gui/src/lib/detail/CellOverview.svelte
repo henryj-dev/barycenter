@@ -6,6 +6,7 @@
    *
    * 시안 개요는 격자뿐이다. 다만 풀 · 백엔드는 **정상이 아닐 때** 격자 아래에 「정상이 아닌 이유」 를 단다(2026-11-20) —
    * 배지가 비정상인데 왜인지 보려면 설정 탭까지 가야 했다. 정상이면 격자뿐이다. 드레인은 설정 탭 · 행 메뉴가 한다.
+   * 그 아래에 「헬스 기록」(판정이 바뀐 때)을 단다(2026-11-20) — 지금 정상이어도 언제 흔들렸는지 보인다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
@@ -16,6 +17,7 @@
   import type { Cell } from '#lib/ui';
   import OverviewGrid from './OverviewGrid.svelte';
   import HealthProblems from './HealthProblems.svelte';
+  import HealthHistory from './HealthHistory.svelte';
 
   let { kind }: { kind: 'listener' | 'pool' | 'backend' | 'addressSet' } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -31,4 +33,4 @@
 </script>
 
 <OverviewGrid rows={grid} />
-{#if kind === 'pool' || kind === 'backend'}<HealthProblems {kind} />{/if}
+{#if kind === 'pool' || kind === 'backend'}<HealthProblems {kind} /><HealthHistory {kind} />{/if}

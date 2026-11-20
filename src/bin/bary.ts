@@ -113,6 +113,7 @@ const usage = (): never => {
                                  backends/status 는 왜 트래픽을 안 받는지까지 낸다
                                  sockets 는 배포가 열어야 할 (전송·주소·포트) 를 낸다 (§11.3)
                                  pools/<id>/backends | backends/<id>/status | operations/<id> | plans/<id>
+                                 backends/<id>/health-history | pools/<id>/health-history (판정이 바뀐 기록, 최근 것부터)
                                  acme/orders | acme/orders/<id> | acme/orders/<id>/challenges | acme/challenges/<id>
                                  모르는 이름은 안 부른다
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
