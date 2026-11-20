@@ -62,6 +62,7 @@ const TITLE: Record<string, string> = {
   'cluster.follow': '리더를 따라 적용', 'operation.cancel': '전환 취소', 'generations.sweep': '옛 세대 정리',
   'generations.sweep.failed': '옛 세대 정리 실패', 'health.reproject.failed': '헬스 다시 투영 실패',
   'membership.slots.reclaimed': '멤버십 슬롯 회수', 'acme.account.created': 'ACME 계정 만들기',
+  'discovery.refresh': '백엔드 출처 다시 찾기',
   'session.login': '로그인', 'session.logout': '로그아웃', 'session.logout_all': '모든 세션 로그아웃',
   'session.step_up': '다시 인증',
 };

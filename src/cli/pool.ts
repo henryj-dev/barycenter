@@ -131,3 +131,17 @@ export async function poolDiscoverySet(
   if (pool === undefined) throw new Error(`풀 '${name}' 가 없다`);
   return commitPatch(http, [{ op: 'put', kind: 'pool', key: name, body: poolBodyWithDiscovery(pool, discovery) }]);
 }
+
+/**
+ * 「지금 다시 찾기」 (2026-11-20) — 풀의 백엔드 출처를 지금 묻는다. 리비전을 만들지 않는다.
+ * 출처가 실패하면 서버가 502 를 주고 `unwrap` 이 던진다 — 마지막 목록은 그대로 쓰인다.
+ */
+export async function poolDiscoveryRefresh(
+  http: Http, name: string,
+): Promise<{ pool: string; state: string; advertised: boolean; endpoints: { host: string; port: number }[]; changed: boolean }> {
+  if (name === '') throw new Error('풀 키가 비어 있다');
+  return unwrap(
+    await http('POST', `/api/v1/pools/${encodeURIComponent(name)}/discovery/refresh`, {}),
+    'pool discovery-refresh',
+  ) as { pool: string; state: string; advertised: boolean; endpoints: { host: string; port: number }[]; changed: boolean };
+}

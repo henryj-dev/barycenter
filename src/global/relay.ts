@@ -37,6 +37,8 @@ export const RELAY_PATHS: readonly string[] = [
   'backends/:id/health-history', 'pools/:id/health-history',
   // 트래픽 통계 (2026-11-20). 지역 노드가 센 것을 그대로 읽는다.
   'traffic', 'traffic/:kind/:id',
+  // GUI 가 이미 부르던 것 (2026-11-20) — 빠져 있었다.
+  'pools/:id/discovery', 'address-sets/refresh-status',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */
@@ -51,6 +53,8 @@ export const RELAY_WRITES: readonly { method: 'POST' | 'PATCH' | 'DELETE'; path:
   { method: 'POST', path: 'acme/accounts', scope: 'write' },
   { method: 'POST', path: 'certificates/:id/acme/retry', scope: 'write' },
   { method: 'POST', path: 'certificates/:id/acme/renew', scope: 'write' },
+  { method: 'POST', path: 'address-sets/:id/refresh', scope: 'write' },
+  { method: 'POST', path: 'pools/:id/discovery/refresh', scope: 'write' },
   { method: 'POST', path: 'backends/:id/drain', scope: 'write' },
   { method: 'DELETE', path: 'backends/:id/drain', scope: 'write' },
   { method: 'POST', path: 'apply', scope: 'apply' },

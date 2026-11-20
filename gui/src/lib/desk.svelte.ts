@@ -854,6 +854,31 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
       editing = false;
     }
   };
+  /**
+   * 「지금 다시 찾기」 (2026-11-20) — `POST /api/v1/pools/:id/discovery/refresh`. 그 풀의 출처를 지금 묻는다.
+   * 리비전을 만들지 않는다 — 받은 목록은 멤버십으로 바로 간다(주기 바퀴와 같다).
+   * 출처가 실패해도 서버는 그 풀의 상태(`view`)를 함께 준다 — 마지막 목록을 계속 쓰는지 보인다.
+   */
+  const refreshDiscovery = async (key: string): Promise<
+    | { ok: true; view: DiscoveryPoolView; changed: boolean }
+    | { ok: false; message: string; view?: DiscoveryPoolView }
+  > => {
+    editing = true;
+    try {
+      const r = await call('POST', `/api/v1/pools/${encodeURIComponent(key)}/discovery/refresh`, {});
+      if (!r.ok) {
+        const msg = r.body['message'];
+        const view = r.body['view'] as DiscoveryPoolView | undefined;
+        return { ok: false, message: typeof msg === 'string' ? msg : `다시 찾기 ${r.status}`, ...(view === undefined ? {} : { view }) };
+      }
+      const { changed, ...view } = r.body as DiscoveryPoolView & { changed?: boolean };
+      return { ok: true, view, changed: changed === true };
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    } finally {
+      editing = false;
+    }
+  };
   const createAcmeAccount = async (input: { key: string; directoryUrl: string; contact: string[] }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -1330,6 +1355,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     trafficSummary,
     addressSetRefreshStatus,
     refreshAddressSet,
+    refreshDiscovery,
     createAcmeAccount,
     acmeAction,
     historyOf,
