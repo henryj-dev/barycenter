@@ -25,14 +25,17 @@ function files(dir: string): string[] {
   });
 }
 
-/** `api('/api/v1/…')` · `call('POST', '/api/v1/…')` 의 경로. `${…}` 구간은 `:x`, 뒤에 붙은 `${…}`(질의)는 버린다. */
+/**
+ * `api('/api/v1/…')` · `call('POST', '/api/v1/…')` 의 경로. 구간 하나를 차지하는 `${…}` 는 `:x`(맨 앞도 —
+ * `${base}/:id/…`), 구간에 덧붙은 `${…}`(질의)는 버린다.
+ */
 function guiPaths(): { file: string; path: string }[] {
   const out: { file: string; path: string }[] = [];
   const re = /\b(?:api|call)\((?:'[A-Z]+',\s*)?[`']\/api\/v1\/([^`']*)[`']/g;
   for (const f of files(GUI)) {
     for (const m of readFileSync(f, 'utf8').matchAll(re)) {
       const path = m[1]!
-        .replace(/\/\$\{[^}]+\}/g, '/:x')
+        .replace(/(^|\/)\$\{[^}]+\}/g, '$1:x')
         .replace(/\$\{[^}]+\}/g, '')
         .replace(/\?.*$/, '');
       out.push({ file: f.slice(GUI.length + 1), path });
