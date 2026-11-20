@@ -4,7 +4,8 @@
    * 시안의 개요는 목록의 열 라벨(`colsOf`)과 그 행의 칸 글(`cells`)을 한 칸씩 늘어놓은 격자다(라벨 12px 흐린색 · 값은
    * 고정폭이면 고정폭). 그래서 목록과 같은 열 정의(`lists/traffic-cells.ts`)를 그대로 쓴다 — 목록과 개요가 같은 말을 한다.
    *
-   * 시안 개요는 격자뿐이다. 백엔드의 「트래픽을 받지 않는 이유」 는 분할 상세, 드레인은 설정 탭 · 행 메뉴가 한다.
+   * 시안 개요는 격자뿐이다. 다만 풀 · 백엔드는 **정상이 아닐 때** 격자 아래에 「정상이 아닌 이유」 를 단다(2026-11-20) —
+   * 배지가 비정상인데 왜인지 보려면 설정 탭까지 가야 했다. 정상이면 격자뿐이다. 드레인은 설정 탭 · 행 메뉴가 한다.
    */
   import { getContext } from 'svelte';
   import { page } from '$app/state';
@@ -14,6 +15,7 @@
   } from '#lib/lists/traffic-cells';
   import type { Cell } from '#lib/ui';
   import OverviewGrid from './OverviewGrid.svelte';
+  import HealthProblems from './HealthProblems.svelte';
 
   let { kind }: { kind: 'listener' | 'pool' | 'backend' | 'addressSet' } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -29,3 +31,4 @@
 </script>
 
 <OverviewGrid rows={grid} />
+{#if kind === 'pool' || kind === 'backend'}<HealthProblems {kind} />{/if}
