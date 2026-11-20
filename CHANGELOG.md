@@ -24,6 +24,21 @@ release section lists every publicly known vulnerability it fixes.
   numbers on the backend overview, and **리스너별 트래픽** on the dashboard. Plain nginx answers
   `unsupported` and renders exactly as before. **Upgrading changes the rendered config on
   OpenResty**, so run **다시 렌더** (`POST /api/v1/apply/rerender`) and apply once to start counting.
+- ACME orders can be retried or renewed by hand. `POST /api/v1/certificates/:id/acme/retry` clears the
+  backoff of a failed order (and resets its attempt count), or opens a new order when the last one was
+  abandoned. `POST /api/v1/certificates/:id/acme/renew` opens a new order even when the certificate is not
+  due; it answers 409 `order_live` when an order is in progress. Both need `write`, run on the leader, are
+  audited as `acme.order.retry` / `acme.order.renew`, and are relayed in global mode. The certificate
+  overview shows **지금 다시 시도** and **지금 갱신…**, and the next retry time of a failed order
+  (`nextAttemptAt` in `GET /api/v1/acme/orders`). The CLI has `bary certificate retry <name>` and
+  `bary certificate renew <name>`.
+- **Abandoned ACME orders now stay stopped.** Before, the next renewal tick opened a new order for the same
+  certificate, so "abandoned" restarted the 8 attempts without anyone fixing the cause. Now no new order is
+  opened while the last order is abandoned and the account and domains are unchanged; a manual retry or a
+  changed intent starts again.
+- When the CA marks an order `invalid`, the next attempt now places a **new CA order**. Before, retries
+  polled the same invalid order until the order was abandoned. A re-placed challenge after a cleaned one
+  is tracked again by the orphan scan.
 - Pool and backend overview pages now show **정상이 아닌 이유** when something is wrong: for a pool,
   each backend that is not healthy or not receiving traffic, with its reason; for a backend, its own
   reasons. Health-check failures say which check ran, when it was last observed, and what the

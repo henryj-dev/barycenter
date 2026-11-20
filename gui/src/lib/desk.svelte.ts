@@ -792,6 +792,28 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
       editing = false;
     }
   };
+  /**
+   * ACME 「지금 다시 시도」 · 「지금 갱신」 (2026-11-20) — `POST /api/v1/certificates/:id/acme/{retry,renew}`.
+   * 주문을 열거나 깨울 뿐이다 — 발급은 데몬 러너가 하고 진행은 `acme` 이벤트로 온다. 답을 받으면 인증서 · 주문을 다시 읽는다.
+   */
+  const acmeAction = async (key: string, kind: 'retry' | 'renew'): Promise<
+    { ok: true; order: string; state: string; created: boolean } | { ok: false; message: string }
+  > => {
+    editing = true;
+    try {
+      const r = await call('POST', `/api/v1/certificates/${encodeURIComponent(key)}/acme/${kind}`, {});
+      if (!r.ok) {
+        const msg = r.body['message'];
+        return { ok: false, message: typeof msg === 'string' ? msg : `ACME ${kind} ${r.status}` };
+      }
+      await refreshCerts();
+      return { ok: true, order: String(r.body['order'] ?? ''), state: String(r.body['state'] ?? ''), created: r.body['created'] === true };
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    } finally {
+      editing = false;
+    }
+  };
   const createAcmeAccount = async (input: { key: string; directoryUrl: string; contact: string[] }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -1267,6 +1289,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     addressSetRefreshStatus,
     refreshAddressSet,
     createAcmeAccount,
+    acmeAction,
     historyOf,
     changeset,
     revisions,

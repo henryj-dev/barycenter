@@ -26,6 +26,7 @@ const run = async (last: { accountId: string; domains: string[] } | undefined, i
   const store = {
     accountByKey: async (key: string) => ({ id: key === 'le-prod' ? 'acct-prod' : 'acct-staging', key }),
     lastIssued: async () => last,
+    latest: async () => undefined,
     openOrder: async () => { opened.push('o'); return { id: 'o', created: true }; },
   } as unknown as AcmeStore;
   const r = new AcmeRunner({ store, secrets, placer });

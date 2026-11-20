@@ -13,6 +13,11 @@ export type PublicOrder = {
   state: AcmeOrderRow['state'];
   attempts: number;
   lastError: string | undefined;
+  /**
+   * 러너가 이 주문을 다시 볼 시각(ISO) — **실패한 주문만** 싣는다 (2026-11-20). 화면의 「다음 시도」 다.
+   * 다른 상태에서는 다음 틱이 바로 보거나(진행 중) 다시 안 본다(종단) — 시각이 뜻이 없다.
+   */
+  nextAttemptAt?: string;
 };
 
 export type PublicChallenge = {
@@ -34,6 +39,7 @@ export function publicOrder(row: AcmeOrderRow): PublicOrder {
     state: row.state,
     attempts: row.attempts,
     lastError: row.lastError,
+    ...(row.state === 'failed' && row.nextAttemptAt !== undefined ? { nextAttemptAt: row.nextAttemptAt } : {}),
   };
 }
 

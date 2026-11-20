@@ -10,6 +10,7 @@
  *   · 계정이 없으면 같은 화면에서 만든다(`POST /api/v1/acme/accounts`) — 계정이 있으면 「＋ 계정 생성」 을
  *     눌러야 만들기 칸이 펼쳐진다(늘 펼쳐 두면 고르는 사람에게 소음이다)
  *   · 인증서 상세가 주문의 실패 이유를 보인다
+ *   · 실패 · 포기한 주문은 「지금 다시 시도」, 진행 중인 주문이 없으면 「지금 갱신…」 (2026-11-20) — 쓸 수 있을 때만
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -93,5 +94,16 @@ describe('ACME 인증서 화면', () => {
     expect(edit).toContain("export const MODEL_FIELDS = ['materialRef', 'chainDigest', 'keyDigest'] as const;");
     expect(edit).toContain('for (const f of MODEL_FIELDS) if (item[f] !== undefined) body[f] = item[f];');
     expect(read('detail/Acme.svelte'), '스테이징이면 운영으로 바꾸라고 먼저 말한다').toMatch(/staging && hasMaterial/);
+  });
+
+  it('상세에서 손으로 다시 시도하고 지금 갱신한다 — 쓸 수 없으면 버튼이 없다 (2026-11-20)', () => {
+    const acme = read('detail/Acme.svelte');
+    expect(acme).toContain("{#if canWrite && canRetry}");
+    expect(acme).toContain("const canWrite = $derived(scope?.blocked !== true);");
+    expect(acme).toContain("const canRetry = $derived(last?.state === 'failed' || last?.state === 'abandoned');");
+    expect(acme).toContain('<ConfirmDialog bind:open={asking} title={`지금 갱신: 인증서 ${key}`}');
+    expect(acme, '「다음 시도」 는 실패한 주문의 시각이다').toContain('다음 시도 {nextTry}');
+    const desk = read('desk.svelte.ts');
+    expect(desk).toContain("call('POST', `/api/v1/certificates/${encodeURIComponent(key)}/acme/${kind}`, {})");
   });
 });

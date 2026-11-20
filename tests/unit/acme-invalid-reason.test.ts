@@ -19,17 +19,19 @@ import type { SecretStore } from '../../src/dp/secrets.js';
 
 const pem = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 
-const store = (): { s: AcmeStore; failed: string[] } => {
+const store = (): { s: AcmeStore; failed: string[]; forgot: string[] } => {
   const failed: string[] = [];
+  const forgot: string[] = [];
   const s = {
     claimDue: async () => ({ id: 'o1', state: 'validating', accountId: 'a1', certificateId: 'c1', domains: ['x.test'], orderUrl: 'https://ca.test/order/1' }),
     accountById: async () => ({ id: 'a1', key: 'k', directoryUrl: 'https://ca.test/dir', accountKeyRef: 'key://acme-k', accountUrl: 'https://ca.test/acct/1' }),
     fail: async (_id: string, message: string) => { failed.push(message); return 'failed'; },
+    forgetCaOrder: async (id: string) => { forgot.push(id); },
     challenges: async () => [],
     markCleaned: async () => undefined,
     release: async () => undefined,
   } as unknown as AcmeStore;
-  return { s, failed };
+  return { s, failed, forgot };
 };
 const secrets = { getKey: async () => pem } as unknown as SecretStore;
 const placer = { type: 'http-01' as const, place: async () => undefined, remove: async () => undefined };
@@ -56,6 +58,14 @@ describe('ACME 거절 사유', () => {
     expect(failed[0]).toContain('Connection refused');
     expect(failed[0]).toContain('x.test http-01');
     expect(failed[0]).not.toContain('(detail 없음)');
+  });
+
+  /** CA 의 `invalid` 주문은 다시 살지 않는다 — 좌표를 버려야 다음 시도가 새 CA 주문을 낸다 (2026-11-20). */
+  it('거절된 주문의 CA 좌표를 버린다', async () => {
+    const { s, forgot } = store();
+    const r = new AcmeRunner({ store: s, secrets, placer, clientFor: () => ca(async () => { throw new Error('안 답한다'); }) });
+    expect((await r.step())?.to).toBe('failed');
+    expect(forgot).toEqual(['o1']);
   });
 
   it('인가를 못 읽어도 실패는 실패다', async () => {

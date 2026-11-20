@@ -147,3 +147,20 @@ export async function certificateDelete(
   if (patch === undefined) throw new Error('인증서 키가 비어 있다');
   return commitPatch(http, patch);
 }
+
+/**
+ * ACME 수동 재시도 · 지금 갱신 (2026-11-20) — `POST /api/v1/certificates/:id/acme/{retry,renew}`.
+ *
+ * 주문을 열거나 깨울 뿐이다. 발급은 데몬 러너의 다음 틱이 하고, 끝나면 데몬이 게시한다(자동 적용은 설정을 따른다).
+ */
+export async function certificateAcme(
+  http: Http,
+  key: string,
+  kind: 'retry' | 'renew',
+): Promise<{ certificate: string; order: string; state: string; created: boolean; nextAttemptAt?: string }> {
+  if (key === '') throw new Error('인증서 키가 비어 있다');
+  return unwrap(
+    await http('POST', `/api/v1/certificates/${encodeURIComponent(key)}/acme/${kind}`, {}),
+    `certificate ${kind}`,
+  ) as { certificate: string; order: string; state: string; created: boolean; nextAttemptAt?: string };
+}
