@@ -65,6 +65,12 @@ export type AcmeRunnerOptions = {
   onAdvance?: (e: TickResult) => void;
 };
 
+/** 도메인 집합이 같은가 — 순서 · 대소문자는 안 본다. */
+export function sameDomains(a: readonly string[], b: readonly string[]): boolean {
+  const norm = (xs: readonly string[]): string => xs.map((d) => d.toLowerCase()).sort().join(',');
+  return norm(a) === norm(b);
+}
+
 /** 한 틱이 한 일. 관측과 테스트가 이걸 본다. */
 export type TickResult = {
   /** 이번 틱에 옮긴 주문 (없으면 undefined). */
@@ -133,6 +139,7 @@ export class AcmeRunner {
       }
       const changed = await this.#intentChanged(cert.id, cert.materialRef, account.id, acme.domains);
       if (!changed && !this.#due(cert.materialRef, days)) continue;
+      if (await this.#gaveUp(cert.id, account.id, acme.domains)) continue;
       const r = await this.#o.store.openOrder({
         accountId: account.id, certificateId: cert.id, domains: acme.domains,
       });
@@ -158,9 +165,20 @@ export class AcmeRunner {
     const last = await this.#o.store.lastIssued(certificateId);
     if (last === undefined) return false;
     if (last.accountId !== accountId) return true;
-    const a = last.domains.map((d) => d.toLowerCase()).sort().join(',');
-    const b = domains.map((d) => d.toLowerCase()).sort().join(',');
-    return a !== b;
+    return !sameDomains(last.domains, domains);
+  }
+
+  /**
+   * **포기한 그대로인가** (2026-11-20). 마지막 주문이 `abandoned` 이고 의도(계정 · 도메인)가 그때와 같으면 새 주문을 안 낸다.
+   *
+   * 전에는 `abandoned` 가 살아 있는 상태가 아니어서 `openOrder` 가 다음 틱에 새 주문을 열었다 — 「포기」 가
+   * 「처음부터 다시 8 번」 이었고, 고칠 것을 안 고친 채 CA 레이트리밋을 계속 썼다. 이제 사람이 움직여야 한다:
+   * 수동 재시도(`POST /certificates/:id/acme/retry`) · 지금 갱신 · 계정이나 도메인 바꾸기.
+   */
+  async #gaveUp(certificateId: string, accountId: string, domains: readonly string[]): Promise<boolean> {
+    const last = await this.#o.store.latest(certificateId);
+    if (last?.state !== 'abandoned') return false;
+    return last.accountId === accountId && sameDomains(last.domains, domains);
   }
 
   /**
@@ -307,6 +325,9 @@ export class AcmeRunner {
     if (order.orderUrl === undefined) throw new Error('주문 URL 이 없다');
     const now = await client.fetchOrder(order.orderUrl);
     if (now.status === 'invalid') {
+      // CA 가 거절한 주문은 다시 살지 않는다 — 좌표를 버려 다음 시도(백오프 · 수동)가 **새 CA 주문**을 내게 한다.
+      // 전에는 같은 URL 을 상한(8 회)까지 다시 물어 같은 거절만 받고 포기했다 (2026-11-20).
+      await this.#o.store.forgetCaOrder(order.id);
       throw new Error(`CA 가 주문을 거절했다: ${now.error?.detail ?? await this.#whyInvalid(client, now.authorizations)}`);
     }
     if (now.status === 'ready' || now.status === 'valid') {
