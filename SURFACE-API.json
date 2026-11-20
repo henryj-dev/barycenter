@@ -298,6 +298,28 @@
         }
       }
     },
+    "/api/v1/certificates/{id}/acme/retry": {
+      "post": {
+        "operationId": "POST:/api/v1/certificates/:id/acme/retry",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/certificates/{id}/acme/renew": {
+      "post": {
+        "operationId": "POST:/api/v1/certificates/:id/acme/renew",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/certificates": {
       "get": {
         "operationId": "GET:/api/v1/certificates",
@@ -1339,6 +1361,28 @@
     "/api/v1/regions/{name}/certificates/material": {
       "post": {
         "operationId": "POST:/api/v1/regions/:name/certificates/material",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/certificates/{id}/acme/retry": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/certificates/:id/acme/retry",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/certificates/{id}/acme/renew": {
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/certificates/:id/acme/renew",
         "x-scope": "write",
         "responses": {
           "200": {

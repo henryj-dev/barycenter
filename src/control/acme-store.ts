@@ -41,6 +41,8 @@ export type AcmeOrderRow = {
   certKeyRef: string | undefined;
   attempts: number;
   lastError: string | undefined;
+  /** 러너가 이 주문을 다시 볼 시각(ISO). 종단 상태에서는 뜻이 없다. */
+  nextAttemptAt: string | undefined;
 };
 
 export type ChallengeRow = {
@@ -59,6 +61,13 @@ export type ChallengeRow = {
 const text = (r: Row, k: string): string => String(r[k]);
 const maybe = (r: Row, k: string): string | undefined =>
   r[k] === null || r[k] === undefined ? undefined : String(r[k]);
+/** 시각 열은 방언마다 Date(PG · MySQL) 또는 ISO 문자열(SQLite)로 온다 — 한 형식(ISO)으로 낸다. */
+const instant = (r: Row, k: string): string | undefined => {
+  const v = r[k];
+  if (v === null || v === undefined) return undefined;
+  const d = v instanceof Date ? v : new Date(String(v));
+  return Number.isNaN(d.getTime()) ? String(v) : d.toISOString();
+};
 
 /**
  * 지수 백오프. §8.2 *"CA 레이트 리밋 인지 + 지수 백오프"*.
@@ -354,7 +363,44 @@ export class AcmeStore {
       certKeyRef: maybe(r, 'cert_key_ref'),
       attempts: Number(r['attempts']),
       lastError: maybe(r, 'last_error'),
+      nextAttemptAt: instant(r, 'next_attempt_at'),
     };
+  }
+
+  /**
+   * 이 인증서의 **가장 최근 주문** (상태 무관). 수동 재시도 · 지금 갱신 · 「포기」 판정이 이것을 본다.
+   */
+  async latest(certificateId: string): Promise<AcmeOrderRow | undefined> {
+    const r = (await this.db.query(
+      'SELECT id FROM acme_orders WHERE certificate_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1',
+      [certificateId],
+    )).rows[0];
+    return r === undefined ? undefined : this.#read(this.db, text(r, 'id'));
+  }
+
+  /**
+   * **사람이 지금 다시 하라고 했다** (2026-11-20). 실패한 주문의 백오프를 지우고 시도 수를 0 으로 돌린다 —
+   * 포기 상한(`MAX_ATTEMPTS`)을 새로 센다. 실패 상태가 아니면 아무것도 안 바꾸고 false.
+   */
+  async retryNow(orderId: string): Promise<boolean> {
+    const r = await this.db.query(
+      `UPDATE acme_orders SET attempts=0, next_attempt_at=now(), updated_at=now()
+        WHERE id=$1 AND state='failed'`,
+      [orderId],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  /**
+   * CA 쪽 주문 좌표를 버린다. CA 가 `invalid` 로 판정한 주문은 **다시 살아나지 않는다**(RFC 8555 §7.1.6) —
+   * 그 URL 로 재시도하면 같은 거절을 상한까지 되풀이할 뿐이다. 다음 시도는 새 CA 주문을 낸다.
+   */
+  async forgetCaOrder(orderId: string): Promise<void> {
+    await this.db.query(
+      `UPDATE acme_orders SET order_url=NULL, finalize_url=NULL, expires_at=NULL, updated_at=now()
+        WHERE id=$1`,
+      [orderId],
+    );
   }
 
   /** CA 쪽 좌표를 붙인다. 재시작 뒤 이어서 몰려면 이게 있어야 한다. */
@@ -469,6 +515,13 @@ export class AcmeStore {
 
   // ── 챌린지 ──────────────────────────────────────────────────────────────
 
+  /**
+   * 챌린지를 적는다. 같은 주문 · 도메인 · 종류가 이미 있으면 덮는다 — 새 CA 주문으로 다시 시도할 때다.
+   *
+   * **치운 것은 「안 놓음」 으로 돌린다** (2026-11-20). 전 시도에서 치웠으면 `placed_at` · `cleaned_at` 이 둘 다 서 있고,
+   * 그대로 두면 `markPlaced` 가 아무것도 안 해서 새로 놓은 자료가 고아 스캔에서 빠진다(치운 것으로 보인다).
+   * 놓고 아직 안 치웠으면 `placed_at` 을 둔다 — 그 자료는 아직 치울 대상이다.
+   */
   async putChallenge(ch: Omit<ChallengeRow, 'id' | 'placedAt' | 'cleanedAt'>): Promise<string> {
     if (dialectOf(this.db).name === 'mysql') {
       // 유일 키는 PK(새 uuid)와 (order_id, domain, type) 뿐이라 충돌 대상이 같다. `RETURNING` 대신 그 키로 다시 읽는다.
@@ -477,6 +530,7 @@ export class AcmeStore {
           `INSERT INTO acme_challenges (id,order_id,domain,type,token,value,authz_url,challenge_url)
            VALUES ($8,$1,$2,$3,$4,$5,$6,$7)
            ON DUPLICATE KEY UPDATE
+             placed_at=IF(cleaned_at IS NULL, placed_at, NULL), cleaned_at=NULL,
              token=VALUES(token), value=VALUES(value),
              authz_url=VALUES(authz_url), challenge_url=VALUES(challenge_url)`,
           [ch.orderId, ch.domain, ch.type, ch.token, ch.value, ch.authzUrl, ch.challengeUrl, randomUUID()],
@@ -491,6 +545,8 @@ export class AcmeStore {
       `INSERT INTO acme_challenges (id,order_id,domain,type,token,value,authz_url,challenge_url)
        VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (order_id, domain, type) DO UPDATE SET
+         placed_at=CASE WHEN acme_challenges.cleaned_at IS NULL THEN acme_challenges.placed_at END,
+         cleaned_at=NULL,
          token=EXCLUDED.token, value=EXCLUDED.value,
          authz_url=EXCLUDED.authz_url, challenge_url=EXCLUDED.challenge_url
        RETURNING id`,

@@ -31,7 +31,7 @@ import { createHash, randomBytes, randomUUID, X509Certificate, type KeyObject } 
 
 import { currentLeader, listClusterNodes, nodeHistory } from '../control/cluster.js';
 import type { ControlPlane } from '../control/plane.js';
-import { AcmeStore } from '../control/acme-store.js';
+import { AcmeStore, LIVE_STATES } from '../control/acme-store.js';
 import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.js';
 import {
   deadlineExceededKeys, drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
@@ -360,6 +360,74 @@ const field = (body: unknown, name: string): string => {
   }
   return v;
 };
+
+
+/**
+ * 수동 재시도 · 지금 갱신의 몸통. 답: 202 `{ certificate, order, state, created, nextAttemptAt? }`.
+ *
+ * 409 의 말은 정해져 있다 — `not_acme`(ACME 의도가 없다) · `order_live`(이미 진행 중) · `nothing_to_retry`(실패한 주문이 없다)
+ * · `no_account`(의도의 계정이 원장에 없다).
+ */
+async function acmeManual(c: Ctx, api: ApiOptions, kind: 'retry' | 'renew'): Promise<void> {
+  const key = c.params['id'] ?? '';
+  const cert = (await api.store.modelAt((await api.store.head()).revision)).certificates.find((x) => x.key === key);
+  if (cert === undefined) {
+    json(c.res, 404, { error: 'not_found', message: `인증서 '${key}' 가 없다` });
+    return;
+  }
+  if (cert.acme === undefined) {
+    json(c.res, 409, { error: 'not_acme', message: `인증서 '${key}' 는 손으로 올린 자료다 — ACME 로 받지 않는다` });
+    return;
+  }
+  const idRow = (await api.db.query('SELECT id FROM certificates WHERE key=$1', [key])).rows[0];
+  if (idRow === undefined) {
+    json(c.res, 404, { error: 'not_found', message: `인증서 '${key}' 가 없다` });
+    return;
+  }
+  const certificateId = String(idRow['id']);
+  const store = new AcmeStore(api.db);
+  const last = await store.latest(certificateId);
+  const live = last !== undefined && LIVE_STATES.includes(last.state);
+
+  let order: string;
+  let created = false;
+  if (kind === 'retry' && last?.state === 'failed') {
+    if (!(await store.retryNow(last.id))) {
+      json(c.res, 409, { error: 'order_live', message: `주문 '${last.id}' 가 방금 다른 상태로 갔다 — 다시 본다` });
+      return;
+    }
+    order = last.id;
+  } else if (live) {
+    json(c.res, 409, {
+      error: 'order_live', order: last.id, state: last.state,
+      message: `인증서 '${key}' 의 주문이 진행 중이다 (${last.state})${kind === 'renew' && last.state === 'failed' ? ' — 다시 시도를 쓴다' : ''}`,
+    });
+    return;
+  } else if (kind === 'retry' && last?.state !== 'abandoned') {
+    json(c.res, 409, { error: 'nothing_to_retry', message: `인증서 '${key}' 에 실패하거나 포기한 주문이 없다` });
+    return;
+  } else {
+    const account = await store.accountByKey(cert.acme.account);
+    if (account === undefined) {
+      json(c.res, 409, { error: 'no_account', message: `ACME 계정 '${cert.acme.account}' 가 없다 — 계정을 먼저 만든다` });
+      return;
+    }
+    const opened = await store.openOrder({ accountId: account.id, certificateId, domains: cert.acme.domains });
+    order = opened.id;
+    created = opened.created;
+  }
+  const now = await store.get(order);
+  const state = now?.state ?? 'pending';
+  await api.store.audit(c.who.name, `acme.order.${kind}`, key,
+    last === undefined ? undefined : { order: last.id, state: last.state },
+    { order, state, created });
+  // 화면은 `acme` 이벤트에 인증서 · 주문을 다시 읽는다 — 러너의 걸음과 같은 모양이다.
+  eventsOf(api).publish('acme', { order, ...(last === undefined ? {} : { from: last.state }), to: state });
+  json(c.res, 202, {
+    certificate: key, order, state, created,
+    ...(now?.nextAttemptAt === undefined ? {} : { nextAttemptAt: now.nextAttemptAt }),
+  });
+}
 
 /** changeset 의 ETag — 누적된 patch 의 내용으로 만든다. */
 const changesetEtag = (patch: unknown, state: string): string =>
@@ -742,6 +810,20 @@ const ROUTES: Route[] = [
     }
     json(c.res, 200, body);
   }),
+
+  /**
+   * **ACME 수동 재시도 · 지금 갱신** (2026-11-20).
+   *
+   * 러너는 실패한 주문을 백오프(60 초 → 1 시간)로 8 번까지 다시 하고 포기(`abandoned`)한다. 포기한 뒤에는 사람이 움직이기
+   * 전까지 새 주문을 안 낸다(`AcmeRunner.#gaveUp`). 사람이 원인을 고쳤으면(:80 리스너 · DNS) 기다리지 않고 다시 하게 한다.
+   *
+   *   · retry — 실패한 주문은 백오프를 지우고 시도 수를 0 으로 돌린다. 포기한 주문은 새 주문을 연다.
+   *   · renew — 만료가 멀어도 새 주문을 연다. 살아 있는 주문이 있으면 409 다(실패 중이면 retry 를 쓴다).
+   *
+   * 발급은 러너의 다음 틱이 한다. 이 창구는 주문을 열거나 깨울 뿐 CA 를 기다리지 않는다 — 계정 만들기와 같은 이유다.
+   */
+  route('POST', '/api/v1/certificates/:id/acme/retry', 'write', (c, api) => acmeManual(c, api, 'retry')),
+  route('POST', '/api/v1/certificates/:id/acme/renew', 'write', (c, api) => acmeManual(c, api, 'renew')),
 
   /**
    * TLS 리소스 읽기 (§5.2).
@@ -1548,6 +1630,8 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('POST', '/api/v1/regions/:name/changesets/:id/commit', 'write', relayTo('changesets/:id/commit', 'POST')),
   route('POST', '/api/v1/regions/:name/certificates/material', 'write', relayTo('certificates/material', 'POST')),
   route('POST', '/api/v1/regions/:name/acme/accounts', 'write', relayTo('acme/accounts', 'POST')),
+  route('POST', '/api/v1/regions/:name/certificates/:id/acme/retry', 'write', relayTo('certificates/:id/acme/retry', 'POST')),
+  route('POST', '/api/v1/regions/:name/certificates/:id/acme/renew', 'write', relayTo('certificates/:id/acme/renew', 'POST')),
   route('POST', '/api/v1/regions/:name/backends/:id/drain', 'write', relayTo('backends/:id/drain', 'POST')),
   route('DELETE', '/api/v1/regions/:name/backends/:id/drain', 'write', relayTo('backends/:id/drain', 'DELETE')),
   route('POST', '/api/v1/regions/:name/apply', 'apply', relayTo('apply', 'POST')),
