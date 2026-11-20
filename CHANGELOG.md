@@ -14,6 +14,16 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Fields that could only be changed with **JSON 으로 고치기** or a raw patch now have form controls:
+  listener rate-limit zone size (`zoneKb`), backend `softMaxConns` and `isBackup` (blocked for
+  hash pools), SNI binding TLS version override, HSTS `preload` (requires max-age ≥ 1 year and
+  include-subdomains), and per-source-rule request headers and path rewrite (the route form no
+  longer blocks saving when a rule has them). Creating a listener can now set the real-IP source,
+  PROXY protocol on TCP and passthrough, and the passthrough preread timeout. The route-group form
+  takes a priority for every route it creates.
+- New **엔진 설정** screen under 운영 (`/ops/engine`) edits the engine settings
+  (`workerShutdownTimeoutS`, `membershipDictKb`, `acmeDictKb`) through a normal changeset. New read
+  endpoint `GET /api/v1/engine`, relayed in global mode.
 - Pool and backend overview pages now show **정상이 아닌 이유** when something is wrong: for a pool,
   each backend that is not healthy or not receiving traffic, with its reason; for a backend, its own
   reasons. Health-check failures say which check ran, when it was last observed, and what the

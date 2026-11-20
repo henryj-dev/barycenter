@@ -19,6 +19,14 @@ export const portError = (v: string | number): string | undefined => {
 };
 
 /** 가중치 — 해독기와 같은 범위(1 부터). nginx 가 `weight=0` 을 거절한다. 트래픽을 멈추는 자리는 드레인이다. */
+/** 동시 연결 기준(`softMaxConns`). 비우면 기준이 없다. */
+export const softMaxError = (v: string): string | undefined => {
+  const t = v.trim();
+  if (t === '') return undefined;
+  const n = Number(t);
+  return Number.isInteger(n) && n >= 1 && n <= 1_000_000 ? undefined : '1–1000000 사이의 정수예요. 비우면 기준이 없어요.';
+};
+
 export const weightError = (v: string): string | undefined => {
   const t = v.trim();
   if (t === '') return undefined;

@@ -2,6 +2,7 @@
  * SNI 바인딩 폼(만들기 드로어 · 분할 인라인 · 설정 탭)이 같이 쓰는 것 — 콘솔 시안 `fieldsFor('sni')`.
  * 호스트 목록은 시안 `list` 칸이다: 한 줄에 하나, 도움말 끝에 「(N개)」.
  */
+import { itemOf } from '@web/resources';
 import type { createDesk } from '#lib/desk.svelte.ts';
 
 type Desk = ReturnType<typeof createDesk>;
@@ -21,3 +22,14 @@ export const httpsListeners = (desk: Desk): { value: string }[] =>
 /** 인증서 — 자료가 있는 것만(자료 없는 인증서는 바인딩할 수 없다, 검증기가 막는다). */
 export const boundCerts = (desk: Desk, keep?: string): { value: string }[] =>
   desk.certs.rows.filter((c) => c.hasMaterial || c.key === keep).map((c) => ({ value: c.key }));
+
+/** 그 리스너의 TLS 정책 버전(덮어쓰기의 바탕). */
+export const listenerPolicyVersions = (desk: Desk, listener: string | undefined): { name?: string; min?: string; max?: string } => {
+  const l = desk.listenerModels.find((m) => m['key'] === listener);
+  const name = (l?.['tls'] as { policy?: unknown } | undefined)?.policy;
+  if (typeof name !== 'string') return {};
+  const p = itemOf(desk.model, 'tlsPolicy', name);
+  const min = p?.['minVersion'];
+  const max = p?.['maxVersion'];
+  return { name, ...(typeof min === 'string' ? { min } : {}), ...(typeof max === 'string' ? { max } : {}) };
+};

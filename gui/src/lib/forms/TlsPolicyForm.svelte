@@ -9,14 +9,14 @@
    * 시안과 다른 처음 값(사실을 지킨다): 시안은 HSTS 켜짐 · 거절 · modern-2026 · 최대 TLS 1.3 으로 연다.
    * 여기는 모델 기본(HSTS 꺼짐 · 허용 · intermediate-2026 · 최대 제한 없음)으로 연다.
    * **HSTS 는 브라우저 쪽에서 되돌릴 수 없다** — `max-age` 동안 이 도메인을 https 로만 간다. 켜는 것은 사람이 정한다(`TlsPolicy.hsts`).
-   * 「하위 도메인」 은 시안에 없는 기존 칸이다(모델 `includeSubdomains`) — max-age 아래에 둔다.
+   * 「하위 도메인」 은 시안에 없는 기존 칸이다(모델 `includeSubdomains`) — max-age 아래에 둔다. 그 아래 「preload」(모델 `preload`).
    */
   import { getContext } from 'svelte';
   import { FormRow, FormSection, NumberInput, Select, Switch, TextInput } from '#lib/ui';
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
-  import { CIPHERS, HSTS_MAX, MAX_VERSIONS, MISMATCH, VERSIONS, ageError, policyBody, policyForm, rangeError } from '#lib/tls/policy-edit.ts';
+  import { CIPHERS, HSTS_MAX, MAX_VERSIONS, MISMATCH, VERSIONS, ageError, policyBody, policyForm, preloadError, rangeError } from '#lib/tls/policy-edit.ts';
   import CreateForm from './CreateForm.svelte';
   import { filled, keyError } from './checks';
 
@@ -30,16 +30,18 @@
   let hsts = $state(start.hsts);
   let maxAge = $state<number | string>(start.maxAge);
   let subdomains = $state(start.subdomains);
+  let preloadOn = $state(start.preload);
 
   const keyBad = $derived(keyError(key));
   const range = $derived(rangeError({ min, max }));
   const age = $derived(ageError({ hsts, maxAge: String(maxAge) }));
+  const preload = $derived(preloadError({ hsts, maxAge: String(maxAge), preload: preloadOn, subdomains }));
 
-  const ready = $derived(filled(key, keyError) && range === undefined && age === undefined);
+  const ready = $derived(filled(key, keyError) && range === undefined && age === undefined && preload === undefined);
   const submit = (): void => {
     const k = key.trim();
     const go = after(resourcePath('tlsPolicy', k));
-    const { minVersion, ...extra } = policyBody({ min, max, cipher, mismatch, hsts, maxAge: String(maxAge), subdomains });
+    const { minVersion, ...extra } = policyBody({ min, max, cipher, mismatch, hsts, maxAge: String(maxAge), subdomains, preload: preloadOn });
     // 고른 것이 최소 버전뿐이면 전처럼 만든다. 나머지 칸이 있으면 같은 put 에 몸체를 통째로 싣는다.
     if (Object.keys(extra).length === 0) void desk.insertTlsPolicy(k, min).then(go);
     else void desk.putResource('tlsPolicy', k, { minVersion, ...extra }).then(go);
@@ -73,6 +75,10 @@
       </FormRow>
       <FormRow label="하위 도메인">
         <Switch bind:checked={subdomains}>{subdomains ? '켜짐' : '꺼짐'}</Switch>
+      </FormRow>
+      <FormRow label="preload" error={preload}
+        help="켜면 브라우저 preload 목록에 올려도 된다고 알려요. max-age 1년 이상 · 하위 도메인이 필요해요. 목록에 오르면 빼기가 몇 달 걸려요.">
+        <Switch bind:checked={preloadOn}>{preloadOn ? '켜짐' : '꺼짐'}</Switch>
       </FormRow>
     {/if}
   </FormSection>

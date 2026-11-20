@@ -5,7 +5,7 @@
  *   · 호스트 · 경로 · 우선순위 칸 검사가 **서버와 같은 판정**이다 — 화면이 「괜찮아요」 하고 저장에서 거절되면(전에는
  *     빈 호스트가 「호스트가 비어 있다」 로 터졌다) 사람이 화면을 믿지 않는다. 문구는 해요체다.
  *   · 수정 폼: head 의 라우트를 폼 값으로 폈다가 다시 지으면 **같은 몸통**이 나오고, 해독기가 받는다.
- *     폼이 그리지 못하는 칸이 있으면 `lossy` 로 알린다(저장하면 사라지므로).
+ *     출발지 규칙 동작의 요청 헤더 · 경로 바꾸기도 왕복한다(전에는 `lossy` 로 저장을 막았다).
  *   · 풀 공유 경고(시안 「이 풀을 라우트 N개가 함께 써요.」).
  *   · 화면 배선 — 설정 탭이 라우트에 폼을 쓰고 JSON 은 접어 둔다 · 목록이 분할 상세다 · 메뉴 문구 · reject 배지 ✕.
  */
@@ -101,8 +101,7 @@ describe('수정 폼 — head ↔ 폼 값', () => {
 
   for (const item of HTTP) {
     it(`HTTP ${String(item['key'])} — 폈다가 다시 지으면 같은 몸통 · 해독기가 받는다`, () => {
-      const { state, lossy } = httpRouteStateOf(item);
-      expect(lossy).toBe(false);
+      const { state } = httpRouteStateOf(item);
       const { key: _k, ...want } = item;
       const body = httpRouteBody(String(item['key']), state);
       expect(body).toEqual(want);
@@ -117,9 +116,15 @@ describe('수정 폼 — head ↔ 폼 값', () => {
     expect(body['hosts']).toEqual(['a.example.com', 'b.example.com']);
   });
 
-  it('출발지 규칙 동작에 폼에 없는 칸이 있으면 lossy', () => {
-    const item = { ...HTTP[2]!, sourceRules: [{ from: ['10.0.0.0/8'], action: { kind: 'proxy', pool: 'p', websocket: false, rewritePrefix: '/x' } }] };
-    expect(httpRouteStateOf(item).lossy).toBe(true);
+  it('출발지 규칙 동작의 요청 헤더 · 경로 바꾸기도 폈다가 다시 지으면 같다', () => {
+    const item: Record<string, unknown> = { ...HTTP[2]!, pathPrefix: '/api/', sourceRules: [{ from: ['10.0.0.0/8'], action: {
+      kind: 'proxy', pool: 'p', websocket: false,
+      requestHeaders: [{ name: 'X-Office', value: '1' }], rewritePrefix: '/internal/',
+    } }] };
+    const { key: _k, ...want } = item;
+    const body = httpRouteBody(String(item['key']), httpRouteStateOf(item).state);
+    expect(body).toEqual(want);
+    expect(decodes([{ key: item['key'], ...body }])).toBe(true);
   });
 
   it('패스스루 — 풀로 보내기 · 끊기', () => {

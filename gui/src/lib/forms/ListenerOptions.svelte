@@ -15,11 +15,13 @@
     return String(n);
   };
   const str = (v: unknown): string => (num(v) === undefined ? '' : String(v));
+  /** zone 크기(KB) → `10m` · `512k`. `parseListenerOptions` 가 다시 읽는 꼴이다. */
+  const kb = (v: unknown): string => { const n = num(v); return n === undefined ? '' : n % 1024 === 0 ? `${n / 1024}m` : `${n}k`; };
   const rowsOf = (v: unknown): { name: string; value: string }[] =>
     (Array.isArray(v) ? v : []).map((r) => obj(r) ?? {}).map((r) => ({ name: String(r['name'] ?? ''), value: String(r['value'] ?? '') }));
 
   export function optionStateOf(http: unknown): {
-    f: { connectTimeout: string; readTimeout: string; sendTimeout: string; maxBody: string; rate: string; burst: string; maxConn: string };
+    f: { connectTimeout: string; readTimeout: string; sendTimeout: string; maxBody: string; rate: string; burst: string; maxConn: string; zone: string };
     rateOn: boolean; nodelay: boolean; strictPriority: boolean;
     request: { name: string; value: string }[]; response: { name: string; value: string }[];
   } {
@@ -32,6 +34,7 @@
         connectTimeout: ms(l['connectTimeoutMs']), readTimeout: ms(l['readTimeoutMs']), sendTimeout: ms(l['sendTimeoutMs']),
         maxBody: bytes(l['clientMaxBodyBytes']),
         rate: str(r?.['requestsPerSecond']), burst: str(r?.['burst']), maxConn: str(r?.['maxConnections']),
+        zone: kb(r?.['zoneKb']),
       },
       rateOn: r !== undefined, nodelay: r?.['nodelay'] === true, strictPriority: h['strictPriority'] === true,
       request: rowsOf(hd['request']), response: rowsOf(hd['response']),
@@ -95,6 +98,7 @@
     value.burst = rateOn ? opt(f.burst) : undefined;
     value.maxConn = rateOn ? opt(f.maxConn) : undefined;
     value.nodelay = rateOn && nodelay ? true : undefined;
+    value.zone = rateOn ? opt(f.zone) : undefined;
     value.strictPriority = strictPriority ? true : undefined;
     const specs = [
       ...request.filter((r) => r.name.trim() !== '').map((r) => `req:${r.name.trim()}:${r.value}`),
@@ -127,6 +131,10 @@
       </FormRow>
       <FormRow label="nodelay" help="켜면 burst 요청을 지연 없이 처리해요."><Switch bind:checked={nodelay}>켜요</Switch></FormRow>
       <FormRow label="동시 연결" for="lo-mc"><TextInput id="lo-mc" bind:value={f.maxConn} placeholder="100" width="160px" unit="개" /></FormRow>
+      <FormRow label="zone 크기" for="lo-zone"
+        help="클라이언트 주소를 세는 공유 메모리예요. 예: 10m · 512k. 16k 에서 1024m 까지예요. 비우면 10m 이에요.">
+        <TextInput id="lo-zone" bind:value={f.zone} placeholder="10m" width="160px" />
+      </FormRow>
     {/if}
   </FormSection>
 

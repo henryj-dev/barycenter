@@ -4,7 +4,7 @@
    * 기본(이름 · 바인드 주소 · 포트 · 활성화 · 호스트) · 동작(기본 동작 · 기본 풀 · [HTTPS] TLS 정책 · 기본 인증서 · HTTP/2 ·
    * HTTP로 온 요청을 HTTPS로 보내기 · HTTP 포트) · 접근 제한 · 타임아웃과 본문 · 레이트리밋 · 요청 헤더 규칙 · 응답 헤더 규칙 · priority 정책.
    * **둘이 한 폼이다** — `tls` 면 TLS 칸이 더 생긴다. 나머지가 갈리면 안 된다.
-   * 시안의 「원본 IP」 는 만들기 patch 가 받지 않아서 만든 뒤 설정 탭에서 정한다.
+   * 「원본 IP」 는 만들기 patch 빌더가 받지 않아서, 고르면 빌더 본문에 얹어 `putResource` 로 올린다(`switchedBody`).
    */
   import { getContext } from 'svelte';
   import { parseListenerHosts, parseListenerOptions, parseSourceAllow, putHttpListenerPatch, putHttpsListenerPatch, type ListenerOptionFlags } from '@web/edit';
@@ -17,6 +17,7 @@
   import ListenerOptions from './ListenerOptions.svelte';
   import SourceAllowSection from './SourceAllowSection.svelte';
   import HttpRedirectField from './HttpRedirectField.svelte';
+  import RealIpSection, { type RealIpHeader, type RealIpSource } from '#lib/listener/RealIpSection.svelte';
   import { filled, hostLine, keyError, portError } from './checks';
   import { plainSwitches, switchedBody } from './listener-create';
 
@@ -49,6 +50,10 @@
   let allow = $state('');
   let allowBad = $state(false);
   let hosts = $state('');
+  let ipSource = $state<RealIpSource>('none');
+  let ipHeader = $state<RealIpHeader>('CF-Connecting-IP');
+  let ipTrusted = $state('');
+  let ipBad = $state(false);
   // HTTPS 만. 새로 만들 때는 켜 둔다 — 평문으로 온 사람을 HTTPS 로 보내는 것이 흔한 기본이다.
   let redirectOn = $state(true);
   let redirectPort = $state('80');
@@ -57,14 +62,14 @@
   const hostsOk = $derived((hostList ?? []).every((h) => hostLine(h) === undefined));
 
   const ready = $derived(
-    filled(key, keyError) && filled(bind) && filled(port, portError) && (behavior === 'reject' || pool !== undefined) && hostsOk && redirectOk && optsOk && !allowBad
+    filled(key, keyError) && filled(bind) && filled(port, portError) && (behavior === 'reject' || pool !== undefined) && hostsOk && redirectOk && optsOk && !allowBad && !ipBad
     && (!tls || (policy !== undefined && certificate !== undefined)),
   );
   const submit = (): void => {
     const k = key.trim();
     const b = bind.trim();
     const n = Number(port);
-    const sw = { enabled, http2: tls ? http2 : undefined };
+    const sw = { enabled, http2: tls ? http2 : undefined, realIp: { source: ipSource, header: ipHeader, trusted: ipTrusted } };
     const done = after(resourcePath('listener', k));
     if (tls) {
       if (policy === undefined || certificate === undefined) return;
@@ -110,5 +115,6 @@
   </FormSection>
 
   <SourceAllowSection bind:value={allow} bind:invalid={allowBad} {port} http />
+  <RealIpSection bind:source={ipSource} bind:header={ipHeader} bind:trusted={ipTrusted} bind:invalid={ipBad} http />
   <ListenerOptions bind:value={opts} bind:ok={optsOk} folded={false} />
 </CreateForm>
