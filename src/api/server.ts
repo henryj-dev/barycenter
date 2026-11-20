@@ -76,6 +76,7 @@ import {
 import { roleProfilesView } from '../accounts/idp-roles/registry.js';
 import { MAX_SET_BYTES, verifyRoleChange } from '../accounts/idp-roles/role-change.js';
 import { TRAFFIC_RESOURCE_KINDS, type TrafficResourceKind, type TrafficSampler } from '../control/traffic.js';
+import type { StorageStatus } from '../control/storage-status.js';
 
 /** Role Change 를 받는 설정 — `events` 키와 SET 서명 검증 키(JWKS). */
 export type OidcRoleChange = { eventKey: string; keyFor: (kid: string | undefined) => KeyObject | undefined };
@@ -101,6 +102,11 @@ export type ApiOptions = {
   secrets?: SecretStore;
   /** 트래픽 통계 (2026-11-20). 없으면 `unsupported` 로 답한다. */
   traffic?: TrafficSampler;
+  /**
+   * 저장소 상태 (2026-11-20). DB 종류 · 보존 정책 · 마지막 청소. 없으면 `/system/storage` 가 `available: false` 다.
+   * **비밀을 싣지 않는다** — DSN · 호스트 · KEK 값은 이 객체에 애초에 없다.
+   */
+  storage?: StorageStatus;
   /** SSE 허브. 없으면 서버가 하나 만든다. */
   events?: EventHub;
   /** 테스트가 하트비트를 기다리도록. 기본 15s. */
@@ -1251,6 +1257,18 @@ const ROUTES: Route[] = [
     }
     json(c.res, 200, { available: true, ...read() });
   }),
+  /**
+   * **저장소 상태** (2026-11-20). DB 종류와 판 · 시크릿 드라이버 · 표마다 보존 일수 · 세대와 시크릿의 마지막 청소.
+   * 청소는 리더만 돌므로 팔로워의 `last` 는 `null` 이다 — 0 건으로 채우지 않는다.
+   */
+  route('GET', '/api/v1/system/storage', 'read', async (c, api) => {
+    const s = 'storage' in api ? api.storage : undefined;
+    if (s === undefined || !('db' in api)) {
+      json(c.res, 200, { available: false });
+      return;
+    }
+    json(c.res, 200, { available: true, ...(await s.body({ db: api.db, isLeader: api.election.state.isLeader })) });
+  }),
   route('GET', '/api/v1/cluster/nodes', 'read', async (c, api) => {
     const cl = 'cluster' in api ? api.cluster : undefined;
     if (cl === undefined || !('db' in api)) {
@@ -1768,6 +1786,7 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/cluster/nodes', 'read', relayTo('cluster/nodes')),
   route('GET', '/api/v1/regions/:name/cluster/nodes/:node/history', 'read', relayTo('cluster/nodes/:node/history')),
   route('GET', '/api/v1/regions/:name/system/addresses', 'read', relayTo('system/addresses')),
+  route('GET', '/api/v1/regions/:name/system/storage', 'read', relayTo('system/storage')),
   route('GET', '/api/v1/regions/:name/acme/accounts', 'read', relayTo('acme/accounts')),
   route('GET', '/api/v1/regions/:name/acme/orders/:id', 'read', relayTo('acme/orders/:id')),
   route('GET', '/api/v1/regions/:name/sockets', 'read', relayTo('sockets')),

@@ -14,6 +14,12 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- The status screen has a **저장소** panel, and `GET /api/v1/system/storage` (read scope; relayed in
+  global mode; `bary get system/storage`) reports it: the config and accounts database kinds and the
+  config server version, the secret store driver (files or encrypted in the database, and whether a
+  KEK is set — never its value), the retention window of each table (or "kept forever"), and the
+  last database, generation and secret clean-up results. Clean-ups run only on the leader, so a
+  follower says it has no result instead of reporting zero. No DSN, host or key material is returned.
 - Pools with a backend source can be re-queried on demand: `POST /api/v1/pools/:id/discovery/refresh`,
   **지금 다시 찾기** in the pool's 「출처에서 받은 백엔드」 box, and `bary pool discovery-refresh <pool>`.
   It runs the same handling as the periodic round (events, metrics, membership projection), never

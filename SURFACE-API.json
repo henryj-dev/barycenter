@@ -646,6 +646,17 @@
         }
       }
     },
+    "/api/v1/system/storage": {
+      "get": {
+        "operationId": "GET:/api/v1/system/storage",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/cluster/nodes": {
       "get": {
         "operationId": "GET:/api/v1/cluster/nodes",
@@ -1319,6 +1330,17 @@
     "/api/v1/regions/{name}/system/addresses": {
       "get": {
         "operationId": "GET:/api/v1/regions/:name/system/addresses",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/system/storage": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/system/storage",
         "x-scope": "read",
         "responses": {
           "200": {

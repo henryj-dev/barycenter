@@ -21,6 +21,8 @@ const LISTS = new Set([
   'cluster/nodes',
   // 이 설정이 점유하는 (전송, 주소, 포트) 전부 — 배포가 열어야 할 것 (§11.3).
   'sockets',
+  // 저장소 상태 — DB 종류 · 보존 정책 · 마지막 청소 (2026-11-20).
+  'system/storage',
 ]);
 
 export function getPath(what: string): string | undefined {

@@ -19,7 +19,7 @@
  *   bary plan  <파일.json>      커밋하지 않고 영향만 본다
  *   bary export / import
  *   bary rollback / cancel / audit / status / head
- *   bary get listeners|pools|backends|backends/status|routes|certificates|tls-policies|sni-bindings|sockets|health|model|rendered|metrics
+ *   bary get listeners|pools|backends|backends/status|routes|certificates|tls-policies|sni-bindings|sockets|system/storage|health|model|rendered|metrics
  *   bary recover
  *
  * 환경변수: `BARY_URL`(기본 http://127.0.0.1:8088) · `BARY_TOKEN`
@@ -109,9 +109,10 @@ const usage = (): never => {
 
   bary status                    4-way 상태 · 미완 전환 · 미적용 커밋
   bary head                      전역 리비전
-  bary get <무엇>                listeners | pools | backends | backends/status | routes | certificates | tls-policies | sni-bindings | sockets | health | model | rendered | metrics
+  bary get <무엇>                listeners | pools | backends | backends/status | routes | certificates | tls-policies | sni-bindings | sockets | system/storage | health | model | rendered | metrics
                                  backends/status 는 왜 트래픽을 안 받는지까지 낸다
                                  sockets 는 배포가 열어야 할 (전송·주소·포트) 를 낸다 (§11.3)
+                                 system/storage 는 DB 종류 · 보존 정책 · 마지막 청소를 낸다
                                  pools/<id>/backends | backends/<id>/status | operations/<id> | plans/<id>
                                  backends/<id>/health-history | pools/<id>/health-history (판정이 바뀐 기록, 최근 것부터)
                                  acme/orders | acme/orders/<id> | acme/orders/<id>/challenges | acme/challenges/<id>
