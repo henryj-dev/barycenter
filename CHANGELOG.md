@@ -24,6 +24,13 @@ release section lists every publicly known vulnerability it fixes.
 - New **엔진 설정** screen under 운영 (`/ops/engine`) edits the engine settings
   (`workerShutdownTimeoutS`, `membershipDictKb`, `acmeDictKb`) through a normal changeset. New read
   endpoint `GET /api/v1/engine`, relayed in global mode.
+- Pool and backend overview pages now show **헬스 기록**: every time the health verdict flipped,
+  newest first, with the previous and new state and what the prober reported, 20 at a time with
+  **더 보기**. A pool lists its own backends and the ones it discovered. The data was already kept in
+  `health_events` (30 days by default) but nothing read it. New read endpoints
+  `GET /api/v1/backends/:id/health-history` and `GET /api/v1/pools/:id/health-history`
+  (`?limit=` 1–200, `?before=` cursor), relayed in global mode; CLI
+  `bary get backends/<id>/health-history` and `bary get pools/<id>/health-history`.
 - **Traffic statistics.** On OpenResty, the engine now counts requests (connections for TCP/UDP),
   status classes (1xx–5xx), bytes in/out and time per listener, HTTP route, passthrough route,
   pool and backend, in a separate `lua_shared_dict` (`bary_http_traffic` · `bary_stream_traffic`,

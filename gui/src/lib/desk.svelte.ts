@@ -46,6 +46,13 @@ export type StatusSnap = {
  * @param scope 전역 모드면 읽기 경로를 고른 지역의 중계 경로로 바꾼다(`lib/global/scope`). 지역 인스턴스면 그대로다.
  */
 /** 풀 하나의 백엔드 출처 상태 — `GET /api/v1/pools/:id/discovery` (2026-11-05). */
+/** 헬스 기록 한 쪽 — 서버 `HealthHistoryPage` 와 같은 모양이다(GUI 는 서버 모듈을 들이지 않는다). */
+export type HealthHistoryEvent = {
+  seq: string; backendKey: string; from: 'healthy' | 'unhealthy' | 'unknown' | null;
+  to: 'healthy' | 'unhealthy' | 'unknown'; at: string; detail?: string;
+};
+export type HealthHistoryPage = { events: HealthHistoryEvent[]; next?: string };
+
 export type DiscoveryPoolView = {
   pool: string;
   source: string;
@@ -759,6 +766,19 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     return (await r.json().catch(() => undefined)) as DiscoveryPoolView | { pool: string; source: null } | undefined;
   };
   /**
+   * 판정이 바뀐 기록 — `GET /api/v1/{backends|pools}/:id/health-history` (2026-11-20). 최근 것부터.
+   * `before` 는 앞 쪽의 `next` 다. 못 읽으면 undefined.
+   */
+  const healthHistory = async (kind: 'pool' | 'backend', key: string, before?: string): Promise<HealthHistoryPage | undefined> => {
+    const q = new URLSearchParams({ limit: '20', ...(before === undefined ? {} : { before }) });
+    const base = kind === 'pool' ? 'pools' : 'backends';
+    const r = await fetch(api(`/api/v1/${base}/${encodeURIComponent(key)}/health-history?${q.toString()}`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    const body: unknown = await r.json().catch(() => undefined);
+    if (typeof body !== 'object' || body === null || !Array.isArray((body as { events?: unknown }).events)) return undefined;
+    return body as HealthHistoryPage;
+  };
+  /**
    * 트래픽 통계 (2026-11-20) — 이 화면이 붙은 노드가 센 것이다. 못 읽으면 undefined —
    * 「세지 않는다」(`unsupported`)와 다르다.
    */
@@ -1305,6 +1325,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     acmeAccounts,
     hostAddresses,
     poolDiscovery,
+    healthHistory,
     trafficSeries,
     trafficSummary,
     addressSetRefreshStatus,
