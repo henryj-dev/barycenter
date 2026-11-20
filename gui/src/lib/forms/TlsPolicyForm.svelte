@@ -31,7 +31,7 @@
   let maxAge = $state<number | string>(start.maxAge);
   let subdomains = $state(start.subdomains);
 
-  const keyBad = $derived(keyError(key) === undefined ? undefined : '이름은 영문·숫자로 시작하고 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 쓸 수 있어요. 63자까지예요.');
+  const keyBad = $derived(keyError(key));
   const range = $derived(rangeError({ min, max }));
   const age = $derived(ageError({ hsts, maxAge: String(maxAge) }));
 

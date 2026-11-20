@@ -14,6 +14,18 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Resource names (backends, pools, listeners, routes, certificates, TLS policies, SNI bindings,
+  address sets, ACME accounts) may now join segments with `:` and be up to 127 characters, for
+  naming schemes such as `{host}:{service}[:{detail}][:{shard}]`
+  (e.g. `web-01.dc1:shop:api:01`). Each segment still starts with a letter or
+  digit and uses only letters, digits, `.`, `_` and `-`. Migration `034_key_segments` widens the
+  database checks on PostgreSQL, SQLite and MySQL/MariaDB; existing names are unaffected.
+- Names that barycenter derives itself now use `~` so they cannot collide with yours: the plain
+  HTTP redirect socket of an HTTPS listener is `<listener>~http` (was `<listener>:http`) and a
+  discovered backend is `disc~<pool>~<host>~<port>`. An HTTPS listener with both an HTTP redirect and a
+  source allow-list renders a new nginx variable name, so the next apply makes a new generation.
+- CLI: in `--source-rule`, the WebSocket flag is now `pool:<pool>,ws`. The old `pool:<pool>:ws`
+  still works when the pool name has no `:`.
 - The development line on `main` is versioned `0.1.0-dev` again; only tagged releases carry a
   release version.
 

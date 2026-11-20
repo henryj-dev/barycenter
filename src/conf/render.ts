@@ -382,8 +382,8 @@ function ident(key: string): string {
  *
  * 변수 이름은 `variables_hash` 에 들어가고, 기본 `variables_hash_bucket_size 64` 에서 한 칸은
  * 포인터(8) + 8 바이트로 맞춘 (이름 + 2) 이고 버킷 끝 표시(8)가 함께 들어가야 한다 — 이름은 **46 자까지**다.
- * 넘으면 `could not build variables_hash` 로 `nginx -t` 가 실패한다. 리스너 키는 63 자까지 받으므로
- * 키를 그대로 이어 붙이면 넘는다. 실제로 `barycenter-internal` 의 HTTP 리다이렉트 리스너(`…:http`)에
+ * 넘으면 `could not build variables_hash` 로 `nginx -t` 가 실패한다. 리스너 키는 127 자까지 받으므로
+ * 키를 그대로 이어 붙이면 넘는다. 실제로 `barycenter-internal` 의 HTTP 리다이렉트 리스너(당시 `…:http`, 지금 `…~http`)에
  * 출발지 제한이 붙자 `bary_src_deny_barycenter_internal_http_79420b8a`(47 자)가 나와 적용이 거부됐다.
  */
 export const NGINX_VAR_MAX = 46;

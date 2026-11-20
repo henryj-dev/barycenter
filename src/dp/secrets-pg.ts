@@ -31,6 +31,7 @@
 import { createCipheriv, createDecipheriv, createHash, createPrivateKey, randomBytes } from 'node:crypto';
 
 import { inspectMaterial, type CertFacts } from './certinfo.js';
+import { isSecretName } from '../validate/syntax.js';
 import {
   parseKeyRef, parseRef,
   type CertMaterial, type KeyRef, type SecretRef, type SecretStore,
@@ -369,7 +370,7 @@ function frozenFacts(facts: CertFacts): CertFacts {
 }
 
 function assertName(name: string): void {
-  if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+  if (!isSecretName(name)) {
     throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
   }
 }

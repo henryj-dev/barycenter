@@ -133,7 +133,7 @@ describe('렌더', () => {
 describe('소켓 목록 · 편집', () => {
   it('소켓 목록에 80 이 나온다 — 배포 · 방화벽이 연다', () => {
     const rows = socketRows(base([https('a')]));
-    expect(rows.map((r) => `${r.listener}|${r.transport}|${r.port}`)).toEqual(['a:http|tcp|80', 'a|tcp|443']);
+    expect(rows.map((r) => `${r.listener}|${r.transport}|${r.port}`)).toEqual(['a~http|tcp|80', 'a|tcp|443']);
   });
 
   it('만들기 패치에 싣고, 같은 포트는 거절한다', () => {

@@ -46,12 +46,34 @@ const csv = (v: string | undefined): string[] =>
 /**
  * `--source-rule` 한 줄 → 출발지 규칙 (2026-11-02). 모양: `[conn:]대역[,대역…]=동작`.
  *
- *   동작   `pool:<풀>[:ws]` · `redirect:<301|302|307|308>:<URL>` · `reject:<403|404|444>`
+ *   동작   `pool:<풀>[,ws]` · `redirect:<301|302|307|308>:<URL>` · `reject:<403|404|444>`
+ *
+ * 웹소켓 표시는 `,ws` 다. 풀 이름이 `:` 로 구간을 잇게 되면서(2026-11-20) `pool:a:ws` 가
+ * "풀 a + 웹소켓" 인지 "풀 a:ws" 인지 모호해졌다 — `,` 는 이름에 못 쓰므로 모호하지 않다.
+ * 옛 모양 `pool:<풀>:ws` 는 풀 이름에 `:` 가 없을 때만 그 뜻으로 읽는다(쓰던 스크립트가 안 깨지게).
  *   conn:  연결 주소(realip 전)를 본다. 없으면 방문자 주소다.
  *
  * 예: `@cloudflare-ips-v4,@cloudflare-ips-v6=reject:444` · `conn:10.0.0.0/8=pool:internal`.
  * 대역의 모양 · 가려진 규칙은 서버가 본다(해독기 · 검증기) — 여기서는 끊기만 한다.
  */
+/**
+ * `pool:` 뒤의 `<풀>[,ws]`. 옛 모양 `<풀>:ws` 는 풀 이름에 `:` 가 없을 때만 받는다 —
+ * `a:b:ws` 는 풀 `a:b:ws` 다(웹소켓이면 `a:b,ws`).
+ */
+function poolAction(arg: string, fail: (why: string) => never): { pool: string; websocket: boolean } {
+  const comma = arg.indexOf(',');
+  if (comma >= 0) {
+    const flag = arg.slice(comma + 1);
+    if (flag !== 'ws') fail(`풀 뒤에는 ,ws 만 온다 (받은 것: ,${flag})`);
+    const pool = arg.slice(0, comma);
+    if (pool === '') fail('풀 이름이 비어 있다');
+    return { pool, websocket: true };
+  }
+  if (arg === '') fail('풀 이름이 비어 있다');
+  const legacy = /^([^:]+):ws$/.exec(arg);
+  return legacy === null ? { pool: arg, websocket: false } : { pool: legacy[1]!, websocket: true };
+}
+
 export function parseSourceRule(line: string): SourceRuleInput {
   const fail = (why: string): never => {
     throw new Error(`--source-rule ${JSON.stringify(line)}: ${why} — 예: @cloudflare-ips-v4=reject:444 · conn:10.0.0.0/8=pool:internal`);
@@ -68,10 +90,8 @@ export function parseSourceRule(line: string): SourceRuleInput {
   const arg = act.slice(kind.length + 1);
   let action: SourceRuleInput['action'];
   if (kind === 'pool') {
-    const [pool, ws] = arg.split(':');
-    if (pool === undefined || pool === '') fail('풀 이름이 비어 있다');
-    if (ws !== undefined && ws !== 'ws') fail(`pool 뒤에는 :ws 만 온다 (받은 것: :${ws})`);
-    action = { kind: 'proxy', pool: pool!, websocket: ws === 'ws' };
+    const { pool, websocket } = poolAction(arg, fail);
+    action = { kind: 'proxy', pool, websocket };
   } else if (kind === 'redirect') {
     const at = arg.indexOf(':');
     const status = redirectStatus(at < 0 ? undefined : arg.slice(0, at));

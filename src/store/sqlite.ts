@@ -54,8 +54,41 @@ interface Stmt {
   columns(): ColumnInfo[];
   setReadBigInts(on: boolean): void;
 }
+/**
+ * 이 표시로 시작하는 마이그레이션은 `sqlite_schema` 를 직접 고친다(`034_key_segments.sql` 머리말).
+ *
+ * SQLite 는 CHECK 를 `ALTER TABLE` 로 못 바꾸고, 테이블을 새로 만드는 절차는 트랜잭션 안에서
+ * `foreign_keys` 를 끌 수 없어 못 쓴다. 남는 공식 절차가 `writable_schema` 다. node:sqlite 는
+ * 방어 모드로 열어서 그 PRAGMA 를 막는다 — **이 파일 동안만** 끄고, 무슨 일이 있어도 다시 켠다.
+ */
+export const WRITABLE_SCHEMA_MARK = '-- bary:writable-schema\n';
+
+function applySchemaEdit(conn: SqliteConn, sql: string): void {
+  const version = (): number => Number(conn.prepare('PRAGMA schema_version').all()[0]?.['schema_version']);
+  const before = version();
+  conn.enableDefensive(false);
+  try {
+    conn.exec('PRAGMA writable_schema = ON');
+    try {
+      conn.exec(sql);
+      // 고친 CREATE 문을 이 연결과 다른 연결이 다시 읽게 한다. 안 올리면 옛 스키마로 계속 검사한다.
+      conn.exec(`PRAGMA schema_version = ${before + 1}`);
+    } finally {
+      conn.exec('PRAGMA writable_schema = OFF');
+    }
+  } finally {
+    conn.enableDefensive(true);
+  }
+  const check = conn.prepare('PRAGMA quick_check').all();
+  if (check.length !== 1 || check[0]?.['quick_check'] !== 'ok') {
+    throw new Error(`스키마를 고친 뒤 quick_check 가 실패했다: ${JSON.stringify(check)}`);
+  }
+}
+
 export interface SqliteConn {
   exec(sql: string): void;
+  /** SQLite 의 방어 모드(`SQLITE_DBCONFIG_DEFENSIVE`). node:sqlite 는 켠 채로 연다 — `writable_schema` 단계만 잠시 끈다. */
+  enableDefensive(on: boolean): void;
   prepare(sql: string): Stmt;
   close(): void;
   function(name: string, opts: { deterministic?: boolean; varargs?: boolean }, fn: (...a: never[]) => SqlValue): void;
@@ -478,7 +511,8 @@ export class SqliteDb implements Database {
       applyOne: async (table, name, sql) => {
         w.conn.exec('SAVEPOINT bary_migration');
         try {
-          w.conn.exec(sql);
+          if (sql.startsWith(WRITABLE_SCHEMA_MARK)) applySchemaEdit(w.conn, sql);
+          else w.conn.exec(sql);
           w.run(`INSERT INTO ${table} (name) VALUES ($1)`, [name]);
           w.conn.exec('RELEASE bary_migration');
         } catch (e) {

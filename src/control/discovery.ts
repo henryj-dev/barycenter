@@ -37,7 +37,10 @@ export function applyDiscoveredEndpoints(
   const discovered: Backend[] = intake.endpoints
     .filter((e) => intake.pools === undefined || intake.pools.includes(e.pool))
     .map((e) => ({
-      key: `disc:${e.pool}:${e.host}:${e.port}`,
+      // **`~` 로 잇는다** (2026-11-20). 전에는 `disc:<풀>:<호스트>:<포트>` 였다 — 리소스 key 가 `:` 로 구간을
+      // 잇게 되면서 사용자가 같은 모양의 정적 백엔드를 지을 수 있게 됐다. `~` 는 리소스 key 에 못 쓴다
+      // (`validate/syntax.ts`) — 리다이렉트 소켓 `<리스너>~http` 와 같은 규칙이다.
+      key: `disc~${e.pool}~${e.host}~${e.port}`,
       pool: e.pool,
       host: e.host,
       port: e.port,

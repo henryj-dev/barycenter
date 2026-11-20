@@ -57,7 +57,7 @@ import {
   type PeerCertificate, type Principal, type Scope,
 } from './auth.js';
 import { newEcKey } from '../acme/der.js';
-import { PATH_SEGMENT_RULE, PATH_SEGMENT_SYNTAX } from '../validate/syntax.js';
+import { RESOURCE_KEY_RULE, RESOURCE_KEY_SYNTAX } from '../validate/syntax.js';
 import { SECURITY_HEADERS } from './headers.js';
 import { EventHub, openEventStream } from './events.js';
 import { memoryRateLimit } from './auth-limit/memory.js';
@@ -647,9 +647,9 @@ const ROUTES: Route[] = [
     const directoryUrl = field(body, 'directoryUrl');
     // **경계에 해독기를 둔다.** `key` 는 시크릿 이름(`acme-<key>`)이 되어 경로 조각이
     // 되고, 디렉토리 URL 은 우리가 개인키로 서명해 말을 거는 상대다.
-    if (!PATH_SEGMENT_SYNTAX.test(key)) {
+    if (!RESOURCE_KEY_SYNTAX.test(key)) {
       throw new StoreError(400, 'malformed',
-        `계정 key 가 문법에 안 맞는다: ${JSON.stringify(key)} — ${PATH_SEGMENT_RULE}`);
+        `계정 key 가 문법에 안 맞는다: ${JSON.stringify(key)} — ${RESOURCE_KEY_RULE}`);
     }
     if (!directoryUrl.startsWith('https://')) {
       throw new StoreError(400, 'malformed',
