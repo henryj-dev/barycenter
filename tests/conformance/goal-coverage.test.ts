@@ -170,7 +170,7 @@ describe('② 스파이크가 연 기능이 실제로 선다', () => {
 // ── ③ 그 밖 ─────────────────────────────────────────────────────────────
 
 describe('③ 그 밖', () => {
-  it('보존 정책이 여섯 표를 안다 — 다섯은 안 정하면 안 지운다', async () => {
+  it('보존 정책이 일곱 표를 안다 — 다섯은 안 정하면 안 지운다 (기본값은 헬스 이벤트 · 알림 기록)', async () => {
     const calls: string[] = [];
     const db = {
       query: (sql: string) => {
@@ -180,7 +180,7 @@ describe('③ 그 밖', () => {
     };
     const out = await sweepDatabase({ db });
     expect(Object.keys(out).sort()).toEqual(
-      ['audit', 'changesets', 'healthEvents', 'operations', 'plans', 'revisions'],
+      ['audit', 'changesets', 'healthEvents', 'notifyDeliveries', 'operations', 'plans', 'revisions'],
     );
     // 안 정한 다섯은 질의조차 안 나간다.
     expect(out.audit).toBe(0);
@@ -188,6 +188,8 @@ describe('③ 그 밖', () => {
     expect(out.changesets).toBe(0);
     expect(out.operations).toBe(0);
     expect(out.revisions).toBe(0);
+    // 기본값이 있는 둘은 질의가 나간다 — 헬스 이벤트 · 알림 보낸 기록(036).
+    expect(calls.filter((q) => /DELETE FROM (health_events|notify_deliveries)/.test(q))).toHaveLength(2);
   });
 
   /** `terminal` 원장은 DB 가 아니라 에이전트 상태다 — 거기 규칙이 산다. */

@@ -45,6 +45,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     title: '관리',
     items: [
       { place: 'users', label: '사람', icon: '☺', href: '/admin/user' },
+      { place: 'notify', label: '알림', icon: '✉', href: '/admin/notify' },
       { place: 'account', label: '내 계정', icon: '⚙', href: '/account' },
     ],
   },
@@ -71,6 +72,7 @@ export const PAGE_META: Readonly<Record<Place, { title: string; desc: string }>>
   engine: { title: '엔진 설정', desc: '워커 종료 대기 시간과 공유 메모리 크기를 정해요.' },
   audit: { title: '기록', desc: '변경 기록을 묶음 단위로 확인해요.' },
   users: { title: '사람', desc: '사용자와 초대를 관리해요.' },
+  notify: { title: '알림', desc: '운영자에게 알릴 통로를 정하고, 보낸 기록을 확인해요.' },
   account: { title: '내 계정', desc: '비밀번호, 인증 앱, 복구 코드, SSO를 관리해요.' },
   regions: { title: '지역', desc: '지역마다 상태를 확인해요. 지역을 고르면 고른 지역에 바로 써요.' },
   design: { title: '디자인 시스템', desc: '공통 컴포넌트를 상태별로 늘어놓았어요. 데이터는 예시예요.' },

@@ -31,7 +31,7 @@ const DAY = 86_400_000;
 export class NotifyWatch {
   readonly #hub: NotifyHub;
   readonly #src: WatchSources;
-  readonly #o: WatchOptions;
+  #o: WatchOptions;
   #leader: boolean | undefined;
   readonly #unfinishedSince = new Map<string, number>();
   readonly #regionDownSince = new Map<string, number>();
@@ -134,7 +134,14 @@ export class NotifyWatch {
     }
   }
 
+  /** 만료 임박 기준 · 유예를 바꾼다(화면에서 고친 공통 값). 주기는 `start` 를 다시 부른다. */
+  configure(o: Pick<WatchOptions, 'certDays' | 'graceMs'>): void {
+    this.#o = { ...this.#o, ...o };
+  }
+
+  /** 주기를 정하고 돈다. 이미 돌고 있으면 새 주기로 다시 건다. */
   start(intervalMs: number): void {
+    this.stop();
     this.#timer = setInterval(() => {
       if (this.#running) return;
       this.#running = true;

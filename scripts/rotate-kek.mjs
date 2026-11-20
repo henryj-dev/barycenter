@@ -233,7 +233,9 @@ if (verify && !checkOnly && failed.length === 0) {
   for (const r of rows) {
     const ref = `${r['scheme']}://${r['name']}@${r['version']}`;
     try {
-      if (r['scheme'] === 'store') await store.get(ref); else await store.getKey(ref);
+      if (r['scheme'] === 'store') await store.get(ref);
+      else if (r['scheme'] === 'opaque') await store.getOpaque(ref);
+      else await store.getKey(ref);
       checked += 1;
     } catch (e) {
       failed.push({ ref, why: `열어 보니 안 열린다: ${e.message}` });

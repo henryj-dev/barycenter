@@ -76,6 +76,9 @@ import {
 import { roleProfilesView } from '../accounts/idp-roles/registry.js';
 import { MAX_SET_BYTES, verifyRoleChange } from '../accounts/idp-roles/role-change.js';
 import { TRAFFIC_RESOURCE_KINDS, type TrafficResourceKind, type TrafficSampler } from '../control/traffic.js';
+import { KNOB_RANGES } from '../notify/registry.js';
+import type { NotifyRuntime } from '../notify/runtime.js';
+import { CHANNEL_KINDS, decodeKnobs, NOTIFY_KINDS, NotifySettingsError, SEVERITIES, viewOf } from '../notify/settings.js';
 
 /** Role Change 를 받는 설정 — `events` 키와 SET 서명 검증 키(JWKS). */
 export type OidcRoleChange = { eventKey: string; keyFor: (kid: string | undefined) => KeyObject | undefined };
@@ -101,6 +104,8 @@ export type ApiOptions = {
   secrets?: SecretStore;
   /** 트래픽 통계 (2026-11-20). 없으면 `unsupported` 로 답한다. */
   traffic?: TrafficSampler;
+  /** 알림 설정 · 보낸 기록 (036, 2026-11-20). 없으면 알림 경로가 404 `notify_disabled` 다. */
+  notify?: NotifyRuntime;
   /** SSE 허브. 없으면 서버가 하나 만든다. */
   events?: EventHub;
   /** 테스트가 하트비트를 기다리도록. 기본 15s. */
@@ -367,6 +372,31 @@ const field = (body: unknown, name: string): string => {
   return v;
 };
 
+
+/** 알림이 없는 데몬(시험 · 도구)은 404 로 답한다. */
+function notifyOf(api: ApiOptions): NotifyRuntime {
+  if (api.notify === undefined) throw new StoreError(404, 'notify_disabled', '이 데몬에는 알림 설정이 없다');
+  return api.notify;
+}
+
+/** 설정 오류(`NotifySettingsError`)를 API 오류로 옮긴다. */
+function notifyCall<T>(f: () => T): T {
+  try {
+    return f();
+  } catch (e) {
+    if (e instanceof NotifySettingsError) throw new StoreError(e.status, e.code, e.message);
+    throw e;
+  }
+}
+
+async function notifyAsync<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (e instanceof NotifySettingsError) throw new StoreError(e.status, e.code, e.message);
+    throw e;
+  }
+}
 
 /**
  * 수동 재시도 · 지금 갱신의 몸통. 답: 202 `{ certificate, order, state, created, nextAttemptAt? }`.
@@ -745,6 +775,85 @@ const ROUTES: Route[] = [
     json(c.res, 200, trafficBody(api, (s) => ({
       kind, key, points: s.series(kind as TrafficResourceKind, key),
     })));
+  }),
+
+  /**
+   * **알림 설정** (036, 2026-11-20). 전부 `admin` 이다 — 받는 주소 · 웹훅 주소가 보이고, 비밀을 바꾼다.
+   *
+   * 비밀(웹훅 서명 비밀 · Slack 웹훅 URL)은 **쓰기만** 한다: 응답은 `secretSet` 하나다. 비밀을 바꾸는 쓰기는 민감 작업이다
+   * (사람 세션이면 최근 MFA). 지역마다 따로다 — 전역 화면은 이 경로를 중계하지 않는다(비밀이 전역을 지나지 않게).
+   * 바꾸면 이 노드는 곧바로, 다른 노드는 `version` 을 보고 다시 짠다.
+   */
+  route('GET', '/api/v1/notify', 'admin', async (c, api) => {
+    const n = notifyOf(api);
+    const config = await n.config();
+    json(c.res, 200, {
+      ...(config === undefined ? { seeded: false } : {
+        seeded: true, seededFrom: config.seededFrom, version: config.version,
+        settings: config.knobs, updatedAt: config.updatedAt, updatedBy: config.updatedBy,
+      }),
+      channels: (config?.channels ?? []).map(viewOf),
+      status: n.status(),
+      kinds: NOTIFY_KINDS, severities: SEVERITIES, channelKinds: CHANNEL_KINDS, ranges: KNOB_RANGES,
+    });
+  }),
+
+  route('PUT', '/api/v1/notify/settings', 'admin', async (c, api) => {
+    const n = notifyOf(api);
+    const knobs = notifyCall(() => decodeKnobs(c.body));
+    const before = (await n.config())?.knobs;
+    await notifyAsync(() => n.store.putKnobs(knobs, c.who.name));
+    await api.store.audit(c.who.name, 'notify.settings.put', 'notify', before, knobs);
+    await n.reload();
+    json(c.res, 200, { settings: knobs });
+  }),
+
+  route('PUT', '/api/v1/notify/channels/:name', 'admin', async (c, api) => {
+    const n = notifyOf(api);
+    const name = c.params['name'] ?? '';
+    const before = (await n.config())?.channels.find((x) => x.name === name);
+    const out = await notifyAsync(() => n.store.putChannel(name, c.body, c.who.name));
+    const secretChanged = typeof (c.body as Record<string, unknown> | null)?.['secret'] === 'string';
+    // 감사에는 비밀을 싣지 않는다 — 바뀌었는지만.
+    await api.store.audit(c.who.name, out.created ? 'notify.channel.create' : 'notify.channel.update', `notify:${name}`,
+      before === undefined ? undefined : viewOf(before), { ...viewOf(out.channel), secretChanged });
+    await n.reload();
+    json(c.res, out.created ? 201 : 200, viewOf(out.channel));
+  }, { sensitive: true }),
+
+  route('DELETE', '/api/v1/notify/channels/:name', 'admin', async (c, api) => {
+    const n = notifyOf(api);
+    const name = c.params['name'] ?? '';
+    const before = (await n.config())?.channels.find((x) => x.name === name);
+    if (!(await n.store.deleteChannel(name, c.who.name))) {
+      json(c.res, 404, { code: 'not_found', message: `알림 통로 '${name}' 가 없다` });
+      return;
+    }
+    await api.store.audit(c.who.name, 'notify.channel.delete', `notify:${name}`, before === undefined ? undefined : viewOf(before));
+    await n.reload();
+    json(c.res, 200, { deleted: name });
+  }, { sensitive: true }),
+
+  /** 시험 전송. 꺼진 통로에도 보낸다. 답의 `outcome` 이 `sent` 가 아니면 `detail` 이 까닭이다(비밀은 가린다). */
+  route('POST', '/api/v1/notify/channels/:name/test', 'admin', async (c, api) => {
+    const n = notifyOf(api);
+    const name = c.params['name'] ?? '';
+    const out = await notifyAsync(() => n.test(name));
+    await api.store.audit(c.who.name, 'notify.test', `notify:${name}`, undefined, { outcome: out.outcome });
+    json(c.res, 200, out);
+  }),
+
+  route('GET', '/api/v1/notify/deliveries', 'admin', async (c, api) => {
+    const n = notifyOf(api);
+    const asked = Number(c.url.searchParams.get('limit') ?? '50');
+    const limit = Number.isInteger(asked) && asked >= 1 && asked <= 500 ? asked : 50;
+    const before = c.url.searchParams.get('before') ?? undefined;
+    if (before !== undefined && !/^[1-9][0-9]{0,18}$/.test(before)) {
+      json(c.res, 400, { code: 'malformed', message: 'before 는 기록의 id(양의 정수)다' });
+      return;
+    }
+    const channel = c.url.searchParams.get('channel') ?? undefined;
+    json(c.res, 200, await n.store.deliveries({ limit, ...(before === undefined ? {} : { before }), ...(channel === undefined ? {} : { channel }) }));
   }),
 
   route('GET', '/api/v1/backends/:id/drain-status', 'read', async (c, api) => {

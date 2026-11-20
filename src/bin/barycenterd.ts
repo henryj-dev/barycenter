@@ -37,8 +37,8 @@ import { idpMfaKinds, idpMfaProvider } from '../accounts/mfa/registry.js';
 import { DEFAULT_ROLE_MAPPER, roleMapperFactory } from '../accounts/idp-roles/registry.js';
 import type { Mailer } from '../accounts/mail.js';
 import { mailFromEnv } from '../accounts/mail-transport/registry.js';
-import { acmeFailure, notifyFromEnv } from '../notify/registry.js';
-import { NotifyWatch } from '../notify/watch.js';
+import { acmeFailure } from '../notify/registry.js';
+import { NotifyRuntime } from '../notify/runtime.js';
 import { loadRegistry, REGION_NAME } from '../global/registry.js';
 import { RegionRelay } from '../global/relay.js';
 import { JwksCache } from '../api/jwks.js';
@@ -80,7 +80,7 @@ import { renderCapsOf } from '../engine/render-caps.js';
 import { TrafficSampler } from '../control/traffic.js';
 import { servedByFromEnv } from '../conf/served-by.js';
 import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '../control/data-sources-boot.js';
-import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
+import { DEFAULT_HEALTH_EVENT_DAYS, DEFAULT_NOTIFY_DELIVERY_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
 import { openDb } from '../store/open.js';
 import { assertSqliteDeployment } from '../store/sqlite-checks.js';
@@ -1101,6 +1101,7 @@ export async function main(): Promise<void> {
   const revisionDaysRaw = envIntOpt('BARY_REVISION_RETENTION_DAYS', { min: 1, max: 3_650 });
   const dbRetention = {
     healthEventDays: t.healthEventDays,
+    notifyDeliveryDays: envInt('BARY_NOTIFY_DELIVERY_RETENTION_DAYS', DEFAULT_NOTIFY_DELIVERY_DAYS, { min: 1, max: 3_650 }),
     // 빈 값은 **무한 보존**이다. 감사 추적의 보존 기간은 우리가 정할 것이 아니라
     // 운영자가 정하는 것이고, 기본값으로 지우면 업그레이드가 곧 데이터 소실이다.
     ...(auditDaysRaw === undefined ? {} : { auditDays: auditDaysRaw }),
@@ -1114,7 +1115,7 @@ export async function main(): Promise<void> {
       if (!election.state.isLeader) return;
       try {
         const out = await sweepDatabase({ db, ...dbRetention });
-        if (out.healthEvents > 0 || out.audit > 0 || out.plans > 0 || out.changesets > 0) {
+        if (out.healthEvents > 0 || out.audit > 0 || out.plans > 0 || out.changesets > 0 || out.notifyDeliveries > 0) {
           log.info('db.swept', out);
         }
       } catch (e) {
@@ -1146,11 +1147,29 @@ export async function main(): Promise<void> {
   }
 
   /**
-   * 알림 (`BARY_NOTIFY=webhook,slack,mail`) — `src/notify/`. 없으면 끈다(지금과 같다). 반만 설정이면 던진다.
-   * 보내기는 본 동작을 막지 않는다 — 허브가 큐로 따로 보낸다.
+   * 알림 — `src/notify/`. **설정의 정본은 DB 다** (036, 2026-11-20). 첫 기동에 DB 가 비어 있으면 `BARY_NOTIFY_*` 를
+   * 옮겨 넣고, 그 뒤로는 화면(관리 › 알림)에서 고친다. 보내기는 본 동작을 막지 않는다 — 허브가 큐로 따로 보낸다.
+   * 상태 보기의 출처는 아래(전역 화면을 만든 뒤)에서 쓰므로 여기서는 만들기만 하고, 그 자리에서 `start` 한다.
    */
-  const notify = notifyFromEnv(nodeName, process.env, { mail: () => mailFromEnv() });
-  if (notify !== undefined) log.info('notify.enabled', { notifiers: notify.hub.kinds, certDays: notify.certDays });
+  const notify = new NotifyRuntime({
+    db, secrets, node: nodeName, env: process.env,
+    deps: { mail: () => mailFromEnv() },
+    sources: {
+      isLeader: () => election.state.isLeader,
+      failedApply: () => store.failedHead(),
+      unfinished: async () => (await driver.status()).unfinished,
+      certificates: async () => {
+        const head = await store.head();
+        const model = await store.modelAt(head.revision);
+        return model.certificates.flatMap((c) => {
+          const facts = c.materialRef === undefined ? undefined : secrets.facts(c.materialRef);
+          return facts === undefined ? [] : [{ key: c.key, notAfter: facts.notAfter }];
+        });
+      },
+      regions: async () => (await notifyRegions?.()) ?? [],
+    },
+  });
+  let notifyRegions: (() => Promise<readonly { name: string; reachable: boolean; auth?: string; error?: string; lastOkAt?: string }[]>) | undefined;
 
   /**
    * ACME 갱신 러너 (§8.2 · ADR-ACME).
@@ -1179,7 +1198,7 @@ export async function main(): Promise<void> {
     onAdvance: (e) => {
       events.publish('acme', e);
       const n = acmeFailure(e);
-      if (n !== undefined) notify?.hub.emit(n);
+      if (n !== undefined) notify.emit(n);
     },
   });
   if (acmeOn) {
@@ -1340,34 +1359,20 @@ export async function main(): Promise<void> {
     });
   }
   /**
-   * 알림의 상태 보기 — 리더 교체 · 적용 실패 · 미완 전환 · 인증서 만료 임박 · 지역 연락 끊김(`src/notify/watch.ts`).
-   * 읽기만 한다. 리더 교체 말고는 리더만 본다.
+   * 알림을 띄운다 — 씨 뿌리기 · 첫 짜기 · 다른 노드의 변경 보기. 상태 보기(리더 교체 · 적용 실패 · 미완 전환 · 인증서
+   * 만료 임박 · 지역 연락 끊김, `src/notify/watch.ts`)는 켜진 통로가 있을 때만 돈다. 리더 교체 말고는 리더만 본다.
+   * 씨를 뿌려야 하는데 `BARY_NOTIFY_*` 가 반만 설정이면 여기서 던진다(기동을 거부한다 — 전과 같다).
    */
-  let stopNotify = (): void => {};
-  if (notify !== undefined) {
-    const relay = dispatch.globalSurface?.relay;
-    const watch = new NotifyWatch(notify.hub, {
-      isLeader: () => election.state.isLeader,
-      failedApply: () => store.failedHead(),
-      unfinished: async () => (await driver.status()).unfinished,
-      certificates: async () => {
-        const head = await store.head();
-        const model = await store.modelAt(head.revision);
-        return model.certificates.flatMap((c) => {
-          const facts = c.materialRef === undefined ? undefined : secrets.facts(c.materialRef);
-          return facts === undefined ? [] : [{ key: c.key, notAfter: facts.notAfter }];
-        });
-      },
-      ...(relay === undefined ? {} : { regions: () => relay.summary() }),
-    }, { certDays: notify.certDays, graceMs: 2 * notify.intervalMs });
-    watch.start(notify.intervalMs);
-    stopNotify = (): void => watch.stop();
-  }
+  const relayForNotify = dispatch.globalSurface?.relay;
+  if (relayForNotify !== undefined) notifyRegions = () => relayForNotify.summary();
+  await notify.start();
+  const stopNotify = (): void => notify.stop();
 
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
     discovery: dataSources.api,
     traffic,
+    notify,
     ...dispatch,
     ...sessionDomainFromEnv(),
     // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.

@@ -31,6 +31,9 @@ export function getPath(what: string): string | undefined {
   if (what === 'backends/status') return '/api/v1/backends/status';
   if (LISTS.has(what)) return `/api/v1/${what}`;
   if (what === 'metrics') return '/metrics';
+  // 알림 설정 · 보낸 기록 (036, 2026-11-20). 읽기만 — 고치기는 화면에서 한다(비밀을 명령줄에 싣지 않게). admin 토큰.
+  if (what === 'notify') return '/api/v1/notify';
+  if (what === 'notify/deliveries') return '/api/v1/notify/deliveries';
   // 트래픽 통계 (2026-11-20). `traffic` · `traffic/<종류>` · `traffic/<종류>/<이름>`.
   if (what === 'traffic') return '/api/v1/traffic';
   const trafficKind = /^traffic\/([A-Za-z]+)$/.exec(what);

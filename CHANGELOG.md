@@ -14,6 +14,18 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Notification settings now live in the config database and are edited in the GUI under **관리 › 알림**
+  (`/admin/notify`). Channels (webhook, Slack, mail) can be added, changed, disabled, deleted, filtered by event kind and
+  minimum severity, and tested with **시험 전송**; common values (repeat interval, certificate warning days, check
+  interval, queue size) are editable too. Changes apply at once on every node, without a restart. A delivery log records
+  each send, test, and queue drop for 30 days (`BARY_NOTIFY_DELIVERY_RETENTION_DAYS`); secret values in failure reasons
+  are masked. Webhook signing secrets and Slack webhook URLs go into the secret store as a new `opaque://` scheme and are
+  never shown again. On first start the daemon copies the existing `BARY_NOTIFY_*` settings into the database; after
+  that the database wins and differing environment values are logged as `notify.env_ignored`. API: `GET /api/v1/notify`,
+  `PUT /api/v1/notify/settings`, `PUT|DELETE /api/v1/notify/channels/:name`, `POST /api/v1/notify/channels/:name/test`,
+  `GET /api/v1/notify/deliveries` (all `admin`; secret writes and deletes need a fresh MFA step-up). CLI:
+  `bary get notify`, `bary get notify/deliveries`. Migrations 035 (secret store `opaque` scheme) and 036 (notify tables)
+  run on PostgreSQL, MySQL/MariaDB and SQLite. Notify settings are per region and are not relayed by the global view.
 - Pools with a backend source can be re-queried on demand: `POST /api/v1/pools/:id/discovery/refresh`,
   **지금 다시 찾기** in the pool's 「출처에서 받은 백엔드」 box, and `bary pool discovery-refresh <pool>`.
   It runs the same handling as the periodic round (events, metrics, membership projection), never

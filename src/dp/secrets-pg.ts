@@ -33,8 +33,8 @@ import { createCipheriv, createDecipheriv, createHash, createPrivateKey, randomB
 import { inspectMaterial, type CertFacts } from './certinfo.js';
 import { isSecretName } from '../validate/syntax.js';
 import {
-  parseKeyRef, parseRef,
-  type CertMaterial, type KeyRef, type SecretRef, type SecretStore,
+  assertOpaqueValue, parseKeyRef, parseOpaqueRef, parseRef,
+  type CertMaterial, type KeyRef, type OpaqueRef, type SecretRef, type SecretStore,
 } from './secrets.js';
 import { byDialect, type Queryable } from '../store/db.js';
 
@@ -289,6 +289,47 @@ export class PgSecretStore implements SecretStore {
     return this.#open('key', name, version, ref);
   }
 
+  async putOpaque(name: string, value: string): Promise<OpaqueRef> {
+    assertName(name);
+    assertOpaqueValue(value);
+    const digest = sha256(value);
+    const version = versionOf(digest);
+    const ref = `opaque://${name}@${version}`;
+    const env = this.#seal(ref, value);
+    const put = `INSERT INTO secret_materials
+         (scheme, name, version, kek_id, wrapped_dek, nonce, ciphertext, key_digest)
+       VALUES ('opaque', $1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (scheme, name, version) DO UPDATE SET
+         kek_id = EXCLUDED.kek_id, wrapped_dek = EXCLUDED.wrapped_dek,
+         nonce = EXCLUDED.nonce, ciphertext = EXCLUDED.ciphertext,
+         key_digest = EXCLUDED.key_digest`;
+    await this.#db.query(byDialect(this.#db, {
+      postgres: put,
+      sqlite: put,
+      mysql: `INSERT INTO secret_materials
+         (scheme, name, version, kek_id, wrapped_dek, nonce, ciphertext, key_digest)
+       VALUES ('opaque', $1, $2, $3, $4, $5, $6, $7)
+       ON DUPLICATE KEY UPDATE
+         kek_id = VALUES(kek_id), wrapped_dek = VALUES(wrapped_dek),
+         nonce = VALUES(nonce), ciphertext = VALUES(ciphertext),
+         key_digest = VALUES(key_digest)`,
+    }),
+      [name, version, env.kekId, env.wrappedDek, env.nonce, env.ciphertext, digest],
+    );
+    return { ref, name, version };
+  }
+
+  async getOpaque(ref: string): Promise<string> {
+    const { name, version } = parseOpaqueRef(ref);
+    return this.#open('opaque', name, version, ref);
+  }
+
+  async removeOpaque(ref: string): Promise<void> {
+    const { name, version } = parseOpaqueRef(ref);
+    await this.#db.query(
+      "DELETE FROM secret_materials WHERE scheme = 'opaque' AND name = $1 AND version = $2", [name, version]);
+  }
+
   async listRefs(): Promise<string[]> {
     const rows = (await this.#db.query(
       'SELECT scheme, name, version FROM secret_materials')).rows;
@@ -318,7 +359,7 @@ export class PgSecretStore implements SecretStore {
     };
   }
 
-  async #open(scheme: 'store' | 'key', name: string, version: string, ref: string): Promise<string> {
+  async #open(scheme: 'store' | 'key' | 'opaque', name: string, version: string, ref: string): Promise<string> {
     const r = (await this.#db.query(
       `SELECT wrapped_dek, nonce, ciphertext FROM secret_materials
         WHERE scheme = $1 AND name = $2 AND version = $3`,
