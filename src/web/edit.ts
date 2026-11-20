@@ -27,6 +27,19 @@ export function deletePatch(kind: EditKind, key: string): DeleteOp[] {
   return [{ op: 'delete', kind, key }];
 }
 
+export type RenameOp = { op: 'rename'; kind: EditKind; key: string; to: string };
+
+/**
+ * 이름 바꾸기 (2026-11-20). 참조하는 리소스는 서버가 함께 옮긴다 — 여기서는 한 줄이다.
+ * 새 이름의 문법은 서버가 본다(화면은 `keyError` 로 먼저 본다).
+ */
+export function renamePatch(kind: EditKind, key: string, to: string): RenameOp[] {
+  const next = to.trim();
+  if (key === '' || next === '') throw new Error('이름이 비어 있다');
+  if (next === key) throw new Error('새 이름이 지금 이름과 같다');
+  return [{ op: 'rename', kind, key, to: next }];
+}
+
 export function putBackendPatch(
   key: string,
   body: { pool: string; host: string; port: number; weight?: number },

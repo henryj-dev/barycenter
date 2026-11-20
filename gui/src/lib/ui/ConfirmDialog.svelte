@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   /**
    * 확인 대화상자 — 디자인 시스템 §7.
    *
@@ -15,7 +16,7 @@
   import Checkbox from './Checkbox.svelte';
   import TextInput from './TextInput.svelte';
 
-  let { open = $bindable(false), title, sub, lines = [], confirmLabel, danger = true, requireCheck = false, requireName, busy = false, onconfirm, oncancel }: {
+  let { open = $bindable(false), title, sub, lines = [], confirmLabel, danger = true, requireCheck = false, requireName, busy = false, disabled = false, body, onconfirm, oncancel }: {
     open?: boolean;
     title: string;
     sub?: string;
@@ -25,6 +26,10 @@
     requireCheck?: boolean;
     requireName?: string;
     busy?: boolean;
+    /** 바깥이 정하는 잠금 — 입력 칸(`body`)이 맞지 않을 때. */
+    disabled?: boolean;
+    /** 줄 목록 아래, 버튼 위에 그리는 것(예: 새 이름 입력 칸). */
+    body?: Snippet;
     onconfirm: () => void;
     oncancel?: () => void;
   } = $props();
@@ -32,7 +37,7 @@
   let checked = $state(false);
   let typed = $state('');
   let cancelEl: HTMLDivElement | undefined = $state();
-  const blocked = $derived((requireCheck && !checked) || (requireName !== undefined && typed !== requireName));
+  const blocked = $derived(disabled || (requireCheck && !checked) || (requireName !== undefined && typed !== requireName));
 
   $effect(() => {
     if (!open) { checked = false; typed = ''; return; }
@@ -63,6 +68,7 @@
           <div class="ni"><TextInput id="dlg-name" bind:value={typed} autocomplete="off" /></div>
         </div>
       {/if}
+      {#if body}<div class="extra">{@render body()}</div>{/if}
       <div class="foot">
         <div bind:this={cancelEl}><Button onclick={cancel}>취소</Button></div>
         <!-- 시안 `dlgOp`: 잠기면 위험 색 그대로 흐리기만 한다(.45). -->

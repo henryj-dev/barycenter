@@ -31,6 +31,8 @@ export type Impact = {
   bindTransitions?: { opens: string; blockedBy: string[]; message: string }[];
   planes: readonly string[];
   confDiff?: { before: number; after: number };
+  /** 이 plan 이 바꾸는 이름 (2026-11-20). 옛 plan 에는 없다. */
+  renames?: { kind: string; from: string; to: string }[];
 };
 
 export type PendingApply = { planId: string; revision: string };
@@ -54,6 +56,14 @@ export type ImpactView = {
   bindBlockers: string[];
   /** 롤백 plan 이면 되돌아가는 리비전. 이때 위 목록은 비어 있다 — 「없다」 가 아니라 「재지 않았다」 다. */
   rollbackOf?: string;
+  /** 「풀 app → app:v2」 꼴 (2026-11-20). 위의 다른 목록은 이 이름 바꾸기를 이미 반영해 비교한 것이다. */
+  renames: string[];
+};
+
+/** 이름 바꾸기 줄의 종류 이름. 모르는 종류는 그대로 낸다. */
+const KIND_WORD: Readonly<Record<string, string>> = {
+  pool: '풀', backend: '백엔드', listener: '리스너', httpRoute: 'HTTP 라우트', passthroughRoute: '패스스루 라우트',
+  certificate: '인증서', tlsPolicy: 'TLS 정책', sniBinding: 'SNI 바인딩', addressSet: '주소 집합',
 };
 
 /**
@@ -110,6 +120,7 @@ function viewOfRollback(pending: PendingApply, rollbackOf: string): ImpactView {
     routeWarnings: [],
     capabilityWarnings: [],
     bindBlockers: [],
+    renames: [],
     rollbackOf,
   };
 }
@@ -160,6 +171,7 @@ export function viewOfImpact(pending: PendingApply, impact: Impact): ImpactView 
     routeWarnings: (impact.routeOrderChanges?.warnings ?? []).map((w) => w.message),
     capabilityWarnings: (impact.capabilityWarnings ?? []).map(capabilityWarningLine),
     bindBlockers: (impact.bindTransitions ?? []).map((b) => b.message),
+    renames: (impact.renames ?? []).map((r) => `${KIND_WORD[r.kind] ?? r.kind} ${r.from} → ${r.to}`),
   };
 }
 

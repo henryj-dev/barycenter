@@ -78,6 +78,8 @@
     ...view.routeWarnings.map((s) => ({ tone: 'warn' as const, icon: '▲', text: `라우트 순서 — ${s}` })),
     ...view.capabilityWarnings.map((s) => ({ tone: 'warn' as const, icon: '▲', text: s })),
     ...view.certificates.map((s) => ({ tone: 'warn' as const, icon: '▲', text: `인증서 — ${s}` })),
+    // 이름만 바꾼 것은 트래픽을 안 바꾼다 — 알리기만 한다.
+    ...view.renames.map((s) => ({ tone: 'ok' as const, icon: '●', text: `이름 변경 — ${s}` })),
   ]);
   /**
    * 소켓 한 줄 — 시안 「10.0.0.10:8443 (admin-https)」. 엔진 표기(`tcp://0.0.0.0:8443`)에서 전송 접두를 떼고,

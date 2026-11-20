@@ -75,6 +75,43 @@ describe(`방언 적합성 (${process.env['BARY_TEST_DB'] ?? 'postgres'})`, () =
     }
   });
 
+  it('**이름 바꾸기가 세 방언에서 같은 결과를 낸다** — 참조 · 문자열 참조 · 곁 행이 따라온다', async () => {
+    await db.migrate();
+    const { ConfigStore } = await import('../../src/store/config-store.js');
+    const store = new ConfigStore(db);
+    const commit = async (patch: import('../../src/store/config-store.js').PatchOp[]): Promise<string> => {
+      const cs = await store.createChangeset((await store.head()).revision, 't');
+      await store.patchChangeset(cs, patch, 't');
+      const plan = await store.plan(cs, 't');
+      return (await store.commit(cs, plan.id, 't')).revision;
+    };
+    await commit([
+      { op: 'put', kind: 'pool', key: 'rn-app', body: { protocolClass: 'http', algorithm: 'round_robin' } },
+      { op: 'put', kind: 'backend', key: 'rn-app-1', body: { pool: 'rn-app', host: '10.0.0.1', port: 8080, weight: 1 } },
+      { op: 'put', kind: 'addressSet', key: 'rn-office', body: { cidrs: ['192.0.2.0/24'] } },
+      { op: 'put', kind: 'listener', key: 'rn-edge', body: {
+        protocol: 'http', bind: '0.0.0.0', port: 18081, enabled: true, sourceAllow: ['@rn-office'], http: { defaultAction: { pool: 'rn-app' } } } },
+      { op: 'put', kind: 'httpRoute', key: 'rn-api', body: {
+        listener: 'rn-edge', hosts: ['rn.test'], priority: 0, action: { kind: 'proxy', pool: 'rn-app', websocket: false },
+        sourceRules: [{ from: ['@rn-office'], action: { kind: 'proxy', pool: 'rn-app', websocket: true } }] } },
+    ]);
+    await db.query("INSERT INTO backend_health (backend_key, state, consecutive) VALUES ('rn-app-1', 'unhealthy', 2)");
+    const rev = await commit([
+      { op: 'rename', kind: 'pool', key: 'rn-app', to: 'h1:rn:app' },
+      { op: 'rename', kind: 'backend', key: 'rn-app-1', to: 'h1:rn:app:01' },
+      { op: 'rename', kind: 'addressSet', key: 'rn-office', to: 'site:hq' },
+      { op: 'rename', kind: 'listener', key: 'rn-edge', to: 'h1:rn:edge' },
+    ]);
+    const m = await store.modelAt(rev);
+    expect(m.backends.find((b) => b.key === 'h1:rn:app:01')?.pool).toBe('h1:rn:app');
+    expect(m.listeners.find((l) => l.key === 'h1:rn:edge')?.sourceAllow).toEqual(['@site:hq']);
+    const route = m.httpRoutes.find((r) => r.key === 'rn-api')!;
+    expect(route.listener).toBe('h1:rn:edge');
+    expect(route.sourceRules?.[0]).toMatchObject({ from: ['@site:hq'], action: { pool: 'h1:rn:app' } });
+    expect((await db.query("SELECT state FROM backend_health WHERE backend_key = 'h1:rn:app:01'")).rows).toEqual([{ state: 'unhealthy' }]);
+    expect((await db.query("SELECT name FROM pools WHERE key = 'h1:rn:app'")).rows).toEqual([{ name: 'h1:rn:app' }]);
+  });
+
   it('**스키마 모양이 PG 의 모양과 같다** — 표 · 열 · 논리 형 · NULL 허용 (`schema-shape-pg.json`)', async () => {
     // 스냅숏은 PG 의 모양이다. PG 로 돌 때는 「살아 있는 PG = 스냅숏」 을, 다른 방언으로 돌 때는
     // 「그 방언 = 스냅숏」 을 잰다 — 둘이 함께 「방언 = PG」 다. PG 마이그레이션을 더하면 PG 회차가 빨개지고,

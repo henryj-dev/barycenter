@@ -45,6 +45,7 @@ import {
 } from '../model/provisional.js';
 import { DISCOVERY_STATIC } from '../web/discovery.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
+import { renameResource } from '../cli/rename.js';
 import {
   certificateCreate, certificateDelete, sniBindingCreate, sniBindingDelete,
   tlsPolicyCreate, tlsPolicyDelete,
@@ -173,6 +174,9 @@ const usage = (): never => {
                                  URL 경로가 / 가 아니면 --host 가 필요하다 — 경로 바꾸기는 라우트에만 있다
   bary backend create            --name --pool --host --port [--weight]. apply 는 아니다
   bary backend delete            --name
+  bary rename <종류> <옛 이름> <새 이름>
+                                 이름 바꾸기 (2026-11-20). 이것을 쓰는 리소스도 새 이름을 보게 바뀐다. commit 까지. apply 는 아니다
+                                   종류: listener · pool · backend · http-route · passthrough-route · certificate · tls-policy · sni-binding · address-set
   bary backend drain             --name [--deadline 초]. 새 트래픽을 끊는다. apply 가 아니다
                                  기한을 넘기면 drain-status 가 deadline_exceeded 로 답한다
   bary backend undrain           --name. 드레인을 푼다. **deadline 이 지나도 안 풀린다** — 기한은 관측이다
@@ -610,6 +614,18 @@ async function main(): Promise<void> {
           ...(rewritePrefix === undefined ? {} : { rewritePrefix }),
         });
         console.error(`route ${name} committed r${out.revision}`);
+        show(out);
+      } catch (e) {
+        die(e);
+      }
+      return;
+    }
+    case 'rename': {
+      const [from, to] = [argv[2], argv[3]];
+      if (arg === undefined || from === undefined || to === undefined) usage();
+      try {
+        const out = await renameResource(call, arg!, from!, to!);
+        console.error(`${arg} ${from} → ${to} r${out.revision} (commit 까지 — 적용은 bary apply)`);
         show(out);
       } catch (e) {
         die(e);
