@@ -27,6 +27,7 @@ import {
 } from '../validate/strings.js';
 import { RESOURCE_KEY_RULE, RESOURCE_KEY_SYNTAX } from '../validate/syntax.js';
 import { withRedirectListeners } from '../model/redirect.js';
+import { renameInModel } from '../model/rename.js';
 import { bindTransitionConflicts, type BindTransitionConflict } from '../validate/bind-transition.js';
 import { bindIsLocal, type HostAddressFacts } from '../engine/host-addresses.js';
 import type { SecretStore } from '../dp/secrets.js';
@@ -116,7 +117,12 @@ function assertKeySyntax(kind: ResourceKind, key: string): void {
 
 export type PatchOp =
   | { op: 'put'; kind: ResourceKind; key: string; body: unknown }
-  | { op: 'delete'; kind: ResourceKind; key: string };
+  | { op: 'delete'; kind: ResourceKind; key: string }
+  /**
+   * 이름(key)을 바꾼다 (2026-11-20). 리소스끼리는 id 로 이어져 있으므로 행의 key 만 바꾸면 참조가 따라온다.
+   * key 로 묶인 곁 테이블(헬스 · 드레인 · 주소 집합 갱신 기록)과 `@주소집합` 참조는 `renameResource` 가 옮긴다.
+   */
+  | { op: 'rename'; kind: ResourceKind; key: string; to: string };
 
 /**
  * §5.1 의 상태 코드 4분할을 값으로 든다.
@@ -244,6 +250,11 @@ export type Impact = {
   socketChanges: { added: string[]; removed: string[] };
   planes: ('http' | 'stream')[];
   confDiff: { before: number; after: number };
+  /**
+   * 이 plan 이 바꾸는 이름(적은 순서). 없으면 이 칸이 없다. 위의 칸들은 이름 바꾸기를 **이미 반영한** 이전
+   * 모델과 비교한 것이다 — 이름만 바꾼 리스너는 「제거 + 추가」 가 아니라 아예 안 나온다.
+   */
+  renames?: { kind: ResourceKind; from: string; to: string }[];
 };
 
 const PLAN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -715,7 +726,75 @@ async function idOf(c: Queryable, table: string, key: string, subject: string): 
 const obj = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
+/** 리소스 종류 → 테이블. `engine` 은 key 가 없어 여기 없다. */
+const TABLE_OF: Record<Exclude<ResourceKind, 'engine'>, string> = {
+  pool: 'pools', backend: 'backends', listener: 'listeners',
+  httpRoute: 'http_routes', passthroughRoute: 'passthrough_routes',
+  certificate: 'certificates', tlsPolicy: 'tls_policies',
+  sniBinding: 'sni_certificate_bindings', addressSet: 'address_sets',
+};
+
+/** `name` 열이 있는 테이블. 만들 때 `name` 을 안 주면 key 를 넣으므로, 그때는 이름을 따라 바꾼다. */
+const NAMED = new Set(['pools', 'listeners', 'certificates', 'tls_policies']);
+
+/**
+ * 이름 바꾸기 (2026-11-20).
+ *
+ * **행을 지우고 다시 만들지 않는다.** 리소스끼리는 id 로 이어져 있다(백엔드 → 풀, 라우트 → 리스너 · 풀,
+ * SNI → 인증서, ACME 주문 → 인증서). 지웠다 만들면 `ON DELETE RESTRICT` 에 막히거나 `CASCADE` 로 자식이 사라진다.
+ * key 만 바꾸면 id 가 그대로라 참조가 따라온다.
+ *
+ * key 로 묶인 것은 손으로 옮긴다:
+ *   - 백엔드: `backend_health` · `backend_drain` · `health_events` — 헬스 판정과 드레인이 이름을 따라간다
+ *   - 주소 집합: `address_set_refresh`, 그리고 리스너 · 라우트의 대역 목록 안의 `@이름` (FK 가 아니다, 027)
+ *
+ * 새 이름에 남아 있던 곁 행(같은 이름의 옛 리소스가 남긴 헬스 · 갱신 기록)은 지운다 — 옮겨 온 것과 섞이면 안 된다.
+ */
+async function renameResource(
+  c: Queryable, op: PatchOp & { op: 'rename' }, revision: string, by: string,
+): Promise<void> {
+  const kind = op.kind as Exclude<ResourceKind, 'engine'>;
+  const table = TABLE_OF[kind];
+  const taken = (await c.query(`SELECT 1 FROM ${table} WHERE key = $1`, [op.to])).rows[0];
+  if (taken !== undefined) {
+    throw new StoreError(409, 'key_taken', `${op.kind} '${op.to}' 가 이미 있다 — 다른 이름을 고른다`);
+  }
+  const name = NAMED.has(table) ? `name = CASE WHEN name = $1 THEN $2 ELSE name END, ` : '';
+  const r = await c.query(
+    `UPDATE ${table} SET key = $2, ${name}version = version + 1, updated_at = now(), updated_by = $3, revision = $4
+      WHERE key = $1`,
+    [op.key, op.to, by, revision],
+  );
+  if (r.rowCount === 0) throw new StoreError(409, 'not_found', `${op.kind} '${op.key}' 가 없다`);
+
+  if (kind === 'backend') {
+    for (const t of ['backend_health', 'backend_drain']) {
+      await c.query(`DELETE FROM ${t} WHERE backend_key = $1`, [op.to]);
+      await c.query(`UPDATE ${t} SET backend_key = $2 WHERE backend_key = $1`, [op.key, op.to]);
+    }
+    await c.query('DELETE FROM health_events WHERE backend_key = $1', [op.to]);
+    await c.query('UPDATE health_events SET backend_key = $2 WHERE backend_key = $1', [op.key, op.to]);
+  }
+  if (kind === 'addressSet') {
+    await c.query('DELETE FROM address_set_refresh WHERE key = $1', [op.to]);
+    await c.query('UPDATE address_set_refresh SET key = $2 WHERE key = $1', [op.key, op.to]);
+  }
+
+  // **문자열로 든 참조를 옮긴다.** id 로 이어진 참조는 위의 UPDATE 로 끝났다. 그런데 몇몇은 JSON · 배열 안의
+  // 문자열이다 — `@주소집합`(대역 목록), 라우트 출발지 규칙의 풀, 풀의 업스트림 CA 인증서. 바뀐 모델을 만들어
+  // 달라진 리소스만 같은 key 로 다시 저장한다(행 id 는 그대로다). 참조되는 쪽이 먼저 오는 `opsOf` 순서를 따른다.
+  const before = await readModel(c);
+  const after = renameInModel(before, { kind, from: op.key, to: op.to });
+  const was = new Map(opsOf(before).map((o) => [`${o.kind}:${o.key}`, o.op === 'put' ? o.body : undefined]));
+  for (const o of opsOf(after)) {
+    if (o.op !== 'put' || o.kind === 'engine') continue;
+    if (isDeepStrictEqual(was.get(`${o.kind}:${o.key}`), o.body)) continue;
+    await applyOp(c, o, revision, by);
+  }
+}
+
 async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string): Promise<void> {
+  if (op.op === 'rename') return renameResource(c, op, revision, by);
   if (op.op === 'delete') {
     // `engine` 은 key 로 안 지운다 — 컬럼이 없다. 단일 행을 통째로 비운다.
     if (op.kind === 'engine') {
@@ -725,12 +804,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
       }
       return;
     }
-    const table = {
-      pool: 'pools', backend: 'backends', listener: 'listeners',
-      httpRoute: 'http_routes', passthroughRoute: 'passthrough_routes',
-      certificate: 'certificates', tlsPolicy: 'tls_policies',
-      sniBinding: 'sni_certificate_bindings', addressSet: 'address_sets',
-    }[op.kind];
+    const table = TABLE_OF[op.kind];
     const r = await c.query(`DELETE FROM ${table} WHERE key = $1`, [op.key]);
     if (r.rowCount === 0) {
       throw new StoreError(409, 'not_found', `${op.kind} '${op.key}' 가 없다`);
@@ -1507,9 +1581,17 @@ export class ConfigStore {
 
     // **이전 conf 뿐 아니라 이전 모델도 넘긴다.** 산출물 비교는 "reload 가 필요한가"
     // 까지만 답한다 — *누가* 영향받는가는 모델을 봐야 나온다 (§5.4).
-    const impact = impactOf(
-      { model: priorModel, conf: before?.conf ?? '' }, { model, rendered },
-      this.caps, this.certFacts);
+    // **이름 바꾸기를 이전 모델에 먼저 적용한다.** 안 그러면 이름만 바꾼 리스너가 「제거 + 추가」 로,
+    // 인증서가 「자료 추가」 로 보인다. 사람에게는 「이름 변경」 한 줄로 따로 보인다(`renames`).
+    const renames = ops.flatMap((o) => (o.op === 'rename' && o.kind !== 'engine'
+      ? [{ kind: o.kind, from: o.key, to: o.to }] : []));
+    const priorRenamed = renames.reduce((m, r) => renameInModel(m, r), priorModel);
+    const impact: Impact = {
+      ...impactOf(
+        { model: priorRenamed, conf: before?.conf ?? '' }, { model, rendered },
+        this.caps, this.certFacts),
+      ...(renames.length === 0 ? {} : { renames }),
+    };
     const id = randomUUID();
     await this.db.tx(async (c) => {
       await c.query(
@@ -2049,10 +2131,26 @@ function opsOf(model: Model): PatchOp[] {
 
 /** PATCH 시점의 모양 검사. 여기서 걸리는 것은 **400** 이다 (타입·구문). */
 function shapeCheck(op: PatchOp): void {
+  // **동작과 종류를 먼저 본다.** API 경계는 배열인지만 본다 — 모르는 동작이 `put` 으로 읽히면 안 된다.
+  const raw = op as { op?: unknown; kind?: unknown; key?: unknown; to?: unknown };
+  if (raw.op !== 'put' && raw.op !== 'delete' && raw.op !== 'rename') {
+    throw new StoreError(400, 'malformed', `patch 의 op 는 put · delete · rename 이다 (받은 것: ${JSON.stringify(raw.op)})`);
+  }
+  if (typeof raw.kind !== 'string' || (raw.kind !== 'engine' && !Object.hasOwn(TABLE_OF, raw.kind))) {
+    throw new StoreError(400, 'malformed', `모르는 종류다: ${JSON.stringify(raw.kind)}`);
+  }
+  if (typeof raw.key !== 'string') throw new StoreError(400, 'malformed', 'patch 의 key 는 문자열이다');
   // **삭제도 본다.** 문법 밖의 key 로는 애초에 만들 수 없으니 지울 것도 없다 —
   // 그런데 여기를 열어 두면 `DELETE FROM ... WHERE key = '../x'` 가 그대로 나간다.
   if (op.kind !== 'engine') assertKeySyntax(op.kind, op.key);
   if (op.op === 'delete') return;
+  if (op.op === 'rename') {
+    if (op.kind === 'engine') throw new StoreError(400, 'malformed', 'engine 은 이름이 없다 — 바꿀 수 없다');
+    if (typeof raw.to !== 'string') throw new StoreError(400, 'malformed', 'rename 에는 새 이름 to 가 필요하다');
+    assertKeySyntax(op.kind, op.to);
+    if (op.to === op.key) throw new StoreError(400, 'malformed', `새 이름이 지금 이름과 같다: '${op.key}'`);
+    return;
+  }
   const empty: Model = {
     listeners: [], httpRoutes: [], passthroughRoutes: [], pools: [], backends: [],
     certificates: [], tlsPolicies: [], sniBindings: [],

@@ -74,7 +74,7 @@
   <Writable>
     <Form note="저장하면 커밋해요. 트래픽은 적용 대기에서 적용해야 바뀌어요." onsubmit={save}>
       <FormSection title="기본">
-        <FormRow label="이름" help="이름은 바꿀 수 없어요."><TextInput value={key} disabled /></FormRow>
+        <FormRow label="이름" help="이름은 상세 화면 위의 「이름 바꾸기…」 로 바꿔요."><TextInput value={key} disabled /></FormRow>
         <FormRow label="프로토콜 계열" help="계열은 바꿀 수 없어요. 리스너와 같은 계열의 풀만 고를 수 있어요.">
           <TextInput value={protocolClass.toUpperCase()} disabled width="120px" />
         </FormRow>

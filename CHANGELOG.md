@@ -14,6 +14,13 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Resources can be renamed. A changeset patch accepts `{ "op": "rename", "kind", "key", "to" }`;
+  the GUI shows **이름 바꾸기…** on every detail page, and the CLI has
+  `bary rename <kind> <old> <new>`. Everything that refers to the resource follows the new name:
+  ID-linked references, name references inside JSON (route source rules, `@address-set` lists,
+  upstream CA bundles), and backend health and drain state. The plan lists the renames and compares
+  against the renamed previous model, so a renamed listener is not shown as removed and added.
+  Applying renders new nginx names, which makes a new generation; connections are not dropped.
 - Resource names (backends, pools, listeners, routes, certificates, TLS policies, SNI bindings,
   address sets, ACME accounts) may now join segments with `:` and be up to 127 characters, for
   naming schemes such as `{host}:{service}[:{detail}][:{shard}]`

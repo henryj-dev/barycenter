@@ -14,6 +14,7 @@
   import { RESOURCES, itemOf, resourcePath, type ResourceKind } from '@web/resources';
   import { Badge, Button, DetailHeader, Skeleton, type Tone } from '#lib/ui';
   import DeleteConfirm from '#lib/lists/DeleteConfirm.svelte';
+  import RenameDialog from '#lib/lists/RenameDialog.svelte';
   import type { Scope } from '#lib/global/scope.svelte.ts';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { openIn } from '#lib/global/open-in.ts';
@@ -48,6 +49,7 @@
   // 쓸 수 없으면(지역을 안 골랐다 · 팔로워 · 고른 지역과 연락 없음) 만들기 · 수정 · 삭제를 안 보인다.
   const ro = $derived(scope?.blocked === true);
   let asking = $state(false);
+  let renaming = $state(false);
   // 시안: 「연결된 리소스」 탭에 수를 단다 — 그 탭이 그리는 줄 수. 없으면 안 단다(시안 `cnt || ''`).
   const relCount = $derived(relationRows(desk, kind, key).length);
   const tabs = $derived(extra !== undefined ? undefined : spec.tabs.map((t) => ({
@@ -94,6 +96,7 @@
         {#if openReg !== undefined}<Button size="sm" outline="accent" href={openReg.href} target="_blank" rel="noopener">{openReg.label}</Button>{/if}
         {#if !ro}
           {#if edit}{@render edit()}{:else if spec.editable}<Button size="sm" href={resourcePath(kind, key, 'settings')}>수정</Button>{/if}
+          <Button size="sm" disabled={desk.editing} onclick={() => { renaming = true; }}>이름 바꾸기…</Button>
           <Button size="sm" error disabled={desk.editing} onclick={() => { asking = true; }}>삭제…</Button>
         {/if}
       {/snippet}
@@ -102,6 +105,7 @@
   </div>
   <!-- 목록과 같은 확인 — 이것을 실제로 쓰는 리소스를 줄마다 든다. 지우면 목록으로 간다. -->
   <DeleteConfirm bind:target={() => (asking ? { kind, key } : undefined), (t) => { asking = t !== undefined; }} href={listHref} />
+  <RenameDialog bind:target={() => (renaming ? { kind, key } : undefined), (t) => { renaming = t !== undefined; }} />
 {/if}
 
 <style>

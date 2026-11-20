@@ -9,7 +9,7 @@ import { RESOURCE_KEY_SYNTAX } from '../../../../src/validate/syntax.js';
 /** 이름 규칙 한 줄. 도움말과 오류가 같은 말을 한다. */
 const KEY_RULE = '콜론(:)으로 구간을 나눌 수 있어요. 각 구간은 영문·숫자로 시작하고 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 쓸 수 있어요. 127자까지예요.';
 
-export const KEY_HELP = `${KEY_RULE} 예: web-01.dc1:shop:api:01. 만든 뒤에는 바꿀 수 없어요.`;
+export const KEY_HELP = `${KEY_RULE} 예: web-01.dc1:shop:api:01. 만든 뒤에는 상세 화면의 「이름 바꾸기」 로 바꿔요.`;
 
 /** 이름 칸의 오류. 만들기 폼 · 라우트 · SNI · TLS 정책 · ACME 계정이 모두 이것을 쓴다. */
 export const KEY_ERROR = `이름 규칙에 안 맞아요. ${KEY_RULE}`;

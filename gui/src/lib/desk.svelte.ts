@@ -20,7 +20,7 @@ import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { RECONNECT_GRACE_MS, backoffMs, hasStream, isTransientStatus } from '@web/reconnect';
 import { retryingFetch } from '@web/retry';
-import { deletePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput, type SourceRuleInput } from '@web/edit';
+import { deletePatch, renamePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput, type SourceRuleInput } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import { routeGroupPatch, type RouteGroupInput } from '@web/route-group';
 import type { ModelLike, ResourceKind } from '@web/resources';
@@ -529,6 +529,20 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     error = undefined;
     try {
       return await commitPatch(deletePatch(kind, key));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
+  /** 이름 바꾸기 (2026-11-20). 저장(commit)까지다 — 적용은 따로다. 참조하는 리소스는 서버가 함께 옮긴다. */
+  const rename = async (kind: EditKind, key: string, to: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch(renamePatch(kind, key, to));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;
@@ -1216,6 +1230,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     drain,
     undrain,
     withdraw,
+    rename,
     insertBackend,
     insertPool,
     insertHashPool,
