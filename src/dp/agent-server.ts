@@ -55,6 +55,8 @@ const DEFAULT_MAX_BODY = 4 * 1024 * 1024;
 const METHODS = [
   'fence', 'applyConfig', 'recoverConfig', 'abortConfig',
   'applyMembership', 'pushMembershipDirect', 'reconcileConfig', 'status',
+  // 트래픽 카운터 (2026-11-20). 읽기만 한다.
+  'readTraffic',
 ] as const;
 type MethodName = (typeof METHODS)[number];
 
@@ -170,6 +172,8 @@ function invoke(
       return driver.reconcileConfig();
     case 'status':
       return driver.status();
+    case 'readTraffic':
+      return driver.readTraffic === undefined ? Promise.resolve({}) : driver.readTraffic();
   }
 }
 

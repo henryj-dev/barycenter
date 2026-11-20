@@ -223,6 +223,28 @@
         }
       }
     },
+    "/api/v1/traffic": {
+      "get": {
+        "operationId": "GET:/api/v1/traffic",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/traffic/{kind}/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/traffic/:kind/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/backends/{id}/drain-status": {
       "get": {
         "operationId": "GET:/api/v1/backends/:id/drain-status",

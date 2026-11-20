@@ -16,6 +16,7 @@
   import type { Cell } from '#lib/ui';
   import OverviewGrid from './OverviewGrid.svelte';
   import HealthProblems from './HealthProblems.svelte';
+  import BackendTraffic from './BackendTraffic.svelte';
 
   let { kind }: { kind: 'listener' | 'pool' | 'backend' | 'addressSet' } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -32,3 +33,4 @@
 
 <OverviewGrid rows={grid} />
 {#if kind === 'pool' || kind === 'backend'}<HealthProblems {kind} />{/if}
+{#if kind === 'backend' && key !== ''}<BackendTraffic {key} />{/if}

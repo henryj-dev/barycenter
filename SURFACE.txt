@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 125 심볼 · sha256:8d8228acd9b90375d35a28a3c52a05c508c13c112b59e9a8a9ecf7f00d91c78a
+# 126 심볼 · sha256:960d5adb7017fcc01c7e238bbda55716dc8a21bb6d9afe919a0a112e9032efbd
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -114,6 +114,10 @@ export interface DataplaneDriver {
     }>>): Promise<void>;
     reconcileConfig(): Promise<ReconcileResult>;
     status(): Promise<DriverStatus>;
+    readTraffic?(): Promise<{
+        http?: string;
+        stream?: string;
+    }>;
 }
 ── DecodeResult
 export type DecodeResult = {
@@ -208,6 +212,7 @@ export interface Effects {
         softMaxConns?: number;
         isBackup?: boolean;
     }>>): Promise<void>;
+    readTraffic?(): Promise<TrafficDump>;
 }
 ── EngineSettings
 export type EngineSettings = {
@@ -228,6 +233,10 @@ export declare class FileStore implements DurableStore {
 export declare class FsEffects implements Effects {
     stageMembership: (generation: string, plane: "http" | "stream", lease: ApplyLease) => Promise<Checked>;
     pushMembership: (plane: "http" | "stream", epoch: string, slots: Record<string, string[]>) => Promise<void>;
+    readTraffic: () => Promise<{
+        http?: string;
+        stream?: string;
+    }>;
     constructor(opts: FsEffectsOptions);
     preflight(op: ApplyOperation): Promise<PreflightResult>;
     publish(record: PublishRecord, lease: ApplyLease): Promise<Checked>;
@@ -244,6 +253,10 @@ export type FsEffectsOptions = {
     probeFatalLogLines?: () => Promise<number>;
     configTest?: (generation: string) => Promise<boolean>;
     pushMembership?: (plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>) => Promise<void>;
+    readTraffic?: () => Promise<{
+        http?: string;
+        stream?: string;
+    }>;
 };
 ── GenerationError
 export declare class GenerationError extends Error {
@@ -382,6 +395,10 @@ export declare class LocalDataplaneDriver implements DataplaneDriver {
         store: DurableStore;
         effects: Effects;
     }): LocalDataplaneDriver;
+    readTraffic(): Promise<{
+        http?: string;
+        stream?: string;
+    }>;
     fence(leaderToken: string): Promise<{
         maxToken: string;
     }>;
@@ -701,6 +718,11 @@ export type TlsPolicy = {
 };
 ── TlsVersion
 export type TlsVersion = '1.2' | '1.3';
+── TrafficDump
+export type TrafficDump = {
+    http?: string;
+    stream?: string;
+};
 ── UdpListener
 export type UdpListener = ListenerBase & {
     protocol: 'udp';

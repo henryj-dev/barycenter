@@ -3079,6 +3079,11 @@ export interface DataplaneDriver {
   reconcileConfig(): Promise<ReconcileResult>;
 
   status(): Promise<DriverStatus>;
+
+  // 엔진의 트래픽 카운터 덤프 (2026-11-20). **읽기만 한다** — 봉투도 토큰도 없다.
+  // 평면마다 admin 이 낸 글 그대로다. 못 읽은 평면은 키가 없다.
+  // **선택 메서드다** (코드에서 `readTraffic?`). 없는 드라이버는 세지 않는다.
+  readTraffic(): Promise<{ http?: string; stream?: string }>;
 }
 ```
 
