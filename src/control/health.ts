@@ -625,6 +625,86 @@ export async function healthRows(db: Database): Promise<HealthRow[]> {
 }
 
 /**
+ * 판정이 한 번 바뀐 기록 하나 (2026-11-20). `health_events` 의 한 행이다.
+ *
+ * `from` 은 같은 백엔드의 바로 앞 기록의 판정이다. 앞 기록이 없으면(처음 판정이거나 보존 기간이
+ * 지나 지워졌으면) `null` 이다 — `unknown` 으로 채우지 않는다. 모르는 것을 아는 것처럼 보이면 안 된다.
+ */
+export type HealthEvent = {
+  seq: string;
+  backendKey: string;
+  from: HealthState | null;
+  to: HealthState;
+  at: string;
+  detail?: string;
+};
+
+/** 헬스 기록 한 쪽. `next` 는 다음 쪽의 `before` 다 — 더 없으면 없다. */
+export type HealthHistoryPage = { events: HealthEvent[]; next?: string };
+
+export const HEALTH_HISTORY_MAX = 200;
+
+/**
+ * 판정이 바뀐 기록을 최근 것부터 읽는다 (2026-11-20). `health_events` 는 쓰기만 있고 읽는 곳이 없었다.
+ *
+ * - `backendKeys` 의 백엔드와, `prefix` 로 시작하는 키(출처에서 받은 백엔드 `disc~<풀>~`)를 본다.
+ * - `before` 는 순번(seq)이다. 그보다 앞의 기록만 준다. 쪽을 넘기는 커서다.
+ * - 접두사는 `LIKE` 가 아니라 `substr` 로 비교한다. 키의 `_` 가 `LIKE` 의 와일드카드라 엉뚱한 풀이 섞인다.
+ */
+export async function healthHistory(
+  db: Queryable,
+  opts: { backendKeys: readonly string[]; prefix?: string; limit: number; before?: string },
+): Promise<HealthHistoryPage> {
+  const limit = Math.max(1, Math.min(HEALTH_HISTORY_MAX, Math.trunc(opts.limit)));
+  const params: unknown[] = [];
+  const at = (v: unknown): string => { params.push(v); return `$${params.length}`; };
+  const who: string[] = [];
+  if (opts.backendKeys.length > 0) who.push(`backend_key IN (${opts.backendKeys.map((k) => at(k)).join(', ')})`);
+  if (opts.prefix !== undefined && opts.prefix !== '') {
+    who.push(`substr(backend_key, 1, ${opts.prefix.length}) = ${at(opts.prefix)}`);
+  }
+  if (who.length === 0) return { events: [] };
+  const where = [`(${who.join(' OR ')})`];
+  if (opts.before !== undefined) where.push(`seq < ${at(opts.before)}`);
+  const seqText = byDialect(db, {
+    postgres: 'seq::text', sqlite: 'CAST(seq AS TEXT)', mysql: 'CAST(seq AS CHAR)',
+  });
+  const rows = (await db.query(
+    `SELECT ${seqText} AS s, backend_key, state, at, detail FROM health_events
+      WHERE ${where.join(' AND ')} ORDER BY seq DESC LIMIT ${limit + 1}`,
+    params,
+  )).rows;
+  const page = rows.slice(0, limit).map((r): HealthEvent => ({
+    seq: String(r['s']),
+    backendKey: String(r['backend_key']),
+    from: null,
+    to: r['state'] as HealthState,
+    at: new Date(String(r['at'])).toISOString(),
+    ...(r['detail'] === null || r['detail'] === undefined ? {} : { detail: String(r['detail']) }),
+  }));
+  // `from` 은 같은 백엔드의 바로 앞 기록이다. 이 쪽 안에 있으면 그것을, 없으면 한 번 더 묻는다.
+  // 쪽은 최근 것이 앞이다. 뒤(오래된 것)부터 훑으며 같은 백엔드의 바로 앞 기록을 잇는다.
+  const oldest = new Map<string, HealthEvent>();
+  const latest = new Map<string, HealthEvent>();
+  for (let i = page.length - 1; i >= 0; i -= 1) {
+    const e = page[i]!;
+    const prev = latest.get(e.backendKey);
+    if (prev === undefined) oldest.set(e.backendKey, e);
+    else e.from = prev.to;
+    latest.set(e.backendKey, e);
+  }
+  // 각 백엔드의 「이 쪽에서 가장 오래된 기록」 만 그 앞을 한 번 더 묻는다.
+  for (const [key, first] of oldest) {
+    const prev = (await db.query(
+      `SELECT state FROM health_events WHERE backend_key = $1 AND seq < $2 ORDER BY seq DESC LIMIT 1`,
+      [key, first.seq],
+    )).rows[0];
+    first.from = prev === undefined ? null : prev['state'] as HealthState;
+  }
+  return rows.length > limit ? { events: page, next: page[page.length - 1]!.seq } : { events: page };
+}
+
+/**
  * **단일 리듀서** — 커밋된 모델과 원시 헬스를 합성한다 (§6.6).
  *
  * `unhealthy` 만 뺀다. `unknown` 은 **안 뺀다** — 아직 재보지 못한 것과 죽은 것은 다르고,

@@ -36,7 +36,7 @@ import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.
 import {
   deadlineExceededKeys, drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
 } from '../control/drain.js';
-import { healthRows } from '../control/health.js';
+import { healthHistory, healthRows, HEALTH_HISTORY_MAX } from '../control/health.js';
 import type { DiscoveryPoolView } from '../control/discovery/runner.js';
 import { addressSources, type AddressSources } from '../control/address-sources/registry.js';
 import { refreshAddressSet, refreshRows } from '../control/address-sources/refresh.js';
@@ -436,6 +436,16 @@ async function acmeManual(c: Ctx, api: ApiOptions, kind: 'retry' | 'renew'): Pro
 const changesetEtag = (patch: unknown, state: string): string =>
   `"${createHash('sha256').update(`${state}:${JSON.stringify(patch)}`).digest('hex').slice(0, 16)}"`;
 
+/** 헬스 기록의 쪽 인자. 잘못된 커서는 문장으로 돌려준다 — 400 이다. */
+function historyPage(q: URLSearchParams): { limit: number; before?: string } | string {
+  const asked = Number(q.get('limit') ?? '50') || 50;
+  const limit = Math.max(1, Math.min(HEALTH_HISTORY_MAX, Math.trunc(asked)));
+  const before = q.get('before');
+  if (before === null || before === '') return { limit };
+  if (!/^[1-9][0-9]{0,18}$/.test(before)) return `before '${before}' 는 순번(양의 정수)이 아니다`;
+  return { limit, before };
+}
+
 /** 트래픽 응답의 공통 머리 — 상태 · 노드 · 간격 · 창. `ok` 일 때만 몸을 붙인다. */
 function trafficBody(
   api: ApiOptions, body: (s: TrafficSampler) => Record<string, unknown>,
@@ -629,6 +639,40 @@ const ROUTES: Route[] = [
         ? { state: 'unknown', observedAt: null, detail: '아직 관측이 없다' }
         : { state: row.state, observedAt: row.observedAt, ...(row.detail === undefined ? {} : { detail: row.detail }) }),
     });
+  }),
+
+  /**
+   * **헬스 기록** (2026-11-20) — 판정이 바뀐 때마다 하나씩, 최근 것부터. `health_events` 를 읽는다.
+   *
+   * `?limit=` 은 1–200(기본 50), `?before=` 는 앞 쪽의 `next` 다. 보존 기간(기본 30일)이 지난 기록은 없다.
+   * 풀은 지금 그 풀에 속한 백엔드와, 출처에서 받은 백엔드(`disc~<풀>~`)의 기록을 함께 준다.
+   */
+  route('GET', '/api/v1/backends/:id/health-history', 'read', async (c, api) => {
+    const m = await api.store.modelAt((await api.store.head()).revision);
+    const key = c.params['id'] ?? '';
+    if (!m.backends.some((b) => b.key === key)) {
+      json(c.res, 404, { error: 'not_found', message: `백엔드 '${key}' 가 없다` });
+      return;
+    }
+    const page = historyPage(c.url.searchParams);
+    if (typeof page === 'string') { json(c.res, 400, { error: 'bad_cursor', message: page }); return; }
+    json(c.res, 200, await healthHistory(api.db, { backendKeys: [key], ...page }));
+  }),
+
+  route('GET', '/api/v1/pools/:id/health-history', 'read', async (c, api) => {
+    const m = await api.store.modelAt((await api.store.head()).revision);
+    const key = c.params['id'] ?? '';
+    if (!m.pools.some((p) => p.key === key)) {
+      json(c.res, 404, { error: 'not_found', message: `풀 '${key}' 가 없다` });
+      return;
+    }
+    const page = historyPage(c.url.searchParams);
+    if (typeof page === 'string') { json(c.res, 400, { error: 'bad_cursor', message: page }); return; }
+    json(c.res, 200, await healthHistory(api.db, {
+      backendKeys: m.backends.filter((b) => b.pool === key).map((b) => b.key),
+      prefix: `disc~${key}~`,
+      ...page,
+    }));
   }),
 
   route('POST', '/api/v1/backends/:id/drain', 'write', async (c, api) => {
@@ -1666,6 +1710,8 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/sockets', 'read', relayTo('sockets')),
   route('GET', '/api/v1/regions/:name/health/backends', 'read', relayTo('health/backends')),
   route('GET', '/api/v1/regions/:name/config/pending-resources', 'read', relayTo('config/pending-resources')),
+  route('GET', '/api/v1/regions/:name/backends/:id/health-history', 'read', relayTo('backends/:id/health-history')),
+  route('GET', '/api/v1/regions/:name/pools/:id/health-history', 'read', relayTo('pools/:id/health-history')),
   /**
    * **쓰기 중계** (2026-11-01 사용자 결정, 설계 §1.1). 보는 사람의 자격 그대로 지역에 넘긴다. 범위는 지역 라우트와 같다.
    */
