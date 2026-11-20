@@ -27,6 +27,7 @@ import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 import { noteCommit } from '#lib/commit-note';
 import { EMPTY_PENDING, viewOfPendingResources, type PendingResourcesView } from '#lib/pending';
+import type { TrafficKind, TrafficSeriesBody, TrafficSummaryBody } from '@web/traffic-view';
 
 export type StatusSnap = {
   head?: string;
@@ -737,6 +738,22 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     if (r === undefined || !r.ok) return undefined;
     return (await r.json().catch(() => undefined)) as DiscoveryPoolView | { pool: string; source: null } | undefined;
   };
+  /**
+   * 트래픽 통계 (2026-11-20) — 이 화면이 붙은 노드가 센 것이다. 못 읽으면 undefined —
+   * 「세지 않는다」(`unsupported`)와 다르다.
+   */
+  const traffic = async (kind: TrafficKind, key: string): Promise<TrafficSeriesBody | undefined> => {
+    const r = await fetch(api(`/api/v1/traffic/${kind}/${encodeURIComponent(key)}`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    return (await r.json().catch(() => undefined)) as TrafficSeriesBody | undefined;
+  };
+  /** 리소스별 트래픽 요약. 종류로 거를 수 있다. */
+  const trafficSummary = async (kind?: TrafficKind): Promise<TrafficSummaryBody | undefined> => {
+    const q = kind === undefined ? '' : `?kind=${kind}`;
+    const r = await fetch(api(`/api/v1/traffic${q}`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    return (await r.json().catch(() => undefined)) as TrafficSummaryBody | undefined;
+  };
   /** 주소 집합을 다시 받은 기록 — `GET /api/v1/address-sets/refresh-status`. 못 읽으면 undefined. */
   const addressSetRefreshStatus = async (): Promise<AddressSetRefreshRow[] | undefined> => {
     const r = await fetch(api('/api/v1/address-sets/refresh-status'), { headers: auth() }).catch(() => undefined);
@@ -1245,6 +1262,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     acmeAccounts,
     hostAddresses,
     poolDiscovery,
+    traffic,
+    trafficSummary,
     addressSetRefreshStatus,
     refreshAddressSet,
     createAcmeAccount,

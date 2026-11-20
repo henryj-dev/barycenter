@@ -14,6 +14,16 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- **Traffic statistics.** On OpenResty, the engine now counts requests (connections for TCP/UDP),
+  status classes (1xx–5xx), bytes in/out and time per listener, HTTP route, passthrough route,
+  pool and backend, in a separate `lua_shared_dict` (`bary_http_traffic` · `bary_stream_traffic`,
+  2m each). The daemon reads the counters every 10 s (`BARY_TRAFFIC_INTERVAL_MS`) and keeps the
+  last hour in memory, per node. New read endpoints `GET /api/v1/traffic[?kind=]` and
+  `GET /api/v1/traffic/:kind/:id` (also relayed in global mode) and `bary get traffic[/<kind>[/<name>]]`.
+  The GUI shows **실시간 트래픽** charts on the traffic tab of listeners, routes and pools, the
+  numbers on the backend overview, and **리스너별 트래픽** on the dashboard. Plain nginx answers
+  `unsupported` and renders exactly as before. **Upgrading changes the rendered config on
+  OpenResty**, so run **다시 렌더** (`POST /api/v1/apply/rerender`) and apply once to start counting.
 - Pool and backend overview pages now show **정상이 아닌 이유** when something is wrong: for a pool,
   each backend that is not healthy or not receiving traffic, with its reason; for a backend, its own
   reasons. Health-check failures say which check ran, when it was last observed, and what the

@@ -17,6 +17,7 @@ import {
 } from '../conf/render.js';
 
 import { applyDiscoveredEndpoints, type DiscoveryIntake } from './discovery.js';
+import { trafficDumpLua } from '../conf/traffic.js';
 import { log } from '../obs/log.js';
 import type { Model } from '../model/provisional.js';
 
@@ -588,6 +589,13 @@ server {
         }
     }
 
+    # **트래픽 카운터** (2026-11-20, src/conf/traffic.ts). 한 줄에 \`키=값\`. 해석은 데몬이 한다.
+    location = /traffic {
+        content_by_lua_block {
+            ${trafficDumpLua('http')}
+        }
+    }
+
     # peer 별 inflight. 밸런서가 올린 숫자만 준다. 없으면 빈 객체 — 숫자를 안 짓는다.
     location = /membership/inflight {
         content_by_lua_block {
@@ -637,6 +645,12 @@ server {
             local n = d:get("in:" .. peer)
             if n == nil then ngx.print("{}\\n") return end
             ngx.print('{"inflight":' .. n .. ',"active_sessions":' .. n .. '}\\n')
+            return
+        end
+        -- 트래픽 카운터 (2026-11-20). http 의 \`/traffic\` 와 같은 모양이다. 끝에 빈 줄을 붙여 끝을 알린다.
+        if verb == "traffic" then
+            ${trafficDumpLua('stream')}
+            ngx.print("\\n")
             return
         end
         if verb == "read" then

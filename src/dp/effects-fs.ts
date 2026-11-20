@@ -91,6 +91,8 @@ export type FsEffectsOptions = {
    */
   pushMembership?: (plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>)
     => Promise<void>;
+  /** 트래픽 카운터 덤프 (2026-11-20). 없으면 이 배포는 세지 않는다. */
+  readTraffic?: () => Promise<{ http?: string; stream?: string }>;
 };
 
 /** 내용을 fsync 하고 닫는다. rename 이 먼저 보이면 빈 파일이 정본이 된다. */
@@ -160,6 +162,9 @@ export class FsEffects implements Effects {
     }
     await push(plane, epoch, slots);
   };
+
+  /** 트래픽 카운터 덤프 (2026-11-20). 옵션이 없으면 빈 덤프다 — 0 을 짓지 않는다. */
+  readTraffic = async (): Promise<{ http?: string; stream?: string }> => (this.opts.readTraffic === undefined ? {} : this.opts.readTraffic());
 
   /** HUP 을 보낸 시점의 error log 줄 수. 그 이후 증가분만 이 전환의 것이다. */
   private watermark: number | undefined;

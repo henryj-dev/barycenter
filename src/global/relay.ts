@@ -31,6 +31,8 @@ export const RELAY_PATHS: readonly string[] = [
   'acme/orders/:id', 'sockets', 'health/backends',
   // 리소스별 「적용 대기」 (#126 후속).
   'config/pending-resources',
+  // 트래픽 통계 (2026-11-20). 지역 노드가 센 것을 그대로 읽는다.
+  'traffic', 'traffic/:kind/:id',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */

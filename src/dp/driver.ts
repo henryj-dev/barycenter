@@ -145,6 +145,12 @@ export interface DataplaneDriver {
   reconcileConfig(): Promise<ReconcileResult>;
 
   status(): Promise<DriverStatus>;
+
+  /**
+   * 엔진의 트래픽 카운터 (2026-11-20). **읽기만 한다** — 봉투도 토큰도 필요 없다.
+   * 없는 드라이버(테스트의 가짜 등)는 세지 않는 배포다.
+   */
+  readTraffic?(): Promise<{ http?: string; stream?: string }>;
 }
 
 /**
@@ -285,6 +291,11 @@ export class LocalDataplaneDriver implements DataplaneDriver {
    */
   static create(opts: { store: DurableStore; effects: Effects }): LocalDataplaneDriver {
     return new LocalDataplaneDriver(new DpAgent(opts.store), opts.effects);
+  }
+
+  /** 트래픽 카운터 덤프. 부작용이 못 읽으면 빈 덤프다. */
+  async readTraffic(): Promise<{ http?: string; stream?: string }> {
+    return this.effects.readTraffic === undefined ? {} : this.effects.readTraffic();
   }
 
   #runner(): ApplyRunner {
