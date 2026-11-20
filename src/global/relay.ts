@@ -45,6 +45,8 @@ export const RELAY_WRITES: readonly { method: 'POST' | 'PATCH' | 'DELETE'; path:
   { method: 'POST', path: 'changesets/:id/commit', scope: 'write' },
   { method: 'POST', path: 'certificates/material', scope: 'write' },
   { method: 'POST', path: 'acme/accounts', scope: 'write' },
+  { method: 'POST', path: 'certificates/:id/acme/retry', scope: 'write' },
+  { method: 'POST', path: 'certificates/:id/acme/renew', scope: 'write' },
   { method: 'POST', path: 'backends/:id/drain', scope: 'write' },
   { method: 'DELETE', path: 'backends/:id/drain', scope: 'write' },
   { method: 'POST', path: 'apply', scope: 'apply' },

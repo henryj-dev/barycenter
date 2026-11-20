@@ -10,7 +10,7 @@
  *   bary route create|delete
  *   bary backend create|delete
  *   bary tls-policy create|delete
- *   bary certificate create|delete
+ *   bary certificate create|delete|retry|renew
  *   bary sni-binding create|delete
  *   bary changeset new|patch|plan|show|discard|reopen
  *   bary commit --plan <id>
@@ -47,7 +47,7 @@ import { DISCOVERY_STATIC } from '../web/discovery.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
 import { renameResource } from '../cli/rename.js';
 import {
-  certificateCreate, certificateDelete, sniBindingCreate, sniBindingDelete,
+  certificateAcme, certificateCreate, certificateDelete, sniBindingCreate, sniBindingDelete,
   tlsPolicyCreate, tlsPolicyDelete,
 } from '../cli/tls.js';
 import {
@@ -185,6 +185,8 @@ const usage = (): never => {
   bary tls-policy delete         --name
   bary certificate create        --name --fullchain <파일> --privkey <파일>. 패치에 개인키 없음
   bary certificate delete        --name
+  bary certificate retry <이름>   ACME 주문을 지금 다시 시도한다. 실패면 백오프를 지우고, 포기했으면 새 주문을 연다
+  bary certificate renew <이름>   만료가 멀어도 ACME 새 주문을 연다. 진행 중인 주문이 있으면 409
   bary sni-binding create        --name --listener --host --certificate. override 없음
   bary sni-binding delete        --name
   bary changeset new             changeset 을 연다
@@ -721,6 +723,18 @@ async function main(): Promise<void> {
     }
     case 'certificate': {
       const sub = arg ?? usage();
+      if (sub === 'retry' || sub === 'renew') {
+        // 이름은 위치 인자로도 받는다 — `bary certificate retry site` (다른 하위 명령은 `--name`).
+        const name = flag(argv, '--name') ?? (arg2 !== undefined && !arg2.startsWith('--') ? arg2 : undefined) ?? usage();
+        try {
+          const out = await certificateAcme(call, name, sub);
+          console.error(`certificate ${name} ${sub}: 주문 ${out.order} (${out.state}${out.created ? ', 새 주문' : ''}) — 발급은 데몬 러너가 한다`);
+          show(out);
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       if (sub === 'delete') {
         const name = flag(argv, '--name') ?? usage();
         try {

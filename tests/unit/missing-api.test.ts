@@ -33,6 +33,7 @@ const order = (over: Partial<AcmeOrderRow> = {}): AcmeOrderRow => ({
   certKeyRef: 'key://k',
   attempts: 1,
   lastError: undefined,
+  nextAttemptAt: undefined,
   ...over,
 });
 

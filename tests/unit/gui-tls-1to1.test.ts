@@ -137,7 +137,9 @@ describe('상세 — 시안 상세 페이지', () => {
     expect(src('lib/detail/OverviewGrid.svelte')).toContain('grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 24px;');
     const a = src('lib/detail/Acme.svelte');
     expect(a).toContain('<div class="t">ACME 주문</div>');
-    expect(a).toContain('마지막 갱신 {notBefore} · {challenge} · 다음 시도 —');
+    // 「다음 시도」 는 실패한 주문의 시각이고, 그 밖에는 「—」 다 (2026-11-20).
+    expect(a).toContain('마지막 갱신 {notBefore} · {challenge} · 다음 시도 {nextTry}');
+    expect(a).toContain("if (last?.state !== 'failed' || last.nextAttemptAt === null) return '—';");
   });
 
   it('설정 탭: 저장 줄(안내 · 되돌리기 · 저장) · 읽기 전용이면 보기 구획', () => {
