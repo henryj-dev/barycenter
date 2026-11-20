@@ -14,6 +14,14 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Pool and backend overview pages now show **정상이 아닌 이유** when something is wrong: for a pool,
+  each backend that is not healthy or not receiving traffic, with its reason; for a backend, its own
+  reasons. Health-check failures say which check ran, when it was last observed, and what the
+  prober reported.
+- Health-probe reasons now say what was probed and how to fix common failures, e.g.
+  `GET http://10.0.0.5:8080/ (Host: app.example) 가 302 로 답했다 — 2xx 를 기대한다. 리다이렉트는 따라가지 않는다 — …`
+  (was `302 다 (2xx 가 아니다)`). 3xx, 401/403 and 404 get a hint; connection errors and timeouts
+  name the address.
 - Resources can be renamed. A changeset patch accepts `{ "op": "rename", "kind", "key", "to" }`;
   the GUI shows **이름 바꾸기…** on every detail page, and the CLI has
   `bary rename <kind> <old> <new>`. Everything that refers to the resource follows the new name:

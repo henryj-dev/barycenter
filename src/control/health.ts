@@ -90,14 +90,32 @@ export const HTTP_PROBE_PATH = '/';
 export function probeTcp(host: string, port: number, timeoutMs: number): Promise<string | undefined> {
   return new Promise((resolve) => {
     const s = connect({ host, port });
+    const at = `TCP ${host.includes(':') ? `[${host}]` : host}:${port}`;
     const done = (reason: string | undefined): void => {
       s.destroy();
       resolve(reason);
     };
-    s.setTimeout(timeoutMs, () => done(`${timeoutMs}ms 안에 연결되지 않았다`));
+    s.setTimeout(timeoutMs, () => done(`${at} 에 ${timeoutMs}ms 안에 연결되지 않았다`));
     s.on('connect', () => done(undefined));
-    s.on('error', (e) => done(e.message));
+    s.on('error', (e) => done(`${at} 에 연결하지 못했다: ${e.message}`));
   });
+}
+
+/**
+ * 상태 코드가 기대와 다를 때의 이유 — 무엇을 물었고, 무엇이 왔고, **어떻게 고치는지** (2026-11-20).
+ *
+ * 운영자가 보는 「왜 트래픽에서 빠졌나」 가 이 문장이다. 흔한 셋은 고칠 길을 함께 말한다:
+ * 3xx(따라가지 않는다), 401 · 403(인증), 404(경로가 없다).
+ */
+export function statusReason(target: string, status: number, want: readonly number[] | undefined): string {
+  const head = `${target} 가 ${status} 로 답했다 — ${want === undefined ? '2xx' : want.join(', ')} 를 기대한다`;
+  if (want !== undefined) return head;
+  if (status >= 300 && status < 400) {
+    return `${head}. 리다이렉트는 따라가지 않는다 — 헬스 경로를 2xx 를 주는 곳으로 바꾸거나, 기대 상태에 ${status} 를 넣는다`;
+  }
+  if (status === 401 || status === 403) return `${head}. 인증이 필요한 경로다 — 인증 없이 2xx 를 주는 헬스 경로를 정한다`;
+  if (status === 404) return `${head}. 그 경로가 없다 — 헬스 경로를 정한다(예: /healthz)`;
+  return head;
 }
 
 export type HttpProbeOpts = {
@@ -150,6 +168,9 @@ export function probeHttp(
     // Host 는 지정값 → (TLS 면) SNI 이름 → 노드 기본(찌르는 주소) 순서다. 이름 기반
     // 가상호스팅 HTTPS 서버는 SNI 와 같은 Host 를 기대한다.
     const hostHeader = opts.hostHeader ?? opts.tls?.servername;
+    // **무엇을 물었는지 이유에 싣는다** (2026-11-20). 「302 다」 만으로는 어느 주소 · 경로 · Host 를 물었는지 모른다.
+    const target = `GET ${opts.tls === undefined ? 'http' : 'https'}://${host.includes(':') ? `[${host}]` : host}:${port}${opts.path}`
+      + (hostHeader === undefined ? '' : ` (Host: ${hostHeader})`);
     const common: RequestOptions = {
       host, port, path: opts.path, method: 'GET', timeout: timeoutMs,
       // **있을 때만 얹는다.** 빈 값을 넣으면 노드가 채우던 기본이 사라진다.
@@ -187,11 +208,7 @@ export function probeHttp(
       const status = res.statusCode ?? 0;
       const want = opts.expectStatus;
       const statusOk = want === undefined ? status >= 200 && status < 300 : want.includes(status);
-      if (!statusOk) {
-        return done(want === undefined
-          ? `${status} 다 (2xx 가 아니다)`
-          : `${status} 다 (기대: ${want.join(', ')})`);
-      }
+      if (!statusOk) return done(statusReason(target, status, want));
 
       const expect = opts.expectBody;
       // 본문을 안 볼 것이면 **읽지도 않는다.** 헤더가 이미 답을 줬다.
@@ -218,7 +235,7 @@ export function probeHttp(
     });
     req.on('timeout', () => {
       req.destroy();
-      resolve(`${timeoutMs}ms 안에 응답이 없다`);
+      resolve(`${target} 가 ${timeoutMs}ms 안에 응답이 없다`);
     });
     req.on('error', (e) => {
       // 인증서 실패는 **고칠 길을 함께** 말한다. 이 문구가 운영자가 보는 「왜 빠졌나」다.
@@ -231,7 +248,7 @@ export function probeHttp(
           ? `인증서 이름이 맞지 않는다 (${code}). 업스트림 TLS 의 SNI 에 백엔드 인증서 이름을 넣는다. `
             + '사설 CA 면 그 CA 로 검증할 수 없으므로 healthCheck.protocol 을 tcp_connect 로 둔다(앱 상태는 못 본다)'
           : `인증서를 검증하지 못했다 (${code}). 사설 CA 면 healthCheck.protocol 을 tcp_connect 로 둔다`)
-        : e.message);
+        : `${target} 에 연결하지 못했다: ${e.message}`);
     });
     req.end();
   });

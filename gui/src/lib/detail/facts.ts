@@ -4,7 +4,7 @@
  * 모두 이미 받은 값(head 모델 · 헬스 · 상태 API)에서 읽는다. 새로 묻지 않는다.
  * 모르는 것은 지어내지 않는다 — 상태 API 를 못 읽었으면 「모름」 이다.
  */
-import { itemOf, type ResourceKind } from '@web/resources';
+import { itemOf, itemsOf, type ResourceKind } from '@web/resources';
 import type { ListenerMark } from '@web/listeners-view';
 import type { Tone } from '#lib/ui';
 import type { createDesk } from '#lib/desk.svelte.ts';
@@ -119,7 +119,15 @@ export function backendReasons(desk: Desk, key: string): Mark[] {
   const out: Mark[] = [];
   if (pool?.['protocolClass'] === 'udp') out.push({ tone: 'neutral', icon: '○', text: 'UDP 풀은 헬스체크가 없어서 관측 없음으로 나와요.' });
   else if (h === 'none') out.push({ tone: 'neutral', icon: '○', text: '풀이 헬스체크를 하지 않아요. 상태를 관측하지 않아요.' });
-  if (h === 'unhealthy') out.push({ tone: 'danger', icon: '✕', text: `헬스체크가 실패했어요.${t?.detail === undefined ? '' : ` 프로버: ${t.detail}`}` });
+  if (h === 'unhealthy') {
+    // **무엇을 검사했고 언제 봤는지** 함께 말한다(2026-11-20). 「실패했어요」 만으로는 무엇을 고칠지 모른다.
+    const seen = ago(t?.observedAt);
+    out.push({
+      tone: 'danger', icon: '✕',
+      text: `헬스체크(${healthCheckText(pool)})가 실패했어요.${seen === undefined ? '' : ` ${seen} 관측.`}`
+        + (t?.detail === undefined ? ' 프로버가 이유를 남기지 않았어요.' : ` 프로버: ${t.detail}`),
+    });
+  }
   if (h === 'checking') out.push({ tone: 'info', icon: '↻', text: '첫 헬스체크 결과가 아직 없어요.' });
   for (const r of t?.reasons ?? []) {
     if (r === 'unhealthy') continue; // 위의 헬스 줄이 말한다.
@@ -179,3 +187,36 @@ export function viewContextOf(desk: Desk, kind: ResourceKind, key: string): View
 }
 
 /* 「연결된 리소스」 탭의 수는 `relation-rows.ts` 의 `relationRows(…).length` 다 — 탭이 그리는 줄과 같다. */
+
+/** 「정상이 아닌 이유」 의 한 묶음 — 백엔드 하나와 그 줄들. 풀 개요가 백엔드마다 하나씩 그린다. */
+export type ProblemGroup = { backend?: string; lines: Mark[] };
+
+/** 정상 · 관측 없음 · 첫 검사 대기 줄은 뺀다 — 이 블록은 **정상이 아닐 때만** 보인다. */
+const problemsOnly = (lines: readonly Mark[]): Mark[] => lines.filter((l) => l.tone !== 'ok' && l.tone !== 'neutral' && l.tone !== 'info');
+
+/**
+ * 「정상이 아닌 이유」 (2026-11-20) — 풀 · 백엔드 개요가 쓴다. 정상이면 빈 배열이다(블록을 안 그린다).
+ *
+ * 백엔드는 `backendReasons` 에서 정상 · 관측 없음 줄을 뺀 것이다. 풀은 풀 자체의 문제(백엔드가 없다 ·
+ * 아무도 이 풀을 안 쓴다) 한 묶음과, 정상이 아닌 백엔드마다 한 묶음이다 — 어느 백엔드가 왜인지 한 화면에 보인다.
+ */
+export function problemsOf(desk: Desk, kind: 'pool' | 'backend', key: string): ProblemGroup[] {
+  if (kind === 'backend') {
+    const lines = problemsOnly(backendReasons(desk, key));
+    return lines.length === 0 ? [] : [{ lines }];
+  }
+  if (itemOf(desk.model, 'pool', key) === undefined) return [];
+  const members = itemsOf(desk.model, 'backend').filter((b) => b['pool'] === key).map((b) => String(b['key']));
+  const own: Mark[] = [];
+  if (members.length === 0) own.push({ tone: 'warn', icon: '▲', text: '백엔드가 없어요. 이 풀로 가는 요청은 실패해요.' });
+  if (members.some((m) => desk.traffic.get(m)?.reasons.includes('pool_not_routed') === true)) {
+    own.push({ tone: 'warn', icon: '▲', text: '이 풀을 가리키는 리스너 · 라우트가 없어요. 백엔드가 정상이어도 트래픽이 오지 않아요.' });
+  }
+  const groups: ProblemGroup[] = own.length === 0 ? [] : [{ lines: own }];
+  for (const m of members) {
+    // 풀 쪽 이유는 위에서 한 번 말했다 — 백엔드마다 되풀이하지 않는다.
+    const lines = problemsOnly(backendReasons(desk, m)).filter((l) => !l.text.startsWith('이 풀을 가리키는'));
+    if (lines.length > 0) groups.push({ backend: m, lines });
+  }
+  return groups;
+}
