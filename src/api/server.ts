@@ -74,6 +74,7 @@ import {
 } from './oidc-code.js';
 import { roleProfilesView } from '../accounts/idp-roles/registry.js';
 import { MAX_SET_BYTES, verifyRoleChange } from '../accounts/idp-roles/role-change.js';
+import { TRAFFIC_RESOURCE_KINDS, type TrafficResourceKind, type TrafficSampler } from '../control/traffic.js';
 
 /** Role Change 를 받는 설정 — `events` 키와 SET 서명 검증 키(JWKS). */
 export type OidcRoleChange = { eventKey: string; keyFor: (kid: string | undefined) => KeyObject | undefined };
@@ -97,6 +98,8 @@ export type ApiOptions = {
   maxBodyBytes?: number;
   /** 인증서 자료 저장소 (§4.8). 없으면 업로드 엔드포인트가 501 이다. */
   secrets?: SecretStore;
+  /** 트래픽 통계 (2026-11-20). 없으면 `unsupported` 로 답한다. */
+  traffic?: TrafficSampler;
   /** SSE 허브. 없으면 서버가 하나 만든다. */
   events?: EventHub;
   /** 테스트가 하트비트를 기다리도록. 기본 15s. */
@@ -443,6 +446,21 @@ function historyPage(q: URLSearchParams): { limit: number; before?: string } | s
   return { limit, before };
 }
 
+/** 트래픽 응답의 공통 머리 — 상태 · 노드 · 간격 · 창. `ok` 일 때만 몸을 붙인다. */
+function trafficBody(
+  api: ApiOptions, body: (s: TrafficSampler) => Record<string, unknown>,
+): Record<string, unknown> {
+  const s = api.traffic;
+  const node = api.cluster?.node;
+  const head = node === undefined ? {} : { node };
+  if (s === undefined) {
+    return { state: 'unsupported', reason: '이 인스턴스는 트래픽을 세지 않는다', ...head };
+  }
+  const st = s.state();
+  if (st.state !== 'ok') return { ...st, ...head };
+  return { state: 'ok', ...head, intervalS: s.intervalMs / 1000, window: s.window(), ...body(s) };
+}
+
 const ROUTES: Route[] = [
   // ── 읽기 ───────────────────────────────────────────────────────────────
   route('GET', '/api/v1/config/head', 'read', async (c, api) => {
@@ -695,6 +713,35 @@ const ROUTES: Route[] = [
     await api.control.projectHealth();
     await api.store.audit(c.who.name, 'backend.undrain', key, undefined, undefined);
     json(c.res, 200, { backend: key, draining: false });
+  }),
+
+  /**
+   * **트래픽 통계** (2026-11-20). 이 노드의 엔진이 센 것이다 — 클러스터면 노드마다 다르다.
+   *
+   * `state` 가 셋이다: `ok` · `unsupported`(Lua 가 없는 엔진) · `unavailable`(못 읽었다).
+   * `unsupported` 와 `unavailable` 에는 숫자를 싣지 않는다 — 0 을 짓지 않는다.
+   */
+  route('GET', '/api/v1/traffic', 'read', async (c, api) => {
+    const kind = c.url.searchParams.get('kind');
+    if (kind !== null && !(TRAFFIC_RESOURCE_KINDS as readonly string[]).includes(kind)) {
+      json(c.res, 400, { error: 'bad_kind', message: `kind 는 ${TRAFFIC_RESOURCE_KINDS.join(', ')} 중 하나다` });
+      return;
+    }
+    json(c.res, 200, trafficBody(api, (s) => ({
+      rows: s.summary((kind ?? undefined) as TrafficResourceKind | undefined),
+    })));
+  }),
+
+  route('GET', '/api/v1/traffic/:kind/:id', 'read', async (c, api) => {
+    const kind = c.params['kind'] ?? '';
+    const key = c.params['id'] ?? '';
+    if (!(TRAFFIC_RESOURCE_KINDS as readonly string[]).includes(kind)) {
+      json(c.res, 404, { error: 'bad_kind', message: `kind 는 ${TRAFFIC_RESOURCE_KINDS.join(', ')} 중 하나다` });
+      return;
+    }
+    json(c.res, 200, trafficBody(api, (s) => ({
+      kind, key, points: s.series(kind as TrafficResourceKind, key),
+    })));
   }),
 
   route('GET', '/api/v1/backends/:id/drain-status', 'read', async (c, api) => {

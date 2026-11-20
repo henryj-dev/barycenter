@@ -21,6 +21,16 @@ release section lists every publicly known vulnerability it fixes.
   `GET /api/v1/backends/:id/health-history` and `GET /api/v1/pools/:id/health-history`
   (`?limit=` 1–200, `?before=` cursor), relayed in global mode; CLI
   `bary get backends/<id>/health-history` and `bary get pools/<id>/health-history`.
+- **Traffic statistics.** On OpenResty, the engine now counts requests (connections for TCP/UDP),
+  status classes (1xx–5xx), bytes in/out and time per listener, HTTP route, passthrough route,
+  pool and backend, in a separate `lua_shared_dict` (`bary_http_traffic` · `bary_stream_traffic`,
+  2m each). The daemon reads the counters every 10 s (`BARY_TRAFFIC_INTERVAL_MS`) and keeps the
+  last hour in memory, per node. New read endpoints `GET /api/v1/traffic[?kind=]` and
+  `GET /api/v1/traffic/:kind/:id` (also relayed in global mode) and `bary get traffic[/<kind>[/<name>]]`.
+  The GUI shows **실시간 트래픽** charts on the traffic tab of listeners, routes and pools, the
+  numbers on the backend overview, and **리스너별 트래픽** on the dashboard. Plain nginx answers
+  `unsupported` and renders exactly as before. **Upgrading changes the rendered config on
+  OpenResty**, so run **다시 렌더** (`POST /api/v1/apply/rerender`) and apply once to start counting.
 - ACME orders can be retried or renewed by hand. `POST /api/v1/certificates/:id/acme/retry` clears the
   backoff of a failed order (and resets its attempt count), or opens a new order when the last one was
   abandoned. `POST /api/v1/certificates/:id/acme/renew` opens a new order even when the certificate is not

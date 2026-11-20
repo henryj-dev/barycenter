@@ -129,7 +129,16 @@ export interface Effects {
     /** peer 별 속성 (ADR ②). 없으면 안 민다. */
     attrs?: Record<string, Record<string, { softMaxConns?: number; isBackup?: boolean }>>,
   ): Promise<void>;
+
+  /**
+   * 엔진의 트래픽 카운터 덤프 (2026-11-20, src/conf/traffic.ts). 평면마다 admin 이 낸 글 그대로다.
+   * 못 읽은 평면은 키가 없다 — 0 을 짓지 않는다. 메서드가 없으면 이 배포는 세지 않는다.
+   */
+  readTraffic?(): Promise<TrafficDump>;
 }
+
+/** 평면별 카운터 덤프. 값은 `parseTrafficDump` 가 읽는다. */
+export type TrafficDump = { http?: string; stream?: string };
 
 
 // ── 러너 ─────────────────────────────────────────────────────────────────

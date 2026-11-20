@@ -33,6 +33,8 @@ export const RELAY_PATHS: readonly string[] = [
   'config/pending-resources',
   // 풀 · 백엔드 개요의 「헬스 기록」 (2026-11-20).
   'backends/:id/health-history', 'pools/:id/health-history',
+  // 트래픽 통계 (2026-11-20). 지역 노드가 센 것을 그대로 읽는다.
+  'traffic', 'traffic/:kind/:id',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */

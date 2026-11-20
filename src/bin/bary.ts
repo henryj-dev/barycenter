@@ -115,6 +115,8 @@ const usage = (): never => {
                                  pools/<id>/backends | backends/<id>/status | operations/<id> | plans/<id>
                                  backends/<id>/health-history | pools/<id>/health-history (판정이 바뀐 기록, 최근 것부터)
                                  acme/orders | acme/orders/<id> | acme/orders/<id>/challenges | acme/challenges/<id>
+                                 traffic | traffic/<종류> | traffic/<종류>/<이름>   이 노드가 센 트래픽 (OpenResty)
+                                   종류: listener | httpRoute | passthroughRoute | pool | backend
                                  모르는 이름은 안 부른다
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
                                  tls_passthrough 는 폴백 둘을 받는다:

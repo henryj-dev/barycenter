@@ -31,6 +31,14 @@ export function getPath(what: string): string | undefined {
   if (what === 'backends/status') return '/api/v1/backends/status';
   if (LISTS.has(what)) return `/api/v1/${what}`;
   if (what === 'metrics') return '/metrics';
+  // 트래픽 통계 (2026-11-20). `traffic` · `traffic/<종류>` · `traffic/<종류>/<이름>`.
+  if (what === 'traffic') return '/api/v1/traffic';
+  const trafficKind = /^traffic\/([A-Za-z]+)$/.exec(what);
+  if (trafficKind?.[1] !== undefined) return `/api/v1/traffic?kind=${encodeURIComponent(trafficKind[1])}`;
+  const trafficOne = /^traffic\/([A-Za-z]+)\/(.+)$/.exec(what);
+  if (trafficOne?.[1] !== undefined && trafficOne[2] !== undefined) {
+    return `/api/v1/traffic/${encodeURIComponent(trafficOne[1])}/${encodeURIComponent(trafficOne[2])}`;
+  }
   // 클러스터 노드 하나의 최근 적용 기록 (#120).
   const nodeHist = /^cluster\/nodes\/([^/]+)\/history$/.exec(what);
   if (nodeHist?.[1] !== undefined) return `/api/v1/cluster/nodes/${encodeURIComponent(nodeHist[1])}/history`;

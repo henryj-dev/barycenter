@@ -86,9 +86,26 @@ export function bootEffects(opts: EffectsBootOptions): FsEffects {
     }
   };
 
+  /**
+   * 트래픽 카운터 덤프 (2026-11-20). 평면마다 따로 묻는다 — 두 zone 은 서로 안 보인다(E14 · E25).
+   * 못 물은 평면은 빠진다. 못 읽은 것과 0 인 것은 다르다.
+   */
+  const readTraffic = async (): Promise<{ http?: string; stream?: string }> => {
+    const out: { http?: string; stream?: string } = {};
+    try {
+      const r = await adminFetch(adminSocket)('http://admin/traffic', { signal: AbortSignal.timeout(2000) });
+      if (r.ok) out.http = await r.text();
+    } catch { /* 못 물었다 */ }
+    try {
+      out.stream = await adminTalk(streamAdminSocket, 2000)('0 traffic\n');
+    } catch { /* 못 물었다 */ }
+    return out;
+  };
+
   return new FsEffects({
     prefix,
     pushMembership,
+    readTraffic,
     reload: async () => {
       const cmd = env['BARY_RELOAD_CMD'];
       if (cmd !== undefined) {

@@ -77,6 +77,7 @@ import { dataplaneCapabilitiesOf } from '../engine/native-dns.js';
 import { probeEngine } from '../engine/probe.js';
 import { hostAddresses } from '../engine/host-addresses.js';
 import { renderCapsOf } from '../engine/render-caps.js';
+import { TrafficSampler } from '../control/traffic.js';
 import { servedByFromEnv } from '../conf/served-by.js';
 import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '../control/data-sources-boot.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, sweepDatabase } from '../store/db-retention.js';
@@ -1002,6 +1003,18 @@ export async function main(): Promise<void> {
       engine: engineInfo, driver: driverBoot, secrets,
       discovery: dataSources.intake });
 
+  /**
+   * 트래픽 통계 (2026-11-20). **노드마다 자기 엔진을 읽는다** — 리더만이 아니다. 각 노드가 자기 트래픽을 받기 때문이다.
+   * 메모리에만 둔다. Lua 가 없는 엔진이면 `unsupported` 로 답하고 아무것도 안 읽는다.
+   */
+  const traffic = new TrafficSampler({
+    ...(driver.readTraffic === undefined ? {} : { read: () => driver.readTraffic!() }),
+    model: () => control.headModel(),
+    lua: () => ({ http: renderCaps.httpLua === true, stream: renderCaps.streamLua === true }),
+    intervalMs: Number(env('BARY_TRAFFIC_INTERVAL_MS', '10000')),
+  });
+  if (traffic.state().state !== 'unsupported') traffic.start();
+
   // **기동 시 멤버십을 되돌려 놓는다** (§6.4). shared dict 는 프로세스 수명이라 엔진이
   // 재시작하면 슬롯이 통째로 빈다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.
   if (election.state.isLeader) {
@@ -1354,6 +1367,7 @@ export async function main(): Promise<void> {
   const apiOpts = {
     db, store, control, auth, election, secrets, events, hostAddresses,
     discovery: dataSources.api,
+    traffic,
     ...dispatch,
     ...sessionDomainFromEnv(),
     // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.
@@ -1417,6 +1431,7 @@ export async function main(): Promise<void> {
       // **물러난 것을 적고 나간다.** 락은 세션 종료로 어차피 풀리지만, 깨끗하게 물러난
       // 것과 죽은 것을 나중에 구분할 수 있어야 한다.
       prober.stop();
+      traffic.stop();
       acmeRunner.stop();
       stopPublish();
       stopSecretGc();
