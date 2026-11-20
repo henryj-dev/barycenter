@@ -2,8 +2,8 @@
  * 라우트 폼의 칸 검사 · head 값 ↔ 폼 값 (#126 3단계 후속, 시안 `fieldsFor('routes')`).
  *
  * 만들기와 수정(설정 탭)이 같은 폼을 쓴다. 수정은 head 의 라우트를 폼 값으로 펴고(`httpRouteStateOf`), 저장할 때 만들기와
- * 같은 patch 빌더로 몸통을 다시 짓는다(`httpRouteBody`) — 모양 규칙이 한 자리다. 폼이 그리지 못하는 칸(출발지 규칙 동작의
- * 요청 헤더 · 경로 바꾸기)이 있으면 `lossy` 다 — 저장하면 그 칸이 사라지므로 폼은 저장을 막고 JSON 수정으로 보낸다.
+ * 같은 patch 빌더로 몸통을 다시 짓는다(`httpRouteBody`) — 모양 규칙이 한 자리다. 출발지 규칙 동작의 요청 헤더 ·
+ * 경로 바꾸기도 폼이 그린다(2026-11-20) — 폼으로 저장해도 잃는 칸이 없다.
  *
  * 칸 판정은 **서버가 쓰는 것을 그대로** 가져온다 — 호스트는 `parseHostPattern`(라우트 컴파일 `compileHostRoutes` 가 쓴다),
  * 경로는 `validatePathPrefix`(저장소가 쓴다). 두 벌로 두지 않는다. 노드 내장이 없는 모듈이라 브라우저에서도 돈다.
@@ -90,6 +90,10 @@ export type RuleRow = {
   to: string;
   redirectStatus: string;
   rejectStatus: string;
+  /** 프록시 동작만 — 이 규칙에 맞은 요청의 경로 바꾸기. 비우면 그대로 보낸다. */
+  rewritePrefix: string;
+  /** 프록시 동작만 — 이 규칙에 맞은 요청에 거는 헤더. 이름이 빈 행은 버린다. */
+  headers: { op?: string; name: string; value: string }[];
 };
 
 /** 폼 줄 → 저장할 규칙. 대역이 빈 줄은 버린다(`sourceRulesOf` 가 한 번 더 거른다). */
@@ -97,7 +101,15 @@ export const ruleInputsOf = (rows: readonly RuleRow[]): SourceRuleInput[] => row
   const from = fromTokens(r.from);
   if (from.length === 0) return [];
   const addr = r.address === 'connection' ? { address: 'connection' as const } : {};
-  if (r.kind === 'proxy') return [{ from, ...addr, action: { kind: 'proxy', pool: r.pool ?? '', websocket: r.websocket } }];
+  if (r.kind === 'proxy') {
+    const requestHeaders = headerInputsOf(r.headers);
+    const rewritePrefix = r.rewritePrefix.trim();
+    return [{ from, ...addr, action: {
+      kind: 'proxy', pool: r.pool ?? '', websocket: r.websocket,
+      ...(requestHeaders.length === 0 ? {} : { requestHeaders }),
+      ...(rewritePrefix === '' ? {} : { rewritePrefix }),
+    } }];
+  }
   if (r.kind === 'redirect') return [{ from, ...addr, action: { kind: 'redirect', to: r.to.trim(), status: Number(r.redirectStatus) as RedirectStatus } }];
   return [{ from, ...addr, action: { kind: 'reject', status: Number(r.rejectStatus) as RejectStatus } }];
 });
@@ -106,12 +118,10 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 
-/** head 의 `sourceRules` → 폼 줄. 폼에 없는 칸(규칙 동작의 요청 헤더 · 경로 바꾸기)이 있으면 `lossy`. */
-export const ruleRowsOf = (rules: unknown): { rows: RuleRow[]; lossy: boolean } => {
-  let lossy = false;
+/** head 의 `sourceRules` → 폼 줄. 규칙 동작의 요청 헤더 · 경로 바꾸기도 줄에 싣는다. */
+export const ruleRowsOf = (rules: unknown): { rows: RuleRow[] } => {
   const rows = (Array.isArray(rules) ? rules : []).filter(isObj).map((r): RuleRow => {
     const a = isObj(r['action']) ? r['action'] : {};
-    if (a['requestHeaders'] !== undefined || a['rewritePrefix'] !== undefined) lossy = true;
     const kind = a['kind'] === 'redirect' || a['kind'] === 'reject' ? a['kind'] : 'proxy';
     return {
       from: strs(r['from']).join(', '),
@@ -122,9 +132,12 @@ export const ruleRowsOf = (rules: unknown): { rows: RuleRow[]; lossy: boolean } 
       to: kind === 'redirect' ? String(a['to'] ?? '') : '',
       redirectStatus: kind === 'redirect' ? String(a['status'] ?? '302') : '302',
       rejectStatus: kind === 'reject' ? String(a['status'] ?? '403') : '403',
+      rewritePrefix: kind === 'proxy' && typeof a['rewritePrefix'] === 'string' ? a['rewritePrefix'] : '',
+      headers: kind !== 'proxy' ? [] : (Array.isArray(a['requestHeaders']) ? a['requestHeaders'] : []).filter(isObj)
+        .map((h) => ({ name: String(h['name'] ?? ''), value: String(h['value'] ?? '') })),
     };
   });
-  return { rows, lossy };
+  return { rows };
 };
 
 // ── HTTP 라우트 ────────────────────────────────────────────────────────────
@@ -149,15 +162,14 @@ export type HttpRouteState = {
   rules: RuleRow[];
 };
 
-/** head 의 HTTP 라우트 → 폼 값. 폼이 그리지 못하는 칸이 있으면 `lossy`. */
-export const httpRouteStateOf = (item: Obj): { state: HttpRouteState; lossy: boolean } => {
+/** head 의 HTTP 라우트 → 폼 값. */
+export const httpRouteStateOf = (item: Obj): { state: HttpRouteState } => {
   const a = isObj(item['action']) ? item['action'] : {};
   const action: HttpAction = a['kind'] === 'redirect' || a['kind'] === 'reject' ? a['kind'] : 'proxy';
   const paths = Array.isArray(item['pathPrefixes']) ? strs(item['pathPrefixes'])
     : typeof item['pathPrefix'] === 'string' ? [item['pathPrefix']] : [];
   const rules = ruleRowsOf(item['sourceRules']);
   return {
-    lossy: rules.lossy,
     state: {
       listener: typeof item['listener'] === 'string' ? item['listener'] : undefined,
       hosts: strs(item['hosts']).join(', '),

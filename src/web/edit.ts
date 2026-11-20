@@ -19,8 +19,11 @@ export type PutBackendOp = {
   op: 'put';
   kind: 'backend';
   key: string;
-  body: { pool: string; host: string; port: number; weight: number };
+  body: { pool: string; host: string; port: number; weight: number; softMaxConns?: number; isBackup?: true };
 };
+
+/** 해시 계열 풀은 예비 백엔드를 못 가진다 — 키가 고른 백엔드가 예비면 해시가 갈 곳이 없다(검증기가 막는다). */
+export const BACKUP_FORBIDDEN_ALGORITHMS: readonly string[] = ['hash', 'source_ip_hash'];
 
 export function deletePatch(kind: EditKind, key: string): DeleteOp[] {
   if (key === '') throw new Error('키가 비어 있다');
@@ -42,7 +45,7 @@ export function renamePatch(kind: EditKind, key: string, to: string): RenameOp[]
 
 export function putBackendPatch(
   key: string,
-  body: { pool: string; host: string; port: number; weight?: number },
+  body: { pool: string; host: string; port: number; weight?: number; softMaxConns?: number; isBackup?: boolean },
 ): PutBackendOp[] {
   if (key === '') throw new Error('키가 비어 있다');
   if (body.pool === '') throw new Error('풀이 비어 있다');
@@ -52,7 +55,19 @@ export function putBackendPatch(
   }
   const weight = body.weight ?? 1;
   if (!Number.isInteger(weight) || weight < 1) throw new Error('가중치가 1 이상 정수가 아니다');
-  return [{ op: 'put', kind: 'backend', key, body: { pool: body.pool, host: body.host, port: body.port, weight } }];
+  const soft = body.softMaxConns;
+  if (soft !== undefined && (!Number.isInteger(soft) || soft < 1 || soft > 1_000_000)) {
+    throw new Error('softMaxConns 가 1–1000000 정수가 아니다');
+  }
+  // **`false` 는 안 싣는다** — 안 정한 것과 같고, 실으면 안 건드린 백엔드의 렌더 바이트가 바뀐다.
+  return [{
+    op: 'put', kind: 'backend', key,
+    body: {
+      pool: body.pool, host: body.host, port: body.port, weight,
+      ...(soft === undefined ? {} : { softMaxConns: soft }),
+      ...(body.isBackup === true ? { isBackup: true as const } : {}),
+    },
+  }];
 }
 
 /**
@@ -135,6 +150,12 @@ export function listenerOptionFields(opts: ListenerOptions | undefined): {
     && (rateLimit.burst !== undefined || rateLimit.nodelay !== undefined)) {
     throw new Error('burst·nodelay 는 requestsPerSecond 가 있어야 한다');
   }
+  // zone 크기만으로는 세는 것이 없다 — 해독기는 초당 요청이나 동시 연결 중 하나를 요구한다.
+  if (rateLimit !== undefined
+    && rateLimit.requestsPerSecond === undefined && rateLimit.maxConnections === undefined
+    && rateLimit.zoneKb !== undefined) {
+    throw new Error('zone 크기는 requestsPerSecond 나 maxConnections 가 있어야 한다');
+  }
   return {
     ...(limits === undefined ? {} : { limits }),
     ...(headers === undefined ? {} : { headers }),
@@ -168,6 +189,8 @@ export type ListenerOptionFlags = {
   burst?: string;
   nodelay?: boolean;
   maxConn?: string;
+  /** 레이트리밋 공유 메모리 크기. `10m` · `512k`. 비우면 렌더러 기본(10m)이다. */
+  zone?: string;
   strictPriority?: boolean;
 };
 
@@ -179,6 +202,15 @@ function sizeBytes(v: string): number {
   if (m[2] === 'm') return n * 1024 * 1024;
   if (m[2] === 'k') return n * 1024;
   return n;
+}
+
+/**
+ * zone 크기 `512k` · `10m` → KB. **단위가 없으면 거부한다** — 바이트인지 KB 인지 추측하지 않는다.
+ */
+function zoneKb(v: string): number {
+  const m = /^(\d+)([km])$/.exec(v.trim());
+  if (m === null) throw new Error(`zone 크기가 아니다: ${JSON.stringify(v)} — 단위를 적는다 (예: 10m · 512k)`);
+  return m[2] === 'm' ? Number(m[1]) * 1024 : Number(m[1]);
 }
 
 /**
@@ -234,6 +266,7 @@ export function parseListenerOptions(f: ListenerOptionFlags): ListenerOptions {
     ...(f.burst === undefined ? {} : { burst: Number(f.burst) }),
     ...(f.nodelay === undefined ? {} : { nodelay: f.nodelay }),
     ...(f.maxConn === undefined ? {} : { maxConnections: Number(f.maxConn) }),
+    ...(f.zone === undefined ? {} : { zoneKb: zoneKb(f.zone) }),
   };
   const request: { name: string; value: string }[] = [];
   const response: { name: string; value: string }[] = [];
@@ -620,8 +653,11 @@ export type PutSniBindingOp = {
   op: 'put';
   kind: 'sniBinding';
   key: string;
-  body: { listener: string; hosts: string[]; certificate: string };
+  body: { listener: string; hosts: string[]; certificate: string; override?: TlsOverrideInput };
 };
+
+/** SNI 바인딩이 그 호스트에만 TLS 버전을 좁힌다. 안 적은 쪽은 리스너의 정책을 따른다. */
+export type TlsOverrideInput = { minVersion?: TlsVersion; maxVersion?: TlsVersion };
 
 /**
  * HTTPS 호스트에 제시할 인증서. 라우트에 붙이지 않는다 — handshake 는 SNI 다.
@@ -632,6 +668,7 @@ export function putSniBindingPatch(input: {
   listener: string;
   hosts: readonly string[];
   certificate: string;
+  override?: TlsOverrideInput;
 }): PutSniBindingOp[] {
   if (input.key === '') throw new Error('키가 비어 있다');
   if (input.listener === '') throw new Error('리스너가 비어 있다');
@@ -642,7 +679,12 @@ export function putSniBindingPatch(input: {
     op: 'put',
     kind: 'sniBinding',
     key: input.key,
-    body: { listener: input.listener, hosts, certificate: input.certificate },
+    body: {
+      listener: input.listener, hosts, certificate: input.certificate,
+      // 빈 덮어쓰기는 안 싣는다 — 정책을 따르는 것과 같고, 실으면 렌더 바이트만 바뀐다.
+      ...(input.override === undefined || (input.override.minVersion === undefined && input.override.maxVersion === undefined)
+        ? {} : { override: input.override }),
+    },
   }];
 }
 
@@ -890,7 +932,7 @@ export type SourceRuleInput = {
   /** 없으면 방문자 주소. `connection` 은 realip 전의 연결 주소다 (2026-11-02). */
   address?: 'visitor' | 'connection';
   action:
-    | { kind: 'proxy'; pool: string; websocket: boolean }
+    | { kind: 'proxy'; pool: string; websocket: boolean; requestHeaders?: HeaderRuleInput[]; rewritePrefix?: string }
     | { kind: 'redirect'; to: string; status: RedirectStatus }
     | { kind: 'reject'; status: RejectStatus };
 };

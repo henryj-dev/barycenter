@@ -561,7 +561,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
 
   const insertBackend = async (
     key: string,
-    body: { pool: string; host: string; port: number; weight?: number },
+    body: { pool: string; host: string; port: number; weight?: number; softMaxConns?: number; isBackup?: boolean },
   ): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -719,6 +719,26 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     }
   };
 
+  /** 엔진 전역 설정 — `GET /api/v1/engine` (2026-11-20). 비었으면 `{}`(엔진 기본값). 못 읽으면 undefined. */
+  const engineSettings = async (): Promise<Record<string, unknown> | undefined> => {
+    const r = await fetch(api('/api/v1/engine'), { headers: auth() });
+    if (!r.ok) return undefined;
+    const body = (await r.json()) as { settings?: Record<string, unknown> };
+    return body.settings ?? {};
+  };
+  /** 엔진 설정 저장 — 다른 리소스처럼 changeset 의 `put engine` 이다(key 는 `engine` 하나). 적용은 따로다. */
+  const putEngine = async (body: Record<string, unknown>): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      return await commitPatch([{ op: 'put', kind: 'engine', key: 'engine', body }]);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
   /**
    * ACME 계정 (DESIGN §8.2.1). 계정 키는 서버가 만들어 시크릿에 둔다 — 화면은 키를 보지 않는다.
    * CA 등록은 첫 주문 때 러너가 한다(`registered`). 못 읽으면 undefined.
@@ -995,6 +1015,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
 
   const insertSniBinding = async (input: {
     key: string; listener: string; hosts: string[]; certificate: string;
+    override?: { minVersion?: TlsVersion; maxVersion?: TlsVersion };
   }): Promise<boolean> => {
     editing = true;
     error = undefined;
@@ -1352,6 +1373,8 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     insertHttpRedirect,
     insertHttpReject,
     insertRouteGroup,
+    engineSettings,
+    putEngine,
     insertPassthroughRoute,
     insertPassthroughReject,
     disconnect() { stop?.(); },

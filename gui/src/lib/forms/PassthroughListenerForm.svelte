@@ -6,9 +6,11 @@
    * SNI 가 없을 때**(`noSniPool`, S9). TLS 로 읽히지 않는 바이트(비-TLS · 깨진 ClientHello)에는 폴백이
    * 없다 — 언제나 끊는다. 스파이크가 그 통이 no-SNI 와 갈린다는 것을 실측했다. 그래서 칸을 만들지 않고
    * 도움말에 적는다.
+   *
+   * preread 타임아웃과 원본 IP(PROXY protocol 수신)도 여기서 정한다. PROXY 수신은 출발지 제한과 함께 못 쓴다.
    */
   import { getContext } from 'svelte';
-  import { FormRow, FormSection, Select } from '#lib/ui';
+  import { FormRow, FormSection, Select, TextInput } from '#lib/ui';
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
@@ -16,7 +18,8 @@
   import ListenerBasics from './ListenerBasics.svelte';
   import SourceAllowSection from './SourceAllowSection.svelte';
   import { filled, keyError, portError } from './checks';
-  import { plainSwitches, switchedBody } from './listener-create';
+  import { plainSwitches, prereadError, switchedBody } from './listener-create';
+  import RealIpSection, { type RealIpHeader, type RealIpSource } from '#lib/listener/RealIpSection.svelte';
   import { parseSourceAllow, putPassthroughListenerPatch } from '@web/edit';
 
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -34,8 +37,16 @@
   let allow = $state('');
   let allowBad = $state(false);
   let enabled = $state(true);
+  let preread = $state('');
+  let ipSource = $state<RealIpSource>('none');
+  let ipHeader = $state<RealIpHeader>('CF-Connecting-IP');
+  let ipTrusted = $state('');
+  let ipBad = $state(false);
+  const proxySrc = $derived(ipSource === 'proxy');
+  const sw = $derived({ enabled, preread, realIp: { source: ipSource, header: ipHeader, trusted: ipTrusted } });
 
-  const ready = $derived(filled(key, keyError) && filled(bind) && filled(port, portError) && !allowBad);
+  const ready = $derived(filled(key, keyError) && filled(bind) && filled(port, portError) && !allowBad && !ipBad
+    && prereadError(preread) === undefined && !(proxySrc && allow.trim() !== ''));
   const submit = (): void => {
     const body = {
       bind: bind.trim(),
@@ -44,9 +55,9 @@
       ...(noSniPool === '' ? {} : { noSniPool }),
     };
     const done = after(resourcePath('listener', key.trim()));
-    if (plainSwitches({ enabled })) { void desk.insertPassthroughListener(key.trim(), body, allow).then(done); return; }
+    if (plainSwitches(sw)) { void desk.insertPassthroughListener(key.trim(), body, allow).then(done); return; }
     const sa = parseSourceAllow(allow);
-    const op = switchedBody(putPassthroughListenerPatch(key.trim(), { ...body, ...(sa === undefined ? {} : { sourceAllow: sa }) }), { enabled });
+    const op = switchedBody(putPassthroughListenerPatch(key.trim(), { ...body, ...(sa === undefined ? {} : { sourceAllow: sa }) }), sw);
     void desk.putResource('listener', op.key, op.body).then(done);
   };
 </script>
@@ -60,6 +71,10 @@
     <FormRow label="SNI 없음 폴백" help="TLS 는 맞는데 SNI 가 없을 때 보낼 곳이에요. TLS 로 읽히지 않는 바이트는 어느 쪽으로도 안 가요. 언제나 끊어요.">
       <Select label="SNI 없음 폴백" bind:value={noSniPool} options={choices} mono={false} width="100%" />
     </FormRow>
+    <FormRow label="preread 타임아웃" for="lc-preread" error={prereadError(preread)} help="ClientHello 를 기다리는 시간(초)이에요. 비우면 nginx 기본값이에요.">
+      <TextInput id="lc-preread" bind:value={preread} invalid={prereadError(preread) !== undefined} inputmode="numeric" placeholder="30" unit="s" />
+    </FormRow>
   </FormSection>
-  <SourceAllowSection bind:value={allow} bind:invalid={allowBad} {port} />
+  <SourceAllowSection bind:value={allow} bind:invalid={allowBad} {port} noSrc={proxySrc} conflict={proxySrc && allow.trim() !== ''} />
+  <RealIpSection bind:source={ipSource} bind:header={ipHeader} bind:trusted={ipTrusted} bind:invalid={ipBad} http={false} />
 </CreateForm>

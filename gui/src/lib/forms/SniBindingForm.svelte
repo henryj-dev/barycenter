@@ -3,13 +3,16 @@
    * SNI 바인딩 만들기 — 콘솔 시안 `fieldsFor('sni', v, true, 'drawer')`: 구획 「기본」 의 이름 · 리스너 · 호스트 목록 · 인증서.
    * HTTPS 리스너에서 이 호스트들에는 이 인증서를 낸다. 리스너 · 인증서는 처음 것으로 골라 둔다(시안).
    * 인증서는 자료가 있는 것만 고른다 — 자료 없는 인증서는 바인딩할 수 없다(검증기가 막는다, 시안에는 이 거름이 없다).
+   * 「TLS 버전 덮어쓰기」 는 비워 두면 리스너 정책을 따른다(`SniOverrideSection`).
    */
   import { getContext, untrack } from 'svelte';
   import { FormRow, FormSection, Select, TextArea, TextInput } from '#lib/ui';
   import { resourcePath } from '@web/resources';
   import { after } from '#lib/after';
   import type { createDesk } from '#lib/desk.svelte.ts';
-  import { boundCerts, hostsError, hostsHelp, httpsListeners, listRows, parseHosts } from '#lib/tls/sni-edit.ts';
+  import { boundCerts, hostsError, hostsHelp, httpsListeners, listRows, listenerPolicyVersions, parseHosts } from '#lib/tls/sni-edit.ts';
+  import { overrideBody, type OverrideText } from '#lib/tls/policy-edit.ts';
+  import SniOverrideSection from '#lib/tls/SniOverrideSection.svelte';
   import CreateForm from './CreateForm.svelte';
   import { filled, keyError } from './checks';
 
@@ -21,16 +24,20 @@
   let listener = $state<string | undefined>();
   let hosts = $state('');
   let certificate = $state<string | undefined>();
+  let override = $state<OverrideText>({ min: '', max: '' });
+  let overrideBad = $state(false);
+  const policy = $derived(listenerPolicyVersions(desk, listener));
   // 시안: 처음 것으로 골라 둔다. 목록이 늦게 와도 한 번만.
   $effect(() => { const l = listeners[0]?.value; if (l !== undefined && untrack(() => listener) === undefined) listener = l; });
   $effect(() => { const c = certs[0]?.value; if (c !== undefined && untrack(() => certificate) === undefined) certificate = c; });
 
   const keyBad = $derived(keyError(key));
   const hostsBad = $derived(hosts.trim() === '' ? undefined : hostsError(hosts));
-  const ready = $derived(filled(key, keyError) && listener !== undefined && certificate !== undefined && parseHosts(hosts).length > 0);
+  const ready = $derived(filled(key, keyError) && listener !== undefined && certificate !== undefined && parseHosts(hosts).length > 0 && !overrideBad);
   const submit = (): void => {
     if (listener === undefined || certificate === undefined) return;
-    void desk.insertSniBinding({ key: key.trim(), listener, hosts: parseHosts(hosts), certificate }).then(after(resourcePath('sniBinding', key.trim())));
+    const o = overrideBody(override);
+    void desk.insertSniBinding({ key: key.trim(), listener, hosts: parseHosts(hosts), certificate, ...(o === undefined ? {} : { override: o }) }).then(after(resourcePath('sniBinding', key.trim())));
   };
 </script>
 
@@ -49,4 +56,5 @@
       <Select label="인증서" bind:value={certificate} options={certs} placeholder="인증서를 골라요" width="100%" disabled={certs.length === 0} />
     </FormRow>
   </FormSection>
+  <SniOverrideSection bind:value={override} bind:invalid={overrideBad} {policy} />
 </CreateForm>

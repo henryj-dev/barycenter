@@ -1,6 +1,10 @@
 <script lang="ts" module>
   import { fromTokens, sourceRuleErrors, type SetCidrs } from './source-rules';
   import { ruleInputsOf, type RuleRow } from './route-edit';
+  import { rewriteError } from './rewrite';
+
+  /** 백엔드로 보내기 전에 걸 수 없는 요청 헤더 — 해독기의 `RESERVED_REQUEST_HEADERS` 와 같다. */
+  const RESERVED_REQUEST = ['x-forwarded-for', 'x-forwarded-proto', 'upgrade', 'connection'];
 
   /** 라우트 하나의 규칙 수 상한 — 해독기와 같다(`decodeSourceRules`, 렌더가 규칙마다 `error_page` 코드 하나). */
   export const MAX_RULES = 20;
@@ -13,29 +17,35 @@
   /** 새 규칙 — 시안 `addRule`: 풀로 보내기 · 첫 풀 · 403. */
   export const emptyRule = (pool?: string): SourceRuleRow => ({
     from: '', address: 'visitor', kind: 'proxy', pool, websocket: false, to: '', redirectStatus: '301', rejectStatus: '403',
+    rewritePrefix: '', headers: [],
   });
 
   /** 폼 줄 → 저장할 규칙. 대역이 빈 줄은 버린다(`sourceRulesOf` 가 한 번 더 거른다). 수정 폼의 head ↔ 폼과 같은 함수다. */
   export const toSourceRules = ruleInputsOf;
 
   /**
-   * 행마다 오류 — 출발지 칸(대역 · 가려짐)과 동작 칸(풀 · 대상). 출발지가 빈 행은 저장할 때 버리므로 묻지 않는다.
+   * 행마다 오류 — 출발지 칸(대역 · 가려짐)과 동작 칸(풀 · 대상 · 경로 바꾸기 · 요청 헤더). 출발지가 빈 행은 저장할 때
+   * 버리므로 묻지 않는다. `paths` 는 라우트의 경로 접두사다 — 경로 바꾸기의 끝 `/` 를 견준다(해독기와 같은 규칙).
    * 폼은 하나라도 있으면 「만들기」 를 잠근다(`rulesBlocked`).
    */
-  export const ruleRowErrors = (rows: readonly SourceRuleRow[], sets: SetCidrs): { from?: string; action?: string }[] => {
+  export const ruleRowErrors = (rows: readonly SourceRuleRow[], sets: SetCidrs, paths: readonly string[] = ['/']): { from?: string; action?: string }[] => {
     const from = sourceRuleErrors(rows, sets);
     return rows.map((r, i) => {
       const filled = fromTokens(r.from).length > 0;
+      const reserved = r.kind === 'proxy' ? r.headers.find((h) => RESERVED_REQUEST.includes(h.name.trim().toLowerCase()))?.name.trim() : undefined;
+      const rw = r.kind === 'proxy' ? rewriteError(r.rewritePrefix.trim(), paths) : undefined;
       const action = !filled ? undefined
         : r.kind === 'proxy' && r.pool === undefined ? '풀을 골라요.'
-          : r.kind === 'redirect' && r.to.trim() === '' ? '이동할 URL을 넣어요.' : undefined;
+          : r.kind === 'redirect' && r.to.trim() === '' ? '이동할 URL을 넣어요.'
+            : rw !== undefined ? `경로 바꾸기 · ${rw}`
+              : reserved !== undefined ? `요청 헤더 ${reserved} 는 쓸 수 없어요.` : undefined;
       return { ...(from[i] === undefined ? {} : { from: from[i] }), ...(action === undefined ? {} : { action }) };
     });
   };
 
   /** 저장을 막는가 — 규칙이 상한을 넘거나 오류가 있는 행이 있다. */
-  export const rulesBlocked = (rows: readonly SourceRuleRow[], sets: SetCidrs): boolean =>
-    rows.length > MAX_RULES || ruleRowErrors(rows, sets).some((e) => e.from !== undefined || e.action !== undefined);
+  export const rulesBlocked = (rows: readonly SourceRuleRow[], sets: SetCidrs, paths?: readonly string[]): boolean =>
+    rows.length > MAX_RULES || ruleRowErrors(rows, sets, paths).some((e) => e.from !== undefined || e.action !== undefined);
 </script>
 
 <script lang="ts" generics="R extends SourceRuleRow">
@@ -49,17 +59,22 @@
    *
    * 시안과 다른 곳: reject 응답 코드는 403 · 404 · 444 다(렌더가 받는 값, 444 는 응답 없이 끊는다). 위 · 아래 끝의 버튼은
    * 시안처럼 흐리게 두되 누를 수 없다.
+   *
+   * 풀로 보내는 규칙은 「경로 바꾸기」 와 「요청 헤더」 를 따로 가질 수 있다(2026-11-20). 값이 있으면 펼쳐 두고, 없으면
+   * 「＋ 경로 바꾸기 · 요청 헤더」 로 연다. 경로별 묶음(`withPath`)에는 없다 — 묶음 빌더가 그 칸을 만들지 않는다.
    */
   import { getContext } from 'svelte';
   import { itemsOf } from '@web/resources';
-  import { Button, FieldMessage, Select, TextInput } from '#lib/ui';
+  import { Button, FieldMessage, KeyValueEditor, Select, TextInput } from '#lib/ui';
   import type { createDesk } from '#lib/desk.svelte.ts';
   import { setCidrsOf } from './source-rules';
 
-  let { rules = $bindable([]), pools, withPath = false, errors, make }: {
+  let { rules = $bindable([]), pools, withPath = false, errors, make, paths = ['/'] }: {
     rules: R[];
     pools: { value: string }[];
     withPath?: boolean;
+    /** 라우트의 경로 접두사 — 규칙의 경로 바꾸기를 견준다. */
+    paths?: readonly string[];
     /** 줄마다 오류 — 주면 이것을 쓴다(경로별 묶음). 없으면 출발지 규칙의 오류(`ruleRowErrors`)다. */
     errors?: readonly (string | undefined)[];
     /** 새 줄 — 없으면 `emptyRule(첫 풀)`. */
@@ -69,7 +84,10 @@
   // `@집합` 을 펼쳐 가려짐을 본다 — GUI 가 이미 읽은 주소 집합이다(`desk.model.addressSets`).
   const desk = getContext<ReturnType<typeof createDesk> | undefined>('desk');
   const sets = $derived(setCidrsOf(desk === undefined ? [] : itemsOf(desk.model, 'addressSet')));
-  const errs = $derived(errors ?? ruleRowErrors(rules, sets).map((e) => e.from ?? e.action));
+  const errs = $derived(errors ?? ruleRowErrors(rules, sets, paths).map((e) => e.from ?? e.action));
+  /** 「경로 바꾸기 · 요청 헤더」 를 펼친 규칙 — 값이 있는 규칙은 처음부터 펼친다. */
+  let opened = $state<Set<number>>(new Set());
+  const extrasOpen = (r: SourceRuleRow, i: number): boolean => opened.has(i) || r.rewritePrefix.trim() !== '' || r.headers.length > 0;
   const max = $derived(withPath ? 40 : MAX_RULES);
   const word = $derived(withPath ? '줄' : '규칙');
 
@@ -126,6 +144,19 @@
           <Select label="응답 코드" bind:value={rule.rejectStatus} options={REJECT} width="76px" />
         {/if}
       </div>
+      {#if rule.kind === 'proxy' && !withPath}
+        {#if extrasOpen(rule, i)}
+          <div class="ex">
+            <span class="exl">경로 바꾸기</span>
+            <TextInput aria-label="규칙 {i + 1} 경로 바꾸기" bind:value={rule.rewritePrefix} autocomplete="off" placeholder="비우면 그대로 보내요 · 예: /internal/" />
+            <span class="exl">요청 헤더</span>
+            <KeyValueEditor bind:rows={rule.headers} ops={[]} namePlaceholder="X-Office" addLabel="＋ 헤더를 더해요" />
+            <div class="hp">이 규칙에 맞은 요청에만 걸어요. 같은 이름이면 라우트 · 리스너의 헤더를 덮어요.</div>
+          </div>
+        {:else}
+          <div><Button size="xs" variant="text" onclick={() => { opened = new Set([...opened, i]); }}>＋ 경로 바꾸기 · 요청 헤더</Button></div>
+        {/if}
+      {/if}
       <div class="hp">{rule.address === 'connection'
         ? '연결 주소 — 우리에게 직접 붙은 주소예요. Cloudflare 를 거쳐 왔나를 물을 때 써요.'
         : '방문자 주소 — 리스너가 원본 IP 헤더 · PROXY 수신으로 바꾼 뒤의 주소예요.'}</div>
@@ -153,4 +184,6 @@
   .url { flex: 1; min-width: 0; }
   .url :global(input) { width: 100%; }
   .er { font-size: 12px; color: var(--danger); }
+  .ex { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; border-top: 1px dashed var(--bd); }
+  .exl { font-size: 11px; font-weight: 600; color: var(--tx2); }
 </style>

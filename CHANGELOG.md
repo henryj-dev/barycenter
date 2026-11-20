@@ -22,6 +22,16 @@ release section lists every publicly known vulnerability it fixes.
 - Global mode now relays three region endpoints the GUI already called, which answered 404 there:
   `GET pools/:id/discovery`, `GET address-sets/refresh-status` and `POST address-sets/:id/refresh`.
   A test now checks that every region API path in the GUI source is on the relay allow-list.
+- Fields that could only be changed with **JSON 으로 고치기** or a raw patch now have form controls:
+  listener rate-limit zone size (`zoneKb`), backend `softMaxConns` and `isBackup` (blocked for
+  hash pools), SNI binding TLS version override, HSTS `preload` (requires max-age ≥ 1 year and
+  include-subdomains), and per-source-rule request headers and path rewrite (the route form no
+  longer blocks saving when a rule has them). Creating a listener can now set the real-IP source,
+  PROXY protocol on TCP and passthrough, and the passthrough preread timeout. The route-group form
+  takes a priority for every route it creates.
+- New **엔진 설정** screen under 운영 (`/ops/engine`) edits the engine settings
+  (`workerShutdownTimeoutS`, `membershipDictKb`, `acmeDictKb`) through a normal changeset. New read
+  endpoint `GET /api/v1/engine`, relayed in global mode.
 - Pool and backend overview pages now show **헬스 기록**: every time the health verdict flipped,
   newest first, with the previous and new state and what the prober reported, 20 at a time with
   **더 보기**. A pool lists its own backends and the ones it discovered. The data was already kept in

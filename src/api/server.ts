@@ -950,6 +950,13 @@ const ROUTES: Route[] = [
       };
     }));
   }),
+  /**
+   * 엔진 전역 설정 (2026-11-20) — GUI 「엔진 설정」 이 읽는다. 없으면 `settings` 는 빈 객체다(엔진 기본값).
+   * 쓰기는 여기 없다 — 다른 리소스처럼 changeset 의 `put engine` 을 지난다(§5.3).
+   */
+  route('GET', '/api/v1/engine', 'read', async (c, api) => {
+    json(c.res, 200, { settings: (await api.store.modelAt((await api.store.head()).revision)).engine ?? {} });
+  }),
   route('GET', '/api/v1/tls-policies', 'read', async (c, api) => {
     json(c.res, 200, (await api.store.modelAt((await api.store.head()).revision)).tlsPolicies);
   }),
@@ -1744,6 +1751,7 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/routes', 'read', relayTo('routes')),
   route('GET', '/api/v1/regions/:name/certificates', 'read', relayTo('certificates')),
   route('GET', '/api/v1/regions/:name/tls-policies', 'read', relayTo('tls-policies')),
+  route('GET', '/api/v1/regions/:name/engine', 'read', relayTo('engine')),
   route('GET', '/api/v1/regions/:name/sni-bindings', 'read', relayTo('sni-bindings')),
   route('GET', '/api/v1/regions/:name/acme/orders', 'read', relayTo('acme/orders')),
   route('GET', '/api/v1/regions/:name/audit', 'read', relayTo('audit')),
