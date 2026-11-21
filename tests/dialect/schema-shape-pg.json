@@ -327,6 +327,38 @@
   "secret_sealed": "text",
   "user_id": "uuid"
  },
+ "notify_channels": {
+  "enabled": "bool",
+  "kind": "text",
+  "name": "text",
+  "secret_ref": "text null",
+  "settings": "json",
+  "updated_at": "timestamp",
+  "updated_by": "text"
+ },
+ "notify_deliveries": {
+  "at": "timestamp",
+  "channel": "text null",
+  "detail": "text null",
+  "event_key": "text",
+  "id": "bigint",
+  "kind": "text",
+  "node": "text",
+  "outcome": "text",
+  "severity": "text",
+  "test": "bool"
+ },
+ "notify_settings": {
+  "cert_days": "int",
+  "interval_s": "int",
+  "only_one": "bool",
+  "queue": "int",
+  "repeat_s": "int",
+  "seeded_from": "text",
+  "updated_at": "timestamp",
+  "updated_by": "text",
+  "version": "bigint"
+ },
  "operations": {
   "activation_epoch": "bigint",
   "created_at": "timestamp",

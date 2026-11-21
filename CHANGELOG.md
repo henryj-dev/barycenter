@@ -14,6 +14,18 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Notification settings now live in the config database and are edited in the GUI under **관리 › 알림**
+  (`/admin/notify`). Channels (webhook, Slack, mail) can be added, changed, disabled, deleted, filtered by event kind and
+  minimum severity, and tested with **시험 전송**; common values (repeat interval, certificate warning days, check
+  interval, queue size) are editable too. Changes apply at once on every node, without a restart. A delivery log records
+  each send, test, and queue drop for 30 days (`BARY_NOTIFY_DELIVERY_RETENTION_DAYS`); secret values in failure reasons
+  are masked. Webhook signing secrets and Slack webhook URLs go into the secret store as a new `opaque://` scheme and are
+  never shown again. On first start the daemon copies the existing `BARY_NOTIFY_*` settings into the database; after
+  that the database wins and differing environment values are logged as `notify.env_ignored`. API: `GET /api/v1/notify`,
+  `PUT /api/v1/notify/settings`, `PUT|DELETE /api/v1/notify/channels/:name`, `POST /api/v1/notify/channels/:name/test`,
+  `GET /api/v1/notify/deliveries` (all `admin`; secret writes and deletes need a fresh MFA step-up). CLI:
+  `bary get notify`, `bary get notify/deliveries`. Migrations 035 (secret store `opaque` scheme) and 036 (notify tables)
+  run on PostgreSQL, MySQL/MariaDB and SQLite. Notify settings are per region and are not relayed by the global view.
 - The status screen has a **저장소** panel, and `GET /api/v1/system/storage` (read scope; relayed in
   global mode; `bary get system/storage`) reports it: the config and accounts database kinds and the
   config server version, the secret store driver (files or encrypted in the database, and whether a

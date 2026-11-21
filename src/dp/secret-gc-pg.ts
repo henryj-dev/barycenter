@@ -28,7 +28,8 @@ export type PgSecretSweepOptions = {
 
 export async function sweepSecretsPg(opts: PgSecretSweepOptions): Promise<SecretSweepResult> {
   const rows = (await opts.db.query(
-    'SELECT scheme, name, version, created_at FROM secret_materials')).rows;
+    // `opaque`(알림 비밀)는 보지 않는다 — 쓰는 쪽이 바꿀 때 옛 버전을 지운다(`OpaqueRef` 머리말).
+    "SELECT scheme, name, version, created_at FROM secret_materials WHERE scheme <> 'opaque'")).rows;
   const all: SweepEntry[] = rows.map((r) => ({
     ref: `${String(r['scheme'])}://${String(r['name'])}@${String(r['version'])}`,
     name: String(r['name']),

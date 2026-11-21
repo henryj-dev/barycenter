@@ -105,7 +105,8 @@ describe('화면의 연결', () => {
       expect(isAggregatePath(p)).toBe(true);
     }
     expect(isAggregatePath('/ops/cluster')).toBe(false);
-    expect(src('lib/shell/Sidebar.svelte')).toContain("!(global && i.place === 'cluster')");
+    // 알림(관리 › 알림)도 전역에서 숨긴다 — 지역마다 따로고, 비밀이 전역을 지나지 않게 중계하지 않는다(036).
+    expect(src('lib/shell/Sidebar.svelte')).toContain("!(global && (i.place === 'cluster' || i.place === 'notify'))");
   });
 
   it.each(['lib/ops/Dashboard.svelte', 'lib/ops/StatusPanel.svelte', 'lib/ops/AuditLog.svelte', 'routes/change/pending/+page.svelte'])(

@@ -65,6 +65,9 @@ const TITLE: Record<string, string> = {
   'discovery.refresh': '백엔드 출처 다시 찾기',
   'session.login': '로그인', 'session.logout': '로그아웃', 'session.logout_all': '모든 세션 로그아웃',
   'session.step_up': '다시 인증',
+  // 알림 설정 (036). 비밀은 감사에 없다 — 바뀌었는지(`secretChanged`)만.
+  'notify.settings.put': '알림 공통 값 고치기', 'notify.channel.create': '알림 통로 만들기',
+  'notify.channel.update': '알림 통로 고치기', 'notify.channel.delete': '알림 통로 지우기', 'notify.test': '알림 시험 전송',
 };
 
 const APPLY = new Set(['apply', 'apply.membership', 'apply.retry_plan', 'apply.rerender_plan']);

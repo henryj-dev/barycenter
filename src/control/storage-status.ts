@@ -23,6 +23,8 @@ import type { DbRetentionResult } from '../store/db-retention.js';
 /** 보존 정책을 거는 표. 순서가 화면 순서다. */
 export const RETENTION_TABLES = [
   'health_events', 'audit', 'plans', 'changesets', 'operations', 'config_revisions',
+  // 알림 보낸 기록 (036). 기본 30일.
+  'notify_deliveries',
 ] as const;
 export type RetentionTable = (typeof RETENTION_TABLES)[number];
 
@@ -30,6 +32,7 @@ export type RetentionTable = (typeof RETENTION_TABLES)[number];
 const RESULT_FIELD: Readonly<Record<RetentionTable, keyof DbRetentionResult>> = {
   health_events: 'healthEvents', audit: 'audit', plans: 'plans',
   changesets: 'changesets', operations: 'operations', config_revisions: 'revisions',
+  notify_deliveries: 'notifyDeliveries',
 };
 
 export type SweepOutcome =

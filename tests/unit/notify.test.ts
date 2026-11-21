@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { mailNotifier, signWebhook, slackNotifier, webhookNotifier } from '../../src/notify/channels.js';
 import { NotifyHub, type NotifyInput } from '../../src/notify/hub.js';
 import type { Notifier, NotifyEvent } from '../../src/notify/notifier.js';
-import { acmeFailure, notifyFromEnv } from '../../src/notify/registry.js';
+import { acmeFailure, readNotifyEnv } from '../../src/notify/registry.js';
 import { NotifyWatch } from '../../src/notify/watch.js';
 import { setSink } from '../../src/obs/log.js';
 
@@ -269,31 +269,39 @@ describe('등록부 (BARY_NOTIFY)', () => {
   writeFileSync(secretFile, `${fakeSecret}\n`);
   writeFileSync(slackFile, `${slackUrl}\n`);
 
-  it('없으면 끈다 — 지금과 같다', () => {
-    expect(notifyFromEnv('n1', {})).toBeUndefined();
+  it('없으면 끈다 — 씨 뿌리기가 빈 통로 목록을 만든다', () => {
+    expect(readNotifyEnv({})).toBeUndefined();
   });
 
-  it('여럿을 함께 · 기본값', () => {
-    const s = notifyFromEnv('n1', { BARY_NOTIFY: 'webhook,slack', BARY_NOTIFY_WEBHOOK_URL: 'https://h.test/x', BARY_NOTIFY_WEBHOOK_SECRET_FILE: secretFile, BARY_NOTIFY_SLACK_URL_FILE: slackFile })!;
-    expect(s.hub.kinds).toEqual(['webhook', 'slack']);
-    expect(s).toMatchObject({ certDays: 14, intervalMs: 60_000 });
+  it('여럿을 함께 · 기본값 · 비밀은 파일에서', () => {
+    const s = readNotifyEnv({ BARY_NOTIFY: 'webhook,slack', BARY_NOTIFY_WEBHOOK_URL: 'https://h.test/x', BARY_NOTIFY_WEBHOOK_SECRET_FILE: secretFile, BARY_NOTIFY_SLACK_URL_FILE: slackFile })!;
+    expect(s.channels).toEqual([
+      { kind: 'webhook', url: 'https://h.test/x', secret: fakeSecret },
+      { kind: 'slack', secret: slackUrl },
+    ]);
+    expect(s.knobs).toEqual({ repeatS: 21_600, certDays: 14, intervalS: 60, queue: 100 });
+  });
+
+  it('보존 일수 변수는 통로 변수가 아니다 — 알림이 꺼져 있어도 둘 수 있다', () => {
+    expect(readNotifyEnv({ BARY_NOTIFY_DELIVERY_RETENTION_DAYS: '7' })).toBeUndefined();
   });
 
   it('모르는 이름 · 중복은 던진다', () => {
-    expect(() => notifyFromEnv('n1', { BARY_NOTIFY: 'pagerduty' })).toThrow(/모르는 알림 통로: pagerduty/);
-    expect(() => notifyFromEnv('n1', { BARY_NOTIFY: 'slack,slack', BARY_NOTIFY_SLACK_URL_FILE: slackFile })).toThrow(/두 번/);
+    expect(() => readNotifyEnv({ BARY_NOTIFY: 'pagerduty' })).toThrow(/모르는 알림 통로: pagerduty/);
+    expect(() => readNotifyEnv({ BARY_NOTIFY: 'slack,slack', BARY_NOTIFY_SLACK_URL_FILE: slackFile })).toThrow(/두 번/);
   });
 
   it('반만 설정이면 거부 — 비밀 없음 · 통로 없이 변수만 · 고르지 않은 통로 변수 · http · 메일 설정 없음', () => {
-    expect(() => notifyFromEnv('n1', { BARY_NOTIFY: 'webhook', BARY_NOTIFY_WEBHOOK_URL: 'https://h.test' })).toThrow(/SECRET_FILE/);
-    expect(() => notifyFromEnv('n1', { BARY_NOTIFY_SLACK_URL_FILE: slackFile })).toThrow(/BARY_NOTIFY 가 없다/);
-    expect(() => notifyFromEnv('n1', { BARY_NOTIFY: 'slack', BARY_NOTIFY_SLACK_URL_FILE: slackFile, BARY_NOTIFY_WEBHOOK_URL: 'https://h.test' })).toThrow(/쓰지 않는 변수/);
-    expect(() => notifyFromEnv('n1', { BARY_NOTIFY: 'webhook', BARY_NOTIFY_WEBHOOK_URL: 'http://h.test', BARY_NOTIFY_WEBHOOK_SECRET_FILE: secretFile })).toThrow(/https/);
-    expect(() => notifyFromEnv('n1', { BARY_NOTIFY: 'mail', BARY_NOTIFY_MAIL_TO: 'ops@example.com' }, { mail: () => undefined })).toThrow(/메일 전송 설정/);
+    expect(() => readNotifyEnv({ BARY_NOTIFY: 'webhook', BARY_NOTIFY_WEBHOOK_URL: 'https://h.test' })).toThrow(/SECRET_FILE/);
+    expect(() => readNotifyEnv({ BARY_NOTIFY_SLACK_URL_FILE: slackFile })).toThrow(/BARY_NOTIFY 가 없다/);
+    expect(() => readNotifyEnv({ BARY_NOTIFY: 'slack', BARY_NOTIFY_SLACK_URL_FILE: slackFile, BARY_NOTIFY_WEBHOOK_URL: 'https://h.test' })).toThrow(/쓰지 않는 변수/);
+    expect(() => readNotifyEnv({ BARY_NOTIFY: 'webhook', BARY_NOTIFY_WEBHOOK_URL: 'http://h.test', BARY_NOTIFY_WEBHOOK_SECRET_FILE: secretFile })).toThrow(/https/);
+    expect(() => readNotifyEnv({ BARY_NOTIFY: 'mail', BARY_NOTIFY_MAIL_TO: 'ops@example.com' }, { mail: () => undefined })).toThrow(/메일 전송 설정/);
   });
 
   it('mail 은 메일 전송 설정을 함께 쓴다', () => {
     const mailer = { send: async () => undefined };
-    expect(notifyFromEnv('n1', { BARY_NOTIFY: 'mail', BARY_NOTIFY_MAIL_TO: 'ops@example.com, oncall@example.com' }, { mail: () => ({ kind: 'log', from: 'x@example.com', mailer }) })!.hub.kinds).toEqual(['mail']);
+    expect(readNotifyEnv({ BARY_NOTIFY: 'mail', BARY_NOTIFY_MAIL_TO: 'ops@example.com, oncall@example.com' }, { mail: () => ({ kind: 'log', from: 'x@example.com', mailer }) })!.channels)
+      .toEqual([{ kind: 'mail', to: ['ops@example.com', 'oncall@example.com'] }]);
   });
 });

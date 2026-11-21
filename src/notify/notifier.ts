@@ -21,7 +21,9 @@ export type NotifyKind =
   /** 백업이 실패했다. **데몬 안에 백업 작업이 없어서 지금은 아무도 내지 않는다** — 바깥 백업 작업이 쓸 자리다. */
   | 'backup.failed'
   /** 전역 화면이 한 지역에 닿지 못한다. */
-  | 'region.unreachable';
+  | 'region.unreachable'
+  /** 화면의 「시험 전송」. 통로의 거르기를 지나지 않고 그 통로 하나로만 간다. */
+  | 'notify.test';
 
 export type Severity = 'critical' | 'warning' | 'info';
 

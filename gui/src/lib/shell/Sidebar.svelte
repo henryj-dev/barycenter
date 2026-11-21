@@ -34,7 +34,7 @@
   } = $props();
   const aggregate = $derived(chosen === undefined);
 
-  const groups = $derived(NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => !(global && i.place === 'cluster')) })));
+  const groups = $derived(NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => !(global && (i.place === 'cluster' || i.place === 'notify'))) })));
 </script>
 
 <aside class="sb" aria-label="주 메뉴" data-collapsed={collapsed}>

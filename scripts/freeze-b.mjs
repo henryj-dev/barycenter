@@ -19,7 +19,7 @@ function routesOf() {
   const src = readFileSync(join(root, 'src/api/server.ts'), 'utf8');
   const out = [];
   // `route<AccountApi>(…)` 처럼 타입 인자가 붙은 것도 센다 — 안 세면 계정 경로가 게이트에서 조용히 빠진다.
-  for (const m of src.matchAll(/route(?:<\w+>)?\('(GET|POST|PATCH|DELETE)', '([^']+)', '([^']+)'/g)) {
+  for (const m of src.matchAll(/route(?:<\w+>)?\('(GET|POST|PUT|PATCH|DELETE)', '([^']+)', '([^']+)'/g)) {
     out.push({ method: m[1], path: m[2], scope: m[3] });
   }
   return out;

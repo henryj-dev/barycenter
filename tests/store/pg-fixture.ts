@@ -221,6 +221,8 @@ export async function reset(db: Db): Promise<void> {
                            health_events, health_cursor,
                            -- 주소 집합과 그 다시 받기 기록 (027 · 033). CASCADE 가 안 데려간다.
                            address_sets, address_set_refresh,
+                           -- 알림 설정 · 통로 · 보낸 기록 (036). 단일 행 표가 남으면 다음 시험의 씨 뿌리기가 안 돈다.
+                           notify_settings, notify_channels, notify_deliveries,
                            leadership, config_head, config_revisions
                   RESTART IDENTITY CASCADE`);
   // 커서는 **단일 행 표**다 — 비웠으면 다시 넣어야 한다. 행이 없으면 `emit()` 의
@@ -377,7 +379,8 @@ function startMysql(h: PgHandle): void {
 async function resetMysql(db: Db): Promise<void> {
   const tables = ['audit', 'operations', 'plans', 'changesets', 'http_routes', 'passthrough_routes', 'backends', 'listeners',
     'pools', 'sni_certificate_bindings', 'certificates', 'tls_policies', 'engine_settings', 'backend_drain', 'backend_health',
-    'secret_materials', 'health_events', 'health_cursor', 'address_sets', 'address_set_refresh', 'leadership', 'config_head',
+    'secret_materials', 'health_events', 'health_cursor', 'address_sets', 'address_set_refresh',
+    'notify_settings', 'notify_channels', 'notify_deliveries', 'leadership', 'config_head',
     'config_revisions', 'acme_orders', 'acme_challenges'];
   await db.tx(async (c) => {
     await c.query('SET FOREIGN_KEY_CHECKS = 0');

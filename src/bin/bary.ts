@@ -118,6 +118,7 @@ const usage = (): never => {
                                  acme/orders | acme/orders/<id> | acme/orders/<id>/challenges | acme/challenges/<id>
                                  traffic | traffic/<종류> | traffic/<종류>/<이름>   이 노드가 센 트래픽 (OpenResty)
                                    종류: listener | httpRoute | passthroughRoute | pool | backend
+                                 notify | notify/deliveries   알림 통로 · 공통 값 · 보낸 기록 (admin). 비밀은 안 낸다
                                  모르는 이름은 안 부른다
   bary listener create           --name --protocol http|tcp|udp|https|tls_passthrough --bind --port [--pool] [--preset] [--policy] [--certificate]. commit 까지. apply 는 아니다
                                  tls_passthrough 는 폴백 둘을 받는다:
