@@ -26,6 +26,9 @@ const LISTS = new Set([
   // 엔진 전역 설정 · ACME 계정 (2026-11-21).
   'engine',
   'acme/accounts',
+  // 변경 초안(커밋 전 changeset) · 최근 전환 (2026-11-21).
+  'changesets',
+  'operations',
 ]);
 
 export function getPath(what: string): string | undefined {
