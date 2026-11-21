@@ -22,7 +22,7 @@ import {
   type ConfNode, type ConfValue,
 } from './ast.js';
 import {
-  LISTENER_VAR, ROUTE_MAP_VAR, ROUTE_VAR, TRAFFIC_DICT, TRAFFIC_DICT_SIZE, trafficLogLua,
+  LISTENER_VAR, PEERS_VAR, POOL_VAR, ROUTE_MAP_VAR, ROUTE_VAR, TRAFFIC_DICT, TRAFFIC_DICT_SIZE, trafficLogLua,
 } from './traffic.js';
 import {
   compileHostRoutes, hostPatternKey, planStrictPriority, type RouteInput,
@@ -33,7 +33,7 @@ import { ModelValidationError, validateModel } from '../validate/model.js';
 import { expandAddressSets } from '../model/address-sets.js';
 import { redirectListenerOf } from '../model/redirect.js';
 import { decodeModel } from '../model/decode.js';
-import { errorPageHttpNodes, errorPageServerNodes, locationErrorPageNodes } from './error-pages.js';
+import { errorPageHttpNodes, errorPageServerNodes, locationErrorPageNodes, upstreamStatusHeaderNodes } from './error-pages.js';
 import { servedByHttpNodes } from './served-by.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
@@ -200,6 +200,41 @@ const dictSize = (kb: number | undefined, fallback: number): string => {
  * 확인할 시간이 충분하고, 그 뒤에는 저절로 사라진다.
  */
 const INFLIGHT_IDLE_TTL = 3600;
+
+/**
+ * 고른 peer 를 적는 자리 — **http 는 nginx 변수, stream 은 `ngx.ctx`** (2026-11-21).
+ *
+ * http 에서 백엔드에 못 붙으면 엔진이 502 · 504 를 만들고 `error_page` 로 내부 리다이렉트한다. 리다이렉트는
+ * `ngx.ctx` 를 비운다. 고른 peer 를 ctx 에만 두면 log 단계가 못 찾아 `in:` 이 **실패한 요청마다 하나씩** 남았다
+ * (실측: 502 여섯 번에 `in:` 6, tests/golden/default-action-upstream.test.ts). 남은 `in:` 은 `least_conn` 이 그
+ * peer 를 피하게 하고, `softMaxConns` 를 일찍 걸고, 드레인이 quiesced 를 영영 못 보게 한다. nginx 변수는
+ * 리다이렉트를 넘어 남는다(`PEERS_VAR`). stream 에는 `error_page` 가 없다.
+ */
+const HTTP_RECORD_PEER = (name: string): string => `            local cur = ngx.var.${PEERS_VAR}
+            ngx.var.${PEERS_VAR} = (cur and cur ~= "") and (cur .. "," .. peer) or peer
+            d:incr("in:" .. peer, 1, 0)
+            -- 트래픽 카운터가 풀을 안다 (src/conf/traffic.ts).
+            ngx.var.${POOL_VAR} = "${name}"`;
+const STREAM_RECORD_PEER = (name: string): string => `            local chosen = ngx.ctx.bary_peers
+            chosen[#chosen + 1] = peer
+            d:incr("in:" .. peer, 1, 0)
+            -- 트래픽 카운터가 풀을 안다 (src/conf/traffic.ts).
+            ngx.ctx.bary_up = "${name}"`;
+
+/**
+ * http server 마다 내는 요청 변수 — 리스너 이름(트래픽 카운터)과, 밸런서가 채울 두 자리.
+ * 두 자리는 **선언**이 목적이다: `ngx.var.x = …` 는 선언되지 않은 변수에 못 쓴다. server rewrite 단계에서 빈 값으로
+ * 시작하고, `error_page` 의 named location 은 그 단계를 다시 돌지 않으므로 밸런서가 쓴 값이 남는다.
+ */
+function httpRequestVars(listenerKey: string): ConfNode[] {
+  return [nameVar(LISTENER_VAR, listenerKey), nameVar(PEERS_VAR, ''), nameVar(POOL_VAR, '')];
+}
+
+/**
+ * 기본 동작이 보내는 `Connection` (2026-11-21). 업그레이드를 물으면 `upgrade`, 아니면 **빈 값** — 빈 값이면 nginx 가
+ * 그 헤더를 안 보내 지금까지와 같은 요청이 된다. 라우트의 `$connection_upgrade`(E7)는 빈 자리에 `close` 를 넣는다.
+ */
+const DEFAULT_CONN_VAR = 'bary_default_conn';
 
 /** SNI↔Host 불일치 판정을 담는 변수 (§4.6). */
 const SNI_MISMATCH_VAR = 'bary_sni_mismatch';
@@ -636,8 +671,7 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
             if not tried then
                 tried = {}
                 ngx.ctx.bary_tried = tried
-                ngx.ctx.bary_peers = {}
-                -- **한 번만 부른다** (검수 N5). 두 번 부르면 남은 횟수가 다시 설정돼
+${plane === 'stream' ? '                ngx.ctx.bary_peers = {}\n' : ''}                -- **한 번만 부른다** (검수 N5). 두 번 부르면 남은 횟수가 다시 설정돼
                 -- 재시도가 끝나지 않는다. 값은 **남은 peer 수**다 — 상수로 박으면
                 -- 풀 크기가 바뀔 때 갈린다.
                 if #all > 1 then balancer.set_more_tries(#all - 1) end
@@ -704,11 +738,7 @@ function membershipUpstream(pool: Pool, plane: 'http' | 'stream'): ConfNode {
             tried[peer] = true
             -- **고른 것을 전부 쌓는다** (검수 D3). 하나만 들면 재시도한 요청에서
             -- 먼저 고른 peer 의 \`in:\` 이 영영 안 내려간다.
-            local chosen = ngx.ctx.bary_peers
-            chosen[#chosen + 1] = peer
-            d:incr("in:" .. peer, 1, 0)
-            -- 트래픽 카운터가 풀을 안다 (src/conf/traffic.ts).
-            ngx.ctx.bary_up = "${name}"
+${plane === 'http' ? HTTP_RECORD_PEER(name) : STREAM_RECORD_PEER(name)}
         `),
   ]);
 }
@@ -936,7 +966,7 @@ function httpServerBlocks(
       ...alsoOn.filter((a) => !a.hosts.has(host)).map((a) => directive('listen', a.args)),
       directive('server_name', [nameArg]),
       // 이름을 먼저 적는다 — 아래 가드의 `return` 은 rewrite 단계라 그 뒤의 `set` 은 안 돈다.
-      ...(count ? [nameVar(LISTENER_VAR, listener.key)] : []),
+      ...(count ? httpRequestVars(listener.key) : []),
       ...tlsBody,
       ...realipNodes(listener),
       ...sourceAllowGuard(listener),
@@ -1599,6 +1629,19 @@ function defaultActionLocations(
             directive('proxy_set_header', [lit('X-Forwarded-For'), variable('proxy_add_x_forwarded_for')]),
             directive('proxy_set_header', [lit('X-Forwarded-Proto'), variable('scheme')]),
             /**
+             * **기본 동작도 업그레이드를 넘긴다** (2026-11-21). 라우트에는 `websocket` 칸이 있지만 기본 동작에는 없다.
+             * 그래서 라우트 없이 기본 풀로 보내는 리스너에서는 웹소켓이 **조용히 안 열렸다** — `Upgrade` 가 백엔드로
+             * 안 갔다. 기본 동작은 「나머지 전부」 를 받는 자리라, 업그레이드를 물을지는 클라이언트가 정하게 둔다.
+             *
+             * `Connection` 은 라우트와 다른 map 이다(`DEFAULT_CONN_VAR`). 업그레이드를 안 물은 요청에는 빈 값을 보내
+             * **지금과 같은 요청**이 나가게 한다 — 라우트의 map 은 그 자리에 `close` 를 넣는다. 엔진이 HTTP/1.1 기본을
+             * 쓰는 판(1.29+)에서 `close` 를 넣으면 거동이 바뀐다. `proxy_http_version 1.1` 은 옛 엔진(기본 1.0)을 위해
+             * 적는다 — 1.0 으로는 업그레이드가 안 된다.
+             */
+            directive('proxy_http_version', [lit('1.1')]),
+            directive('proxy_set_header', [lit('Upgrade'), variable('http_upgrade')]),
+            directive('proxy_set_header', [lit('Connection'), variable(DEFAULT_CONN_VAR)]),
+            /**
              * **요청 헤더는 여기도 나가야 한다** (제안 #7, 2026-08-24).
              *
              * 라우트 location 에만 내고 있었다. 그래서 라우트 없이 기본 액션만 쓰는
@@ -1690,7 +1733,7 @@ function defaultServerBlock(
   return block('server', [], [
     directive('listen', [...listenArgs(listener), lit('default_server')]),
     directive('server_name', [lit('_')]),
-    ...(count ? [nameVar(LISTENER_VAR, listener.key)] : []),
+    ...(count ? httpRequestVars(listener.key) : []),
     ...tlsBody,
     ...realipNodes(listener),
     // **default_server 에도 낸다.** 모르는 Host 로 오면 여기로 온다 — 여기가 빠지면
@@ -2010,9 +2053,13 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
 
     const usedPools = new Set<string>();
     let anyWebsocket = false;
+    let anyDefaultProxy = false;
     for (const l of httpListeners) {
       const da = l.http?.defaultAction;
-      if (da !== undefined && da !== 'reject' && poolsWithBackends.has(da.pool)) usedPools.add(da.pool);
+      if (da !== undefined && da !== 'reject' && poolsWithBackends.has(da.pool)) {
+        usedPools.add(da.pool);
+        anyDefaultProxy = true;
+      }
       // 출발지 규칙의 풀도 쓰는 풀이다 (2026-11-02) — 빼면 named location 이 없는 upstream 을 가리킨다.
       for (const r of routesByListener.get(l.key) ?? []) for (const a of routeActions(r)) {
         if (a.kind !== 'proxy') continue;
@@ -2049,6 +2096,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
         : []),
       // **응답한 노드의 이름** (served-by.ts). 값은 노드가 세대마다 쓰는 조각에서 온다 — 렌더 결과는 노드마다 같다.
       ...servedByHttpNodes(caps.headersMore === true),
+      // 백엔드가 준 상태 (error-pages.ts). `Server: barycenter` 만 보면 백엔드의 500 도 barycenter 의 것으로 읽힌다.
+      ...upstreamStatusHeaderNodes(caps.headersMore === true),
       // 오류 페이지의 변수들. `error_page` 와 named location 은 server 마다다(`errorPageServerNodes`).
       ...errorPageHttpNodes(),
     ];
@@ -2058,11 +2107,11 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
             -- **고른 것을 전부 내린다** (검수 D3). 전에는 \`ngx.ctx.bary_peer\` 하나였고,
             -- 그건 **마지막** peer 다 — 재시도한 요청에서 먼저 고른 peer 의 \`in:\` 이
             -- 영영 안 내려갔다. 그 누수는 N5(페일오버 없음)를 고치는 순간 살아난다.
-            local chosen = ngx.ctx.bary_peers
-            if not chosen then return end
+            -- ctx 가 아니라 변수에서 읽는다 — error_page 의 내부 리다이렉트가 ctx 를 비운다 (HTTP_RECORD_PEER).
+            local chosen = ngx.var.${PEERS_VAR}
+            if not chosen or chosen == "" then return end
             local d = ngx.shared.${MEMBERSHIP_DICT.http}
-            for i = 1, #chosen do
-                local peer = chosen[i]
+            for peer in chosen:gmatch("[^,]+") do
                 local n = d:incr("in:" .. peer, -1)
                 -- 0 이하면 0 으로 고정하고 **만료를 건다** (검수 B-12). 지우지는 않는다 —
                 -- 키가 없으면 드레인이 "관측 없음" 으로 읽어 quiesced 를 영영 못 판정한다.
@@ -2084,6 +2133,15 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
         block('map', [variable('http_upgrade'), variable('connection_upgrade')], [
           entry(lit('default'), lit('upgrade')),
           entry(lit(''), lit('close')),
+        ]),
+      );
+    }
+    // 기본 동작의 `Connection` — 기본 풀로 보내는 리스너가 있을 때만. 없으면 렌더 바이트가 그대로다.
+    if (anyDefaultProxy) {
+      children.push(
+        block('map', [variable('http_upgrade'), variable(DEFAULT_CONN_VAR)], [
+          entry(lit('default'), lit('upgrade')),
+          entry(lit(''), lit('')),
         ]),
       );
     }

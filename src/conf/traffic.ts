@@ -9,7 +9,7 @@
  *   키는 `<종류>|<이름>|<칸>` 이다. 종류는 넷이다.
  *     · `l` 리스너 — server 블록이 `$bary_l` 에 이름을 적는다.
  *     · `r` 라우트 — location 이 `$bary_r` 에 적는다. 패스스루는 SNI map 이 정한다.
- *     · `p` 풀 — 밸런서가 `ngx.ctx.bary_up` 에 upstream 이름을 적는다.
+ *     · `p` 풀 — 밸런서가 upstream 이름을 적는다. http 는 `$bary_p`, stream 은 `ngx.ctx.bary_up` 이다.
  *     · `b` 백엔드 — `b|<upstream>|<peer>`. peer 는 `$upstream_addr` 의 마지막 주소다.
  *   칸은 `n`(수) · `s1`..`s5`(상태 계열) · `bi`·`bo`(받은·보낸 바이트) · `ms`(걸린 시간 합, 밀리초).
  *
@@ -33,6 +33,21 @@ export const ROUTE_VAR = 'bary_r';
 /** stream 패스스루는 라우트를 SNI map 이 정한다. 그 map 변수의 **이름**을 여기 둔다. */
 export const ROUTE_MAP_VAR = 'bary_rv';
 
+/**
+ * http 평면에서 **내부 리다이렉트를 넘어 살아야 하는 값**을 싣는 변수 (2026-11-21).
+ *
+ * `ngx.ctx` 는 `error_page` 의 내부 리다이렉트에서 비워진다. 백엔드에 못 붙어 엔진이 502 · 504 를 만들면 바로 그
+ * 리다이렉트가 일어난다. 그래서 고른 peer 를 ctx 에만 두면 log 단계가 그것을 못 찾고 `in:` 이 **실패한 요청에서만**
+ * 샜다. nginx 변수는 리다이렉트를 넘어 남는다. stream 에는 `error_page` 가 없으므로 ctx 그대로다.
+ *
+ *   · `$bary_peers` — 이 요청이 고른 peer 들. 쉼표로 잇는다(peer 에는 쉼표가 없다).
+ *   · `$bary_p` — 고른 upstream 이름. 풀 카운터가 읽는다.
+ *
+ * 값을 쓰려면 변수가 선언되어 있어야 한다. server 마다 `set` 으로 빈 값을 둔다(`httpRequestVars`).
+ */
+export const PEERS_VAR = 'bary_peers';
+export const POOL_VAR = 'bary_p';
+
 /** 카운터 칸. 데몬이 이 목록으로 읽는다. */
 export const TRAFFIC_FIELDS = ['n', 's1', 's2', 's3', 's4', 's5', 'bi', 'bo', 'ms'] as const;
 export type TrafficField = (typeof TRAFFIC_FIELDS)[number];
@@ -41,8 +56,8 @@ export type TrafficField = (typeof TRAFFIC_FIELDS)[number];
  * log 단계에서 수를 올리는 Lua. 멤버십의 `in:` 내리기 **앞에** 둔다 — 그쪽은 고른 peer 가
  * 없으면 `return` 한다.
  *
- * `ngx.ctx` 는 내부 리다이렉트(`error_page`)에서 비워진다. 그래서 풀은 그때 빠질 수 있고,
- * 백엔드는 `$upstream_addr` 로 잡으므로 남는다. 리스너와 라우트는 변수라서 남는다.
+ * 리스너 · 라우트 · 풀은 nginx 변수에서 읽는다 — 내부 리다이렉트(`error_page`)를 넘어 남는다. 백엔드는
+ * `$upstream_addr` 로 잡는다. stream 의 풀만 ctx 다(stream 에는 리다이렉트가 없다).
  */
 export function trafficLogLua(plane: 'http' | 'stream'): string {
   const bytesIn = plane === 'http' ? 'request_length' : 'bytes_received';
@@ -71,7 +86,8 @@ export function trafficLogLua(plane: 'http' | 'stream'): string {
                 if l and l ~= "" then add("l|" .. l) end
                 ${route}
                 if r and r ~= "" then add("r|" .. r) end
-                local up = ngx.ctx.bary_up
+                ${plane === 'http' ? `local up = ngx.var.${POOL_VAR}
+                if up == "" then up = nil end` : 'local up = ngx.ctx.bary_up'}
                 if up then add("p|" .. up) end
                 local ua = ngx.var.upstream_addr
                 if ua and ua ~= "" then

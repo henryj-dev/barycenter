@@ -71,9 +71,15 @@ describe('렌더 — 이름 변수와 카운터 dict', () => {
     expect(conf).toMatch(/set \$bary_rv bary_ptr_\w+;/);
   });
 
-  it('밸런서가 풀(upstream 이름)을 ctx 에 남긴다', () => {
+  it('밸런서가 풀(upstream 이름)을 남긴다 — http 는 변수(error_page 를 넘어 산다), stream 은 ctx', () => {
     const conf = render(model(), LUA).conf;
-    expect(conf).toContain(`ngx.ctx.bary_up = "${upstreamName('app')}"`);
+    const http = conf.slice(conf.indexOf('http {'), conf.indexOf('stream {') > 0 ? conf.indexOf('stream {') : undefined);
+    expect(http).toContain(`ngx.var.bary_p = "${upstreamName('app')}"`);
+    expect(http).not.toContain('ngx.ctx.bary_up');
+    expect(http).not.toContain('ngx.ctx.bary_peers');
+    // 변수는 server 마다 선언된다 — 선언 없이 쓰면 밸런서가 죽는다.
+    expect(http).toContain('set $bary_peers "";');
+    expect(http).toContain('set $bary_p "";');
   });
 
   it('카운터는 inflight 내리기 **앞**에 선다 — 그쪽은 peer 가 없으면 return 한다', () => {
