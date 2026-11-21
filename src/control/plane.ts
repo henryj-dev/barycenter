@@ -27,7 +27,7 @@ import {
 import type { DataplaneDriver, DriverStatus } from '../dp/driver.js';
 import { RemoteDataplaneDriver } from '../dp/remote.js';
 import { materializeGeneration } from '../dp/materialize.js';
-import { DEFAULT_KEEP, sweepGenerations } from '../dp/retention.js';
+import { DEFAULT_KEEP, sweepGenerations, type SweepResult } from '../dp/retention.js';
 import { certificateFiles, type SecretStore } from '../dp/secrets.js';
 import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
@@ -75,6 +75,11 @@ export type ControlPlaneOptions = {
    * 디버깅용이고, **기본값으로 두면 디스크가 무한히 자란다.**
    */
   keepGenerations?: number;
+  /**
+   * 세대 청소 결과를 받는다 (2026-11-20 · 저장소 상태). 상태 화면이 「마지막 청소」 를 말한다.
+   * 없으면 감사에만 남는다 — 지금과 같다.
+   */
+  onGenerationSweep?: (out: SweepResult | { error: unknown }) => void;
   /**
    * 인증서 자료 저장소 (§4.8).
    *
@@ -1190,6 +1195,7 @@ export class ControlPlane {
         prefix: this.opts.prefix, keep, protect,
         ...(linger === undefined ? {} : { workerLingerMs: linger * 2000 }),
       });
+      this.opts.onGenerationSweep?.(out);
       if (out.removed.length > 0 || out.failed.length > 0) {
         await this.audit(by, 'generations.sweep', out);
       }
@@ -1200,6 +1206,7 @@ export class ControlPlane {
       // 처리되지 않은 rejection 이 되고 그건 데몬을 죽인다 (검수 2026-08-29(4)).
       void this.reclaimSlots(out.removed, by).catch(() => undefined);
     } catch (e) {
+      this.opts.onGenerationSweep?.({ error: e });
       await this.audit(by, 'generations.sweep.failed', { error: String(e) });
     }
   }

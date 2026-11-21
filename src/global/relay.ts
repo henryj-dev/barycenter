@@ -37,6 +37,8 @@ export const RELAY_PATHS: readonly string[] = [
   'backends/:id/health-history', 'pools/:id/health-history',
   // 트래픽 통계 (2026-11-20). 지역 노드가 센 것을 그대로 읽는다.
   'traffic', 'traffic/:kind/:id',
+  // 저장소 상태 (2026-11-20). 비밀을 싣지 않는다 — 종류 · 판 · 보존 일수 · 마지막 청소뿐이다.
+  'system/storage',
   // GUI 가 이미 부르던 것 (2026-11-20) — 빠져 있었다.
   'pools/:id/discovery', 'address-sets/refresh-status',
 ];

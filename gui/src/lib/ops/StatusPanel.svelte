@@ -19,6 +19,8 @@
   import { loadRegions } from './fetch';
   import { nodeState, type ClusterBody } from './cluster';
   import { regionBadge } from './aggregate-view';
+  import StorageCard from './StorageCard.svelte';
+  import type { StorageBodyView } from '@web/storage-view';
 
   type Desk = ReturnType<typeof createDesk>;
   type StatCard = { label: string; value: string; sub: string; badge?: { tone: Tone; text: string } };
@@ -38,6 +40,26 @@
     void desk.clusterNodes().then((r) => { cluster = r as ClusterBody | undefined; });
   });
   const clustered = $derived(cluster?.enabled === true);
+
+  /**
+   * 저장소 상태 (2026-11-20). 한 번 읽고, head 가 바뀌면 다시 읽는다 — 청소 결과는 실시간 사건이 아니다.
+   * 전체 합산이면 붙은 지역마다 따로 읽는다(지역마다 DB 가 다르다).
+   */
+  let storage = $state<StorageBodyView | undefined>();
+  let storageLoading = $state(true);
+  $effect(() => {
+    void desk.head;
+    if (!desk.live || agg.on) return;
+    void desk.systemStorage().then((b) => { storage = b; storageLoading = false; });
+  });
+  let regionStorage = $state<Record<string, StorageBodyView | undefined>>({});
+  $effect(() => {
+    if (!agg.on) return;
+    for (const e of agg.entries) {
+      if (e.state !== 'ok') continue;
+      void e.desk.systemStorage().then((b) => { regionStorage = { ...regionStorage, [e.name]: b }; });
+    }
+  });
 
   /**
    * 활성 리비전(시안 「활성 리비전은 r8이에요.」) — 상태 스냅샷은 그것을 따로 주지 않는다.
@@ -217,6 +239,9 @@
         <DataTable rows={aggRows} rowKey={(r) => r.name} columns={aggColumns} cell={aggCell}
           label="지역별 상태" emptyTitle="지역이 없어요" minHeight="0" />
       </section>
+      {#each agg.entries.filter((e) => e.state === 'ok') as e (e.name)}
+        <StorageCard title={`저장소 · ${e.name}`} body={regionStorage[e.name]} loading={!(e.name in regionStorage)} />
+      {/each}
     </div>
   {/if}
 {:else if !desk.live}
@@ -241,6 +266,8 @@
         {#if v.pending.length > 0}<a class="link" href="/change/pending">적용 대기 화면에서 영향 확인하기 →</a>{/if}
       </div>
     {/if}
+
+    <StorageCard title={global && scope?.region !== undefined ? `저장소 · ${scope.region.name}` : '저장소'} body={storage} loading={storageLoading} />
 
     {#if global}
       <section class="panel" aria-label="지역별 상태">

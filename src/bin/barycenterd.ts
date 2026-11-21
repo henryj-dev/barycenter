@@ -60,7 +60,7 @@ import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
 import { dns01FromEnv } from '../control/dns-providers/registry.js';
 import { publishIssued } from '../control/acme-publish.js';
 import { collectSecretRoots } from '../control/secret-roots.js';
-import { sweepSecrets } from '../dp/secret-gc.js';
+import { DEFAULT_KEEP_PER_NAME, DEFAULT_MIN_AGE_MS, sweepSecrets } from '../dp/secret-gc.js';
 import { sweepSecretsPg } from '../dp/secret-gc-pg.js';
 import { ClusterNode } from '../control/cluster.js';
 import { ControlPlane, defaultStreamSocket } from '../control/plane.js';
@@ -83,6 +83,9 @@ import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '.
 import { DEFAULT_HEALTH_EVENT_DAYS, DEFAULT_NOTIFY_DELIVERY_DAYS, sweepDatabase } from '../store/db-retention.js';
 import { ConfigStore } from '../store/config-store.js';
 import { openDb } from '../store/open.js';
+import { dbKindOf } from '../store/db.js';
+import { DEFAULT_KEEP } from '../dp/retention.js';
+import { StorageStatus } from '../control/storage-status.js';
 import { assertSqliteDeployment } from '../store/sqlite-checks.js';
 import { envBool, envInt, envIntOpt } from '../validate/env.js';
 import { isLoopbackBind, parseListen } from '../validate/sockets.js';
@@ -998,10 +1001,19 @@ export async function main(): Promise<void> {
     // 헤더는 못 내고 오류 페이지에만 나간다 — 켰는데 반만 되는 것을 조용히 두지 않는다.
     else log.warn('served_by.no_header', { alias: servedBy, why: '엔진에 headers-more 가 없다 — 오류 페이지에만 나간다' });
   }
+  /**
+   * **저장소 상태** (2026-11-20). 청소 타이머들이 마지막 결과를 여기 적고, `GET /api/v1/system/storage` 가 읽는다.
+   * 정책(보존 일수 · ACME 여부)이 아래에서 정해지므로 만드는 것은 그 뒤다 — 세대 청소는 그 전에 돌 수 없다(apply 가 부른다).
+   */
+  let storageStatus: StorageStatus | undefined;
   const control = new ControlPlane(db, store, driver, election,
     { prefix, adminSocket, streamAdminSocket, renderCaps, ...(servedBy === undefined ? {} : { servedBy }),
       engine: engineInfo, driver: driverBoot, secrets,
-      discovery: dataSources.intake });
+      discovery: dataSources.intake,
+      onGenerationSweep: (out) => {
+        if ('error' in out) storageStatus?.recordGenerationFailure(out.error);
+        else storageStatus?.recordGenerationSweep(out);
+      } });
 
   /**
    * 트래픽 통계 (2026-11-20). **노드마다 자기 엔진을 읽는다** — 리더만이 아니다. 각 노드가 자기 트래픽을 받기 때문이다.
@@ -1115,10 +1127,12 @@ export async function main(): Promise<void> {
       if (!election.state.isLeader) return;
       try {
         const out = await sweepDatabase({ db, ...dbRetention });
+        storageStatus?.recordDbSweep(out);
         if (out.healthEvents > 0 || out.audit > 0 || out.plans > 0 || out.changesets > 0 || out.notifyDeliveries > 0) {
           log.info('db.swept', out);
         }
       } catch (e) {
+        storageStatus?.recordDbFailure(e);
         log.error('db.sweep_failed', { error: (e as Error).message });
       }
     })();
@@ -1181,6 +1195,26 @@ export async function main(): Promise<void> {
    * **리더만 돈다.** 스탠바이가 함께 주문하면 nonce 가 서로를 깨뜨린다.
    */
   const acmeOn = renderCaps.httpLua === true && env('BARY_ACME', '1') !== '0';
+  const accountsDsn = env('BARY_ACCOUNTS_DSN', '');
+  storageStatus = new StorageStatus({
+    configDb: { kind: dbKindOf(dsn) },
+    accountsDb: accountsDsn === '' ? null : { kind: dbKindOf(accountsDsn) },
+    secrets: { backend: secretBackend === 'pg' ? 'pg' : 'fs' },
+    retention: {
+      intervalMs: t.dbRetentionMs,
+      days: {
+        health_events: dbRetention.healthEventDays,
+        audit: auditDaysRaw ?? null,
+        plans: planDaysRaw ?? null,
+        changesets: changesetDaysRaw ?? null,
+        operations: operationDaysRaw ?? null,
+        config_revisions: revisionDaysRaw ?? null,
+        notify_deliveries: dbRetention.notifyDeliveryDays,
+      },
+    },
+    generations: { keep: DEFAULT_KEEP, prefix },
+    secretGc: { enabled: acmeOn, keepPerName: DEFAULT_KEEP_PER_NAME, minAgeMs: DEFAULT_MIN_AGE_MS, intervalMs: t.secretGcMs },
+  });
   let stopPublish = (): void => {};
   let stopSecretGc = (): void => {};
   let stopOrphans = (): void => {};
@@ -1278,6 +1312,7 @@ export async function main(): Promise<void> {
           const out = secretBackend === 'pg'
             ? await sweepSecretsPg({ db, roots })
             : sweepSecrets({ root: env('BARY_SECRETS', `${prefix}/secrets`), roots });
+          storageStatus?.recordSecretSweep(out);
           if (out.removed.length > 0 || out.failed.length > 0) {
             log.info('secrets.swept', {
               removed: out.removed.length, kept: out.kept.length,
@@ -1285,6 +1320,7 @@ export async function main(): Promise<void> {
             });
           }
         } catch (e) {
+          storageStatus?.recordSecretFailure(e);
           log.error('secrets.sweep_failed', { error: (e as Error).message });
         }
       })();
@@ -1373,6 +1409,7 @@ export async function main(): Promise<void> {
     discovery: dataSources.api,
     traffic,
     notify,
+    storage: storageStatus,
     ...dispatch,
     ...sessionDomainFromEnv(),
     // 「연락 없음」은 동기 주기의 5배를 넘긴 신호다.
