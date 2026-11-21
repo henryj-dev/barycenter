@@ -64,7 +64,7 @@ import { EventHub, openEventStream } from './events.js';
 import { memoryRateLimit } from './auth-limit/memory.js';
 import type { RateLimitStore } from './auth-limit/store.js';
 import { clientAddress, type TrustedProxies } from './client-address.js';
-import { RELAY_PATHS, RELAY_WRITES, type Credential, type RegionRelay } from '../global/relay.js';
+import { LOCAL_ONLY_PATHS, RELAY_PATHS, RELAY_WRITES, type Credential, type RegionRelay } from '../global/relay.js';
 import type { HostAddressFacts } from '../engine/host-addresses.js';
 import {
   BrowserSessions, LOGIN_COOKIE, SESSION_COOKIE, cookieValue, expiredCookie, sessionCookie,
@@ -500,6 +500,26 @@ function trafficBody(
   return { state: 'ok', ...head, intervalS: s.intervalMs / 1000, window: s.window(), ...body(s) };
 }
 
+/**
+ * import · restore 본문을 읽는다 (2026-11-21). `{ manifest, mode?, preview?, base_revision? }` 로 감싼 것과
+ * 매니페스트 그대로를 둘 다 받는다 — 감싸지 않은 본문은 옛 CLI 가 보내는 모양이다.
+ */
+function importBody(body: unknown): {
+  manifest: unknown; mode: 'merge' | 'replace'; opts: { preview?: boolean; baseRevision?: string };
+} {
+  const rec = body !== null && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : undefined;
+  if (rec === undefined || !('manifest' in rec)) return { manifest: body, mode: 'merge', opts: {} };
+  const base = rec['base_revision'];
+  if (base !== undefined && (typeof base !== 'string' || !/^[0-9]+$/.test(base))) {
+    throw new StoreError(400, 'malformed', 'base_revision 은 리비전 번호 문자열이다');
+  }
+  return {
+    manifest: rec['manifest'],
+    mode: rec['mode'] === 'replace' ? 'replace' : 'merge',
+    opts: { ...(rec['preview'] === true ? { preview: true } : {}), ...(base === undefined ? {} : { baseRevision: base }) },
+  };
+}
+
 const ROUTES: Route[] = [
   // ── 읽기 ───────────────────────────────────────────────────────────────
   route('GET', '/api/v1/config/head', 'read', async (c, api) => {
@@ -568,15 +588,16 @@ const ROUTES: Route[] = [
   /**
    * §5.5 import. 단일 changeset. 차이가 없으면 리비전을 안 올린다.
    * nginx 적용은 `/apply` 의 몫이다 — import 가 적용까지 하면 그 경로만 덜 검증된다.
+   *
+   * 감싼 본문 `{ manifest, mode?, preview?, base_revision? }` (2026-11-21):
+   * - `preview: true` — 커밋하지 않고 `changes`(바뀌는 리소스)와 `impact` 만 돌려준다. 리비전 사건을 내지 않는다.
+   * - `base_revision` — 미리 본 head. 움직였으면 409 `head_moved`.
+   * 감싸지 않은 매니페스트 본문은 지금처럼 merge 로 커밋한다(CLI 호환).
    */
   route('POST', '/api/v1/config/import', 'write', async (c, api) => {
-    const body = c.body;
-    const wrapped = body !== null && typeof body === 'object' && !Array.isArray(body)
-      && 'manifest' in (body as object);
-    const mode = wrapped && (body as { mode?: unknown }).mode === 'replace' ? 'replace' : 'merge';
-    const input = wrapped ? (body as { manifest: unknown }).manifest : body;
-    const out = await api.store.importFromManifest(input, mode, c.who.name);
-    eventsOf(api).publish('revision', { revision: out.revision, unchanged: out.unchanged });
+    const { manifest, mode, opts } = importBody(c.body);
+    const out = await api.store.importFromManifest(manifest, mode, c.who.name, opts);
+    if (out.preview !== true) eventsOf(api).publish('revision', { revision: out.revision, unchanged: out.unchanged });
     json(c.res, 200, out);
   }),
 
@@ -591,14 +612,14 @@ const ROUTES: Route[] = [
 
   /**
    * 백업 복구. `admin` 스코프. 적용은 `/apply` 의 몫이다.
+   *
+   * 늘 replace 다 — 백업에 없는 리소스는 지운다. 미리 보기는 `POST /config/import` 의
+   * `{ mode: 'replace', preview: true }` 로 한다(같은 계산이다). `base_revision` 을 주면 그 사이에 head 가
+   * 움직였을 때 409 다.
    */
   route('POST', '/api/v1/restore', 'admin', async (c, api) => {
-    const body = c.body;
-    const wrapped = body !== null && typeof body === 'object' && !Array.isArray(body);
-    const manifest = wrapped && 'manifest' in (body as object)
-      ? (body as { manifest: unknown }).manifest
-      : body;
-    const out = await api.store.importFromManifest(manifest, 'replace', c.who.name);
+    const { manifest, opts } = importBody(c.body);
+    const out = await api.store.importFromManifest(manifest, 'replace', c.who.name, { ...opts, preview: false });
     eventsOf(api).publish('revision', { revision: out.revision, restored: true });
     json(c.res, 200, out);
   }, { sensitive: true }),
@@ -1849,6 +1870,8 @@ function fillPath(template: string, params: Record<string, string>): string {
 const relayTo = (path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET') => {
   const known = method === 'GET' ? RELAY_PATHS.includes(path) : RELAY_WRITES.some((w) => w.method === method && w.path === path);
   if (!known) throw new Error(`중계 허용 목록에 없는 경로다: ${method} ${path}`);
+  // 지역에서만 쓰는 경로(백업 · 복원 · 내보내기 · 가져오기)는 목록에 넣어도 중계하지 않는다 — 전체 설정이 전역에 모이지 않게.
+  if (LOCAL_ONLY_PATHS.includes(path)) throw new Error(`지역에서만 쓰는 경로는 중계하지 않는다: ${method} ${path}`);
   return async (c: Ctx, api: GlobalApiOptions): Promise<void> => {
   const name = c.params['name'] ?? '';
   if (!api.global.has(name)) {

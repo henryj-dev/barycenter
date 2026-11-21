@@ -209,8 +209,10 @@ const usage = (): never => {
   bary apply <파일.json>         changeset → plan → commit → apply 한 바퀴
   bary export                    spec-only 매니페스트 (stdout)
   bary import <파일.json>        단일 changeset 으로 커밋. --mode replace 는 없는 키를 지운다
+                                 --preview 는 커밋하지 않고 바뀌는 것과 영향만 본다
   bary backup [파일.json]        GET /backup. 시크릿 바이트 없음
   bary restore <파일.json>       POST /restore. admin 스코프. apply 는 아니다
+                                 --preview 는 복원하지 않고 바뀌는 것과 영향만 본다
   bary rollback <리비전>          그 시점 내용으로 **새 리비전**을 만들고 적용한다
   bary rerender                  활성 리비전을 지금 판의 렌더러로 다시 적용한다 (새 리비전 없음)
   bary cancel <오퍼레이션>        진행 중인 전환을 포기한다 (활성화된 것은 못 되돌린다)
@@ -828,6 +830,12 @@ async function main(): Promise<void> {
         console.error('백업 파일에 manifest 가 없다');
         process.exit(2);
       }
+      if (argv.includes('--preview')) {
+        // 복원과 같은 계산(replace)을 커밋 없이 — 지울 것까지 보인다.
+        show(must(await call('POST', '/api/v1/config/import',
+          { manifest: bundle.manifest, mode: 'replace', preview: true }), 'restore --preview'));
+        return;
+      }
       show(await restoreNow(call, { revision: bundle.revision ?? '', manifest: bundle.manifest }));
       return;
     }
@@ -842,12 +850,17 @@ async function main(): Promise<void> {
         process.exit(2);
       }
       const doc: unknown = JSON.parse(readFileSync(path, 'utf8'));
-      const body = mode === 'replace' ? { manifest: doc, mode } : doc;
+      const preview = argv.includes('--preview');
+      const body = mode === 'replace' || preview
+        ? { manifest: doc, mode, ...(preview ? { preview: true } : {}) }
+        : doc;
       const out = must(await call('POST', '/api/v1/config/import', body), 'import') as {
-        unchanged: boolean; revision: string;
+        unchanged: boolean; revision: string; preview?: boolean;
       };
       if (out.unchanged) {
         console.error(`이미 같다 (r${out.revision})`);
+      } else if (out.preview === true) {
+        console.error(`미리 봤다 — 커밋하지 않았다 (head r${out.revision})`);
       } else {
         console.error(`imported r${out.revision}`);
       }

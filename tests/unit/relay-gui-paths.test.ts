@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { apiRouteTable } from '../../src/api/server.js';
-import { RELAY_PATHS, RELAY_WRITES } from '../../src/global/relay.js';
+import { LOCAL_ONLY_PATHS, RELAY_PATHS, RELAY_WRITES } from '../../src/global/relay.js';
 
 const GUI = join(import.meta.dirname, '../../gui/src');
 
@@ -63,6 +63,7 @@ describe('GUI 가 부르는 지역 API 는 모두 전역 중계에 있다', () =
     const allowed = [...RELAY_PATHS, ...RELAY_WRITES.map((w) => w.path)];
     const missing = found
       .filter((f) => !OWN.includes(f.path.split('/')[0]!))
+      .filter((f) => !LOCAL_ONLY_PATHS.includes(f.path))
       .filter((f) => !allowed.some((a) => matches(f.path, a)))
       .map((f) => `${f.path} (${f.file})`);
     expect(missing).toEqual([]);
@@ -98,5 +99,28 @@ describe('중계 허용 목록과 전역 라우트가 하나씩 맞는다', () =
 
   it('모든 전역 라우트가 허용 목록에 있다', () => {
     expect(global.filter((g) => !allowed.includes(g))).toEqual([]);
+  });
+});
+
+/**
+ * **지역에서만** 쓰는 경로 (2026-11-21). 내보내기 · 가져오기 · 백업 · 복원은 지역 하나의 전체 설정이라 전역을 지나지 않는다.
+ * GUI 화면은 전역이면 이 경로를 부르지 않는다 — 화면 소스가 그 갈래를 갖는지 본다.
+ */
+describe('백업 · 복원 경로는 전역을 지나지 않는다', () => {
+  it('허용 목록에도 전역 라우트에도 없다', () => {
+    const globalPaths = apiRouteTable()
+      .filter((r) => r.path.startsWith('/api/v1/regions/:name/'))
+      .map((r) => r.path.slice('/api/v1/regions/:name/'.length));
+    const allowed = [...RELAY_PATHS, ...RELAY_WRITES.map((w) => w.path)];
+    for (const p of LOCAL_ONLY_PATHS) {
+      expect(allowed).not.toContain(p);
+      expect(globalPaths).not.toContain(p);
+    }
+  });
+
+  it('화면은 전역이면 부르지 않고 지역에서 열게 한다', () => {
+    const src = readFileSync(join(GUI, 'lib/ops/BackupRestore.svelte'), 'utf8');
+    expect(src).toContain("scope?.mode === 'global'");
+    expect(src).toContain('이 지역에서 열기 ↗');
   });
 });
