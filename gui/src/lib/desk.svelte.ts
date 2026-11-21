@@ -23,6 +23,8 @@ import { RECONNECT_GRACE_MS, backoffMs, hasStream, isTransientStatus } from '@we
 import { retryingFetch } from '@web/retry';
 import { deletePatch, renamePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput, type SourceRuleInput } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
+import { failureKind, keepsDraft, keptDraftMessage, parseDrafts, type DraftRow } from '@web/drafts-view';
+import { parseOperation, parseOperations, type OperationRow } from '@web/operations-view';
 import { routeGroupPatch, type RouteGroupInput } from '@web/route-group';
 import type { ModelLike, ResourceKind } from '@web/resources';
 import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
@@ -524,39 +526,196 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
    */
   const commitPatch = async (patch: unknown[]): Promise<boolean> => {
     let csId: string | undefined;
+    /** 실패가 충돌이면(head 가 움직였다 · 남이 먼저 고쳤다 · 서버 오류) changeset 을 초안으로 남긴다 (2026-11-21). */
+    let keep = false;
+    const fail = (what: string, r: { status: number; body: Record<string, unknown> }): false => {
+      const message = r.body['message'] as string | undefined;
+      const kind = failureKind({ status: r.status, ...(typeof r.body['code'] === 'string' ? { code: r.body['code'] } : {}), ...(message === undefined ? {} : { message }) });
+      keep = csId !== undefined && keepsDraft(kind);
+      error = keep ? keptDraftMessage(kind, message) : (message ?? `${what} ${r.status}`);
+      return false;
+    };
+    try {
+      const headRes = await call('GET', '/api/v1/config/head');
+      if (!headRes.ok || typeof headRes.body['revision'] !== 'string') return fail('head', headRes);
+      const opened = await call('POST', '/api/v1/changesets', { base_revision: headRes.body['revision'] });
+      if (!opened.ok || typeof opened.body['id'] !== 'string') return fail('changeset', opened);
+      csId = opened.body['id'];
+      const patched = await call('PATCH', `/api/v1/changesets/${csId}`, { patch });
+      if (!patched.ok) return fail('patch', patched);
+      const planned = await call('POST', `/api/v1/changesets/${csId}/plan`);
+      if (!planned.ok || typeof planned.body['id'] !== 'string') return fail('plan', planned);
+      const committed = await call('POST', `/api/v1/changesets/${csId}/commit`, { plan_id: planned.body['id'] });
+      if (!committed.ok) return fail('commit', committed);
+      noteCommit(committed.body['applied'] !== undefined);
+      return true;
+    } finally {
+      if (csId !== undefined && error !== undefined && !keep) {
+        await call('DELETE', `/api/v1/changesets/${csId}`).catch(() => undefined);
+      }
+    }
+  };
+
+  // ── 변경 초안 (2026-11-21) ── 커밋하지 않은 changeset. 「저장」 이 충돌로 실패하면 여기 남는다.
+
+  /** `GET /api/v1/changesets` — open · sealed. 못 읽으면 undefined. */
+  const drafts = async (): Promise<DraftRow[] | undefined> => {
+    try {
+      const r = await fetch(api('/api/v1/changesets'), { headers: auth() });
+      return r.ok ? parseDrafts(await r.json()) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** 「초안으로 두기」 — changeset 을 열고 patch 만 얹는다. 계획 · 커밋은 초안 화면에서 한다. 만든 id 를 돌려준다. */
+  const saveDraft = async (patch: unknown[]): Promise<string | undefined> => {
+    editing = true;
+    error = undefined;
+    let csId: string | undefined;
     try {
       const headRes = await call('GET', '/api/v1/config/head');
       if (!headRes.ok || typeof headRes.body['revision'] !== 'string') {
         error = (headRes.body['message'] as string | undefined) ?? `head ${headRes.status}`;
-        return false;
+        return undefined;
       }
       const opened = await call('POST', '/api/v1/changesets', { base_revision: headRes.body['revision'] });
       if (!opened.ok || typeof opened.body['id'] !== 'string') {
         error = (opened.body['message'] as string | undefined) ?? `changeset ${opened.status}`;
-        return false;
+        return undefined;
       }
       csId = opened.body['id'];
       const patched = await call('PATCH', `/api/v1/changesets/${csId}`, { patch });
       if (!patched.ok) {
         error = (patched.body['message'] as string | undefined) ?? `patch ${patched.status}`;
+        await call('DELETE', `/api/v1/changesets/${csId}`).catch(() => undefined);
+        return undefined;
+      }
+      return csId;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return undefined;
+    } finally {
+      editing = false;
+    }
+  };
+
+  /** 초안을 계획한다 — 영향을 돌려준다. 커밋은 `commitDraft` 가 한다. 실패하면 undefined 이고 `error` 에 이유가 있다. */
+  const planDraft = async (id: string): Promise<{ id: string; impact: Impact } | undefined> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await call('POST', `/api/v1/changesets/${encodeURIComponent(id)}/plan`);
+      if (!r.ok || typeof r.body['id'] !== 'string') {
+        error = (r.body['message'] as string | undefined) ?? `plan ${r.status}`;
+        return undefined;
+      }
+      return { id: r.body['id'], impact: r.body['impact'] as Impact };
+    } finally {
+      editing = false;
+    }
+  };
+
+  /** 계획한 초안을 커밋한다. head 가 움직였으면 초안은 남고, 「최신 head 로 다시 계획」 을 안내한다. */
+  const commitDraft = async (id: string, planId: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await call('POST', `/api/v1/changesets/${encodeURIComponent(id)}/commit`, { plan_id: planId });
+      if (!r.ok) {
+        const message = r.body['message'] as string | undefined;
+        const kind = failureKind({ status: r.status, ...(typeof r.body['code'] === 'string' ? { code: r.body['code'] } : {}) });
+        error = kind === 'stale' ? `다른 변경이 먼저 커밋됐어요. 「최신 head 로 다시 계획」 을 눌러요.${message === undefined ? '' : ` (${message})`}` : (message ?? `commit ${r.status}`);
         return false;
       }
-      const planned = await call('POST', `/api/v1/changesets/${csId}/plan`);
-      if (!planned.ok || typeof planned.body['id'] !== 'string') {
-        error = (planned.body['message'] as string | undefined) ?? `plan ${planned.status}`;
-        return false;
-      }
-      const committed = await call('POST', `/api/v1/changesets/${csId}/commit`, { plan_id: planned.body['id'] });
-      if (!committed.ok) {
-        error = (committed.body['message'] as string | undefined) ?? `commit ${committed.status}`;
-        return false;
-      }
-      noteCommit(committed.body['applied'] !== undefined);
+      noteCommit(r.body['applied'] !== undefined);
       return true;
     } finally {
-      if (csId !== undefined && error !== undefined) {
-        await call('DELETE', `/api/v1/changesets/${csId}`).catch(() => undefined);
-      }
+      editing = false;
+    }
+  };
+
+  /**
+   * 「최신 head 로 다시 계획」 — 같은 patch 로 지금 head 위에 새 초안을 열고 계획한다. 옛 초안은 버린다.
+   * 새 초안의 id 와 계획을 돌려준다. 새 head 와 부딪치면(같은 리소스를 남이 지웠다 등) 계획이 실패하고, 옛 초안은 그대로 남는다.
+   */
+  const rebaseDraft = async (id: string): Promise<{ id: string; plan: { id: string; impact: Impact } } | undefined> => {
+    const cur = await call('GET', `/api/v1/changesets/${encodeURIComponent(id)}`);
+    if (!cur.ok || !Array.isArray(cur.body['patch'])) {
+      error = (cur.body['message'] as string | undefined) ?? `changeset ${cur.status}`;
+      return undefined;
+    }
+    const fresh = await saveDraft(cur.body['patch'] as unknown[]);
+    if (fresh === undefined) return undefined;
+    const plan = await planDraft(fresh);
+    if (plan === undefined) {
+      // 새 초안은 계획이 안 되는 내용이다 — 남기지 않는다. 옛 초안이 그대로 있다.
+      await call('DELETE', `/api/v1/changesets/${encodeURIComponent(fresh)}`).catch(() => undefined);
+      return undefined;
+    }
+    await call('DELETE', `/api/v1/changesets/${encodeURIComponent(id)}`).catch(() => undefined);
+    return { id: fresh, plan };
+  };
+
+  /** sealed → open. 옛 계획은 무효다. */
+  const reopenDraft = async (id: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await call('POST', `/api/v1/changesets/${encodeURIComponent(id)}/reopen`);
+      if (!r.ok) error = (r.body['message'] as string | undefined) ?? `reopen ${r.status}`;
+      return r.ok;
+    } finally {
+      editing = false;
+    }
+  };
+
+  /** 초안을 버린다. 행은 `discarded` 로 남는다 — 감사가 가리킬 대상이 사라지지 않는다. */
+  const discardDraft = async (id: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await call('DELETE', `/api/v1/changesets/${encodeURIComponent(id)}`);
+      if (!r.ok) error = (r.body['message'] as string | undefined) ?? `discard ${r.status}`;
+      return r.ok;
+    } finally {
+      editing = false;
+    }
+  };
+
+  // ── 전환 (2026-11-21) ── 적용 · 롤백 · 다시 렌더가 남긴 오퍼레이션.
+
+  /** `GET /api/v1/operations` — 새 것부터. 못 읽으면 undefined. */
+  const operations = async (limit = 30): Promise<OperationRow[] | undefined> => {
+    try {
+      const r = await fetch(api(`/api/v1/operations?limit=${limit}`), { headers: auth() });
+      return r.ok ? parseOperations(await r.json()) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** `GET /api/v1/operations/:id`. 없으면 null, 못 읽으면 undefined. */
+  const operation = async (id: string): Promise<OperationRow | null | undefined> => {
+    try {
+      const r = await fetch(api(`/api/v1/operations/${encodeURIComponent(id)}`), { headers: auth() });
+      if (r.status === 404) return null;
+      return r.ok ? parseOperation(await r.json()) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** 끝나지 않은 전환을 포기한다 — 예약한 슬롯을 반납하고 실패로 닫는다. 활성화된 것은 되돌리지 않는다(롤백이다). */
+  const cancelOperation = async (id: string): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = await call('POST', `/api/v1/operations/${encodeURIComponent(id)}/cancel`);
+      if (!r.ok) error = (r.body['message'] as string | undefined) ?? `cancel ${r.status}`;
+      return r.ok;
+    } finally {
+      editing = false;
     }
   };
 
@@ -1506,6 +1665,16 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     insertRouteGroup,
     engineSettings,
     putEngine,
+    drafts,
+    saveDraft,
+    planDraft,
+    commitDraft,
+    rebaseDraft,
+    reopenDraft,
+    discardDraft,
+    operations,
+    operation,
+    cancelOperation,
     insertPassthroughRoute,
     insertPassthroughReject,
     disconnect() { stop?.(); },

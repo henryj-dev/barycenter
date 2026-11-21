@@ -23,6 +23,9 @@ const LISTS = new Set([
   'sockets',
   // 저장소 상태 — DB 종류 · 보존 정책 · 마지막 청소 (2026-11-20).
   'system/storage',
+  // 변경 초안(커밋 전 changeset) · 최근 전환 (2026-11-21).
+  'changesets',
+  'operations',
 ]);
 
 export function getPath(what: string): string | undefined {

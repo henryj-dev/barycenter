@@ -44,7 +44,7 @@ import { refreshAddressSet, refreshRows } from '../control/address-sources/refre
 import { count, render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
-import { ConfigStore, isHistoryKind, StoreError, type PatchOp } from '../store/config-store.js';
+import { ConfigStore, DRAFT_STATES, isHistoryKind, StoreError, type ChangesetDraftState, type PatchOp } from '../store/config-store.js';
 import {
   AccountError, AccountStoreUnavailable, STEP_UP_MAX_AGE_MS, type AccountService, type Meta as AccountMeta, type SecondFactorKind,
 } from '../accounts/service.js';
@@ -1251,6 +1251,23 @@ const ROUTES: Route[] = [
       { location: `/api/v1/changesets/${id}` });
   }),
 
+  /**
+   * **변경 초안** — 아직 커밋하지 않은 changeset (2026-11-21). `state=open|sealed` 로 거른다. 없으면 둘 다다.
+   * 한 줄에 patch 를 그대로 싣는다 — 화면이 「무엇을 바꾸려던 것인가」 를 말하려면 필요하다(최대 1000 op).
+   */
+  route('GET', '/api/v1/changesets', 'read', async (c, api) => {
+    const raw = c.url.searchParams.get('state');
+    const states = raw === null || raw === '' ? [] : raw.split(',');
+    const bad = states.find((s) => !(DRAFT_STATES as readonly string[]).includes(s));
+    if (bad !== undefined) {
+      json(c.res, 400, { code: 'bad_state', message: `state '${bad}' 를 모른다 — open · sealed 만 있다` });
+      return;
+    }
+    const asked = Number(c.url.searchParams.get('limit') ?? '50') || 50;
+    const rows = await api.store.listChangesets(states as ChangesetDraftState[], asked);
+    json(c.res, 200, rows.map((r) => ({ ...r, etag: changesetEtag(r.patch, r.state) })));
+  }),
+
   route('GET', '/api/v1/changesets/:id', 'read', async (c, api) => {
     const r = (await api.db.query(
       `SELECT id, base_revision, state, patch, created_by, committed_revision
@@ -1262,6 +1279,8 @@ const ROUTES: Route[] = [
       id: r['id'], base_revision: String(r['base_revision']), state: r['state'],
       patch: r['patch'], created_by: r['created_by'],
       committed_revision: r['committed_revision'] === null ? null : String(r['committed_revision']),
+      // 본문에도 싣는다 — 전역 중계는 응답 헤더를 넘기지 않는다. `If-Match` 는 이 값을 그대로 보낸다.
+      etag,
     }, { etag });
   }),
 
@@ -1367,6 +1386,12 @@ const ROUTES: Route[] = [
     const out = await api.store.replanActiveHead(c.who.name);
     eventsOf(api).publish('revision', { revision: out.revision, rerender: true });
     json(c.res, 200, out);
+  }),
+
+  /** **최근 전환** (2026-11-21). `limit` 1–200, 기본 20. 끝나지 않은 것은 `terminal: false` 다. */
+  route('GET', '/api/v1/operations', 'read', async (c, api) => {
+    const asked = Number(c.url.searchParams.get('limit') ?? '20') || 20;
+    json(c.res, 200, await api.control.operations(asked));
   }),
 
   route('GET', '/api/v1/operations/:id', 'read', async (c, api) => {
@@ -1918,8 +1943,10 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/config/head', 'read', relayTo('config/head')),
   route('GET', '/api/v1/regions/:name/config/revisions', 'read', relayTo('config/revisions')),
   route('GET', '/api/v1/regions/:name/config/history', 'read', relayTo('config/history')),
+  route('GET', '/api/v1/regions/:name/changesets', 'read', relayTo('changesets')),
   route('GET', '/api/v1/regions/:name/changesets/:id', 'read', relayTo('changesets/:id')),
   route('GET', '/api/v1/regions/:name/plans/:id', 'read', relayTo('plans/:id')),
+  route('GET', '/api/v1/regions/:name/operations', 'read', relayTo('operations')),
   route('GET', '/api/v1/regions/:name/operations/:id', 'read', relayTo('operations/:id')),
   route('GET', '/api/v1/regions/:name/address-sets', 'read', relayTo('address-sets')),
   route('GET', '/api/v1/regions/:name/cluster/nodes', 'read', relayTo('cluster/nodes')),

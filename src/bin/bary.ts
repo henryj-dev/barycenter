@@ -12,7 +12,7 @@
  *   bary tls-policy create|delete
  *   bary certificate create|delete|retry|renew
  *   bary sni-binding create|delete
- *   bary changeset new|patch|plan|show|discard|reopen
+ *   bary changeset new|list|patch|plan|show|discard|reopen
  *   bary commit --plan <id>
  *   bary apply --plan <id>
  *   bary apply <파일.json>      한 바퀴 단축
@@ -53,6 +53,7 @@ import {
 import {
   applyByPlan,
   changesetDiscard,
+  changesetList,
   changesetNew,
   changesetPatch,
   changesetPlan,
@@ -196,6 +197,7 @@ const usage = (): never => {
   bary sni-binding create        --name --listener --host --certificate. override 없음
   bary sni-binding delete        --name
   bary changeset new             changeset 을 연다
+  bary changeset list [--state open|sealed]   커밋 전 changeset(초안). stale 은 base 가 head 와 다르다
   bary changeset patch <id> <파일.json>
   bary changeset plan <id>       영향만 본다 (커밋하지 않는다)
   bary changeset show <id>
@@ -870,6 +872,12 @@ async function main(): Promise<void> {
       try {
         if (sub === 'new') {
           show(await changesetNew(call));
+          return;
+        }
+        if (sub === 'list') {
+          const state = flag(argv, '--state');
+          if (state !== undefined && state !== 'open' && state !== 'sealed') return usage();
+          show(await changesetList(call, state));
           return;
         }
         if (sub === 'show') {

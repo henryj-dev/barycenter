@@ -23,6 +23,8 @@ export type StatusView = {
   driver: { loaded: boolean; name: string | undefined };
   published: { kind: string; generation: string | undefined };
   unfinished: boolean;
+  /** 끝나지 않은 전환의 오퍼레이션 id — 「작업」 화면에서 고른다 (2026-11-21). 모르면 undefined. */
+  unfinishedOperation: string | undefined;
   pending: { planId: string; revision: string }[];
 };
 
@@ -75,6 +77,7 @@ export function viewOfStatus(snap: StatusFact): StatusView {
       generation: text(record['generation']) ?? text(published['generation']),
     },
     unfinished: snap.unfinished !== undefined && snap.unfinished !== null,
+    unfinishedOperation: text(rec(snap.unfinished)['operationId']),
     pending,
   };
 }
