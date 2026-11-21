@@ -1457,6 +1457,28 @@
         }
       }
     },
+    "/api/v1/regions/{name}/traffic": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/traffic",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/traffic/{kind}/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/traffic/:kind/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/regions/{name}/changesets": {
       "post": {
         "operationId": "POST:/api/v1/regions/:name/changesets",

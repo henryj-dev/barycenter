@@ -14,6 +14,10 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Global mode now relays traffic statistics (`GET /api/v1/regions/<region>/traffic` and
+  `/traffic/<kind>/<key>`). The paths were on the relay allow-list but had no global route, so the
+  traffic graphs answered 404 in global mode. A test now checks that the relay allow-list and the
+  global routes match one to one.
 - The status screen has a **저장소** panel, and `GET /api/v1/system/storage` (read scope; relayed in
   global mode; `bary get system/storage`) reports it: the config and accounts database kinds and the
   config server version, the secret store driver (files or encrypted in the database, and whether a
