@@ -14,6 +14,22 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Saving no longer throws away a change that lost a race. If someone else committed first (the plan is
+  stale), another person changed the same changeset (412), or the server failed, the GUI keeps the
+  changeset as a **draft** and says where to find it; only invalid content is discarded. The new screen
+  **변경 › 초안** (`/change/drafts`) lists open and sealed changesets (`GET /api/v1/changesets`, relayed in
+  global mode), shows what each would change, plans it, commits it, reopens or discards it. A draft whose
+  base is no longer head gets **최신 head 로 다시 계획**: the same patch is planned again on the current head.
+  **JSON 으로 고치기** has **초안으로 두기** to save a draft on purpose. `GET /changesets/:id` also carries the
+  ETag in the body, because the global relay does not forward response headers. CLI:
+  `bary changeset list [--state open|sealed]`, `bary get changesets`.
+- New screen **운영 › 작업** (`/ops/operation`) lists recent operations from apply, rollback and re-render
+  (`GET /api/v1/operations`, relayed), with phase, planes, who and when. An unfinished one can be cancelled
+  with **작업 취소…** (confirmation required): reserved slots are released and the transition is closed as
+  failed; the active generation and traffic do not change. The status screen's unfinished-transition banner
+  links to it. `GET /operations/:id` now also returns `createdAt`, `updatedAt`, `createdBy` and `terminal`.
+  CLI: `bary get operations`.
+
 - Global mode now relays traffic statistics (`GET /api/v1/regions/<region>/traffic` and
   `/traffic/<kind>/<key>`). The paths were on the relay allow-list but had no global route, so the
   traffic graphs answered 404 in global mode. A test now checks that the relay allow-list and the

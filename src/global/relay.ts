@@ -41,6 +41,8 @@ export const RELAY_PATHS: readonly string[] = [
   'system/storage',
   // GUI 가 이미 부르던 것 (2026-11-20) — 빠져 있었다.
   'pools/:id/discovery', 'address-sets/refresh-status',
+  // 변경 초안 · 최근 전환 (2026-11-21).
+  'changesets', 'operations',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */

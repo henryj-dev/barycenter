@@ -29,7 +29,8 @@ import { RemoteDataplaneDriver } from '../dp/remote.js';
 import { materializeGeneration } from '../dp/materialize.js';
 import { DEFAULT_KEEP, sweepGenerations, type SweepResult } from '../dp/retention.js';
 import { certificateFiles, type SecretStore } from '../dp/secrets.js';
-import type { ApplyOperation, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
+import type { ApplyOperation, ApplyPhase, ApplyResult, Plane, PlaneTarget } from '../dp/operation.js';
+import { isTerminalPhase } from '../dp/operation.js';
 import { ConfigStore, StoreError } from '../store/config-store.js';
 import { bindTransitionConflicts } from '../validate/bind-transition.js';
 import type { Certificate, Model } from '../model/provisional.js';
@@ -102,6 +103,15 @@ export type OperationView = {
   generation: string;
   phase: string;
   detail: unknown;
+};
+
+/** `GET /operations/:id` · `GET /operations` 의 한 줄. `OperationView` 에 시각과 종단 여부를 더한다. */
+export type OperationRecord = OperationView & {
+  createdAt: string | null;
+  updatedAt: string | null;
+  createdBy: string | null;
+  /** 러너가 더 진행하지 않는 단계다 (`isTerminalPhase`). 거짓이면 취소할 수 있다. */
+  terminal: boolean;
 };
 
 const PLANES: Plane[] = ['http', 'stream'];
@@ -976,7 +986,7 @@ export class ControlPlane {
    * **이미 활성화된 것을 되돌리지는 않는다** — 되돌리는 것은 롤백이고, 롤백은 새 활성화
    * 사건이다 (§3.3). 그래서 활성화가 끝난 오퍼레이션은 취소 대상이 아니다.
    */
-  async cancel(id: string, by: string): Promise<OperationView> {
+  async cancel(id: string, by: string): Promise<OperationRecord> {
     this.election.assertLeader();
     const r = (await this.db.query(
       `SELECT id, plan_id, revision, activation_epoch, generation, phase, detail, envelope
@@ -1002,13 +1012,26 @@ export class ControlPlane {
     return this.operation(id);
   }
 
-  async operation(id: string): Promise<OperationView> {
+  async operation(id: string): Promise<OperationRecord> {
     const r = (await this.db.query(
-      `SELECT id, plan_id, revision, activation_epoch, generation, phase, detail
+      `SELECT id, plan_id, revision, activation_epoch, generation, phase, detail, created_at, updated_at, created_by
          FROM operations WHERE id=$1`, [id],
     )).rows[0];
     if (r === undefined) throw new StoreError(404, 'unknown_operation', `오퍼레이션 ${id} 이 없다`);
-    return viewOf(r);
+    return recordOf(r);
+  }
+
+  /**
+   * **최근 전환** — 새 것부터 (GUI 「작업」, 2026-11-21). 적용 · 롤백 · 다시 렌더가 모두 여기 남는다.
+   * `terminal` 이 거짓이면 아직 끝나지 않은 전환이다 — 취소하거나 이어받을 대상이다.
+   */
+  async operations(limit = 20): Promise<OperationRecord[]> {
+    const n = Math.min(Math.max(Math.trunc(limit), 1), 200);
+    const rows = (await this.db.query(
+      `SELECT id, plan_id, revision, activation_epoch, generation, phase, detail, created_at, updated_at, created_by
+         FROM operations ORDER BY created_at DESC LIMIT $1`, [n],
+    )).rows;
+    return rows.map(recordOf);
   }
 
   /** §5.2 `GET /status` — 4-way + 미완 전환. */
@@ -1299,6 +1322,18 @@ export class ControlPlane {
   }
 }
 
+
+const isoOf = (v: unknown): string | null =>
+  v === null || v === undefined ? null : v instanceof Date ? v.toISOString() : new Date(String(v)).toISOString();
+
+/** 화면이 읽는 전환 — 언제 · 누가 · 끝났는가를 더한다. */
+const recordOf = (r: Row): OperationRecord => ({
+  ...viewOf(r),
+  createdAt: isoOf(r['created_at']),
+  updatedAt: isoOf(r['updated_at']),
+  createdBy: r['created_by'] === null || r['created_by'] === undefined ? null : String(r['created_by']),
+  terminal: isTerminalPhase(String(r['phase']) as ApplyPhase),
+});
 
 const viewOf = (r: Row): OperationView => ({
   id: String(r['id']),
