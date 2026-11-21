@@ -28,6 +28,18 @@
  *   · `error_page` 는 상속이 아니라 **대체**다 — 자기 `error_page` 가 있는 location(라우트 출발지 규칙의 570 번대)은
  *     server 의 것을 잃는다. 그 자리에는 `locationErrorPageNodes()` 로 한 벌을 다시 낸다.
  *   · 444 는 응답이 없으므로 대상이 아니다.
+ *
+ * ── 백엔드가 무엇을 줬는가 (2026-11-21) ─────────────────────────────────────────────────────
+ *
+ *   응답의 `Server` 는 언제나 barycenter 다 — 백엔드가 보낸 500 도 그렇게 보인다. 그래서 「barycenter 가 500 을 냈다」
+ *   로 읽혔다(실제 운영 장애의 진단이 거기서 헷갈렸다). 두 가지를 더한다.
+ *
+ *   · `X-Bary-Upstream-Status: <백엔드 상태>` — 백엔드에 간 응답에만 붙는다(`$upstream_status`, 재시도면 `502, 200`).
+ *     headers-more 가 있을 때만이다. `add_header` 로 내면 location 의 다른 `add_header` 와 서로 지운다.
+ *   · 엔진이 만든 오류 페이지의 꼬리에 `Upstream <code>502</code>` 한 줄 — 「백엔드에 붙으려다 실패했다」 와
+ *     「barycenter 가 거절했다(라우트 없음 · 출발지 거부)」 를 가른다. JSON 에는 `upstream_status` 칸이다.
+ *
+ *   백엔드 주소는 싣지 않는다 — 방문자에게 내부 주소를 보일 이유가 없다. 상태 숫자만 싣는다.
  */
 import { block, directive, entry, lit, num, regex, variable, type ConfNode } from './ast.js';
 import { servedByWhenSet } from './served-by.js';
@@ -93,6 +105,7 @@ const FALLBACK: Copy = { title: 'Something went wrong', text: 'The request could
 const V = {
   loc: 'bary_err_loc', title: 'bary_err_title', head: 'bary_err_head', main: 'bary_err_main',
   foot: 'bary_err_foot', json: 'bary_err_jbody', served: 'bary_err_served', jserved: 'bary_err_jserved',
+  up: 'bary_err_up', jup: 'bary_err_jup',
 } as const;
 const LOC_HTML = '@bary_err_html';
 const LOC_JSON = '@bary_err_json';
@@ -138,7 +151,7 @@ const HEAD = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
  * 노드 이름(`BARY_SERVED_BY`, served-by.ts)이 있으면 그 옆에 붙는다 — 어느 노드의 기록을 볼지 같이 알려 준다.
  */
 const FOOT = `<footer><span class="brand">${MARK}barycenter</span>`
-  + '<span>Request ID <code>$request_id</code>$bary_err_served</span></footer></main></body></html>';
+  + '<span>Request ID <code>$request_id</code>$bary_err_served$bary_err_up</span></footer></main></body></html>';
 
 /** `href=""` 는 지금 주소를 다시 연다(GET). 스크립트 없이 「다시 시도」 가 된다. */
 const ACTION: Record<Copy['action'], string> = {
@@ -149,7 +162,7 @@ const ACTION: Record<Copy['action'], string> = {
 const mainOf = (c: Copy): string =>
   `<h1>${c.title}</h1><p>${c.text}</p><p class="ko" lang="ko">${c.ko}</p>${ACTION[c.action]}`;
 
-const JSON_BODY = '{"status":$status,"error":"$bary_err_title","request_id":"$request_id"$bary_err_jserved}';
+const JSON_BODY = '{"status":$status,"error":"$bary_err_title","request_id":"$request_id"$bary_err_jserved$bary_err_jup}';
 
 const statusEntries = (f: (c: Copy) => string): ConfNode[] => [
   ...Object.entries(COPY).map(([code, c]) => entry(num(Number(code)), lit(f(c)))),
@@ -165,6 +178,9 @@ export function errorPageHttpNodes(): ConfNode[] {
     // 노드 이름이 없으면 빈 문자열 — 자리가 남지 않는다.
     servedByWhenSet(V.served, ' · <code>$bary_served_by</code>'),
     servedByWhenSet(V.jserved, ',"served_by":"$bary_served_by"'),
+    // 백엔드에 간 요청이면 그 상태 — 안 갔으면 빈 값이라 자리가 남지 않는다.
+    upstreamWhenSet(V.up, ' · Upstream <code>$upstream_status</code>'),
+    upstreamWhenSet(V.jup, ',"upstream_status":"$upstream_status"'),
     // `Accept` 에 json 이 있으면 JSON 이다. 브라우저의 `Accept` 에는 없다.
     block('map', [variable('http_accept'), variable(V.loc)], [
       entry(lit('default'), lit(LOC_HTML)),
@@ -176,6 +192,21 @@ export function errorPageHttpNodes(): ConfNode[] {
     block('map', [variable('status'), variable(V.foot)], [entry(lit('default'), lit(FOOT))]),
     block('map', [variable('status'), variable(V.json)], [entry(lit('default'), lit(JSON_BODY))]),
   ];
+}
+
+function upstreamWhenSet(target: string, whenSet: string): ConfNode {
+  return block('map', [variable('upstream_status'), variable(target)], [
+    entry(lit(''), lit('')),
+    entry(lit('default'), lit(whenSet)),
+  ]);
+}
+
+/**
+ * `X-Bary-Upstream-Status` — http 블록에 한 번. headers-more 의 `more_set_headers` 는 값이 비면 헤더를 안 낸다 —
+ * 백엔드에 안 간 응답(라우트 거부 · 리다이렉트)에는 안 붙는다. 모듈이 없으면 안 낸다(위 주석).
+ */
+export function upstreamStatusHeaderNodes(headersMore: boolean): ConfNode[] {
+  return headersMore ? [directive('more_set_headers', [lit('X-Bary-Upstream-Status: $upstream_status')])] : [];
 }
 
 const errorPageDirective = (): ConfNode =>
