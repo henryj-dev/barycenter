@@ -14,6 +14,21 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- **Rerender and apply after upgrading** — these change the rendered nginx config (OpenResty).
+  - Failed requests no longer leak the per-backend in-flight count. When nginx could not reach a
+    backend, it made a 502/504 and jumped to the error page, which cleared `ngx.ctx`; the counter
+    kept one in-flight request per failure. That skewed `least_conn`, tripped soft connection caps
+    early and kept drains from ever reaching "quiesced". Pool traffic counters also missed those
+    requests. The chosen peers now live in nginx variables, which survive the jump.
+  - A listener's default action now forwards WebSocket upgrades (`Upgrade` / `Connection`) and
+    pins `proxy_http_version 1.1`. Before, WebSockets only worked through routes with
+    `websocket: true`. Requests that do not ask for an upgrade are sent as before.
+  - Responses that came from a backend carry `X-Bary-Upstream-Status` (needs headers-more), and
+    barycenter's own error page adds an `Upstream 502` line (JSON: `upstream_status`) when the
+    error happened while talking to the backend. Errors barycenter made without a backend (no
+    route, source denied) show neither. Since every response says `Server: barycenter`, a
+    backend's own 500 used to look like barycenter's.
+
 - Global mode now relays traffic statistics (`GET /api/v1/regions/<region>/traffic` and
   `/traffic/<kind>/<key>`). The paths were on the relay allow-list but had no global route, so the
   traffic graphs answered 404 in global mode. A test now checks that the relay allow-list and the
