@@ -23,6 +23,9 @@ const LISTS = new Set([
   'sockets',
   // 저장소 상태 — DB 종류 · 보존 정책 · 마지막 청소 (2026-11-20).
   'system/storage',
+  // 엔진 전역 설정 · ACME 계정 (2026-11-21).
+  'engine',
+  'acme/accounts',
 ]);
 
 export function getPath(what: string): string | undefined {

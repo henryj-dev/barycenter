@@ -14,6 +14,17 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- The `bary` CLI now covers what only the GUI had (2026-11-21):
+  `bary apply retry`, `bary history <kind> <name>`, `bary revisions`, `bary pending`,
+  `bary engine set` (engine settings; unspecified fields keep their value, `--clear-*` resets),
+  `bary get engine` / `bary get acme/accounts`, `bary acme account create|list` (`--ca production|staging|URL`,
+  staging by default), and account management: `bary me`, `bary token list|create|revoke`,
+  `bary user list|role|activate|deactivate|authority|revoke-sessions|recovery-link|delete|tokens|token-revoke`,
+  `bary invite list|create|resend|revoke`, `bary account-audit`. Users are named by username.
+  Authorization is unchanged: sensitive account actions still need a recent MFA check in a human session, so
+  personal API tokens get `token_not_allowed`; the CLI now explains why and points to the GUI. One-time values
+  (new token, invitation and recovery links) are printed once. The GUI and CLI share one CA list
+  (`src/web/acme-directories.ts`).
 - The GUI now shows several things the API already had:
   - **Drain progress** on the backend page: new connections blocked / fully drained / deadline
     passed, in-flight requests and sessions when the engine reports them, who started the drain,

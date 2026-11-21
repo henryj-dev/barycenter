@@ -284,6 +284,24 @@ sudo deploy/install.sh ... \
 열린 실시간 스트림(SSE)도 하트비트(15초)마다 세션을 확인해, 로그아웃·정지된 세션의 스트림을 닫는다.
 이미 보낸 데이터는 되돌릴 수 없다.
 
+## 명령줄 (2026-11-21)
+
+계정 관리는 `bary` 로도 한다. **권한은 화면과 같다** — CLI 가 넓히지 않는다.
+
+| 명령 | 범위 | 개인 API 토큰 |
+|---|---|---|
+| `bary me` · `bary token list` | read | 된다 |
+| `bary token create --name --role [--days]` · `bary token revoke <id>` | read · 민감 | **안 된다** (`token_not_allowed`) |
+| `bary user list` · `bary user tokens <이름>` · `bary invite list` · `bary account-audit` | admin | admin 토큰이면 된다 |
+| `bary user` 의 role · activate · deactivate · authority · revoke-sessions · recovery-link · delete, `bary invite` 의 create · resend · revoke | admin · 민감 | **안 된다** |
+
+- 민감 작업은 사람 세션에서 인증 앱을 다시 확인해야 한다. 개인 API 토큰은 그 확인을 받을 수 없어서 막힌다. 명령줄에서는
+  서버의 admin **파일 토큰**(비상 출입구)만 된다. 막히면 CLI 가 이유와 갈 곳(GUI)을 함께 말한다.
+- `bary token create` 는 내 계정에 토큰을 만든다. 파일 토큰에는 주인이 없어서 못 만든다 — GUI 에서 만든다.
+- 사용자는 **이름**으로 가리킨다. CLI 가 `GET /users` 로 id 를 찾아 보낸다.
+- 새 토큰 값, 초대 링크, 복구 링크는 표준 출력에 **한 번** 나온다. 다시 볼 수 없다. 셸 기록에 남지 않게 파일로 받는다
+  (`bary user recovery-link alice > link.json`, `chmod 600`).
+
 ## SSO 연결 (B2 — 로컬 권한 정본)
 
 SSO 공급자는 지금처럼 `BARY_OIDC_*` 로 하나 둔다. 계정이 켜진 배포에서 SSO 는 **「누구인가」(issuer, subject)만**

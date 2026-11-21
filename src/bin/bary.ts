@@ -21,6 +21,8 @@
  *   bary rollback / cancel / audit / status / head
  *   bary get listeners|pools|backends|backends/status|routes|certificates|tls-policies|sni-bindings|sockets|system/storage|health|model|rendered|metrics
  *   bary recover
+ *   bary apply retry · history · revisions · pending · engine set · acme account create|list
+ *   bary me · token list|create|revoke · user … · invite … · account-audit   (계정, 2026-11-21)
  *
  * 환경변수: `BARY_URL`(기본 http://127.0.0.1:8088) · `BARY_TOKEN`
  *
@@ -46,6 +48,14 @@ import {
 import { DISCOVERY_STATIC } from '../web/discovery.js';
 import { routeCreate, routeDelete } from '../cli/route.js';
 import { renameResource } from '../cli/rename.js';
+import {
+  accountAudit, acmeAccountCreate, acmeAccountList, applyRetry, engineSet, pendingResources, resourceHistory, revisions,
+} from '../cli/ops.js';
+import {
+  explainAuth, inviteCreate, inviteList, inviteResend, inviteRevoke, me, roleOf, tokenCreate, tokenList, tokenRevoke,
+  userAuthority, userDelete, userIdOf, userList, userRecoveryLink, userRevokeSessions, userRole, userStatus, userTokenRevoke,
+  userTokens,
+} from '../cli/account.js';
 import {
   certificateAcme, certificateCreate, certificateDelete, sniBindingCreate, sniBindingDelete,
   tlsPolicyCreate, tlsPolicyDelete,
@@ -109,7 +119,7 @@ const usage = (): never => {
 
   bary status                    4-way 상태 · 미완 전환 · 미적용 커밋
   bary head                      전역 리비전
-  bary get <무엇>                listeners | pools | backends | backends/status | routes | certificates | tls-policies | sni-bindings | sockets | system/storage | health | model | rendered | metrics
+  bary get <무엇>                listeners | pools | backends | backends/status | routes | certificates | tls-policies | sni-bindings | sockets | system/storage | engine | acme/accounts | health | model | rendered | metrics
                                  backends/status 는 왜 트래픽을 안 받는지까지 낸다
                                  sockets 는 배포가 열어야 할 (전송·주소·포트) 를 낸다 (§11.3)
                                  system/storage 는 DB 종류 · 보존 정책 · 마지막 청소를 낸다
@@ -214,6 +224,33 @@ const usage = (): never => {
   bary cancel <오퍼레이션>        진행 중인 전환을 포기한다 (활성화된 것은 못 되돌린다)
   bary recover                   미완 전환을 이어받는다. changeset 을 안 연다
   bary audit [개수]
+  bary apply retry               실패한 head 를 다시 계획해 적용한다. 실패한 적용이 없으면 409
+  bary history <종류> <이름> [개수]  그 리소스를 바꾼 리비전 (종류는 rename 과 같다)
+  bary revisions [개수]           리비전 목록 — rollback 대상을 고른다
+  bary pending                   적용 대기 — head 와 활성 리비전이 다른 리소스
+  bary engine set                [--worker-shutdown-timeout 초] [--membership-dict-kb KB] [--acme-dict-kb KB]
+                                 [--clear-worker-shutdown-timeout] [--clear-membership-dict-kb] [--clear-acme-dict-kb]
+                                 주지 않은 칸은 그대로 둔다. --clear-* 는 기본값으로 돌린다. commit 까지. apply 는 아니다
+                                 지금 값: bary get engine
+  bary acme account list
+  bary acme account create       --name <키> --contact you@example.com (여러 번) [--ca production|staging|https://…]
+                                 기본 CA 는 staging 이다 — 되는 것을 본 뒤 운영 계정을 따로 만든다. CA 등록은 첫 주문 때
+계정 (2026-11-21). 민감 작업은 사람 세션의 인증 앱 확인이 필요하다 — 개인 API 토큰은 403 token_not_allowed.
+명령줄에서는 서버의 admin 파일 토큰만 된다. 한 번만 나오는 값(새 토큰 · 링크)은 한 번 쓴다:
+  bary me                        이 토큰 · 세션이 누구인가, 범위
+  bary token list                내 API 토큰
+  bary token create              --name <이름> --role auditor|operator|admin [--days 1–365]   (민감)
+  bary token revoke <id>         (민감)
+  bary user list                 (admin)
+  bary user role <이름> <역할>     (admin · 민감)
+  bary user activate|deactivate <이름>   (admin · 민감)
+  bary user authority <이름> local|idp   역할을 누가 정하나 (admin · 민감)
+  bary user revoke-sessions <이름>        (admin · 민감)
+  bary user recovery-link <이름>          인증 앱을 초기화하고 복구 링크를 낸다 (admin · 민감)
+  bary user delete <이름>         (admin · 민감)
+  bary user tokens <이름> · bary user token-revoke <이름> <id>   남의 토큰 (admin)
+  bary invite list | create --role <역할> [--email 주소] | resend <id> | revoke <id>   (admin · 쓰기는 민감)
+  bary account-audit [개수]       계정 감사 기록 (admin)
 
 환경변수: BARY_URL (기본 ${URL_BASE}) · BARY_TOKEN`);
   process.exit(2);
@@ -318,6 +355,147 @@ async function main(): Promise<void> {
     case 'audit': {
       const n = arg ?? '30';
       show(must(await call('GET', `/api/v1/audit?limit=${encodeURIComponent(n)}`), 'audit'));
+      return;
+    }
+    case 'history': {
+      try {
+        show(await resourceHistory(call, arg ?? usage(), arg2 ?? usage(), argv[3]));
+      } catch (e) {
+        die(e);
+      }
+      return;
+    }
+    case 'revisions':
+      try {
+        show(await revisions(call, arg));
+      } catch (e) {
+        die(e);
+      }
+      return;
+    case 'pending':
+      try {
+        show(await pendingResources(call));
+      } catch (e) {
+        die(e);
+      }
+      return;
+    case 'engine': {
+      if (arg !== 'set') usage();
+      const clear = ([
+        ['--clear-worker-shutdown-timeout', 'shutdown'], ['--clear-membership-dict-kb', 'membership'], ['--clear-acme-dict-kb', 'acme'],
+      ] as const).filter(([f]) => has(argv, f)).map(([, k]) => k);
+      const shutdown = flag(argv, '--worker-shutdown-timeout');
+      const membership = flag(argv, '--membership-dict-kb');
+      const acme = flag(argv, '--acme-dict-kb');
+      if (shutdown === undefined && membership === undefined && acme === undefined && clear.length === 0) usage();
+      try {
+        const out = await engineSet(call, {
+          ...(shutdown === undefined ? {} : { shutdown }),
+          ...(membership === undefined ? {} : { membership }),
+          ...(acme === undefined ? {} : { acme }),
+          clear,
+        });
+        console.error(`committed r${out.revision} (plan ${out.planId}) — 적용: bary apply --plan ${out.planId}`);
+        show(out);
+      } catch (e) {
+        die(e);
+      }
+      return;
+    }
+    case 'acme': {
+      if (arg !== 'account') usage();
+      try {
+        if (arg2 === 'list') {
+          show(await acmeAccountList(call));
+        } else if (arg2 === 'create') {
+          show(await acmeAccountCreate(call, {
+            name: flag(argv, '--name') ?? usage(),
+            ca: flag(argv, '--ca') ?? 'staging',
+            contact: flagAll(argv, '--contact'),
+          }));
+        } else {
+          usage();
+        }
+      } catch (e) {
+        die(e);
+      }
+      return;
+    }
+    case 'account-audit':
+      try {
+        show(await accountAudit(call, arg));
+      } catch (e) {
+        die(explainAuth(e));
+      }
+      return;
+    case 'me':
+      try {
+        show(await me(call));
+      } catch (e) {
+        die(explainAuth(e));
+      }
+      return;
+    case 'token': {
+      try {
+        if (arg === 'list') show(await tokenList(call));
+        else if (arg === 'create') {
+          const days = flag(argv, '--days');
+          const out = await tokenCreate(call, {
+            name: flag(argv, '--name') ?? usage(),
+            role: roleOf(flag(argv, '--role') ?? usage()),
+            ...(days === undefined ? {} : { expiresInDays: Number(days) }),
+          });
+          console.error('토큰 값은 지금 한 번만 나온다. 바로 안전한 곳에 둔다.');
+          show(out);
+        } else if (arg === 'revoke') show(await tokenRevoke(call, arg2 ?? usage()));
+        else usage();
+      } catch (e) {
+        die(explainAuth(e));
+      }
+      return;
+    }
+    case 'user': {
+      const who = arg2;
+      try {
+        switch (arg) {
+          case 'list': show(await userList(call)); break;
+          case 'role': show(await userRole(call, who ?? usage(), roleOf(argv[3] ?? usage()))); break;
+          case 'activate': show(await userStatus(call, who ?? usage(), 'active')); break;
+          case 'deactivate': show(await userStatus(call, who ?? usage(), 'suspended')); break;
+          case 'authority': {
+            const a = argv[3];
+            show(await userAuthority(call, who ?? usage(), a === 'local' || a === 'idp' ? a : usage()));
+            break;
+          }
+          case 'revoke-sessions': show(await userRevokeSessions(call, who ?? usage())); break;
+          case 'recovery-link':
+            console.error('복구 링크는 지금 한 번만 나온다. 대상에게 안전한 길로 건넨다.');
+            show(await userRecoveryLink(call, who ?? usage()));
+            break;
+          case 'delete': show(await userDelete(call, who ?? usage())); break;
+          case 'tokens': show(await userTokens(call, who ?? usage())); break;
+          case 'token-revoke': show(await userTokenRevoke(call, who ?? usage(), argv[3] ?? usage())); break;
+          case 'id': show(await userIdOf(call, who ?? usage())); break;
+          default: usage();
+        }
+      } catch (e) {
+        die(explainAuth(e));
+      }
+      return;
+    }
+    case 'invite': {
+      try {
+        if (arg === 'list') show(await inviteList(call));
+        else if (arg === 'create') {
+          const out = await inviteCreate(call, roleOf(flag(argv, '--role') ?? usage()), flag(argv, '--email'));
+          console.error('메일로 가지 않았으면 링크는 지금 한 번만 나온다.');
+          show(out);
+        } else if (arg === 'resend') show(await inviteResend(call, arg2 ?? usage()));
+        else if (arg === 'revoke') show(await inviteRevoke(call, arg2 ?? usage()));
+        else usage();
+      } catch (e) {
+        die(explainAuth(e));
+      }
       return;
     }
     case 'address-set': {
@@ -898,6 +1076,20 @@ async function main(): Promise<void> {
       return;
     }
     case 'apply': {
+      if (arg === 'retry' && argv.length === 2) {
+        try {
+          const op = await applyRetry(call);
+          show(op);
+          if (op.phase !== 'activated') {
+            console.error(`활성화되지 않았다: ${op.phase}${
+              op.detail?.failure === undefined ? '' : ` — ${op.detail.failure}`}`);
+            process.exit(1);
+          }
+        } catch (e) {
+          die(e);
+        }
+        return;
+      }
       const planId = flag(argv, '--plan');
       if (planId !== undefined) {
         try {

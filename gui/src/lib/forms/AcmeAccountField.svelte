@@ -1,12 +1,10 @@
 <script lang="ts" module>
-  /** 고를 수 있는 CA. 처음에는 스테이징으로 확인하고, 되면 운영으로 바꾼다. */
-  export const CAS = [
-    { value: 'https://acme-v02.api.letsencrypt.org/directory', label: "Let's Encrypt", hint: '운영' },
-    { value: 'https://acme-staging-v02.api.letsencrypt.org/directory', label: "Let's Encrypt 스테이징", hint: '시험용 · 브라우저가 안 믿어요' },
-  ] as const;
-  export const caLabel = (url: string): string => CAS.find((c) => c.value === url)?.label ?? url;
+  /** 고를 수 있는 CA — `bary acme account create` 와 같은 표다(`@web/acme-directories`). */
+  import { ACME_DIRECTORIES, acmeDirectoryLabel, isStagingDirectory } from '@web/acme-directories';
+  export const CAS = ACME_DIRECTORIES;
+  export const caLabel = acmeDirectoryLabel;
   /** 스테이징 CA 인가 — 그 인증서는 브라우저가 안 믿는다. */
-  export const isStaging = (url: string): boolean => url.includes('staging');
+  export const isStaging = isStagingDirectory;
   /** 셀렉트의 「＋ 새 계정」 값. 계정 키 문법(영문 · 숫자로 시작)과 겹치지 않는다. */
   export const NEW_ACCOUNT = '__new';
 </script>
