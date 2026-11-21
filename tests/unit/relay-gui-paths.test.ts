@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { apiRouteTable } from '../../src/api/server.js';
 import { RELAY_PATHS, RELAY_WRITES } from '../../src/global/relay.js';
 
 const GUI = join(import.meta.dirname, '../../gui/src');
@@ -72,5 +73,30 @@ describe('GUI 가 부르는 지역 API 는 모두 전역 중계에 있다', () =
     expect(RELAY_PATHS).toContain('address-sets/refresh-status');
     expect(RELAY_WRITES).toContainEqual({ method: 'POST', path: 'address-sets/:id/refresh', scope: 'write' });
     expect(RELAY_WRITES).toContainEqual({ method: 'POST', path: 'pools/:id/discovery/refresh', scope: 'write' });
+  });
+});
+
+/**
+ * 허용 목록과 전역 라우트가 **서로 같은지** (2026-11-21). 목록에 있어도 `GLOBAL_ROUTES` 에 라우트가 없으면 전역은
+ * 404 다 — 트래픽 통계(`traffic`, `traffic/:kind/:id`)가 그렇게 빠져 있었다. 반대로 라우트만 있고 목록에 없으면
+ * 중계가 거부한다.
+ */
+describe('중계 허용 목록과 전역 라우트가 하나씩 맞는다', () => {
+  const PREFIX = '/api/v1/regions/:name/';
+  const global = apiRouteTable()
+    .filter((r) => r.path.startsWith(PREFIX))
+    .map((r) => `${r.method} ${r.path.slice(PREFIX.length)}`)
+    .sort();
+  const allowed = [
+    ...RELAY_PATHS.map((p) => `GET ${p}`),
+    ...RELAY_WRITES.map((w) => `${w.method} ${w.path}`),
+  ].sort();
+
+  it('허용 목록의 모든 경로에 전역 라우트가 있다', () => {
+    expect(allowed.filter((a) => !global.includes(a))).toEqual([]);
+  });
+
+  it('모든 전역 라우트가 허용 목록에 있다', () => {
+    expect(global.filter((g) => !allowed.includes(g))).toEqual([]);
   });
 });

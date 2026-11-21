@@ -1906,6 +1906,9 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/address-sets/refresh-status', 'read', relayTo('address-sets/refresh-status')),
   route('GET', '/api/v1/regions/:name/backends/:id/health-history', 'read', relayTo('backends/:id/health-history')),
   route('GET', '/api/v1/regions/:name/pools/:id/health-history', 'read', relayTo('pools/:id/health-history')),
+  // 트래픽 통계 (2026-11-21). 허용 목록에는 있었지만 라우트가 없어 전역에서 그래프가 404 였다.
+  route('GET', '/api/v1/regions/:name/traffic', 'read', relayTo('traffic')),
+  route('GET', '/api/v1/regions/:name/traffic/:kind/:id', 'read', relayTo('traffic/:kind/:id')),
   /**
    * **쓰기 중계** (2026-11-01 사용자 결정, 설계 §1.1). 보는 사람의 자격 그대로 지역에 넘긴다. 범위는 지역 라우트와 같다.
    */

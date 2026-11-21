@@ -14,6 +14,10 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- Global mode now relays traffic statistics (`GET /api/v1/regions/<region>/traffic` and
+  `/traffic/<kind>/<key>`). The paths were on the relay allow-list but had no global route, so the
+  traffic graphs answered 404 in global mode. A test now checks that the relay allow-list and the
+  global routes match one to one.
 - Notification settings now live in the config database and are edited in the GUI under **관리 › 알림**
   (`/admin/notify`). Channels (webhook, Slack, mail) can be added, changed, disabled, deleted, filtered by event kind and
   minimum severity, and tested with **시험 전송**; common values (repeat interval, certificate warning days, check
