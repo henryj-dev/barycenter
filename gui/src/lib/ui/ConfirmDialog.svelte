@@ -16,7 +16,7 @@
   import Checkbox from './Checkbox.svelte';
   import TextInput from './TextInput.svelte';
 
-  let { open = $bindable(false), title, sub, lines = [], confirmLabel, danger = true, requireCheck = false, requireName, busy = false, disabled = false, body, onconfirm, oncancel }: {
+  let { open = $bindable(false), title, sub, lines = [], confirmLabel, danger = true, requireCheck = false, requireName, nameLabel = '삭제하려면 이름을 똑같이 넣어요:', busy = false, disabled = false, body, onconfirm, oncancel }: {
     open?: boolean;
     title: string;
     sub?: string;
@@ -25,6 +25,8 @@
     danger?: boolean;
     requireCheck?: boolean;
     requireName?: string;
+    /** `requireName` 칸 앞의 말. 삭제가 아닌 확인(복원 등)이 바꾼다. */
+    nameLabel?: string;
     busy?: boolean;
     /** 바깥이 정하는 잠금 — 입력 칸(`body`)이 맞지 않을 때. */
     disabled?: boolean;
@@ -64,7 +66,7 @@
       {#if requireCheck}<div class="extra"><Checkbox bind:checked>위 영향을 확인했어요</Checkbox></div>{/if}
       {#if requireName !== undefined}
         <div class="extra">
-          <label for="dlg-name" class="nl">삭제하려면 이름을 똑같이 넣어요: <b>{requireName}</b></label>
+          <label for="dlg-name" class="nl">{nameLabel} <b>{requireName}</b></label>
           <div class="ni"><TextInput id="dlg-name" bind:value={typed} autocomplete="off" /></div>
         </div>
       {/if}

@@ -377,7 +377,7 @@
           {#if !ro}
             <span class="note">같은 설정으로 다시 시도해요. 새 리비전은 안 만들어요.{where}</span>
             {@render lostNote()}
-            <Button variant="danger" loading={desk.applying} disabled={lost} onclick={retry}>{desk.applying ? '적용하는 중' : `r${desk.failedApply.revision} 다시 적용해요`}</Button>
+            <Button variant="danger" loading={desk.applying} disabled={lost} onclick={retry}>{desk.applying ? '적용하는 중' : `r${desk.failedApply?.revision} 다시 적용해요`}</Button>
           {:else}
             <WriteNote />
           {/if}

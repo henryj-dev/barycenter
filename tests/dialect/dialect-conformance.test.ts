@@ -75,6 +75,20 @@ describe(`방언 적합성 (${process.env['BARY_TEST_DB'] ?? 'postgres'})`, () =
     }
   });
 
+  it('**풀 헬스체크 CHECK 가 세 방언에서 같은 판정을 한다** — http · tcp 는 받고 udp 는 막는다 (037)', async () => {
+    await db.migrate();
+    const pool = async (cls: string): Promise<string> => {
+      const key = `hc-${cls}-${randomUUID().slice(0, 8)}`;
+      await db.query(
+        `INSERT INTO pools (id, key, name, protocol_class, algorithm, created_by, updated_by, revision, health_check)
+         VALUES ($1, $2, 'n', $3, 'round_robin', 't', 't', 1, $4)`,
+        [randomUUID(), key, cls, JSON.stringify({ mode: 'active', protocol: 'tcp_connect', intervalS: 5 })]);
+      return key;
+    };
+    for (const ok of ['http', 'tcp']) await db.query('DELETE FROM pools WHERE key = $1', [await pool(ok)]);
+    await expect(pool('udp')).rejects.toMatchObject({ code: '23514', constraint: 'pool_healthcheck_http_only' });
+  });
+
   it('**이름 바꾸기가 세 방언에서 같은 결과를 낸다** — 참조 · 문자열 참조 · 곁 행이 따라온다', async () => {
     await db.migrate();
     const { ConfigStore } = await import('../../src/store/config-store.js');

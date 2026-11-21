@@ -11,7 +11,7 @@ export type Place =
   | 'dashboard' | 'impact' | 'drafts'
   | 'listeners' | 'routes' | 'pools' | 'backends' | 'addressSets'
   | 'certificates' | 'tlsPolicies' | 'sniBindings' | 'acmeAccounts'
-  | 'status' | 'cluster' | 'rendered' | 'engine' | 'operations' | 'sockets' | 'discovery' | 'metrics' | 'audit'
+  | 'status' | 'cluster' | 'rendered' | 'engine' | 'operations' | 'sockets' | 'discovery' | 'backup' | 'metrics' | 'audit'
   | 'login' | 'invite' | 'account' | 'users' | 'notify' | 'accountAudit' | 'reset' | 'email' | 'regions' | 'design';
 
 /** 리소스가 사이드바의 어느 자리에 불이 들어오나. 두 라우트는 한 메뉴(라우트)다. */
@@ -65,6 +65,8 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'sockets', path: '/ops/sockets' },
   { place: 'discovery', path: '/ops/discovery' },
   { place: 'acmeAccounts', path: '/tls/acme-account' },
+  // 백업 · 복원 (2026-11-21). 지역에서만 쓴다 — 전역은 「이 지역에서 열기」 를 보인다.
+  { place: 'backup', path: '/ops/backup' },
   // 지표 (2026-11-21) — `/api/v1/metrics` 의 Prometheus 텍스트를 묶음별로.
   { place: 'metrics', path: '/ops/metrics' },
   { place: 'audit', path: '/ops/audit' },
@@ -147,6 +149,7 @@ export function pageOf(pathname: string): Place {
   if (under(pathname, '/ops/sockets')) return 'sockets';
   if (under(pathname, '/ops/discovery')) return 'discovery';
   if (under(pathname, '/tls/acme-account')) return 'acmeAccounts';
+  if (under(pathname, '/ops/backup')) return 'backup';
   if (under(pathname, '/ops/metrics')) return 'metrics';
   if (under(pathname, '/ops/audit')) return 'audit';
   if (under(pathname, '/admin/user')) return 'users';

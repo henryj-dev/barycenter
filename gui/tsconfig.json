@@ -7,8 +7,29 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "types": ["svelte", "vite/client"],
-    "paths": { "@web/*": ["../src/web/*"] }
+    "types": [
+      "svelte",
+      "vite/client",
+      "@sveltejs/kit"
+    ],
+    "paths": {
+      "@web/*": [
+        "../src/web/*"
+      ],
+      "#lib": [
+        "./src/lib"
+      ],
+      "#lib/*": [
+        "./src/lib/*"
+      ]
+    },
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "vite.config.ts",
+    ".svelte-kit/types/**/$types.d.ts"
+  ]
 }

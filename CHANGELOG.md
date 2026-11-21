@@ -14,6 +14,16 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- **운영 › 백업·복원** (`/ops/backup`) is a new GUI screen: download the spec-only manifest of any
+  revision, download a backup bundle, import a file (merge, or replace which deletes resources not in
+  the file), and restore a backup (admin, step-up, type `복원` to confirm). Import and restore are
+  **previewed first**: `POST /api/v1/config/import` accepts `{ manifest, mode, preview: true }` and
+  returns `changes` (added / changed / removed per resource) and the plan `impact` without committing
+  — it runs the same changeset and plan path and discards the changeset. Import and `POST /restore`
+  accept `base_revision`; if head moved since the preview they answer `409 head_moved`. Results now
+  include `changes`. CLI: `bary import <file> --preview`, `bary restore <file> --preview`. These paths
+  stay region-only — global mode does not relay them (`LOCAL_ONLY_PATHS`), so one region's whole
+  config never passes through the global view; the screen shows **이 지역에서 열기 ↗** there.
 - Saving no longer throws away a change that lost a race. If someone else committed first (the plan is
   stale), another person changed the same changeset (412), or the server failed, the GUI keeps the
   changeset as a **draft** and says where to find it; only invalid content is discarded. The new screen
@@ -29,6 +39,17 @@ release section lists every publicly known vulnerability it fixes.
   failed; the active generation and traffic do not change. The status screen's unfinished-transition banner
   links to it. `GET /operations/:id` now also returns `createdAt`, `updatedAt`, `createdBy` and `terminal`.
   CLI: `bary get operations`.
+- TCP pools can now have a health check. The GUI already showed the editor for TCP pools, but saving
+  was rejected because the validator (and a database CHECK) allowed health checks on HTTP pools only.
+  The prober has always honoured the plan for TCP pools (mode, port, probe address, interval, timeout,
+  rise, fall, and an HTTP health port per §4.3.1). Migration `037_pool_healthcheck_tcp` relaxes the
+  CHECK to "not UDP" on PostgreSQL, MySQL/MariaDB and SQLite. UDP pools still cannot have one.
+- Restarting `barycenterd` no longer logs one `prober.failed` / `api.internal`
+  (`Cannot use a pool after calling end`) line from the old process. Shutdown now waits up to 5 s for the
+  running probe sweep, ACME tick and in-flight API requests before it closes the database.
+- The GUI is now type-checked: `cd gui && npm run check` runs `svelte-check`, and `verify.sh` runs it.
+  The `#lib` alias and `.ts` imports were not wired for the checker (676 reported errors); 12 real type
+  errors are fixed without changing behaviour.
 - The GUI now shows several things the API already had:
   - **Drain progress** on the backend page: new connections blocked / fully drained / deadline
     passed, in-flight requests and sessions when the engine reports them, who started the drain,
