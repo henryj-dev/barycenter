@@ -60,3 +60,44 @@ export function socketRows(model: Model): SocketRow[] {
     || (a.bind < b.bind ? -1 : a.bind > b.bind ? 1 : 0)
     || (a.listener < b.listener ? -1 : a.listener > b.listener ? 1 : 0));
 }
+
+/**
+ * 「운영 › 소켓」 의 줄 (2026-11-21) — 위 목록을 화면 말로.
+ *
+ * **겹침은 검증기가 이미 막는다**(`socket_conflict`) — 커밋된 설정에는 진짜 충돌이 없다. 그래서 화면이 짚는 것은
+ * 운영자가 헷갈리는 두 가지다:
+ *
+ *   · 「같이 씀」 — 켜진 리스너 여럿이 한 소켓을 나눠 쓴다(호스트 리스너). 이름(Host · SNI)으로 갈린다.
+ *   · 「와일드카드와 겹침」 — `0.0.0.0` / `::` 리스너와 같은 포트에 특정 주소 리스너가 있다. 그 주소로 온 연결은
+ *     특정 주소 쪽이 먼저 받는다. 적용 영향의 `wildcard_also_on` 과 같은 사실이다.
+ *
+ * `owner` 는 그 소켓을 만든 리스너다 — 리다이렉트 소켓(`<리스너>~http`)은 HTTPS 리스너의 것이다.
+ */
+export type SocketView = SocketRow & {
+  /** `tcp 10.0.0.1:443` — 줄을 묶는 이름. */
+  socket: string;
+  /** 이 소켓의 주인 리스너 — 상세 링크가 간다. */
+  owner: string;
+  /** 같은 소켓을 쓰는 켜진 리스너 수(자기 포함). 꺼졌으면 0 이다. */
+  sharedWith: number;
+  /** 와일드카드와 특정 주소가 같은 포트에 함께 있다. */
+  wildcardOverlap: boolean;
+};
+
+const WILDCARD = new Set(['0.0.0.0', '::', '[::]', '*']);
+const addrOf = (bind: string): string => (bind.includes(':') && !bind.startsWith('[') ? `[${bind}]` : bind);
+
+export function socketViews(rows: readonly SocketRow[]): SocketView[] {
+  const on = rows.filter((r) => r.enabled);
+  return rows.map((r) => {
+    const samePort = on.filter((o) => o.transport === r.transport && o.port === r.port);
+    const wild = WILDCARD.has(r.bind);
+    return {
+      ...r,
+      socket: `${r.transport} ${addrOf(r.bind)}:${r.port}`,
+      owner: r.listener.replace(/~http$/, ''),
+      sharedWith: r.enabled ? samePort.filter((o) => o.bind === r.bind).length : 0,
+      wildcardOverlap: r.enabled && samePort.some((o) => WILDCARD.has(o.bind) !== wild),
+    };
+  });
+}

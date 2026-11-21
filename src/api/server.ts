@@ -34,7 +34,7 @@ import type { ControlPlane } from '../control/plane.js';
 import { AcmeStore, LIVE_STATES } from '../control/acme-store.js';
 import { leaksSecret, publicChallenge, publicOrder } from '../control/acme-view.js';
 import {
-  deadlineExceededKeys, drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
+  deadlineExceededKeys, drainRecords, drainStatusOf, endDrain, isDraining, parsePeerObservation, startDrain,
 } from '../control/drain.js';
 import { healthHistory, healthRows, HEALTH_HISTORY_MAX } from '../control/health.js';
 import type { DiscoveryPoolView } from '../control/discovery/runner.js';
@@ -896,7 +896,14 @@ const ROUTES: Route[] = [
       json(c.res, 404, { error: 'not_draining', message: `백엔드 '${key}' 는 드레인 중이 아니다` });
       return;
     }
-    json(c.res, 200, status);
+    // 누가 · 언제 걸었고 기한이 언제인가 (2026-11-21) — 화면의 「드레인 진행」 이 읽는다. 더하기만 한다.
+    const rec = (await drainRecords(api.db)).get(key);
+    json(c.res, 200, rec === undefined ? status : {
+      ...status,
+      started_at: rec.startedAt,
+      started_by: rec.startedBy,
+      ...(rec.deadlineAt === undefined ? {} : { deadline_at: rec.deadlineAt }),
+    });
   }),
 
   /**
@@ -1926,6 +1933,10 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/acme/accounts', 'read', relayTo('acme/accounts')),
   route('GET', '/api/v1/regions/:name/acme/orders/:id', 'read', relayTo('acme/orders/:id')),
   route('GET', '/api/v1/regions/:name/sockets', 'read', relayTo('sockets')),
+  route('GET', '/api/v1/regions/:name/backends/:id/drain-status', 'read', relayTo('backends/:id/drain-status')),
+  route('GET', '/api/v1/regions/:name/acme/orders/:id/challenges', 'read', relayTo('acme/orders/:id/challenges')),
+  route('GET', '/api/v1/regions/:name/acme/challenges/:id', 'read', relayTo('acme/challenges/:id')),
+  route('GET', '/api/v1/regions/:name/discovery', 'read', relayTo('discovery')),
   route('GET', '/api/v1/regions/:name/health/backends', 'read', relayTo('health/backends')),
   route('GET', '/api/v1/regions/:name/config/pending-resources', 'read', relayTo('config/pending-resources')),
   // GUI 가 이미 부르던 것 (2026-11-20). 빠져 있어 전역에서 풀의 출처 · 주소 집합 갱신 기록이 404 였다.

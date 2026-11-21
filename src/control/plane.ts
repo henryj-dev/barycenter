@@ -18,7 +18,7 @@ import { render, type RenderCapabilities } from '../conf/render.js';
 import { SERVED_BY_FILE, servedByFragment } from '../conf/served-by.js';
 import { adminFetch, adminTalk } from './admin-client.js';
 import { eligibleWithDiscovery, type DiscoveryIntake } from './discovery.js';
-import { drainKeys, observationPeerOf, observePeerFromAdmin, observeStreamPeer } from './drain.js';
+import { drainKeys, drainRecords, observationPeerOf, observePeerFromAdmin, observeStreamPeer } from './drain.js';
 import { backendStatusRows, type BackendStatusRow } from './backend-status.js';
 import { currentHealth, eligibleCountForPlane, healthRows, shouldPushMembership } from './health.js';
 import {
@@ -1126,6 +1126,7 @@ export class ControlPlane {
         ...(r.detail === undefined ? {} : { detail: r.detail }),
       }])),
       draining: await drainKeys(this.db),
+      drainInfo: await drainRecords(this.db),
       routedPools: routedPools(model, caps),
     });
   }

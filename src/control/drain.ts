@@ -153,6 +153,27 @@ export async function isDraining(db: Database, backendKey: string): Promise<bool
   return r !== undefined;
 }
 
+/**
+ * 드레인을 누가 · 언제 걸었고 기한이 언제인가 (2026-11-21). 화면이 「드레인 진행」 에 싣는다.
+ * `backend_drain` 에 이미 있던 열이다 — 지금까지는 아무도 읽지 않았다.
+ */
+export type DrainRecord = { startedAt: string; startedBy: string; deadlineAt?: string };
+
+/** 시각 열은 방언마다 Date(PG · MySQL) 또는 문자열(SQLite)로 온다 — ISO 로 낸다. */
+const isoOf = (v: unknown): string => {
+  const d = v instanceof Date ? v : new Date(String(v));
+  return Number.isNaN(d.getTime()) ? String(v) : d.toISOString();
+};
+
+export async function drainRecords(db: Database): Promise<Map<string, DrainRecord>> {
+  const rows = (await db.query('SELECT backend_key, started_at, started_by, deadline_at FROM backend_drain')).rows;
+  return new Map(rows.map((r) => [String(r['backend_key']), {
+    startedAt: isoOf(r['started_at']),
+    startedBy: String(r['started_by']),
+    ...(r['deadline_at'] === null || r['deadline_at'] === undefined ? {} : { deadlineAt: isoOf(r['deadline_at']) }),
+  }]));
+}
+
 /** 기한을 넘긴 드레인들. **빼는 판단이 아니라 관측이다.** */
 export async function deadlineExceededKeys(db: Database): Promise<Set<string>> {
   const rows = (await db.query(

@@ -10,8 +10,8 @@ import { RESOURCES, RESOURCE_KINDS, detailPattern, type ResourceKind } from './r
 export type Place =
   | 'dashboard' | 'impact' | 'drafts'
   | 'listeners' | 'routes' | 'pools' | 'backends' | 'addressSets'
-  | 'certificates' | 'tlsPolicies' | 'sniBindings'
-  | 'status' | 'cluster' | 'rendered' | 'engine' | 'operations' | 'audit'
+  | 'certificates' | 'tlsPolicies' | 'sniBindings' | 'acmeAccounts'
+  | 'status' | 'cluster' | 'rendered' | 'engine' | 'operations' | 'sockets' | 'discovery' | 'audit'
   | 'login' | 'invite' | 'account' | 'users' | 'notify' | 'reset' | 'email' | 'regions' | 'design';
 
 /** 리소스가 사이드바의 어느 자리에 불이 들어오나. 두 라우트는 한 메뉴(라우트)다. */
@@ -61,6 +61,10 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'engine', path: '/ops/engine' },
   // 최근 전환 · 끝나지 않은 전환의 취소 (2026-11-21). `?id=` 로 하나를 고른다.
   { place: 'operations', path: '/ops/operation' },
+  // 운영 보기 (2026-11-21): 설정이 차지하는 소켓 · 모든 풀의 백엔드 출처. TLS › ACME 계정(읽기).
+  { place: 'sockets', path: '/ops/sockets' },
+  { place: 'discovery', path: '/ops/discovery' },
+  { place: 'acmeAccounts', path: '/tls/acme-account' },
   { place: 'audit', path: '/ops/audit' },
   { place: 'users', path: '/admin/user' },
   // 알림 통로 · 공통 값 · 보낸 기록 (036, 2026-11-20). 지역마다 따로다 — 전역 화면에는 없다.
@@ -136,6 +140,9 @@ export function pageOf(pathname: string): Place {
   if (under(pathname, '/ops/rendered')) return 'rendered';
   if (under(pathname, '/ops/engine')) return 'engine';
   if (under(pathname, '/ops/operation')) return 'operations';
+  if (under(pathname, '/ops/sockets')) return 'sockets';
+  if (under(pathname, '/ops/discovery')) return 'discovery';
+  if (under(pathname, '/tls/acme-account')) return 'acmeAccounts';
   if (under(pathname, '/ops/audit')) return 'audit';
   if (under(pathname, '/admin/user')) return 'users';
   if (under(pathname, '/admin/notify')) return 'notify';

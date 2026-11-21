@@ -7,7 +7,8 @@
    * 시안에 없는 기존 표시(같은 상자 안 · 아래):
    *   · 마지막 주문이 실패했으면 이유(`lastError`)와 시도 횟수(`attempts`) — 「왜 아직 안 됐나」 를 물을 자리다.
    *   · 스테이징 CA 로 받은 인증서면 「운영 CA 로 바꾸기」(설정 탭의 ACME 계정으로 간다). 스테이징 인증서는 브라우저가 믿지 않는다.
-   *   · 주문 기록(접힘) — 주문마다 상태 · 도메인 · 시도 · 마지막 오류.
+   *   · 주문 기록(접힘) — 주문마다 상태 · 도메인 · 시도 · 마지막 오류. 주문을 누르면 그 주문의 챌린지(2026-11-21):
+   *     도메인 · 방식 · 놓은 때 · 치운 때. 값(토큰 · keyAuthorization)은 서버가 싣지 않는다.
    * 계정 바꾸기(「CA 바꾸기」)는 설정 탭의 「ACME 계정」 이 한다(`CertificateSettings`).
    *
    * 손으로 움직이기 (2026-11-20, 쓸 수 있을 때만):
@@ -23,7 +24,7 @@
   import Writable from '#lib/global/Writable.svelte';
   import { isStaging } from '#lib/forms/AcmeAccountField.svelte';
   import { challengeOf } from '#lib/tls/cert-edit.ts';
-  import type { AcmeAccountRow, createDesk } from '#lib/desk.svelte.ts';
+  import type { AcmeAccountRow, AcmeChallengeView, createDesk } from '#lib/desk.svelte.ts';
 
   type Order = { id: string; state: string; domains: string[]; attempts: number; lastError: string | null; nextAttemptAt: string | null };
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -89,6 +90,24 @@
     toast.ok(r.created ? '새 주문을 열었어요' : '주문을 지금 다시 시도해요', `${key} — 진행은 이 상자에 나와요`);
   };
   let showOrders = $state(false);
+  /** 고른 주문의 챌린지 — 주문 행을 누르면 읽는다. undefined 는 아직 안 읽음, null 은 못 읽음이다. */
+  let picked = $state<string[]>([]);
+  let challenges = $state<AcmeChallengeView[] | null | undefined>();
+  $effect(() => {
+    const id = picked[0];
+    challenges = undefined;
+    if (id === undefined) return;
+    let stop = false;
+    void desk.acmeChallenges(id).then((c) => { if (!stop) challenges = c ?? null; });
+    return () => { stop = true; };
+  });
+  const when = (iso: string | undefined): string => (iso === undefined ? '—' : new Date(iso).toLocaleString());
+  const chColumns: Column<AcmeChallengeView>[] = [
+    { key: 'domain', label: '도메인', mono: true, text: (r) => r.domain },
+    { key: 'type', label: '방식', mono: true, width: '90px', text: (r) => r.type.toUpperCase() },
+    { key: 'placed', label: '놓음', text: (r) => (r.placed ? `● ${when(r.placedAt)}` : '○ 아직') },
+    { key: 'cleaned', label: '치움', text: (r) => (r.cleaned ? `● ${when(r.cleanedAt)}` : '○ 아직') },
+  ];
   const columns: Column<Order>[] = [
     { key: 'state', label: '상태', width: '120px', sort: (r) => r.state },
     { key: 'domains', label: '도메인', mono: true, text: (r) => r.domains.join(', ') },
@@ -134,7 +153,19 @@
       <div class="orders">
         <Expander bind:open={showOrders}>주문 기록 · {orders.length}</Expander>
         {#if showOrders}
-          <DataTable rows={orders} rowKey={(r) => r.id} {columns} {cell} label="ACME 주문" minHeight="0" />
+          <DataTable rows={orders} rowKey={(r) => r.id} {columns} {cell} label="ACME 주문" minHeight="0" bind:selected={picked} />
+          {#if picked[0] === undefined}
+            <div class="hint">주문을 누르면 그 주문의 챌린지가 보여요.</div>
+          {:else if challenges === null}
+            <div class="err">챌린지를 읽지 못했어요.</div>
+          {:else if challenges !== undefined}
+            <div class="t">챌린지 · {challenges.length}</div>
+            {#if challenges.length === 0}
+              <div class="hint">이 주문에는 챌린지가 없어요. CA 가 아직 인가를 주지 않았거나, 이미 인가된 도메인이에요.</div>
+            {:else}
+              <DataTable rows={challenges} rowKey={(r) => r.id} columns={chColumns} label="ACME 챌린지" minHeight="0" />
+            {/if}
+          {/if}
         {/if}
       </div>
     {/if}
@@ -156,4 +187,5 @@
   .stg { margin-top: 6px; color: var(--warn); font-size: 12px; }
   .stg a { color: var(--accent); margin-left: 6px; }
   .orders { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .hint { color: var(--tx3); font-size: 12px; }
 </style>

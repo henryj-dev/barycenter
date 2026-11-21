@@ -43,6 +43,8 @@ export const RELAY_PATHS: readonly string[] = [
   'pools/:id/discovery', 'address-sets/refresh-status',
   // 변경 초안 · 최근 전환 (2026-11-21).
   'changesets', 'operations',
+  // 운영 보기 (2026-11-21): 드레인 진행 · ACME 주문의 챌린지 · 모든 풀의 출처. 챌린지 본문은 값(토큰)을 싣지 않는다.
+  'backends/:id/drain-status', 'acme/orders/:id/challenges', 'acme/challenges/:id', 'discovery',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */
