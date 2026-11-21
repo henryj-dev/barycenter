@@ -17,7 +17,7 @@
     size?: 'md' | 'sm';
     /** 단위 꼬리표(시안 `unit`). 값에는 붙지 않는다 — 보이기만 한다. */
     unit?: string;
-  } & Omit<HTMLInputAttributes, 'value'> = $props();
+  } & Omit<HTMLInputAttributes, 'value' | 'size'> = $props();
 </script>
 
 {#if unit}

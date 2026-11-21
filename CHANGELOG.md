@@ -50,6 +50,17 @@ release section lists every publicly known vulnerability it fixes.
   failed; the active generation and traffic do not change. The status screen's unfinished-transition banner
   links to it. `GET /operations/:id` now also returns `createdAt`, `updatedAt`, `createdBy` and `terminal`.
   CLI: `bary get operations`.
+- TCP pools can now have a health check. The GUI already showed the editor for TCP pools, but saving
+  was rejected because the validator (and a database CHECK) allowed health checks on HTTP pools only.
+  The prober has always honoured the plan for TCP pools (mode, port, probe address, interval, timeout,
+  rise, fall, and an HTTP health port per §4.3.1). Migration `037_pool_healthcheck_tcp` relaxes the
+  CHECK to "not UDP" on PostgreSQL, MySQL/MariaDB and SQLite. UDP pools still cannot have one.
+- Restarting `barycenterd` no longer logs one `prober.failed` / `api.internal`
+  (`Cannot use a pool after calling end`) line from the old process. Shutdown now waits up to 5 s for the
+  running probe sweep, ACME tick and in-flight API requests before it closes the database.
+- The GUI is now type-checked: `cd gui && npm run check` runs `svelte-check`, and `verify.sh` runs it.
+  The `#lib` alias and `.ts` imports were not wired for the checker (676 reported errors); 12 real type
+  errors are fixed without changing behaviour.
 - The GUI now shows several things the API already had:
   - **Drain progress** on the backend page: new connections blocked / fully drained / deadline
     passed, in-flight requests and sessions when the engine reports them, who started the drain,

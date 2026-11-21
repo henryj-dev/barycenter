@@ -649,8 +649,8 @@ export type Pool = {
   /** §4.7 — http 는 엔진에 송신 디렉티브 자체가 없고, udp 는 미지원. tcp 만 v1. */
   sendProxyProtocol?: 'v1';
   /**
-   * HTTP 헬스체크 (검수 B-07). **http 풀에만** — stream 에는 요청 개념이 없고,
-   * 프로버는 연결만 본다.
+   * 헬스체크 (검수 B-07, 2026-11-21 넓힘). **http · tcp 풀에** — 프로버가 풀 종류와
+   * 상관없이 이 계획을 따른다(`probePlanOf`). udp 는 프로브가 없어 못 적는다(037).
    */
   healthCheck?: HealthCheck;
   /**

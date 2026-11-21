@@ -319,17 +319,23 @@ export function validateModel(
       });
     }
     /**
-     * **HTTP 헬스체크는 http 풀에만** (검수 B-07). stream 에는 요청 개념이 없어 프로버가
-     * 연결만 보므로, 여기 적힌 경로·상태·본문은 **아무도 안 읽는다** — 표현 가능하면
-     * 언젠가 들어오고, 들어오면 조용히 무시된다.
+     * **udp 풀에는 헬스체크를 못 적는다** (2026-11-21).
+     *
+     * 전에는 http 가 아닌 풀을 모두 막았다 (검수 B-07). 그러나 프로버는 tcp 풀도 계획대로
+     * 찌른다 — `probePlanOf` 가 `mode` · `protocol` · `port` · `hostOverride` · 주기 · rise · fall 을
+     * 풀 종류와 상관없이 따른다. 그래서 tcp 풀의 헬스체크는 쓸모가 있고, 해독기와
+     * `probe-fields` 시험도 그것을 허용한다(§4.3.1: TCP 서비스의 HTTP 헬스 포트). GUI 는
+     * tcp 풀에 편집기를 보였는데 여기서 막아서 저장이 거절되었다.
+     *
+     * udp 는 다르다. udp 프로브(`udp_payload`)가 없으므로(§13-6) 적어도 맞는 판정을 못 낸다.
      */
-    if (pool.healthCheck !== undefined && pool.protocolClass !== 'http') {
+    if (pool.healthCheck !== undefined && pool.protocolClass === 'udp') {
       issues.push({
         code: 'option_not_supported',
         subjects: [pool.key],
         message:
-          `풀 '${pool.key}' 는 ${pool.protocolClass} 인데 healthCheck 가 있다. ` +
-          `HTTP 헬스체크는 http 풀에만 있다 — stream 프로버는 연결만 본다`,
+          `풀 '${pool.key}' 는 udp 인데 healthCheck 가 있다. ` +
+          `udp 프로브가 없다 — 헬스체크는 http · tcp 풀에만 적는다`,
       });
     }
     // 경로는 `location` 이 아니라 요청 경로지만, 같은 문법으로 좁힌다 — 절대 경로여야 한다.

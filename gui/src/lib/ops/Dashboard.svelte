@@ -78,6 +78,11 @@
   const clusterText = $derived(cluster?.enabled === true && cluster.nodes.length > 1
     ? ` · ${cluster.nodes.length}대 중 ${cluster.nodes.filter((n) => nodeState(n).tone === 'ok').length}대 맞음` : '');
 
+  // 아래 `stats` 가 읽으므로 그보다 먼저 둔다.
+  let regions = $state<RegionSummary[] | undefined>();
+  /** 전역 합산 — 지역 요약의 `status` 로 센다. 닿지 않는 지역은 세지 않는다(모름). */
+  const regionViews = $derived((regions ?? []).map((r) => ({ r, v: r.status === undefined ? undefined : viewOfStatus(r.status as StatusFact) })));
+  const regionPending = $derived(regionViews.reduce((a, x) => a + (x.v?.pending.length ?? 0), 0));
   type Stat = { href: string; label: string; value: string; tone: Tone; text: string };
   const nearText = (n: NonNullable<Tally['nearest']>): string => `${n.region === undefined ? '' : `${n.region} · `}${n.key}`;
   const stats = $derived<Stat[]>([
@@ -116,7 +121,6 @@
   ]);
 
   // ── 지역별 현황 (전역 · 좁혀 보기) — 지역 요약으로 ──
-  let regions = $state<RegionSummary[] | undefined>();
   $effect(() => {
     if (!global) return;
     void desk.head;
@@ -131,9 +135,6 @@
   };
   const pendingOf = (r: RegionSummary): number | undefined =>
     (Array.isArray(r.status?.['pendingApply']) ? (r.status['pendingApply'] as unknown[]).length : undefined);
-  /** 전역 합산 — 지역 요약의 `status` 로 센다. 닿지 않는 지역은 세지 않는다(모름). */
-  const regionViews = $derived((regions ?? []).map((r) => ({ r, v: r.status === undefined ? undefined : viewOfStatus(r.status as StatusFact) })));
-  const regionPending = $derived(regionViews.reduce((a, x) => a + (x.v?.pending.length ?? 0), 0));
   const regionUnfinished = $derived(regionViews.filter((x) => x.v?.unfinished === true).length);
   const regionEngines = $derived([...new Set(regionViews.map((x) => x.v?.engine.label).filter((e): e is string => e !== undefined))].join(', '));
   const regionsWithLeader = $derived(regionViews.filter((x) => x.v !== undefined).length);
