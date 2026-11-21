@@ -31,6 +31,8 @@
   /** 전역에서 지역 하나로 좁혀 본다. 전체 합산(`agg.on`)은 아니다. */
   const global = $derived(scope?.mode === 'global' && !agg.on);
   const v = $derived(desk.status);
+  /** 끝나지 않은 전환 — 「작업」 화면에서 그 전환을 고른다(취소하려면 거기서). id 를 모르면 목록이다. */
+  const unfinishedHref = $derived(v.unfinishedOperation === undefined ? '/ops/operation' : `/ops/operation?id=${encodeURIComponent(v.unfinishedOperation)}`);
 
   /** 클러스터면 노드별 상태 화면으로 가는 길을 보인다. 전역은 지역마다 다르므로 묻지 않는다. */
   let cluster = $state<ClusterBody | undefined>();
@@ -252,6 +254,7 @@
       <Banner tone="warn">
         끝나지 않은 전환이 있어요. 복구가 이어받아야 다음 적용을 할 수 있어요.
         {#snippet action()}
+          <Button size="sm" variant="text" href={unfinishedHref}>작업 보기</Button>
           {#if !ro}<Button size="sm" loading={desk.recovering} onclick={() => { void desk.recover(); }}>{desk.recovering ? '이어받는 중' : '이어받기'}</Button>{/if}
         {/snippet}
       </Banner>

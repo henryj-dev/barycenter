@@ -14,6 +14,31 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- **운영 › 백업·복원** (`/ops/backup`) is a new GUI screen: download the spec-only manifest of any
+  revision, download a backup bundle, import a file (merge, or replace which deletes resources not in
+  the file), and restore a backup (admin, step-up, type `복원` to confirm). Import and restore are
+  **previewed first**: `POST /api/v1/config/import` accepts `{ manifest, mode, preview: true }` and
+  returns `changes` (added / changed / removed per resource) and the plan `impact` without committing
+  — it runs the same changeset and plan path and discards the changeset. Import and `POST /restore`
+  accept `base_revision`; if head moved since the preview they answer `409 head_moved`. Results now
+  include `changes`. CLI: `bary import <file> --preview`, `bary restore <file> --preview`. These paths
+  stay region-only — global mode does not relay them (`LOCAL_ONLY_PATHS`), so one region's whole
+  config never passes through the global view; the screen shows **이 지역에서 열기 ↗** there.
+- Saving no longer throws away a change that lost a race. If someone else committed first (the plan is
+  stale), another person changed the same changeset (412), or the server failed, the GUI keeps the
+  changeset as a **draft** and says where to find it; only invalid content is discarded. The new screen
+  **변경 › 초안** (`/change/drafts`) lists open and sealed changesets (`GET /api/v1/changesets`, relayed in
+  global mode), shows what each would change, plans it, commits it, reopens or discards it. A draft whose
+  base is no longer head gets **최신 head 로 다시 계획**: the same patch is planned again on the current head.
+  **JSON 으로 고치기** has **초안으로 두기** to save a draft on purpose. `GET /changesets/:id` also carries the
+  ETag in the body, because the global relay does not forward response headers. CLI:
+  `bary changeset list [--state open|sealed]`, `bary get changesets`.
+- New screen **운영 › 작업** (`/ops/operation`) lists recent operations from apply, rollback and re-render
+  (`GET /api/v1/operations`, relayed), with phase, planes, who and when. An unfinished one can be cancelled
+  with **작업 취소…** (confirmation required): reserved slots are released and the transition is closed as
+  failed; the active generation and traffic do not change. The status screen's unfinished-transition banner
+  links to it. `GET /operations/:id` now also returns `createdAt`, `updatedAt`, `createdBy` and `terminal`.
+  CLI: `bary get operations`.
 - TCP pools can now have a health check. The GUI already showed the editor for TCP pools, but saving
   was rejected because the validator (and a database CHECK) allowed health checks on HTTP pools only.
   The prober has always honoured the plan for TCP pools (mode, port, probe address, interval, timeout,

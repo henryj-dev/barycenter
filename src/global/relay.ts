@@ -41,9 +41,21 @@ export const RELAY_PATHS: readonly string[] = [
   'system/storage',
   // GUI 가 이미 부르던 것 (2026-11-20) — 빠져 있었다.
   'pools/:id/discovery', 'address-sets/refresh-status',
+  // 변경 초안 · 최근 전환 (2026-11-21).
+  'changesets', 'operations',
   // 운영 보기 (2026-11-21): 드레인 진행 · ACME 주문의 챌린지 · 모든 풀의 출처. 챌린지 본문은 값(토큰)을 싣지 않는다.
   'backends/:id/drain-status', 'acme/orders/:id/challenges', 'acme/challenges/:id', 'discovery',
 ];
+
+/**
+ * **지역에서만** 쓰는 경로 (`/api/v1/` 뒤, 2026-11-21) — 위 목록에 일부러 넣지 않는다.
+ *
+ * 내보내기 · 백업은 지역의 전체 설정이고, 가져오기 · 복원은 지역의 전체 설정을 바꾼다. 전역을 지나면 모든 지역의
+ * 설정이 한 곳에 모이고(위 `RELAY_PATHS` 의 이유), 복원은 admin · step-up 이라 지역 세션에 묶이는 편이 맞다.
+ * GUI 의 「백업 · 복원」 화면은 전역이면 이 경로를 부르지 않고 「이 지역에서 열기 ↗」 를 보인다.
+ * 시험(`relay-gui-paths`)이 GUI 가 부르는 경로를 모을 때 이 목록을 뺀다.
+ */
+export const LOCAL_ONLY_PATHS: readonly string[] = ['config/export', 'config/import', 'backup', 'restore'];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */
 export const RELAY_WRITES: readonly { method: 'POST' | 'PATCH' | 'DELETE'; path: string; scope: 'write' | 'apply' }[] = [

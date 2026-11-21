@@ -44,7 +44,7 @@ import { refreshAddressSet, refreshRows } from '../control/address-sources/refre
 import { count, render as renderMetrics, type LabeledGauge } from '../obs/metrics.js';
 import { log } from '../obs/log.js';
 import { NotLeader, type LeaderElection } from '../control/leader.js';
-import { ConfigStore, isHistoryKind, StoreError, type PatchOp } from '../store/config-store.js';
+import { ConfigStore, DRAFT_STATES, isHistoryKind, StoreError, type ChangesetDraftState, type PatchOp } from '../store/config-store.js';
 import {
   AccountError, AccountStoreUnavailable, STEP_UP_MAX_AGE_MS, type AccountService, type Meta as AccountMeta, type SecondFactorKind,
 } from '../accounts/service.js';
@@ -64,7 +64,7 @@ import { EventHub, openEventStream } from './events.js';
 import { memoryRateLimit } from './auth-limit/memory.js';
 import type { RateLimitStore } from './auth-limit/store.js';
 import { clientAddress, type TrustedProxies } from './client-address.js';
-import { RELAY_PATHS, RELAY_WRITES, type Credential, type RegionRelay } from '../global/relay.js';
+import { LOCAL_ONLY_PATHS, RELAY_PATHS, RELAY_WRITES, type Credential, type RegionRelay } from '../global/relay.js';
 import type { HostAddressFacts } from '../engine/host-addresses.js';
 import {
   BrowserSessions, LOGIN_COOKIE, SESSION_COOKIE, cookieValue, expiredCookie, sessionCookie,
@@ -505,6 +505,26 @@ function trafficBody(
   return { state: 'ok', ...head, intervalS: s.intervalMs / 1000, window: s.window(), ...body(s) };
 }
 
+/**
+ * import · restore 본문을 읽는다 (2026-11-21). `{ manifest, mode?, preview?, base_revision? }` 로 감싼 것과
+ * 매니페스트 그대로를 둘 다 받는다 — 감싸지 않은 본문은 옛 CLI 가 보내는 모양이다.
+ */
+function importBody(body: unknown): {
+  manifest: unknown; mode: 'merge' | 'replace'; opts: { preview?: boolean; baseRevision?: string };
+} {
+  const rec = body !== null && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : undefined;
+  if (rec === undefined || !('manifest' in rec)) return { manifest: body, mode: 'merge', opts: {} };
+  const base = rec['base_revision'];
+  if (base !== undefined && (typeof base !== 'string' || !/^[0-9]+$/.test(base))) {
+    throw new StoreError(400, 'malformed', 'base_revision 은 리비전 번호 문자열이다');
+  }
+  return {
+    manifest: rec['manifest'],
+    mode: rec['mode'] === 'replace' ? 'replace' : 'merge',
+    opts: { ...(rec['preview'] === true ? { preview: true } : {}), ...(base === undefined ? {} : { baseRevision: base }) },
+  };
+}
+
 const ROUTES: Route[] = [
   // ── 읽기 ───────────────────────────────────────────────────────────────
   route('GET', '/api/v1/config/head', 'read', async (c, api) => {
@@ -573,15 +593,16 @@ const ROUTES: Route[] = [
   /**
    * §5.5 import. 단일 changeset. 차이가 없으면 리비전을 안 올린다.
    * nginx 적용은 `/apply` 의 몫이다 — import 가 적용까지 하면 그 경로만 덜 검증된다.
+   *
+   * 감싼 본문 `{ manifest, mode?, preview?, base_revision? }` (2026-11-21):
+   * - `preview: true` — 커밋하지 않고 `changes`(바뀌는 리소스)와 `impact` 만 돌려준다. 리비전 사건을 내지 않는다.
+   * - `base_revision` — 미리 본 head. 움직였으면 409 `head_moved`.
+   * 감싸지 않은 매니페스트 본문은 지금처럼 merge 로 커밋한다(CLI 호환).
    */
   route('POST', '/api/v1/config/import', 'write', async (c, api) => {
-    const body = c.body;
-    const wrapped = body !== null && typeof body === 'object' && !Array.isArray(body)
-      && 'manifest' in (body as object);
-    const mode = wrapped && (body as { mode?: unknown }).mode === 'replace' ? 'replace' : 'merge';
-    const input = wrapped ? (body as { manifest: unknown }).manifest : body;
-    const out = await api.store.importFromManifest(input, mode, c.who.name);
-    eventsOf(api).publish('revision', { revision: out.revision, unchanged: out.unchanged });
+    const { manifest, mode, opts } = importBody(c.body);
+    const out = await api.store.importFromManifest(manifest, mode, c.who.name, opts);
+    if (out.preview !== true) eventsOf(api).publish('revision', { revision: out.revision, unchanged: out.unchanged });
     json(c.res, 200, out);
   }),
 
@@ -596,14 +617,14 @@ const ROUTES: Route[] = [
 
   /**
    * 백업 복구. `admin` 스코프. 적용은 `/apply` 의 몫이다.
+   *
+   * 늘 replace 다 — 백업에 없는 리소스는 지운다. 미리 보기는 `POST /config/import` 의
+   * `{ mode: 'replace', preview: true }` 로 한다(같은 계산이다). `base_revision` 을 주면 그 사이에 head 가
+   * 움직였을 때 409 다.
    */
   route('POST', '/api/v1/restore', 'admin', async (c, api) => {
-    const body = c.body;
-    const wrapped = body !== null && typeof body === 'object' && !Array.isArray(body);
-    const manifest = wrapped && 'manifest' in (body as object)
-      ? (body as { manifest: unknown }).manifest
-      : body;
-    const out = await api.store.importFromManifest(manifest, 'replace', c.who.name);
+    const { manifest, opts } = importBody(c.body);
+    const out = await api.store.importFromManifest(manifest, 'replace', c.who.name, { ...opts, preview: false });
     eventsOf(api).publish('revision', { revision: out.revision, restored: true });
     json(c.res, 200, out);
   }, { sensitive: true }),
@@ -1235,6 +1256,23 @@ const ROUTES: Route[] = [
       { location: `/api/v1/changesets/${id}` });
   }),
 
+  /**
+   * **변경 초안** — 아직 커밋하지 않은 changeset (2026-11-21). `state=open|sealed` 로 거른다. 없으면 둘 다다.
+   * 한 줄에 patch 를 그대로 싣는다 — 화면이 「무엇을 바꾸려던 것인가」 를 말하려면 필요하다(최대 1000 op).
+   */
+  route('GET', '/api/v1/changesets', 'read', async (c, api) => {
+    const raw = c.url.searchParams.get('state');
+    const states = raw === null || raw === '' ? [] : raw.split(',');
+    const bad = states.find((s) => !(DRAFT_STATES as readonly string[]).includes(s));
+    if (bad !== undefined) {
+      json(c.res, 400, { code: 'bad_state', message: `state '${bad}' 를 모른다 — open · sealed 만 있다` });
+      return;
+    }
+    const asked = Number(c.url.searchParams.get('limit') ?? '50') || 50;
+    const rows = await api.store.listChangesets(states as ChangesetDraftState[], asked);
+    json(c.res, 200, rows.map((r) => ({ ...r, etag: changesetEtag(r.patch, r.state) })));
+  }),
+
   route('GET', '/api/v1/changesets/:id', 'read', async (c, api) => {
     const r = (await api.db.query(
       `SELECT id, base_revision, state, patch, created_by, committed_revision
@@ -1246,6 +1284,8 @@ const ROUTES: Route[] = [
       id: r['id'], base_revision: String(r['base_revision']), state: r['state'],
       patch: r['patch'], created_by: r['created_by'],
       committed_revision: r['committed_revision'] === null ? null : String(r['committed_revision']),
+      // 본문에도 싣는다 — 전역 중계는 응답 헤더를 넘기지 않는다. `If-Match` 는 이 값을 그대로 보낸다.
+      etag,
     }, { etag });
   }),
 
@@ -1351,6 +1391,12 @@ const ROUTES: Route[] = [
     const out = await api.store.replanActiveHead(c.who.name);
     eventsOf(api).publish('revision', { revision: out.revision, rerender: true });
     json(c.res, 200, out);
+  }),
+
+  /** **최근 전환** (2026-11-21). `limit` 1–200, 기본 20. 끝나지 않은 것은 `terminal: false` 다. */
+  route('GET', '/api/v1/operations', 'read', async (c, api) => {
+    const asked = Number(c.url.searchParams.get('limit') ?? '20') || 20;
+    json(c.res, 200, await api.control.operations(asked));
   }),
 
   route('GET', '/api/v1/operations/:id', 'read', async (c, api) => {
@@ -1829,6 +1875,8 @@ function fillPath(template: string, params: Record<string, string>): string {
 const relayTo = (path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET') => {
   const known = method === 'GET' ? RELAY_PATHS.includes(path) : RELAY_WRITES.some((w) => w.method === method && w.path === path);
   if (!known) throw new Error(`중계 허용 목록에 없는 경로다: ${method} ${path}`);
+  // 지역에서만 쓰는 경로(백업 · 복원 · 내보내기 · 가져오기)는 목록에 넣어도 중계하지 않는다 — 전체 설정이 전역에 모이지 않게.
+  if (LOCAL_ONLY_PATHS.includes(path)) throw new Error(`지역에서만 쓰는 경로는 중계하지 않는다: ${method} ${path}`);
   return async (c: Ctx, api: GlobalApiOptions): Promise<void> => {
   const name = c.params['name'] ?? '';
   if (!api.global.has(name)) {
@@ -1900,8 +1948,10 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   route('GET', '/api/v1/regions/:name/config/head', 'read', relayTo('config/head')),
   route('GET', '/api/v1/regions/:name/config/revisions', 'read', relayTo('config/revisions')),
   route('GET', '/api/v1/regions/:name/config/history', 'read', relayTo('config/history')),
+  route('GET', '/api/v1/regions/:name/changesets', 'read', relayTo('changesets')),
   route('GET', '/api/v1/regions/:name/changesets/:id', 'read', relayTo('changesets/:id')),
   route('GET', '/api/v1/regions/:name/plans/:id', 'read', relayTo('plans/:id')),
+  route('GET', '/api/v1/regions/:name/operations', 'read', relayTo('operations')),
   route('GET', '/api/v1/regions/:name/operations/:id', 'read', relayTo('operations/:id')),
   route('GET', '/api/v1/regions/:name/address-sets', 'read', relayTo('address-sets')),
   route('GET', '/api/v1/regions/:name/cluster/nodes', 'read', relayTo('cluster/nodes')),

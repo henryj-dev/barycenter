@@ -371,7 +371,7 @@
       <ImpactCard tone="danger" title={`r${desk.failedApply.revision} 적용이 실패했어요`}
         breaking={[{ tone: 'danger', icon: '✕', text: desk.failedApply.failure }]} quiet={[]}
         progress={desk.applying ? progressBlock : undefined} result={result !== undefined ? resultBlock : undefined}>
-        {#snippet sub()}엔진은 전에 적용한 설정 그대로예요. 설정을 고쳐 저장하거나, 원인을 없앤 뒤 같은 리비전을 다시 적용해요.{/snippet}
+        {#snippet sub()}엔진은 전에 적용한 설정 그대로예요. 설정을 고쳐 저장하거나, 원인을 없앤 뒤 같은 리비전을 다시 적용해요. 단계별 기록은 <a href="/ops/operation">작업</a> 화면에 있어요.{/snippet}
         {#snippet details()}{@render removedBlock()}{/snippet}
         {#snippet footer()}
           {#if !ro}
