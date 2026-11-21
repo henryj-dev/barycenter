@@ -86,6 +86,32 @@ export type HostAddressFacts = {
   nonlocalBind: { v4: boolean; v6: boolean };
 };
 
+/** 드레인 기록 — 누가 · 언제 걸었고 기한이 언제인가. `deadlineExceeded` 는 관측이다(드레인은 그대로다). */
+export type DrainInfo = { startedAt: string; startedBy: string; deadlineAt?: string; deadlineExceeded: boolean };
+
+/** 드레인 진행 — `GET /api/v1/backends/:id/drain-status` (2026-11-21). 숫자는 엔진이 줄 때만 있다. */
+export type DrainStatusView = {
+  backend: string;
+  drain_condition: 'no_new_traffic' | 'quiesced' | 'deadline_exceeded';
+  inflight?: number;
+  active_sessions?: number;
+  started_at?: string;
+  started_by?: string;
+  deadline_at?: string;
+};
+
+/** 설정이 차지하는 소켓 한 줄 — `GET /api/v1/sockets` (2026-11-21). */
+export type SocketRow = { listener: string; protocol: string; transport: 'tcp' | 'udp'; bind: string; port: number; enabled: boolean };
+
+/** 모든 풀의 백엔드 출처 — `GET /api/v1/discovery` (2026-11-21). */
+export type DiscoveryAll = { enabled: boolean; reason?: string; intervalMs?: number; pools: DiscoveryPoolView[] };
+
+/** ACME 챌린지 한 줄 — `GET /api/v1/acme/orders/:id/challenges`. 값(토큰 · keyAuthorization)은 서버가 안 싣는다. */
+export type AcmeChallengeView = {
+  id: string; order: string; domain: string; type: 'http-01' | 'dns-01';
+  placed: boolean; cleaned: boolean; placedAt?: string; cleanedAt?: string;
+};
+
 /** ACME 계정 한 줄 — `GET /api/v1/acme/accounts`. */
 export type AcmeAccountRow = { id: string; key: string; directoryUrl: string; contact: string[]; registered: boolean };
 
@@ -203,7 +229,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
    */
   let acmeOrders = $state<Record<string, unknown>[]>([]);
   /** `observedAt` · `detail` — 마지막 헬스 관측 시각(ISO)과 프로버의 말. 상태 API 가 줄 때만 있다. */
-  let traffic = $state<Map<string, { receivingTraffic: boolean; reasons: string[]; observedAt?: string; detail?: string }>>(new Map());
+  let traffic = $state<Map<string, { receivingTraffic: boolean; reasons: string[]; observedAt?: string; detail?: string; drain?: DrainInfo }>>(new Map());
 
   const refreshPools = async (): Promise<void> => {
     const [pr, br, sr] = await Promise.all([
@@ -214,11 +240,12 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     // 상태 API 는 **선택**이다. 못 읽어도 풀 화면은 서야 한다 — 헬스와 드레인은
     // 다른 경로로 오고, 이 줄 하나 때문에 화면 전체가 비면 그게 더 나쁘다.
     traffic = sr.ok
-      ? new Map((await sr.json() as { key: string; receivingTraffic: boolean; reasons: string[]; health?: { observedAt?: string; detail?: string } }[])
+      ? new Map((await sr.json() as { key: string; receivingTraffic: boolean; reasons: string[]; health?: { observedAt?: string; detail?: string }; drain?: DrainInfo }[])
         .map((r) => [r.key, {
           receivingTraffic: r.receivingTraffic, reasons: r.reasons,
           ...(typeof r.health?.observedAt === 'string' ? { observedAt: r.health.observedAt } : {}),
           ...(typeof r.health?.detail === 'string' ? { detail: r.health.detail } : {}),
+          ...(r.drain === undefined ? {} : { drain: r.drain }),
         }]))
       : new Map();
     if (!pr.ok || !br.ok) {
@@ -760,6 +787,34 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     const body = (await r.json()) as HostAddressFacts & { available?: boolean };
     return body.available === true ? { addresses: body.addresses, nonlocalBind: body.nonlocalBind } : undefined;
   };
+  /** 드레인 진행 (2026-11-21). 드레인 중이 아니면(404) `null`, 못 읽으면 undefined. */
+  const drainStatus = async (key: string): Promise<DrainStatusView | null | undefined> => {
+    const r = await fetch(api(`/api/v1/backends/${encodeURIComponent(key)}/drain-status`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined) return undefined;
+    if (r.status === 404) return null;
+    if (!r.ok) return undefined;
+    return (await r.json().catch(() => undefined)) as DrainStatusView | undefined;
+  };
+  /** 설정이 차지하는 소켓 (2026-11-21). 못 읽으면 undefined. */
+  const sockets = async (): Promise<SocketRow[] | undefined> => {
+    const r = await fetch(api('/api/v1/sockets'), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    const body = (await r.json().catch(() => undefined)) as unknown;
+    return Array.isArray(body) ? (body as SocketRow[]) : undefined;
+  };
+  /** 모든 풀의 백엔드 출처 (2026-11-21). 못 읽으면 undefined. */
+  const discoveryAll = async (): Promise<DiscoveryAll | undefined> => {
+    const r = await fetch(api('/api/v1/discovery'), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    return (await r.json().catch(() => undefined)) as DiscoveryAll | undefined;
+  };
+  /** ACME 주문 하나의 챌린지 (2026-11-21). 못 읽으면 undefined. */
+  const acmeChallenges = async (orderId: string): Promise<AcmeChallengeView[] | undefined> => {
+    const r = await fetch(api(`/api/v1/acme/orders/${encodeURIComponent(orderId)}/challenges`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    const body = (await r.json().catch(() => undefined)) as unknown;
+    return Array.isArray(body) ? (body as AcmeChallengeView[]) : undefined;
+  };
   /** 풀 하나의 백엔드 출처 상태 — `GET /api/v1/pools/:id/discovery` (2026-11-05). 못 읽으면 undefined. */
   const poolDiscovery = async (key: string): Promise<DiscoveryPoolView | { pool: string; source: null } | undefined> => {
     const r = await fetch(api(`/api/v1/pools/${encodeURIComponent(key)}/discovery`), { headers: auth() }).catch(() => undefined);
@@ -1250,12 +1305,18 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     }
   };
 
-  const drain = async (key: string): Promise<boolean> => {
+  /**
+   * 드레인 — 새 연결을 보내지 않는다. 설정(commit)이 아니다. `deadlineS` 를 주면 기한을 단다(초).
+   * 기한은 관측이다 — 지나도 드레인은 그대로고, 화면이 「기한 넘김」 으로 보인다(§4.4).
+   */
+  const drain = async (key: string, deadlineS?: number): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
       const r = await fetch(api(`/api/v1/backends/${encodeURIComponent(key)}/drain`), {
-        method: 'POST', headers: auth(),
+        method: 'POST',
+        headers: { ...auth(), ...(deadlineS === undefined ? {} : { 'content-type': 'application/json' }) },
+        ...(deadlineS === undefined ? {} : { body: JSON.stringify({ deadline_s: deadlineS }) }),
       });
       if (!r.ok) {
         const body = (await r.json()) as { message?: string };
@@ -1364,6 +1425,10 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     healthHistory,
     trafficSeries,
     trafficSummary,
+    drainStatus,
+    sockets,
+    discoveryAll,
+    acmeChallenges,
     addressSetRefreshStatus,
     refreshAddressSet,
     refreshDiscovery,

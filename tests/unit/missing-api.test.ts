@@ -65,7 +65,7 @@ describe('주문·챌린지 GET', () => {
     const ch = publicChallenge(challenge());
     expect(ch).toEqual({
       id: 'c1', order: 'o1', domain: 'a.test', type: 'http-01',
-      placed: true, cleaned: false,
+      placed: true, cleaned: false, placedAt: '2026-08-19T00:00:00.000Z',
     });
     expect(JSON.stringify(ch)).not.toContain('tok-secret');
     expect(JSON.stringify(ch)).not.toContain('keyauth-secret');

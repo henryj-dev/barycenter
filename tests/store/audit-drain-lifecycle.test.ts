@@ -151,6 +151,41 @@ describe('드레인 수명 (검수 B-04 · B-10)', () => {
     expect([...await deadlineExceededKeys(db)]).toEqual(['a-11']);
   });
 
+  it('드레인 진행이 누가 · 언제 · 기한을 싣고, 상태 목록도 같은 기록을 싣는다 (2026-11-21)', async () => {
+    const before = Date.now() - 2000;
+    expect((await req('POST', '/api/v1/backends/a-11/drain', { deadline_s: 600 })).status).toBe(200);
+    const st = await req('GET', '/api/v1/backends/a-11/drain-status');
+    expect(st.status).toBe(200);
+    const body = st.body as Record<string, unknown>;
+    expect(body['drain_condition']).toBe('no_new_traffic');
+    expect(body['started_by']).toBe('tester');
+    expect(Date.parse(String(body['started_at']))).toBeGreaterThanOrEqual(before);
+    const deadline = Date.parse(String(body['deadline_at']));
+    expect(deadline - Date.now()).toBeGreaterThan(500_000);
+    // 숫자는 엔진이 줄 때만 있다 — 이 시험에는 엔진이 없으므로 없다(0 으로 채우지 않는다).
+    expect(body).not.toHaveProperty('inflight');
+
+    const rows = (await req('GET', '/api/v1/backends/status')).body as { key: string; drain?: Record<string, unknown> }[];
+    const row = rows.find((r) => r.key === 'a-11');
+    expect(row?.drain).toMatchObject({ startedBy: 'tester', deadlineExceeded: false });
+    expect(Date.parse(String(row?.drain?.['deadlineAt']))).toBe(deadline);
+
+    // 기한을 지나게 하면 목록이 「기한 넘김」 을 안다 — 드레인은 그대로다.
+    await db.query(TEST_DB === 'sqlite'
+      ? `UPDATE backend_drain SET deadline_at = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '-1 second')`
+      : IS_MYSQL ? 'UPDATE backend_drain SET deadline_at = DATE_SUB(now(), INTERVAL 1 SECOND)'
+      : `UPDATE backend_drain SET deadline_at = now() - interval '1 second'`);
+    const after = (await req('GET', '/api/v1/backends/status')).body as { key: string; draining: boolean; drain?: { deadlineExceeded: boolean } }[];
+    expect(after.find((r) => r.key === 'a-11')).toMatchObject({ draining: true, drain: { deadlineExceeded: true } });
+    expect(((await req('GET', '/api/v1/backends/a-11/drain-status')).body as Record<string, unknown>)['drain_condition'])
+      .toBe('deadline_exceeded');
+
+    // 드레인이 아니면 `drain` 칸이 없다.
+    await req('DELETE', '/api/v1/backends/a-11/drain');
+    const none = (await req('GET', '/api/v1/backends/status')).body as { key: string; drain?: unknown }[];
+    expect(none.find((r) => r.key === 'a-11')).not.toHaveProperty('drain');
+  });
+
   it('없는 드레인을 푸는 것은 404 다', async () => {
     // 빈 성공으로 답하면 "풀렸다" 와 "원래 없었다" 가 같아진다.
     expect((await req('DELETE', '/api/v1/backends/a-11/drain')).status).toBe(404);
