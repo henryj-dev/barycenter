@@ -12,7 +12,13 @@ export type NavGroup = { title: string; items: readonly NavItem[] };
 /** 시안의 `GROUPS` 순서 그대로. 전역 모드는 클러스터를 숨긴다(지역마다 따로다). */
 export const NAV_GROUPS: readonly NavGroup[] = [
   { title: '', items: [{ place: 'dashboard', label: '대시보드', icon: '▦', href: '/' }] },
-  { title: '변경', items: [{ place: 'impact', label: '적용 대기', icon: '◐', href: '/change/pending' }] },
+  {
+    title: '변경',
+    items: [
+      { place: 'impact', label: '적용 대기', icon: '◐', href: '/change/pending' },
+      { place: 'drafts', label: '초안', icon: '✎', href: '/change/drafts' },
+    ],
+  },
   {
     title: '트래픽',
     items: [
@@ -39,6 +45,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { place: 'cluster', label: '클러스터', icon: '◫', href: '/ops/cluster' },
       { place: 'rendered', label: '렌더된 설정', icon: '❯', href: '/ops/rendered' },
       { place: 'engine', label: '엔진 설정', icon: '⚒', href: '/ops/engine' },
+      { place: 'operations', label: '작업', icon: '⟳', href: '/ops/operation' },
       { place: 'sockets', label: '소켓', icon: '⊶', href: '/ops/sockets' },
       { place: 'discovery', label: '백엔드 출처', icon: '⇲', href: '/ops/discovery' },
       { place: 'audit', label: '기록', icon: '◷', href: '/ops/audit' },
@@ -61,6 +68,7 @@ export const STANDALONE: readonly Place[] = ['login', 'invite', 'reset', 'email'
 export const PAGE_META: Readonly<Record<Place, { title: string; desc: string }>> = {
   dashboard: { title: '대시보드', desc: '이 인스턴스의 상태를 확인해요.' },
   impact: { title: '적용 대기', desc: '커밋한 변경의 영향을 확인하고 적용해요.' },
+  drafts: { title: '초안', desc: '커밋하지 않은 변경이에요. 계획해서 영향을 보고 커밋하거나 버려요.' },
   listeners: { title: '리스너', desc: '사용할 프로토콜과 경로, 기본 동작을 정해요.' },
   routes: { title: '라우트', desc: '호스트와 경로에 따라 요청을 풀이나 동작으로 보내요.' },
   pools: { title: '풀', desc: '백엔드를 묶고 알고리즘과 헬스체크를 정해요.' },
@@ -74,6 +82,7 @@ export const PAGE_META: Readonly<Record<Place, { title: string; desc: string }>>
   cluster: { title: '클러스터', desc: '노드별 활성 세대와 상태를 확인해요.' },
   rendered: { title: '렌더된 설정', desc: '리비전별 nginx.conf를 확인해요.' },
   engine: { title: '엔진 설정', desc: '워커 종료 대기 시간과 공유 메모리 크기를 정해요.' },
+  operations: { title: '작업', desc: '적용 · 롤백 · 다시 렌더가 남긴 전환이에요. 끝나지 않은 것은 취소해요.' },
   sockets: { title: '소켓', desc: '설정이 차지하는 전송 · 주소 · 포트와 그것을 쓰는 리스너를 확인해요.' },
   discovery: { title: '백엔드 출처', desc: '출처에서 백엔드를 받는 풀의 상태와 마지막 갱신을 확인해요.' },
   audit: { title: '기록', desc: '변경 기록을 묶음 단위로 확인해요.' },
