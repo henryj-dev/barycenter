@@ -1466,6 +1466,50 @@
         }
       }
     },
+    "/api/v1/regions/{name}/backends/{id}/drain-status": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/backends/:id/drain-status",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/acme/orders/{id}/challenges": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/acme/orders/:id/challenges",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/acme/challenges/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/acme/challenges/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/discovery": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/discovery",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/regions/{name}/health/backends": {
       "get": {
         "operationId": "GET:/api/v1/regions/:name/health/backends",

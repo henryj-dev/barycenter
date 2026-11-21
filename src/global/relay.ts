@@ -41,6 +41,8 @@ export const RELAY_PATHS: readonly string[] = [
   'system/storage',
   // GUI 가 이미 부르던 것 (2026-11-20) — 빠져 있었다.
   'pools/:id/discovery', 'address-sets/refresh-status',
+  // 운영 보기 (2026-11-21): 드레인 진행 · ACME 주문의 챌린지 · 모든 풀의 출처. 챌린지 본문은 값(토큰)을 싣지 않는다.
+  'backends/:id/drain-status', 'acme/orders/:id/challenges', 'acme/challenges/:id', 'discovery',
   // 지표 (2026-11-21). Prometheus 텍스트를 해석하지 않고 넘긴다 — 운영 › 지표가 지역을 골라 읽는다.
   'metrics',
 ];

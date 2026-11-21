@@ -18,6 +18,7 @@ import { whenText } from '#lib/ops/audit';
 import { isPendingResource } from '#lib/pending';
 import { HEALTH_MARK, ago, backendHealth, poolMark, sourceAllowSummary, hcText, type HealthKind } from '#lib/detail/facts';
 import type { ListenerMark } from '@web/listeners-view';
+import { deadlineText, drainCell } from '@web/drain-view';
 
 type Desk = ReturnType<typeof createDesk>;
 type Obj = Record<string, unknown>;
@@ -89,6 +90,8 @@ export const listenerColumns = <T extends ListenerRow>(): Column<T>[] => [
 export type BackendRow = {
   key: string; pool: string; host: string; port: string; addr: string; weight: number; health: HealthKind;
   receiving: boolean | undefined; draining: boolean; why: string[]; seen?: string;
+  /** 드레인 기록(누가 · 언제 · 기한). 상태 API 가 줄 때만 있다. */
+  drain?: { startedAt: string; startedBy: string; deadlineAt?: string; deadlineExceeded: boolean };
 };
 
 export const backendRowsOf = (desk: Desk): BackendRow[] => itemsOf(desk.model, 'backend').map((bk) => {
@@ -103,8 +106,17 @@ export const backendRowsOf = (desk: Desk): BackendRow[] => itemsOf(desk.model, '
     // 이유 코드는 사람 말로 바꾼다(제안 #9) — 드레인은 「드레인」 칸이 따로 말하므로 뺀다.
     why: trafficMarkOf(t === undefined ? undefined : { ...t, reasons: t.reasons.filter((r) => r !== 'draining') })?.reasons ?? [],
     ...(seen === undefined ? {} : { seen }),
+    ...(t?.drain === undefined ? {} : { drain: t.drain }),
   };
 });
+
+/** 드레인 칸 — 기한을 넘긴 것은 경고 색이다(2026-11-21). 마우스를 올리면 누가 걸었고 기한이 어떤지 보인다. */
+const drainingCell = (r: BackendRow): Cell => {
+  if (!r.draining) return x('—');
+  const c = drainCell(r.drain);
+  const tip = r.drain === undefined ? undefined : `${r.drain.startedBy} · 기한 ${deadlineText(r.drain.deadlineAt)}`;
+  return b(c.tone, c.icon, c.text, tip);
+};
 
 const healthCell = (h: HealthKind): Cell => { const k = HEALTH_MARK[h]; return b(k.tone, k.icon, k.text); };
 /** 트래픽 수신 — 시안 「● 수신 중」 / 「○ 수신 안 함」. 상태 API 를 못 읽었으면 모른다(「—」). 까닭은 마우스를 올리면 보인다. */
@@ -118,7 +130,7 @@ export const backendColumns = <T extends BackendRow>(): Column<T>[] => [
   { key: 'weight', label: '가중치', value: (r) => m(r.weight), sort: (r) => r.weight },
   { key: 'health', label: '헬스', value: (r) => healthCell(r.health), sort: true },
   { key: 'receiving', label: '트래픽 수신', value: (r) => receivingCell(r), sort: true },
-  { key: 'draining', label: '드레인', value: (r) => (r.draining ? b('drain', '⇣', '드레인 중') : x('—')), sort: true },
+  { key: 'draining', label: '드레인', value: (r) => drainingCell(r), sort: (r) => (r.drain?.deadlineExceeded === true ? 2 : r.draining ? 1 : 0) },
   { key: 'seen', label: '마지막 관측', value: (r) => x(r.seen), sort: true },
 ];
 
