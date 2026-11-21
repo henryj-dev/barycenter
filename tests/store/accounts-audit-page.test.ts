@@ -4,7 +4,7 @@
  * 재는 것: 최근 것부터 id 순서로 `limit` 개, `next` 로 다음 쪽을 이어 읽으면 겹치지도 빠지지도 않는다.
  * 대상 사람의 이름이 붙고, `detail` 은 객체로 온다.
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ACCOUNT_MIGRATIONS } from '../../src/accounts/migrations.js';
@@ -33,9 +33,9 @@ beforeEach(async () => {
 describe('계정 감사 한 쪽', () => {
   it('최근 것부터 · 쪽을 이어 읽으면 겹치지 않는다 · 대상 이름과 detail 이 붙는다', async () => {
     const s = svc();
-    const uid = (await db.query(
-      `INSERT INTO users (username, role, created_by) VALUES ('alice', 'operator', 'test') RETURNING id`,
-    )).rows[0]!['id'] as string;
+    // id 를 직접 준다 — `RETURNING` 과 기본 uuid 는 방언마다 다르다(MySQL 에는 둘 다 없다).
+    const uid = randomUUID();
+    await db.query(`INSERT INTO users (id, username, role, created_by) VALUES ($1, 'alice', 'operator', 'test')`, [uid]);
     for (let i = 0; i < 5; i += 1) await s.recordGlobalView('user:admin', { region: `r${i}`, path: 'status' }, i === 4 ? uid : null, { ip: '10.0.0.9' });
 
     const p1 = await s.accountAudit(2);
