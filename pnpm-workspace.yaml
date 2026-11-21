@@ -1,0 +1,12 @@
+packages:
+  - api
+  - web
+allowBuilds:
+  esbuild: true
+  sharp: true
+engineStrict: true
+# svelte-eslint-parser 는 닿는 TypeScript 중 가장 새 것을 집는다. 끌어올리면 api 의 7 을 집어 web lint 가 깨진다.
+# typescript 만 끌어올리지 않아서, 각 패키지가 자기 것을 쓰게 한다.
+hoistPattern:
+  - '*'
+  - '!typescript'
