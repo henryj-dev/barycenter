@@ -14,6 +14,20 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- The GUI now shows several things the API already had:
+  - **Drain progress** on the backend page: new connections blocked / fully drained / deadline
+    passed, in-flight requests and sessions when the engine reports them, who started the drain,
+    when, and the deadline. You can pick a deadline (5 min – 4 h) when you drain. The backends
+    list marks drains whose deadline has passed. `GET /api/v1/backends/:id/drain-status` now also
+    returns `started_at`, `started_by` and `deadline_at`, and `GET /api/v1/backends/status` rows
+    carry `drain { startedAt, startedBy, deadlineAt?, deadlineExceeded }` while draining.
+  - **ACME challenges** in the certificate's ACME box: click an order to see each challenge's
+    domain, type, and when it was placed and cleaned. Challenge bodies now include `placedAt` /
+    `cleanedAt`; tokens are still never returned.
+  - New screens: **운영 › 소켓** (every socket the config occupies, with shared sockets and
+    wildcard overlaps marked), **운영 › 백엔드 출처** (discovery state of every pool), and
+    **TLS › ACME 계정** (accounts, CA, registration, and which certificates use them).
+  - Global mode relays drain status, ACME challenges and the all-pool discovery view.
 - Global mode now relays traffic statistics (`GET /api/v1/regions/<region>/traffic` and
   `/traffic/<kind>/<key>`). The paths were on the relay allow-list but had no global route, so the
   traffic graphs answered 404 in global mode. A test now checks that the relay allow-list and the

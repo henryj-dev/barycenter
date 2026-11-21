@@ -48,6 +48,11 @@ export type BackendStatusRow = {
   plane: 'http' | 'stream' | undefined;
   health: { state: HealthState; observedAt?: string; detail?: string };
   draining: boolean;
+  /**
+   * 드레인 중이면 누가 · 언제 걸었고 기한이 언제인가 (2026-11-21). 목록이 「기한 넘김」 을 백엔드마다 따로 묻지 않고 그린다.
+   * `deadlineExceeded` 는 관측이다 — 드레인은 그대로다(§4.4).
+   */
+  drain?: { startedAt: string; startedBy: string; deadlineAt?: string; deadlineExceeded: boolean };
   /** 지금 트래픽을 받는가 — 리듀서의 판정 그대로. */
   receivingTraffic: boolean;
   /** 안 받으면 왜. 받으면 빈 배열. **정렬해서 낸다** — 목록을 눈으로 비교할 수 있어야 한다. */
@@ -61,6 +66,8 @@ export type BackendStatusInput = {
   /** 관측 시각·사유. 없어도 판정은 선다. */
   detail?: ReadonlyMap<string, { observedAt: string; detail?: string }>;
   draining: ReadonlySet<string>;
+  /** 드레인 기록(누가 · 언제 · 기한). 없으면 `drain` 칸을 안 싣는다. */
+  drainInfo?: ReadonlyMap<string, { startedAt: string; startedBy: string; deadlineAt?: string }>;
   /** 렌더에 upstream 이 생기는 풀들. `slotsOf` 가 보는 것과 같은 집합이다. */
   routedPools: ReadonlySet<string>;
 };
@@ -68,6 +75,14 @@ export type BackendStatusInput = {
 export function backendStatusRows(input: BackendStatusInput): BackendStatusRow[] {
   const { model, health, draining, routedPools } = input;
   const poolOf = new Map(model.pools.map((p) => [p.key, p]));
+
+  const now = Date.now();
+  const drainOf = (key: string): Pick<BackendStatusRow, 'drain'> => {
+    const rec = draining.has(key) ? input.drainInfo?.get(key) : undefined;
+    if (rec === undefined) return {};
+    const exceeded = rec.deadlineAt !== undefined && new Date(rec.deadlineAt).getTime() <= now;
+    return { drain: { ...rec, deadlineExceeded: exceeded } };
+  };
 
   const rows = model.backends.map((b): BackendStatusRow => {
     const pool = poolOf.get(b.pool);
@@ -98,6 +113,7 @@ export function backendStatusRows(input: BackendStatusInput): BackendStatusRow[]
         ...(seen?.detail === undefined ? {} : { detail: seen.detail }),
       },
       draining: draining.has(b.key),
+      ...drainOf(b.key),
       receivingTraffic: reasons.length === 0,
       reasons,
     };
