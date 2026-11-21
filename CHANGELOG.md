@@ -24,6 +24,20 @@ release section lists every publicly known vulnerability it fixes.
   include `changes`. CLI: `bary import <file> --preview`, `bary restore <file> --preview`. These paths
   stay region-only — global mode does not relay them (`LOCAL_ONLY_PATHS`), so one region's whole
   config never passes through the global view; the screen shows **이 지역에서 열기 ↗** there.
+- The GUI now shows several things the API already had:
+  - **Drain progress** on the backend page: new connections blocked / fully drained / deadline
+    passed, in-flight requests and sessions when the engine reports them, who started the drain,
+    when, and the deadline. You can pick a deadline (5 min – 4 h) when you drain. The backends
+    list marks drains whose deadline has passed. `GET /api/v1/backends/:id/drain-status` now also
+    returns `started_at`, `started_by` and `deadline_at`, and `GET /api/v1/backends/status` rows
+    carry `drain { startedAt, startedBy, deadlineAt?, deadlineExceeded }` while draining.
+  - **ACME challenges** in the certificate's ACME box: click an order to see each challenge's
+    domain, type, and when it was placed and cleaned. Challenge bodies now include `placedAt` /
+    `cleanedAt`; tokens are still never returned.
+  - New screens: **운영 › 소켓** (every socket the config occupies, with shared sockets and
+    wildcard overlaps marked), **운영 › 백엔드 출처** (discovery state of every pool), and
+    **TLS › ACME 계정** (accounts, CA, registration, and which certificates use them).
+  - Global mode relays drain status, ACME challenges and the all-pool discovery view.
 - **Rerender and apply after upgrading** — these change the rendered nginx config (OpenResty).
   - Failed requests no longer leak the per-backend in-flight count. When nginx could not reach a
     backend, it made a 502/504 and jumped to the error page, which cleared `ngx.ctx`; the counter

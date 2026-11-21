@@ -27,6 +27,15 @@ export type PublicChallenge = {
   type: ChallengeRow['type'];
   placed: boolean;
   cleaned: boolean;
+  /** 놓은 · 치운 시각(ISO, 2026-11-21) — 화면의 주문 상세가 싣는다. 값(토큰 · keyAuthorization)은 싣지 않는다. */
+  placedAt?: string;
+  cleanedAt?: string;
+};
+
+/** 시각 열은 방언마다 모양이 다르다 — ISO 로 낸다. 못 읽으면 그대로. */
+const iso = (v: string): string => {
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? v : d.toISOString();
 };
 
 const SECRET = /BEGIN |PRIVATE KEY|accountKey|account_key|issuedRef|certKeyRef/i;
@@ -51,6 +60,8 @@ export function publicChallenge(row: ChallengeRow): PublicChallenge {
     type: row.type,
     placed: row.placedAt !== undefined,
     cleaned: row.cleanedAt !== undefined,
+    ...(row.placedAt === undefined ? {} : { placedAt: iso(row.placedAt) }),
+    ...(row.cleanedAt === undefined ? {} : { cleanedAt: iso(row.cleanedAt) }),
   };
 }
 
