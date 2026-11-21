@@ -407,6 +407,8 @@ async function emit(
 export class HealthProber {
   #timer: NodeJS.Timeout | undefined;
   #running = false;
+  /** 지금 도는 한 바퀴. 종료가 이것을 기다린다(`quiesce.ts`). */
+  #current: Promise<void> | undefined;
   /**
    * 프로브 시작 순번. **단조** — 늦게 끝난 낡은 관측을 가려낸다 (§6.6 ABA).
    *
@@ -595,14 +597,20 @@ export class HealthProber {
         this.#running = false;
       }
     };
-    this.#timer = setInterval(() => void tick(), this.opts.intervalMs ?? DEFAULTS.intervalMs);
+    const run = (): void => {
+      if (this.#running) return;
+      this.#current = tick();
+    };
+    this.#timer = setInterval(run, this.opts.intervalMs ?? DEFAULTS.intervalMs);
     this.#timer.unref();
-    void tick();
+    run();
   }
 
-  stop(): void {
+  /** 타이머를 멈추고, 돌고 있던 한 바퀴가 끝나면 풀린다. 그 뒤에 DB 를 닫는다. */
+  stop(): Promise<void> {
     if (this.#timer !== undefined) clearInterval(this.#timer);
     this.#timer = undefined;
+    return this.#current ?? Promise.resolve();
   }
 }
 

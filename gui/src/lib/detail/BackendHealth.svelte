@@ -53,7 +53,9 @@
     label: l.label, value: l.value, ...(l.tone === 'ok' || l.tone === 'warn' ? { tone: l.tone } : {}),
   })));
 
-  let deadline = $state(0);
+  // `Select` 는 문자열 값을 받는다 — 초를 문자열로 들고, 보낼 때 숫자로 돌린다.
+  const deadlineOptions = DRAIN_DEADLINES.map((d) => ({ value: String(d.value), label: d.label }));
+  let deadline = $state('0');
 </script>
 
 <div class="bh">
@@ -72,8 +74,8 @@
   <Writable>
     <div class="act">
       {#if traffic === undefined || !draining}
-        <Select label="기한" size="sm" width="130px" mono={false} bind:value={deadline} options={DRAIN_DEADLINES} />
-        <Button size="sm" disabled={desk.editing} onclick={() => { void desk.drain(key, deadline > 0 ? deadline : undefined); }}>드레인</Button>
+        <Select label="기한" size="sm" width="130px" mono={false} bind:value={deadline} options={deadlineOptions} />
+        <Button size="sm" disabled={desk.editing} onclick={() => { void desk.drain(key, Number(deadline) > 0 ? Number(deadline) : undefined); }}>드레인</Button>
       {/if}
       {#if traffic === undefined || draining}<Button size="sm" disabled={desk.editing} onclick={() => { void desk.undrain(key); }}>드레인 해제</Button>{/if}
       <FieldMessage>새 연결을 보내지 않아요. 진행 중인 연결은 끝까지 가요. 설정(커밋)이 아니라 바로 걸려요. 기한이 지나도 드레인은 풀리지 않아요 — 「기한 넘김」 으로 보여요.</FieldMessage>
