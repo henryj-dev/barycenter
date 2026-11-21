@@ -274,6 +274,23 @@ export const MAX_CHANGESET_OPS = 1000;
 const text = (r: Row, k: string): string => String(r[k]);
 
 /** 리비전 목록의 한 줄 (`revisions`). */
+/** 커밋 전 changeset 의 상태 — 「변경 초안」 이 보이는 것. */
+export type ChangesetDraftState = 'open' | 'sealed';
+export const DRAFT_STATES: readonly ChangesetDraftState[] = ['open', 'sealed'];
+
+export type ChangesetDraftRow = {
+  id: string;
+  baseRevision: string;
+  state: ChangesetDraftState;
+  patch: unknown[];
+  ops: number;
+  createdAt: string;
+  createdBy: string;
+  sealedAt: string | null;
+  /** base 가 지금 head 와 다르다. 그대로 계획하면 커밋이 PLAN_STALE 이다. */
+  stale: boolean;
+};
+
 export type RevisionRow = {
   revision: string;
   parent: string | null;
@@ -1297,6 +1314,40 @@ export class ConfigStore {
       note: r['note'] === null ? null : text(r, 'note'),
       changeset: r['changeset'] === null ? null : text(r, 'changeset'),
     }));
+  }
+
+  /**
+   * **아직 커밋하지 않은 changeset** — 새 것부터 (GUI 「변경 초안」, 2026-11-21).
+   *
+   * `open` 과 `sealed` 만 본다. `committed` 는 리비전 목록이, `discarded` 는 감사 로그가 이미 말한다.
+   * `stale` 은 base 가 지금 head 와 다르다는 뜻이다 — 그대로 계획하면 커밋이 PLAN_STALE(head_moved) 이다.
+   */
+  async listChangesets(states: readonly ChangesetDraftState[], limit = 50): Promise<ChangesetDraftRow[]> {
+    const n = Math.min(Math.max(Math.trunc(limit), 1), 200);
+    const want = states.length === 0 ? DRAFT_STATES : states;
+    const head = (await this.head()).revision;
+    const rows = (await this.db.query(
+      `SELECT id, base_revision, state, patch, created_at, created_by, sealed_at
+         FROM changesets
+        WHERE state = $1 OR state = $2
+        ORDER BY created_at DESC
+        LIMIT $3`, [want[0], want[want.length - 1], n],
+    )).rows;
+    return rows.map((r) => {
+      const patch = Array.isArray(r['patch']) ? r['patch'] as unknown[] : [];
+      const base = text(r, 'base_revision');
+      return {
+        id: text(r, 'id'),
+        baseRevision: base,
+        state: text(r, 'state') as ChangesetDraftState,
+        patch,
+        ops: patch.length,
+        createdAt: (r['created_at'] as Date).toISOString(),
+        createdBy: text(r, 'created_by'),
+        sealedAt: r['sealed_at'] === null || r['sealed_at'] === undefined ? null : (r['sealed_at'] as Date).toISOString(),
+        stale: base !== head,
+      };
+    });
   }
 
   /**

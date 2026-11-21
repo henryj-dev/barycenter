@@ -547,6 +547,15 @@
             "description": "implemented"
           }
         }
+      },
+      "get": {
+        "operationId": "GET:/api/v1/changesets",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
       }
     },
     "/api/v1/changesets/{id}": {
@@ -659,6 +668,17 @@
       "post": {
         "operationId": "POST:/api/v1/apply/rerender",
         "x-scope": "apply",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/operations": {
+      "get": {
+        "operationId": "GET:/api/v1/operations",
+        "x-scope": "read",
         "responses": {
           "200": {
             "description": "implemented"
@@ -1318,6 +1338,26 @@
         }
       }
     },
+    "/api/v1/regions/{name}/changesets": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/changesets",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      },
+      "post": {
+        "operationId": "POST:/api/v1/regions/:name/changesets",
+        "x-scope": "write",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/regions/{name}/changesets/{id}": {
       "get": {
         "operationId": "GET:/api/v1/regions/:name/changesets/:id",
@@ -1350,6 +1390,17 @@
     "/api/v1/regions/{name}/plans/{id}": {
       "get": {
         "operationId": "GET:/api/v1/regions/:name/plans/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/operations": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/operations",
         "x-scope": "read",
         "responses": {
           "200": {
@@ -1602,17 +1653,6 @@
       "get": {
         "operationId": "GET:/api/v1/regions/:name/metrics",
         "x-scope": "read",
-        "responses": {
-          "200": {
-            "description": "implemented"
-          }
-        }
-      }
-    },
-    "/api/v1/regions/{name}/changesets": {
-      "post": {
-        "operationId": "POST:/api/v1/regions/:name/changesets",
-        "x-scope": "write",
         "responses": {
           "200": {
             "description": "implemented"

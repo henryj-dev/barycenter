@@ -128,6 +128,12 @@ export async function changesetPlan(http: Http, id: string): Promise<{
   };
 }
 
+/** 커밋 전 changeset — `open` · `sealed` (2026-11-21). `state` 를 주면 그것만 본다. */
+export async function changesetList(http: Http, state?: 'open' | 'sealed'): Promise<unknown> {
+  const q = state === undefined ? '' : `?state=${state}`;
+  return unwrap(await http('GET', `/api/v1/changesets${q}`), 'changeset 목록');
+}
+
 export async function changesetShow(http: Http, id: string): Promise<unknown> {
   return unwrap(await http('GET', `/api/v1/changesets/${id}`), 'changeset');
 }

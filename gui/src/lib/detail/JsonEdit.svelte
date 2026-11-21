@@ -9,7 +9,8 @@
   import { getContext } from 'svelte';
   import { page } from '$app/state';
   import { RESOURCES, itemOf, type ResourceKind, resourcePath } from '@web/resources';
-  import { Button, Form, FormRow, FormSection, TextArea } from '#lib/ui';
+  import { goto } from '$app/navigation';
+  import { Button, Form, FormRow, FormSection, TextArea, toast } from '#lib/ui';
   import { after } from '#lib/after';
   import Writable from '#lib/global/Writable.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
@@ -44,6 +45,15 @@
     if (problem !== undefined || desk.editing) return;
     void desk.putResource(kind, key, JSON.parse(text) as Record<string, unknown>).then(after(resourcePath(kind, key)));
   };
+  /** 「초안으로 두기」 (2026-11-21) — 커밋하지 않고 changeset 만 남긴다. 변경 › 초안에서 계획하고 커밋한다. */
+  const draft = (): void => {
+    if (problem !== undefined || desk.editing) return;
+    void desk.saveDraft([{ op: 'put', kind, key, body: JSON.parse(text) as Record<string, unknown> }]).then((id) => {
+      if (id === undefined) return;
+      toast.ok('초안으로 두었어요', '변경 › 초안에서 계획하고 커밋해요.');
+      void goto('/change/drafts');
+    });
+  };
   const reset = (): void => { loaded = undefined; };
 </script>
 
@@ -56,6 +66,7 @@
     </FormSection>
     {#snippet actions()}
       <Button variant="primary" type="submit" loading={desk.editing} disabled={problem !== undefined}>{desk.editing ? '저장 중' : '저장'}</Button>
+      <Button onclick={draft} disabled={desk.editing || problem !== undefined}>초안으로 두기</Button>
       <Button onclick={reset} disabled={desk.editing}>되돌리기</Button>
     {/snippet}
   </Form>
