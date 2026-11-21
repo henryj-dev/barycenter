@@ -56,7 +56,7 @@ import { byDialect, dialectOf, type ByDialect, type Database, type Queryable, ty
 import { referencedSets, referencedSetsOfRoute } from '../model/address-sets.js';
 import { routeActions } from '../model/route-rules.js';
 import {
-  exportManifest, importPatch, parseManifest, type ImportMode, type Manifest,
+  exportManifest, importChanges, importPatch, parseManifest, type ImportChange, type ImportMode, type Manifest,
 } from './manifest.js';
 import { diffResources, type PendingResources } from './pending-resources.js';
 
@@ -147,6 +147,15 @@ export class StoreError extends Error {
 }
 
 export type Head = { revision: string; etag: string };
+
+/**
+ * `importFromManifest` 의 결과. `changes` 는 바뀌는 리소스 한 줄씩이다(같으면 비어 있다).
+ * 미리 보기(`preview: true`)는 리비전을 올리지 않는다 — `revision` 은 미리 본 head 다.
+ */
+export type ImportResult =
+  | { unchanged: true; preview?: true; revision: string; changes: ImportChange[] }
+  | { unchanged: false; preview: true; revision: string; changes: ImportChange[]; impact: Impact }
+  | { unchanged: false; preview?: undefined; revision: string; planId: string; changesetId: string; changes: ImportChange[] };
 
 export type PlanRecord = {
   id: string;
@@ -1486,22 +1495,46 @@ export class ConfigStore {
    *
    * 차이가 없으면 changeset 을 만들지 않는다. 두 번째 import 가 리비전을
    * 올리지 않는 것이 "결과가 같다" 의 강한 쪽이다.
+   *
+   * **`preview`** (2026-11-21) — 커밋하지 않고 무엇이 바뀌는지와 영향만 본다. 같은 changeset · plan 경로를
+   * 지나서(검증 · 렌더 · 영향 계산이 커밋과 같다) changeset 을 **버린다.** GUI 가 「가져오기」 · 「복원」 전에 이것을 보여 준다.
+   *
+   * **`baseRevision`** — 미리 본 head. 그 사이에 head 가 움직였으면 409 `head_moved` 다. 미리 본 것과 다른 것을
+   * 커밋하지 않게 한다. 주지 않으면 지금처럼 그때의 head 에 얹는다(CLI 호환).
    */
   async importFromManifest(
     input: unknown, mode: ImportMode, by: string,
-  ): Promise<
-    | { unchanged: true; revision: string }
-    | { unchanged: false; revision: string; planId: string; changesetId: string }
-  > {
+    opts: { preview?: boolean; baseRevision?: string } = {},
+  ): Promise<ImportResult> {
     const manifest = parseManifest(input);
     const head = await this.head();
-    const ops = importPatch(await this.modelAt(head.revision), manifest, mode);
-    if (ops.length === 0) return { unchanged: true, revision: head.revision };
+    if (opts.baseRevision !== undefined && opts.baseRevision !== head.revision) {
+      throw new StoreError(409, 'head_moved',
+        `미리 본 것은 r${opts.baseRevision} 인데 head 는 r${head.revision} 다 — 다시 미리 본다`);
+    }
+    const current = await this.modelAt(head.revision);
+    const ops = importPatch(current, manifest, mode);
+    const changes = importChanges(current, ops);
+    const preview = opts.preview === true;
+    if (ops.length === 0) {
+      return preview
+        ? { unchanged: true, preview: true, revision: head.revision, changes }
+        : { unchanged: true, revision: head.revision, changes };
+    }
     const changesetId = await this.createChangeset(head.revision, by);
+    if (preview) {
+      try {
+        await this.patchChangeset(changesetId, ops, by);
+        const plan = await this.plan(changesetId, by);
+        return { unchanged: false, preview: true, revision: head.revision, changes, impact: plan.impact };
+      } finally {
+        await this.discardChangeset(changesetId, by).catch(() => undefined);
+      }
+    }
     await this.patchChangeset(changesetId, ops, by);
     const plan = await this.plan(changesetId, by);
     const committed = await this.commit(changesetId, plan.id, by);
-    return { unchanged: false, revision: committed.revision, planId: plan.id, changesetId };
+    return { unchanged: false, revision: committed.revision, planId: plan.id, changesetId, changes };
   }
 
   /**

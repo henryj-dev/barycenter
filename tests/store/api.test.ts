@@ -283,4 +283,30 @@ describe('§5.5 export / import', () => {
     expect(again.body.unchanged).toBe(true);
     expect(again.body.revision).toBe(before);
   });
+
+  it('import 미리 보기는 커밋하지 않고, base_revision 이 낡으면 409 다 (2026-11-21)', async () => {
+    await commitAll([
+      PUT('pool', 'app', { protocolClass: 'http', algorithm: 'round_robin' }),
+      PUT('backend', 'a-11', { pool: 'app', host: '10.0.0.1', port: 80, weight: 1 }),
+      PUT('backend', 'a-12', { pool: 'app', host: '10.0.0.2', port: 80, weight: 1 }),
+    ]);
+    const exp = (await req('GET', '/api/v1/config/export')).body;
+    const head = (await req('GET', '/api/v1/config/head')).body.revision;
+    const manifest = { ...exp, resources: exp.resources.filter((r: { key: string }) => r.key !== 'a-12') };
+
+    const pv = await req('POST', '/api/v1/config/import', { manifest, mode: 'replace', preview: true });
+    expect(pv.status).toBe(200);
+    expect(pv.body).toMatchObject({ preview: true, unchanged: false, revision: head });
+    expect(pv.body.changes).toEqual([{ change: 'removed', kind: 'backend', key: 'a-12' }]);
+    expect(pv.body.impact).toBeDefined();
+    expect((await req('GET', '/api/v1/config/head')).body.revision).toBe(head);
+
+    expect((await req('POST', '/api/v1/config/import', { manifest, mode: 'replace', base_revision: 'x' })).status).toBe(400);
+    const ok = await req('POST', '/api/v1/config/import', { manifest, mode: 'replace', base_revision: head });
+    expect(ok.status).toBe(200);
+    expect(ok.body.unchanged).toBe(false);
+    const stale = await req('POST', '/api/v1/config/import', { manifest: exp, mode: 'replace', base_revision: head });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('head_moved');
+  });
 });
