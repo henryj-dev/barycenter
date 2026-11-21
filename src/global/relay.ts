@@ -41,6 +41,8 @@ export const RELAY_PATHS: readonly string[] = [
   'system/storage',
   // GUI 가 이미 부르던 것 (2026-11-20) — 빠져 있었다.
   'pools/:id/discovery', 'address-sets/refresh-status',
+  // 지표 (2026-11-21). Prometheus 텍스트를 해석하지 않고 넘긴다 — 운영 › 지표가 지역을 골라 읽는다.
+  'metrics',
 ];
 
 /** 중계하는 쓰기 (`/api/v1/` 뒤). 범위는 지역 라우트와 같다 — 전역이 먼저 거르고, 지역이 다시 판정한다. */

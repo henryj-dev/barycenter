@@ -85,6 +85,13 @@ export type InvitationRow = {
   createdAt: string; expiresAt: string; usedAt: string | null; revokedAt: string | null;
 };
 
+/** 계정 감사 한 줄 (관리 › 계정 감사). `detail` 은 동작마다 다르다 — 비밀은 서버가 처음부터 넣지 않는다. */
+export type AccountAuditRow = {
+  id: string; at: string; actor: string; action: string;
+  subjectUser: string | null; subjectName: string | null; ip: string | null;
+  detail?: Record<string, unknown>;
+};
+
 async function call<T>(method: string, path: string, body?: unknown, retried = false): Promise<Result<T>> {
   let r: Response;
   try {
@@ -159,6 +166,10 @@ export const accountApi = {
   resendInvitation: (id: string) =>
     call<{ id: string; token: string; expiresAt: string; mailed: boolean }>('POST', `/api/v1/invitations/${encodeURIComponent(id)}/resend`),
   revokeInvitation: (id: string) => call<{ revoked: true }>('DELETE', `/api/v1/invitations/${encodeURIComponent(id)}`),
+  /** 계정 감사 한 쪽. `before` 는 앞 쪽의 `next`. 관리자만. */
+  accountAudit: (limit: number, before?: string) =>
+    call<{ items: AccountAuditRow[]; next?: string }>('GET',
+      `/api/v1/account-audit?limit=${limit}${before === undefined ? '' : `&before=${encodeURIComponent(before)}`}`),
 };
 
 /** 링크는 이 화면의 출처로 만든다 — 토큰은 `#` 뒤라 서버 로그에 안 남는다. */
