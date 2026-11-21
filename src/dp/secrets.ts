@@ -85,6 +85,33 @@ export function parseKeyRef(ref: string): { name: string; version: string } {
 }
 
 /**
+ * **불투명 값** 참조 — 알림 통로의 비밀(웹훅 서명 비밀 · Slack 웹훅 URL). `opaque://<name>@<version>` (2026-11-20).
+ *
+ * PEM 이 아니고 짝도 없다. 인증서 자리(`store://`)나 개인키 자리(`key://`)에 넣을 수 없게 스킴을 갈랐다 —
+ * `parseRef` · `parseKeyRef` 가 이 참조를 거절한다.
+ *
+ * **청소(`secret-gc`)가 보지 않는다.** 이 값을 쓰는 쪽(알림 설정)만 무엇이 살아 있는지 안다. 그래서 값을 바꾸면
+ * 쓰는 쪽이 옛 버전을 `removeOpaque` 로 지운다. 청소가 추측하기 시작하면 추측이 틀렸을 때 살아 있는 비밀을 지운다.
+ */
+export type OpaqueRef = { ref: string; name: string; version: string };
+
+export function parseOpaqueRef(ref: string): { name: string; version: string } {
+  const m = /^opaque:\/\/([A-Za-z0-9._:-]+)@([a-f0-9]{32})$/.exec(ref);
+  if (m === null) {
+    throw new Error(`불투명 값 참조 모양이 아니다: ${JSON.stringify(ref)} (opaque://<name>@<version>)`);
+  }
+  return { name: m[1]!, version: m[2]! };
+}
+
+/** 불투명 값 하나의 상한 — 비밀 하나가 이보다 클 까닭이 없다. */
+export const OPAQUE_MAX_BYTES = 8 * 1024;
+
+export function assertOpaqueValue(value: string): void {
+  if (value === '') throw new Error('불투명 값이 비었다');
+  if (Buffer.byteLength(value, 'utf8') > OPAQUE_MAX_BYTES) throw new Error(`불투명 값이 ${OPAQUE_MAX_BYTES} 바이트를 넘는다`);
+}
+
+/**
  * **동기로 남는 창구** (§4.8.1).
  *
  * `facts` 가 다루는 값은 **비밀이 아니다** — 만료·SAN·발급자다. 그리고 이것을 읽는
@@ -133,6 +160,12 @@ export interface SecretStore extends CertFactsView {
    * 조용히 무효였다. 이름을 모르는 쪽에 이름을 묻던 것이 문제였다.
    */
   listRefs(): Promise<string[]>;
+  /** 불투명 값을 둔다. 같은 이름에 같은 값이면 같은 버전이다(내용 주소). */
+  putOpaque(name: string, value: string): Promise<OpaqueRef>;
+  /** 불투명 값을 읽는다. 없으면 던진다. */
+  getOpaque(ref: string): Promise<string>;
+  /** 불투명 값 한 버전을 지운다. 없으면 아무 일도 안 한다. */
+  removeOpaque(ref: string): Promise<void>;
 }
 
 const sha256 = (s: string): string =>
@@ -161,6 +194,12 @@ export function parseRef(ref: string): { name: string; version: string } {
  * 뒤엣것이 실제 위험이다 — 지켜야 할 것이 안 지켜진다.
  */
 export const VERSION_DIR = /^[a-f0-9]{32}$/;
+
+/**
+ * 불투명 값의 디렉토리 — 인증서 자료 루트 **아래** 있으므로 청소 · `listRefs` 가 이름으로 건너뛴다(`keys/` 와 같다).
+ * 이 이름의 인증서 시크릿은 만들 수 없다(`put` 이 막는다).
+ */
+export const OPAQUE_DIR = 'opaque';
 
 /**
  * **버전 디렉토리를 통째로 갈아 끼운다** (검수 D8).
@@ -237,6 +276,8 @@ export class FsSecretStore implements SecretStore {
     if (!isSecretName(name)) {
       throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
     }
+    // 불투명 값의 디렉토리와 겹치는 이름은 받지 않는다 — 청소가 그 디렉토리를 건너뛰므로 인증서 자료가 숨는다.
+    if (name === OPAQUE_DIR) throw new Error(`시크릿 이름 '${OPAQUE_DIR}' 는 예약돼 있다`);
     // **저장소도 스스로 검증한다.** API 가 이미 `inspectMaterial` 을 부르지만, 그건
     // 좋은 에러 메시지를 주기 위한 것이고 이쪽은 **거짓을 들고 있지 않기 위한** 것이다.
     // 호출자가 하나 늘 때마다 검사를 잊을 자리가 하나 는다 (§7.2).
@@ -303,6 +344,33 @@ export class FsSecretStore implements SecretStore {
     return readFileSync(join(this.root, 'keys', name, version, 'privkey.pem'), 'utf8');
   }
 
+  async putOpaque(name: string, value: string): Promise<OpaqueRef> {
+    if (!isSecretName(name)) {
+      throw new Error(`시크릿 이름에 쓸 수 없는 문자가 있다: ${JSON.stringify(name)}`);
+    }
+    assertOpaqueValue(value);
+    const version = createHash('sha256').update(sha256(value), 'utf8').digest('hex').slice(0, 32);
+    // **인증서 자료 · 키와 다른 디렉토리다.** 청소와 `listRefs` 가 이 디렉토리를 이름으로 건너뛴다.
+    replaceDir(join(this.root, OPAQUE_DIR, name, version), [
+      { name: 'value', body: value, mode: 0o400 },
+    ]);
+    return { ref: `opaque://${name}@${version}`, name, version };
+  }
+
+  async getOpaque(ref: string): Promise<string> {
+    const { name, version } = parseOpaqueRef(ref);
+    return readFileSync(join(this.root, OPAQUE_DIR, name, version, 'value'), 'utf8');
+  }
+
+  async removeOpaque(ref: string): Promise<void> {
+    const { name, version } = parseOpaqueRef(ref);
+    const dir = join(this.root, OPAQUE_DIR, name, version);
+    if (!existsSync(dir)) return;
+    // 0400 파일 · 디렉토리는 쓰기 권한이 없으면 못 지운다 — 청소와 같은 순서로 푼다.
+    try { chmodSync(dir, 0o700); } catch { /* 그 사이 사라졌으면 그만 */ }
+    rmSync(dir, { recursive: true, force: true });
+  }
+
   facts(ref: string): CertFacts | undefined {
     const { name, version } = parseRef(ref);
     try {
@@ -339,7 +407,7 @@ export class FsSecretStore implements SecretStore {
       }
       for (const name of names) {
         // `keys/` 는 인증서 자료 루트 **아래**에 있으므로 이름으로 걸러낸다.
-        if (scheme === 'store' && name === 'keys') continue;
+        if (scheme === 'store' && (name === 'keys' || name === OPAQUE_DIR)) continue;
         let versions: string[];
         try {
           versions = readdirSync(join(base, name));

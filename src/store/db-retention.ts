@@ -4,6 +4,7 @@
  * 여섯 표를 본다. **다섯은 안 정하면 안 지운다** — `health_events` 만 기본값이 있다.
  *
  *   `health_events`     30일 기본. 프로덕션에서 아무도 안 읽는다
+ *   `notify_deliveries` 30일 기본. 알림을 보낸 기록 — 감사 추적이 아니다(036)
  *   `audit`             옵트인. 감사 추적의 보존 기간은 우리가 정할 것이 아니다
  *   `plans`             옵트인. 만료된 것만 — 커밋된 것은 롤백 수단이다
  *   `changesets`        옵트인. 버려진 것만
@@ -42,6 +43,12 @@ const TERMINAL_PHASE_NAMES: string[] = [...TERMINAL_PHASES];
 export const DEFAULT_HEALTH_EVENT_DAYS = 30;
 
 /**
+ * 알림을 보낸 기록의 기본 상한 (036, 2026-11-20). **감사 추적이 아니다** — 「보냈나」 를 보는 운영 상태라 기본으로
+ * 자른다. 설정을 바꾼 기록은 `audit` 에 따로 남는다.
+ */
+export const DEFAULT_NOTIFY_DELIVERY_DAYS = 30;
+
+/**
  * 한 번에 지우는 상한.
  *
  * 처음 켜는 배포에서는 이 테이블이 수백만 행일 수 있다. 한 트랜잭션으로 밀면 그 시간
@@ -55,6 +62,8 @@ export type DbRetentionOptions = {
   /** **안 정하면 안 지운다.** 감사 추적의 보존 기간은 우리가 정할 것이 아니다. */
   auditDays?: number;
   healthEventDays?: number;
+  /** 알림 보낸 기록을 며칠 남기나. 기본 30일. */
+  notifyDeliveryDays?: number;
   /**
    * 만료된 plan 을 며칠 뒤 지우나 (제안 #10). **안 정하면 안 지운다.**
    *
@@ -111,6 +120,7 @@ export type DbRetentionResult = {
   changesets: number;
   operations: number;
   revisions: number;
+  notifyDeliveries: number;
 };
 
 /**
@@ -143,7 +153,7 @@ const limitArg = (db: Pick<Database, 'query'>, limit: number): string | number =
   dialectOf(db).name === 'mysql' ? limit : String(limit);
 
 async function prune(
-  db: Pick<Database, 'query'>, table: 'health_events' | 'audit', order: 'seq' | 'id',
+  db: Pick<Database, 'query'>, table: 'health_events' | 'audit' | 'notify_deliveries', order: 'seq' | 'id',
   days: number, limit: number,
 ): Promise<number> {
   const out = await db.query(byDialect(db, {
@@ -196,6 +206,8 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
     : checkDays('config_revisions', opts.revisionDays);
 
   const healthEvents = await prune(opts.db, 'health_events', 'seq', healthDays, limit);
+  const notifyDeliveries = await prune(opts.db, 'notify_deliveries', 'id',
+    checkDays('notify_deliveries', opts.notifyDeliveryDays ?? DEFAULT_NOTIFY_DELIVERY_DAYS), limit);
   const audit = auditDays === undefined
     ? 0
     : await prune(opts.db, 'audit', 'id', auditDays, limit);
@@ -289,7 +301,7 @@ export async function sweepDatabase(opts: DbRetentionOptions): Promise<DbRetenti
     ? 0
     : await pruneRevisionPrefix(opts.db, revisionDays, limit);
 
-  return { healthEvents, audit, plans, changesets, operations, revisions };
+  return { healthEvents, audit, plans, changesets, operations, revisions, notifyDeliveries };
 }
 
 /**

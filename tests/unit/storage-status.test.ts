@@ -26,7 +26,7 @@ const facts = (over: Partial<StorageFacts> = {}): StorageFacts => ({
   secrets: { backend: 'pg' },
   retention: {
     intervalMs: 3_600_000,
-    days: { health_events: 30, audit: null, plans: 7, changesets: null, operations: null, config_revisions: null },
+    days: { health_events: 30, audit: null, plans: 7, changesets: null, operations: null, config_revisions: null, notify_deliveries: 30 },
   },
   generations: { keep: 10, prefix },
   secretGc: { enabled: true, keepPerName: 2, minAgeMs: 3_600_000, intervalMs: 3_600_000 },
@@ -58,13 +58,13 @@ describe('StorageStatus.body', () => {
 
   it('청소 결과를 적는다 — 표마다 건수, 실패는 메시지', async () => {
     const s = new StorageStatus(facts(), () => Date.parse('2026-11-20T01:00:00Z'));
-    s.recordDbSweep({ healthEvents: 5, audit: 0, plans: 2, changesets: 0, operations: 0, revisions: 0 });
+    s.recordDbSweep({ healthEvents: 5, audit: 0, plans: 2, changesets: 0, operations: 0, revisions: 0, notifyDeliveries: 1 });
     s.recordGenerationSweep({ kept: ['a', 'b'], removed: ['c'], failed: [] });
     s.recordSecretFailure(new Error('권한 없음'));
     const b = await s.body({ db: pgDb('16.4') as never, isLeader: true });
     expect(b.retention.last).toEqual({
-      at: '2026-11-20T01:00:00.000Z', ok: true, removed: 7,
-      byTable: { health_events: 5, audit: 0, plans: 2, changesets: 0, operations: 0, config_revisions: 0 },
+      at: '2026-11-20T01:00:00.000Z', ok: true, removed: 8,
+      byTable: { health_events: 5, audit: 0, plans: 2, changesets: 0, operations: 0, config_revisions: 0, notify_deliveries: 1 },
     });
     expect(b.generations.last).toEqual({ at: '2026-11-20T01:00:00.000Z', ok: true, removed: 1, kept: 2, failed: 0 });
     expect(b.secretGc.last).toEqual({ at: '2026-11-20T01:00:00.000Z', ok: false, error: '권한 없음' });

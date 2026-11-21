@@ -35,7 +35,7 @@
 import { chmodSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { VERSION_DIR } from './secrets.js';
+import { OPAQUE_DIR, VERSION_DIR } from './secrets.js';
 
 export type SecretSweepResult = {
   kept: string[];
@@ -126,7 +126,8 @@ function scan(root: string): Entry[] {
     if (!existsSync(base)) return;
     for (const name of readdirSync(base)) {
       // `keys/` 는 인증서 자료 루트 아래 있으므로 이름으로 걸러낸다.
-      if (scheme === 'store' && name === 'keys') continue;
+      // `opaque/` (알림 비밀)도 같다 — 쓰는 쪽이 지운다(`OPAQUE_DIR` 머리말).
+      if (scheme === 'store' && (name === 'keys' || name === OPAQUE_DIR)) continue;
       const nameDir = join(base, name);
       let versions: string[];
       try {

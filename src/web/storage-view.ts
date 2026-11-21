@@ -33,6 +33,7 @@ export const TABLE_LABEL: Readonly<Record<string, string>> = {
   changesets: '버린 변경 묶음',
   operations: '끝난 적용 기록',
   config_revisions: '옛 리비전',
+  notify_deliveries: '알림 보낸 기록',
 };
 
 export const dbText = (kind: StorageKind, version?: string | null): string =>
