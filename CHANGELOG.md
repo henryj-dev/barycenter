@@ -14,6 +14,16 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- **운영 › 백업·복원** (`/ops/backup`) is a new GUI screen: download the spec-only manifest of any
+  revision, download a backup bundle, import a file (merge, or replace which deletes resources not in
+  the file), and restore a backup (admin, step-up, type `복원` to confirm). Import and restore are
+  **previewed first**: `POST /api/v1/config/import` accepts `{ manifest, mode, preview: true }` and
+  returns `changes` (added / changed / removed per resource) and the plan `impact` without committing
+  — it runs the same changeset and plan path and discards the changeset. Import and `POST /restore`
+  accept `base_revision`; if head moved since the preview they answer `409 head_moved`. Results now
+  include `changes`. CLI: `bary import <file> --preview`, `bary restore <file> --preview`. These paths
+  stay region-only — global mode does not relay them (`LOCAL_ONLY_PATHS`), so one region's whole
+  config never passes through the global view; the screen shows **이 지역에서 열기 ↗** there.
 - **Rerender and apply after upgrading** — these change the rendered nginx config (OpenResty).
   - Failed requests no longer leak the per-backend in-flight count. When nginx could not reach a
     backend, it made a 502/504 and jumped to the error page, which cleared `ngx.ctx`; the counter

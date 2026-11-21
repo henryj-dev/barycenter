@@ -925,6 +925,56 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
   };
 
   /**
+   * 백업 · 복원 화면 (2026-11-21). **지역 하나에서만 쓴다** — 전역은 이 경로를 중계하지 않는다(`LOCAL_ONLY_PATHS`).
+   * 전체 설정이 전역 한 곳에 모이지 않게 하려는 것이다. 화면이 전역이면 부르지 않고 「지역에서 열기」 를 보인다.
+   */
+  /** 리비전 하나의 spec-only 매니페스트. 못 읽으면 undefined. */
+  const exportConfig = async (revision?: string): Promise<unknown> => {
+    const q = revision === undefined ? '' : `?revision=${encodeURIComponent(revision)}`;
+    const r = await fetch(api(`/api/v1/config/export${q}`), { headers: auth() });
+    return r.ok ? await r.json() : undefined;
+  };
+  /** 백업 묶음 `{ revision, manifest }`. 시크릿 바이트는 없다. */
+  const backupBundle = async (): Promise<{ revision: string; manifest: unknown } | undefined> => {
+    const r = await fetch(api('/api/v1/backup'), { headers: auth() });
+    if (!r.ok) return undefined;
+    const b = (await r.json()) as { revision?: unknown; manifest?: unknown };
+    return typeof b.revision === 'string' ? { revision: b.revision, manifest: b.manifest } : undefined;
+  };
+  /**
+   * 가져오기 · 복원 미리 보기 — 커밋하지 않는다. 복원은 replace 와 같은 계산이다.
+   * 실패면 `message`(서버 문장: 검증 실패 · 모양 오류)를 준다.
+   */
+  const importPreview = async (manifest: unknown, mode: 'merge' | 'replace'): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; message: string }> => {
+    const r = await call('POST', '/api/v1/config/import', { manifest, mode, preview: true });
+    return r.ok ? { ok: true, body: r.body } : { ok: false, message: (r.body['message'] as string | undefined) ?? `미리 보기 ${r.status}` };
+  };
+  /**
+   * 가져오기 커밋 — 미리 본 head(`base`)에서만 한다. 그 사이 head 가 움직였으면 서버가 409 `head_moved` 로 거절한다.
+   * 복원(`restore: true`)은 admin · step-up 이고 늘 replace 다.
+   */
+  const importCommit = async (manifest: unknown, mode: 'merge' | 'replace', base: string, restore = false): Promise<boolean> => {
+    editing = true;
+    error = undefined;
+    try {
+      const r = restore
+        ? await call('POST', '/api/v1/restore', { manifest, base_revision: base })
+        : await call('POST', '/api/v1/config/import', { manifest, mode, base_revision: base });
+      if (!r.ok) {
+        error = (r.body['message'] as string | undefined) ?? `${restore ? 'restore' : 'import'} ${r.status}`;
+        return false;
+      }
+      if (r.body['unchanged'] !== true) noteCommit(false);
+      return true;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      editing = false;
+    }
+  };
+
+  /**
    * 빠른 프록시 · URL로 다시 만들기 — URL 하나를 풀·백엔드·리스너(또는 라우트)로 편다.
    * 펴는 규칙은 `proxyFromUrlPatch` 한 자리다(CLI `bary proxy create` 와 같다).
    */
@@ -1373,6 +1423,10 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     changeset,
     revisions,
     rollback,
+    exportConfig,
+    backupBundle,
+    importPreview,
+    importCommit,
     clusterNodes,
     systemStorage,
     clusterHistory,

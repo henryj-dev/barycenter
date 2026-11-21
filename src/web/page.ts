@@ -11,7 +11,7 @@ export type Place =
   | 'dashboard' | 'impact'
   | 'listeners' | 'routes' | 'pools' | 'backends' | 'addressSets'
   | 'certificates' | 'tlsPolicies' | 'sniBindings'
-  | 'status' | 'cluster' | 'rendered' | 'engine' | 'audit'
+  | 'status' | 'cluster' | 'rendered' | 'engine' | 'backup' | 'audit'
   | 'login' | 'invite' | 'account' | 'users' | 'notify' | 'reset' | 'email' | 'regions' | 'design';
 
 /** 리소스가 사이드바의 어느 자리에 불이 들어오나. 두 라우트는 한 메뉴(라우트)다. */
@@ -57,6 +57,7 @@ export const KIT_ROUTES: readonly { place: Place; path: string }[] = [
   { place: 'cluster', path: '/ops/cluster' },
   { place: 'rendered', path: '/ops/rendered' },
   { place: 'engine', path: '/ops/engine' },
+  { place: 'backup', path: '/ops/backup' },
   { place: 'audit', path: '/ops/audit' },
   { place: 'users', path: '/admin/user' },
   // 알림 통로 · 공통 값 · 보낸 기록 (036, 2026-11-20). 지역마다 따로다 — 전역 화면에는 없다.
@@ -130,6 +131,7 @@ export function pageOf(pathname: string): Place {
   if (under(pathname, '/ops/cluster')) return 'cluster';
   if (under(pathname, '/ops/rendered')) return 'rendered';
   if (under(pathname, '/ops/engine')) return 'engine';
+  if (under(pathname, '/ops/backup')) return 'backup';
   if (under(pathname, '/ops/audit')) return 'audit';
   if (under(pathname, '/admin/user')) return 'users';
   if (under(pathname, '/admin/notify')) return 'notify';

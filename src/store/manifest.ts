@@ -199,3 +199,22 @@ export function importPatch(current: Model, manifest: Manifest, mode: ImportMode
   }
   return ops;
 }
+
+/**
+ * import 가 **무엇을 바꾸는지** 한 줄씩 (2026-11-21). GUI 가 커밋 전에 보여 주고, 결과에도 싣는다.
+ *
+ * `put` 은 지금 모델에 그 kind·key 가 있으면 `changed`, 없으면 `added` 다. `delete` 는 `removed` 다.
+ * 순서는 patch 그대로다 — 만드는 순서, 그다음 지우는 순서.
+ */
+export type ImportChange = { change: 'added' | 'changed' | 'removed'; kind: ResourceKind; key: string };
+
+export function importChanges(current: Model, ops: readonly PatchOp[]): ImportChange[] {
+  const have = new Set(resourcesOf(current).map((r) => `${r.kind}\0${r.key}`));
+  return ops.flatMap((op): ImportChange[] => {
+    if (op.op === 'delete') return [{ change: 'removed', kind: op.kind, key: op.key }];
+    if (op.op === 'put') {
+      return [{ change: have.has(`${op.kind}\0${op.key}`) ? 'changed' : 'added', kind: op.kind, key: op.key }];
+    }
+    return [];
+  });
+}
