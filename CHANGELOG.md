@@ -75,6 +75,16 @@ release section lists every publicly known vulnerability it fixes.
     wildcard overlaps marked), **운영 › 백엔드 출처** (discovery state of every pool), and
     **TLS › ACME 계정** (accounts, CA, registration, and which certificates use them).
   - Global mode relays drain status, ACME challenges and the all-pool discovery view.
+- New **운영 › 지표** screen reads the daemon's Prometheus metrics, grouped by area (apply, health,
+  ACME, discovery, address sets, notify, cluster, generations, auth, process), with help text, the
+  current value, per-second rate for counters, and a small trend line while the page is open. The same
+  text is now also served at `GET /api/v1/metrics` (read scope) so the GUI and the global relay can
+  reach it; scrapers keep using `/metrics`. In global mode, pick a region to see its metrics.
+- New **관리 › 계정 감사** screen (admin only) lists account activity — logins, invitations, MFA,
+  API tokens, SSO/IdP changes, user changes, global views — with Korean action names, search,
+  group filters and paging. `GET /api/v1/account-audit` now returns `{ items, next }`, accepts
+  `before=<id>`, orders by id, and includes the subject's username and the recorded `detail`
+  (which never holds secrets).
 - **Rerender and apply after upgrading** — these change the rendered nginx config (OpenResty).
   - Failed requests no longer leak the per-backend in-flight count. When nginx could not reach a
     backend, it made a 502/504 and jumped to the error page, which cleared `ngx.ctx`; the counter

@@ -16,7 +16,7 @@ import { LOCAL_ONLY_PATHS, RELAY_PATHS, RELAY_WRITES } from '../../src/global/re
 const GUI = join(import.meta.dirname, '../../gui/src');
 
 /** 계정 · 세션 · 전역 자신의 경로 — 바꾸지 않는다(`scope.svelte.ts` 의 `OWN`). */
-const OWN = ['me', 'session', 'oidc', 'invitations', 'users', 'account', 'sso-providers', 'regions'];
+const OWN = ['me', 'session', 'oidc', 'invitations', 'users', 'account', 'account-audit', 'sso-providers', 'regions'];
 
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => {

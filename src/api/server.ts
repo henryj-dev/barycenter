@@ -1505,20 +1505,14 @@ const ROUTES: Route[] = [
    * 인증 없이 나가는 편이 나쁘다 — `/healthz` 와 다르다. 그쪽은 "살아 있나" 하나뿐이고
    * 이쪽은 배포 구조를 말한다.
    */
-  route('GET', '/metrics', 'read', async (c, api) => {
-    c.res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
-    // **계열을 나란히 낸다.** `renderMetrics` 는 표본 없는 계열을 통째로 빼므로,
-    // 못 물은 것이 0 으로 새지 않는다 (검수 D4 의 슬롯 키 게이지가 그 규칙을 쓴다).
-    const [certs, slots] = await Promise.all([
-      api.control.certificateExpiry(),
-      api.control.membershipSlotKeys(),
-    ]);
-    c.res.end(renderMetrics(await api.control.gauges(), [
-      ...certs,
-      ...slots,
-      plaintextExposureMetric(api.plaintextExposed === true),
-    ]));
-  }),
+  route('GET', '/metrics', 'read', (c, api) => serveMetrics(c, api)),
+
+  /**
+   * 같은 지표를 **API 자리에도** 낸다 (2026-11-21). 화면(운영 › 지표)이 이 길로 읽는다 — 전역 모드의 중계는
+   * `/api/v1/` 뒤만 넘기므로, 최상위 `/metrics` 로는 지역 지표를 볼 수 없다. 스크레이퍼는 지금처럼 `/metrics` 를 쓴다.
+   */
+  route('GET', '/api/v1/metrics', 'read', (c, api) => serveMetrics(c, api)),
+
 
   /**
    * 인증서 **자료 업로드** (§4.8 · §8.1).
@@ -1818,8 +1812,18 @@ const ACCOUNT_ROUTES: Route<AccountApi>[] = [
     json(c.res, 200, { revoked: true });
   }, { leaderFree: true, sensitive: true }),
 
+  /**
+   * 계정 감사 (관리 › 계정 감사, 2026-11-21). 최근 것부터 `limit`(1–1000)개, `before` 는 그 id 보다 앞의 것.
+   * 비밀은 처음부터 기록에 없다(토큰 값 · 비밀번호 · 코드를 남기지 않는다) — `detail` 을 그대로 싣는다.
+   */
   route<AccountApi>('GET', '/api/v1/account-audit', 'admin', async (c, api) => {
-    json(c.res, 200, await accountsOf(api).accountAudit(Number(c.url.searchParams.get('limit') ?? '100') || 100));
+    const before = c.url.searchParams.get('before');
+    if (before !== null && !/^[0-9]{1,18}$/.test(before)) {
+      json(c.res, 400, { code: 'invalid_cursor', message: '`before` 는 기록 id(숫자)다' });
+      return;
+    }
+    json(c.res, 200, await accountsOf(api).accountAudit(
+      Number(c.url.searchParams.get('limit') ?? '100') || 100, before ?? undefined));
   }, { leaderFree: true }),
 ];
 
@@ -1870,6 +1874,22 @@ function credentialOf(c: Ctx, api: CookieApi): Credential | undefined {
 /** `changesets/:id/plan` 의 자리를 요청의 값으로 채운다. `:name`(지역)은 경로 앞에서 이미 썼다. */
 function fillPath(template: string, params: Record<string, string>): string {
   return template.replace(/:([a-zA-Z]+)/g, (_, k: string) => encodeURIComponent(params[k] ?? ''));
+}
+
+/** Prometheus 텍스트. `/metrics` 와 `/api/v1/metrics` 가 같은 것을 낸다. */
+async function serveMetrics(c: Ctx, api: ApiOptions): Promise<void> {
+  c.res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
+  // **계열을 나란히 낸다.** `renderMetrics` 는 표본 없는 계열을 통째로 빼므로,
+  // 못 물은 것이 0 으로 새지 않는다 (검수 D4 의 슬롯 키 게이지가 그 규칙을 쓴다).
+  const [certs, slots] = await Promise.all([
+    api.control.certificateExpiry(),
+    api.control.membershipSlotKeys(),
+  ]);
+  c.res.end(renderMetrics(await api.control.gauges(), [
+    ...certs,
+    ...slots,
+    plaintextExposureMetric(api.plaintextExposed === true),
+  ]));
 }
 
 const relayTo = (path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET') => {
@@ -1975,6 +1995,8 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   // 트래픽 통계 (2026-11-21). 허용 목록에는 있었지만 라우트가 없어 전역에서 그래프가 404 였다.
   route('GET', '/api/v1/regions/:name/traffic', 'read', relayTo('traffic')),
   route('GET', '/api/v1/regions/:name/traffic/:kind/:id', 'read', relayTo('traffic/:kind/:id')),
+  // 지표 (2026-11-21). 운영 › 지표가 지역의 Prometheus 텍스트를 그대로 읽는다.
+  route('GET', '/api/v1/regions/:name/metrics', 'read', relayTo('metrics')),
   /**
    * **쓰기 중계** (2026-11-01 사용자 결정, 설계 §1.1). 보는 사람의 자격 그대로 지역에 넘긴다. 범위는 지역 라우트와 같다.
    */

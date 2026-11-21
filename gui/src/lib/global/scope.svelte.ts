@@ -36,7 +36,7 @@ const pathOf = (input: string | URL | Request): string => {
 
 /** 바꾸면 안 되는 경로 — 계정·세션·OIDC 는 전역 자신이 답한다. */
 const OWN = ['/api/v1/me', '/api/v1/session', '/api/v1/oidc', '/api/v1/invitations', '/api/v1/users',
-  '/api/v1/account', '/api/v1/sso-providers', '/api/v1/regions'];
+  '/api/v1/account', '/api/v1/account-audit', '/api/v1/sso-providers', '/api/v1/regions'];
 
 /**
  * @param fixed 전체 합산의 지역 하나를 보는 범위(`regions.svelte.ts`) — 전역 모드로 시작하고 그 지역에 묶인다.

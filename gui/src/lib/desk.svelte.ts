@@ -1009,6 +1009,16 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     if (r === undefined || !r.ok) return undefined;
     return (await r.json().catch(() => undefined)) as TrafficSummaryBody | undefined;
   };
+  /**
+   * 운영 › 지표 (2026-11-21) — `GET /api/v1/metrics` 의 Prometheus 텍스트. 해석은 `@web/metrics-view` 가 한다.
+   * 못 읽으면 `{ ok: false }` 와 상태 — 403(권한)과 연결 실패를 화면이 가른다.
+   */
+  const metricsText = async (): Promise<{ ok: true; text: string } | { ok: false; status: number }> => {
+    const r = await fetch(api('/api/v1/metrics'), { headers: auth() }).catch(() => undefined);
+    if (r === undefined) return { ok: false, status: 0 };
+    if (!r.ok) return { ok: false, status: r.status };
+    return { ok: true, text: await r.text() };
+  };
   /** 주소 집합을 다시 받은 기록 — `GET /api/v1/address-sets/refresh-status`. 못 읽으면 undefined. */
   const addressSetRefreshStatus = async (): Promise<AddressSetRefreshRow[] | undefined> => {
     const r = await fetch(api('/api/v1/address-sets/refresh-status'), { headers: auth() }).catch(() => undefined);
@@ -1633,6 +1643,7 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     poolDiscovery,
     healthHistory,
     trafficSeries,
+    metricsText,
     trafficSummary,
     drainStatus,
     sockets,

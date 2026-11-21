@@ -2025,15 +2025,46 @@ export class AccountService {
     );
   }
 
-  async accountAudit(limit: number): Promise<unknown[]> {
-    return (await this.#q(
-      `SELECT id, at, actor, action, subject_user, ip FROM account_audit ORDER BY at DESC, id DESC LIMIT $1`,
-      [Math.max(1, Math.min(1000, limit))],
-    )).map((r) => ({
-      id: str(r, 'id'), at: iso(r['at']), actor: str(r, 'actor'), action: str(r, 'action'),
-      subjectUser: opt(r, 'subject_user'), ip: opt(r, 'ip'),
-    }));
+  /**
+   * 계정 감사 한 쪽 (관리 › 계정 감사). **id 순서**로 최근 것부터다 — id 는 넣은 순서이고, 같은 시각의 두 줄도
+   * 갈린다. `before` 가 있으면 그 id 보다 앞의 것만. 다음 쪽이 있으면 `next` 가 마지막 줄의 id 다.
+   * 대상 사람의 이름을 함께 싣는다(지운 사람은 이름이 없다 — id 만 남는다).
+   */
+  async accountAudit(limit: number, before?: string): Promise<{ items: AccountAuditRow[]; next?: string }> {
+    const n = Math.max(1, Math.min(1000, limit));
+    const where = before === undefined ? '' : 'WHERE a.id < $2';
+    const rows = await this.#q(
+      `SELECT a.id, a.at, a.actor, a.action, a.subject_user, a.ip, a.detail, u.username AS subject_name
+         FROM account_audit a LEFT JOIN users u ON u.id = a.subject_user
+         ${where} ORDER BY a.id DESC LIMIT $1`,
+      before === undefined ? [n + 1] : [n + 1, before],
+    );
+    const items = rows.slice(0, n).map((r): AccountAuditRow => {
+      const detail = auditDetail(r['detail']);
+      return {
+        id: str(r, 'id'), at: iso(r['at']), actor: str(r, 'actor'), action: str(r, 'action'),
+        subjectUser: opt(r, 'subject_user'), subjectName: opt(r, 'subject_name'), ip: opt(r, 'ip'),
+        ...(detail === undefined ? {} : { detail }),
+      };
+    });
+    return rows.length > n ? { items, next: items[items.length - 1]!.id } : { items };
   }
+}
+
+/** 계정 감사 한 줄. `detail` 은 동작마다 다르다 — 비밀은 처음부터 넣지 않는다. */
+export type AccountAuditRow = {
+  id: string; at: string; actor: string; action: string;
+  subjectUser: string | null; subjectName: string | null; ip: string | null;
+  detail?: Record<string, unknown>;
+};
+
+/** 방언마다 JSON 칸이 다르게 온다(PG 는 객체, MySQL · SQLite 는 글자). 객체가 아니면 싣지 않는다. */
+function auditDetail(v: unknown): Record<string, unknown> | undefined {
+  let o = v;
+  if (typeof o === 'string') {
+    try { o = JSON.parse(o); } catch { return undefined; }
+  }
+  return o !== null && typeof o === 'object' && !Array.isArray(o) ? o as Record<string, unknown> : undefined;
 }
 
 function normEmail(v: string): string {
