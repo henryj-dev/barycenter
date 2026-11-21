@@ -55,6 +55,7 @@ import { render } from '../conf/render.js';
 import { adminFetch, adminTalk, clearStaleSockets } from '../control/admin-client.js';
 import { httpAdminConf, streamAdminConf } from '../control/membership.js';
 import { HealthProber } from '../control/health.js';
+import { Inflight, settleWithin } from '../control/quiesce.js';
 import { AcmeStore } from '../control/acme-store.js';
 import { AcmeRunner, HttpChallengePlacer } from '../control/acme-runner.js';
 import { dns01FromEnv } from '../control/dns-providers/registry.js';
@@ -107,6 +108,12 @@ const DAY_MS = 86_400_000;
  * DB 닫기가 더 있고, 그 둘은 망을 지난다.
  */
 const SHUTDOWN_DEADLINE_MS = 10_000;
+
+/**
+ * 종료 때 하던 일을 기다리는 시간 (2026-11-21). 마감(`SHUTDOWN_DEADLINE_MS`)보다 짧다 —
+ * 기다린 뒤에도 락을 놓고 DB 를 닫을 시간이 남아야 한다.
+ */
+const QUIESCE_MS = 5_000;
 
 export function plaintextExposureError(
   host: string, tlsOn: boolean, allowPlaintextExposed: boolean,
@@ -1404,7 +1411,9 @@ export async function main(): Promise<void> {
   await notify.start();
   const stopNotify = (): void => notify.stop();
 
+  const inflight = new Inflight();
   const apiOpts = {
+    inflight,
     db, store, control, auth, election, secrets, events, hostAddresses,
     discovery: dataSources.api,
     traffic,
@@ -1472,9 +1481,9 @@ export async function main(): Promise<void> {
     server.close(() => {
       // **물러난 것을 적고 나간다.** 락은 세션 종료로 어차피 풀리지만, 깨끗하게 물러난
       // 것과 죽은 것을 나중에 구분할 수 있어야 한다.
-      prober.stop();
+      const proberDone = prober.stop();
       traffic.stop();
-      acmeRunner.stop();
+      const acmeDone = acmeRunner.stop();
       stopPublish();
       stopSecretGc();
       stopOrphans();
@@ -1493,7 +1502,15 @@ export async function main(): Promise<void> {
       } catch (e) {
         log.warn('agent_store.release_failed', { error: String(e) });
       }
-      void election.release()
+      /**
+       * **하던 일이 끝난 뒤에 DB 를 닫는다** (2026-11-21, `quiesce.ts`). 전에는 바로 닫아서,
+       * 돌고 있던 프로브 한 바퀴나 요청이 닫힌 풀을 쓰고 오류를 한 줄 남겼다.
+       */
+      void settleWithin(QUIESCE_MS, [proberDone, acmeDone, inflight.idle()])
+        .then((settled) => {
+          if (!settled) log.warn('shutdown.quiesce_timeout', { ms: QUIESCE_MS, requests: inflight.size });
+        })
+        .then(() => election.release())
         .then(() => db.close())
         .then(() => process.exit(0));
     });

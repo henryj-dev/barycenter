@@ -86,6 +86,8 @@ export class AcmeRunner {
   #timer: NodeJS.Timeout | undefined;
   /** 틱이 겹치지 않게 (검수 D11). `HealthProber` 의 것과 같은 가드다. */
   #running = false;
+  /** 지금 도는 틱. 종료가 이것을 기다린다(`quiesce.ts`). */
+  #current: Promise<void> | undefined;
 
   constructor(opts: AcmeRunnerOptions) {
     this.#o = opts;
@@ -447,7 +449,8 @@ export class AcmeRunner {
    */
   start(intervalMs: number, isLeader: () => boolean, certs: () => Promise<Parameters<AcmeRunner['scan']>[0]>): void {
     this.#timer = setInterval(() => {
-      void (async (): Promise<void> => {
+      if (this.#running) return;
+      this.#current = (async (): Promise<void> => {
         // **리더만 돈다.** 스탠바이가 함께 주문하면 nonce 가 서로를 깨뜨린다.
         if (!isLeader()) return;
         if (this.#running) return;
@@ -465,9 +468,11 @@ export class AcmeRunner {
     this.#timer.unref?.();
   }
 
-  stop(): void {
+  /** 타이머를 멈추고, 돌고 있던 틱이 끝나면 풀린다. 그 뒤에 DB 를 닫는다. */
+  stop(): Promise<void> {
     if (this.#timer !== undefined) clearInterval(this.#timer);
     this.#timer = undefined;
+    return this.#current ?? Promise.resolve();
   }
 }
 

@@ -284,6 +284,11 @@ echo "════════════════════════�
 group unit
 
 run "typecheck            " --what "tsc --noEmit (TS7) — src·tests 타입만 본다, 산출물은 안 낸다" npx tsc --noEmit
+# **화면의 타입도 잰다** (2026-11-21). 위 `tsc` 는 gui/ 를 안 본다 — `.svelte` 와 `#lib` 별칭은
+# svelte-check 만 읽는다. 전에는 아무도 안 돌려서 오류가 쌓였다(별칭을 못 풀어 676 개, 실제 오류 12 개).
+# 의존성이 없으면 lock 대로 받는다 — build.sh 와 같은 판단이다.
+run "typecheck (gui)      " --what "svelte-check — .svelte · #lib 별칭까지 타입을 본다" \
+  sh -c '[ -d gui/node_modules ] || (cd gui && npm ci --no-audit --no-fund >/dev/null); cd gui && npm run check --silent'
 
 # **두 컴파일러로 잰다** (2026-08-31).
 #

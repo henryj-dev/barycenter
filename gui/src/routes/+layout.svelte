@@ -267,9 +267,9 @@
     else {
       toast.fail(`${name} 지역을 열 수 없어요`, regions.some((x) => x.name === name) ? '이 지역과 지금 연결되지 않았어요.' : '모르는 지역이에요.');
     }
-    const u = new URL(page.url);
+    const u = new URL(page.url.href);
     u.searchParams.delete(REGION_PARAM);
-    void goto(`${u.pathname}${u.search}${u.hash}`, { replaceState: true, keepFocus: true, noScroll: true });
+    void goto(`${u.pathname}${u.search}${u.hash}`, { replaceState: true });
   });
 
   /** 적용 대기 배너 — 닫으면 건수가 바뀔 때까지 안 띄운다. 적용 대기 화면에서는 안 띄운다. */
@@ -320,7 +320,7 @@
       {#if narrowShown}
         <div class="bn" data-tone="info" role="status">
           <span class="bi" aria-hidden="true">◎</span>
-          <span class="bt">전역 화면에서 <b>{scope.region.name}</b> 만 좁혀 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.</span>
+          <span class="bt">전역 화면에서 <b>{scope.region?.name}</b> 만 좁혀 보고 있어요. 바꾼 것은 그 지역으로 바로 가요.</span>
           <button type="button" class="ba" onclick={widen}>전체 합산으로</button>
         </div>
       {/if}

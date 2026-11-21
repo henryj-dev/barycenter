@@ -80,6 +80,7 @@ import { KNOB_RANGES } from '../notify/registry.js';
 import type { NotifyRuntime } from '../notify/runtime.js';
 import { CHANNEL_KINDS, decodeKnobs, NOTIFY_KINDS, NotifySettingsError, SEVERITIES, viewOf } from '../notify/settings.js';
 import type { StorageStatus } from '../control/storage-status.js';
+import type { Inflight } from '../control/quiesce.js';
 
 /** Role Change 를 받는 설정 — `events` 키와 SET 서명 검증 키(JWKS). */
 export type OidcRoleChange = { eventKey: string; keyFor: (kid: string | undefined) => KeyObject | undefined };
@@ -87,6 +88,8 @@ export type OidcRoleChange = { eventKey: string; keyFor: (kid: string | undefine
 export type ApiOptions = {
   /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
   trustedProxies?: TrustedProxies;
+  /** 진행 중인 요청을 센다. 종료가 이것이 비기를 기다린 뒤 DB 를 닫는다(`quiesce.ts`). */
+  inflight?: Inflight;
   /** 인증 실패 제한 저장소 (`BARY_AUTH_LIMIT_STORE`). 없으면 인스턴스 메모리 — 지금과 같다. */
   authLimit?: RateLimitStore;
   /**
@@ -215,6 +218,8 @@ export function parseBuildInfo(text: string): BuildInfo | null {
 export type GlobalApiOptions = {
   /** 믿을 프록시 (`BARY_TRUSTED_PROXIES`). 접속 주소가 이 안이면 `X-Forwarded-For` 로 보낸 사람을 찾는다. */
   trustedProxies?: TrustedProxies;
+  /** 진행 중인 요청을 센다. 종료가 이것이 비기를 기다린 뒤 DB 를 닫는다(`quiesce.ts`). */
+  inflight?: Inflight;
   /** 인증 실패 제한 저장소 (`BARY_AUTH_LIMIT_STORE`). 없으면 인스턴스 메모리 — 지금과 같다. */
   authLimit?: RateLimitStore;
   global: RegionRelay;
@@ -2043,7 +2048,8 @@ export function apiHandler(api: AnyApi): RequestListener {
     if (ip !== undefined) CLIENT_IP.set(req, ip);
     // 실패 제한은 두 화면이 함께 센다 — 화면을 바꿔 가며 두 배로 시도하지 못한다.
     const target = globalApi !== undefined && requestHost(req) === globalHost ? globalApi : api;
-    void handle(req, res, target, max, authFailures).catch((e) => {
+    const work = handle(req, res, target, max, authFailures);
+    void (api.inflight === undefined ? work : api.inflight.track(work)).catch((e) => {
       /**
        * 여기까지 온 것은 핸들러 밖의 실패다. 조용히 끊지 않는다.
        *

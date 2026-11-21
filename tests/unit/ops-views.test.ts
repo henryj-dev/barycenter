@@ -105,8 +105,10 @@ describe('화면 — 새 창구를 쓴다', () => {
   it('백엔드 상세가 드레인 진행을 읽고, 드레인을 걸 때 기한을 고른다', () => {
     const src = gui('lib/detail/BackendHealth.svelte');
     expect(src).toContain('desk.drainStatus(k)');
-    expect(src).toContain('options={DRAIN_DEADLINES}');
-    expect(src).toContain('desk.drain(key, deadline > 0 ? deadline : undefined)');
+    // `Select` 는 문자열 값을 받으므로 기한(초)을 문자열로 들고, 보낼 때 숫자로 돌린다 (svelte-check, 2026-11-21).
+    expect(src).toContain('DRAIN_DEADLINES.map((d) => ({ value: String(d.value), label: d.label }))');
+    expect(src).toContain('options={deadlineOptions}');
+    expect(src).toContain('desk.drain(key, Number(deadline) > 0 ? Number(deadline) : undefined)');
     expect(gui('lib/desk.svelte.ts')).toContain('JSON.stringify({ deadline_s: deadlineS })');
   });
 
