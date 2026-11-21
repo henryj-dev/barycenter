@@ -6,7 +6,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { closeSync, fstatSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -167,8 +167,14 @@ describe('파일 시크릿 저장소의 opaque', () => {
     expect(await s.getOpaque(a.ref)).toBe(secret);
     expect((await s.putOpaque('notify.hook', secret)).ref).toBe(a.ref);
     const file = join(root, 'opaque', 'notify.hook', a.version, 'value');
-    expect(statSync(file).mode & 0o777).toBe(0o400);
-    expect(readFileSync(file, 'utf8')).toBe(secret);
+    // 한 번 연 파일로 모드와 내용을 함께 본다 — 따로 열면 그 사이에 파일이 바뀔 수 있다.
+    const fd = openSync(file, 'r');
+    try {
+      expect(fstatSync(fd).mode & 0o777).toBe(0o400);
+      expect(readFileSync(fd, 'utf8')).toBe(secret);
+    } finally {
+      closeSync(fd);
+    }
     // 인증서 · 키 자리에 넣을 수 없다 — 스킴이 다르다.
     await expect(s.get(a.ref)).rejects.toThrow();
     await expect(s.getKey(a.ref)).rejects.toThrow();
