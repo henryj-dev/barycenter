@@ -34,7 +34,7 @@ import { ModelValidationError, validateModel } from '../validate/model.js';
 import { expandAddressSets } from '../model/address-sets.js';
 import { redirectListenerOf } from '../model/redirect.js';
 import { decodeModel } from '../model/decode.js';
-import { errorPageHttpNodes, errorPageServerNodes, locationErrorPageNodes, upstreamStatusHeaderNodes } from './error-pages.js';
+import { ERR_SKIP_VAR, errorPageHttpNodes, errorPageServerNodes, locationErrorPageNodes, upstreamStatusHeaderNodes } from './error-pages.js';
 import { servedByHttpNodes } from './served-by.js';
 import { parseHashKey } from '../validate/strings.js';
 import { normalizeBind } from '../validate/sockets.js';
@@ -255,10 +255,13 @@ const SNI_MISMATCH_VAR = 'bary_sni_mismatch';
  * | `Host: a.test:443` | 통과 | `$host` 가 **포트를 뗀다** |
  * | `Host: A.TEST` | 통과 | `$host` 가 **소문자로 내린다** |
  * | SNI 없음 | 통과 | 비교할 것이 없다 — 여기서 막으면 SNI 를 안 보내는 옛 클라이언트가 끊긴다 |
+ * | URI 를 못 읽은 요청의 오류 페이지 | 통과 | Host 를 못 읽어 `$host` 가 server 이름이다 (error-pages.ts 「예외」) |
  */
 function sniMismatchMap(): ConfNode {
-  return block('map', [lit('$ssl_server_name:$host'), variable(SNI_MISMATCH_VAR)], [
+  return block('map', [lit(`$${ERR_SKIP_VAR}$ssl_server_name:$host`), variable(SNI_MISMATCH_VAR)], [
     entry(lit('default'), lit('1')),
+    // URI 를 못 읽은 요청의 오류 페이지 — `!` 가 앞에 붙는다.
+    entry(lit('~*^!'), lit('0')),
     // SNI 가 비어 있으면 비교 불가 — 통과시킨다.
     entry(lit('~^:'), lit('0')),
     // 역참조로 "앞과 뒤가 같다" 를 본다.

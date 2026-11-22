@@ -14,6 +14,12 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- **Fixed: requests nginx cannot parse got a 500.** Scanners that send non-HTTP bytes (or a request line that is too
+  long) make nginx answer 400 or 414 before it has a URI, and nginx cannot hand such a request to the named
+  error-page location: it logged `empty URI in redirect to named location "@bary_err_html"` and sent its default 500
+  page — **also to clients that `sourceAllow` should have refused.** Those requests now get 400 / 414 with the
+  barycenter error page, refused sources still get no reply, and the error log stays quiet. **Changes the rendered
+  config**, so run **다시 렌더** and apply once.
 - **Access log.** On OpenResty, the engine now writes one line per request (per connection for TCP/UDP)
   into a fixed-size ring in a separate `lua_shared_dict` (`bary_http_access` · `bary_stream_access`, 8m each,
   5000 lines per plane). Nothing is written to disk or the database. The daemon reads new lines every 2 s
