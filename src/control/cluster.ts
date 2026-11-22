@@ -41,8 +41,12 @@ export class ClusterNode {
   ) {}
 
   start(intervalMs: number): void {
-    void this.tick();
-    this.#timer = setInterval(() => { void this.tick(); }, intervalMs);
+    // `report` 는 DB 에 쓴다 — 끊기면 던진다. 주기 밖으로 새면 데몬이 죽는다 (2026-11-22, web-01).
+    const run = (): void => {
+      this.tick().catch((e: unknown) => { log.warn('cluster.report.failed', { node: this.name, error: String(e) }); });
+    };
+    run();
+    this.#timer = setInterval(run, intervalMs);
     this.#timer.unref?.();
   }
 
