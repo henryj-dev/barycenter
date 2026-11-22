@@ -8,6 +8,7 @@ import { routePaths } from '../model/route-paths.js';
 import type { AddressSourceKind, AddressSourceOptions } from '../model/provisional.js';
 import { parseHashKey } from '../validate/strings.js';
 import { addressSetRef, cidrVersion } from '../validate/ip.js';
+import { normalizeBind } from '../validate/sockets.js';
 
 export type EditKind =
   | 'backend' | 'listener' | 'pool' | 'httpRoute' | 'passthroughRoute'
@@ -1500,4 +1501,35 @@ export function editListenerPatch(current: Readonly<Record<string, unknown>>, ed
     }
   }
   return [{ op: 'put', kind: 'listener', key, body }];
+}
+
+/**
+ * **HTTP/3 는 소켓 단위다** (2026-11-22). 같은 주소:포트를 나눠 쓰는 https 리스너는 `http3` 가 같아야 한다
+ * (검증의 `socket_conflict`). 설정 폼이 리스너 하나만 올리면 값을 바꾸는 저장이 언제나 막혔다 — 켤 길이 없었다.
+ *
+ * 그래서 값을 바꾸는 저장은 같은 소켓의 나머지도 **같은 commit 에서** 맞춘다. 이 함수가 그 나머지의 put 을 준다.
+ * 이미 같은 값인 리스너는 안 건드린다. 꺼진 리스너도 맞춘다 — 나중에 켤 때 어긋나지 않게.
+ * 같은 소켓의 판정은 검증과 같다: https · 같은 포트 · 정규형 주소가 같다(와일드카드와 특정 주소는 다른 소켓이다).
+ */
+export function http3MatePatch(
+  listeners: readonly Readonly<Record<string, unknown>>[], key: string, bind: string, port: number, http3: boolean,
+): PutListenerOp[] {
+  const socketOf = (b: unknown): string | undefined => {
+    if (typeof b !== 'string') return undefined;
+    const n = normalizeBind(b.trim());
+    return n.ok ? `${n.value.family}|${n.value.wildcard ? '*' : n.value.addr}` : undefined;
+  };
+  const self = socketOf(bind);
+  if (self === undefined) return [];
+  return listeners
+    .filter((l) => typeof l['key'] === 'string' && l['key'] !== key && l['protocol'] === 'https'
+      && l['port'] === port && socketOf(l['bind']) === self && (l['http3'] === true) !== http3)
+    .map((l) => {
+      const { key: k, ...rest } = l;
+      const body: Record<string, unknown> = { ...rest };
+      if (http3) body['http3'] = true;
+      else delete body['http3'];
+      return { op: 'put' as const, kind: 'listener' as const, key: String(k), body };
+    })
+    .sort((a, b) => a.key.localeCompare(b.key));
 }

@@ -18,7 +18,7 @@
    */
   import { getContext, tick } from 'svelte';
   import { page } from '$app/state';
-  import { editListenerPatch, parseListenerHosts, parseListenerOptions, parseSourceAllow, type ListenerEdit, type ListenerOptionFlags, type UdpPreset } from '@web/edit';
+  import { editListenerPatch, http3MatePatch, parseListenerHosts, parseListenerOptions, parseSourceAllow, type ListenerEdit, type ListenerOptionFlags, type UdpPreset } from '@web/edit';
   import { Banner, FormRow, FormSection, Select, Switch, TextInput } from '#lib/ui';
   import { itemOf, resourcePath } from '@web/resources';
   import { after } from '#lib/after';
@@ -220,6 +220,12 @@
       return e instanceof Error ? e.message : String(e);
     }
   };
+  /**
+   * HTTP/3 를 바꾸면 같은 소켓의 https 리스너도 같은 commit 에서 맞춘다 — 소켓 단위라 하나만 바꾸면 검증이 막는다.
+   * 바꾸지 않았으면 비었다(이웃을 안 건드린다).
+   */
+  const h3Mates = $derived(isHttps && model !== undefined && http3 !== (model['http3'] === true)
+    ? http3MatePatch(desk.listenerModels, key, bind, Number(port), http3) : []);
   const draft = $derived(loaded === key ? build() : undefined);
   const dirty = $derived(draft !== undefined && (typeof draft === 'string' || baseline === undefined || !sameBody(draft, baseline)));
   const save = (): void => {
@@ -227,7 +233,7 @@
     problem = undefined;
     const body = build();
     if (typeof body === 'string') { problem = body; return; }
-    void desk.putResource('listener', key, body).then(after(resourcePath('listener', key)));
+    void desk.putResource('listener', key, body, h3Mates).then(after(resourcePath('listener', key)));
   };
   const reset = (): void => { loaded = undefined; };
 </script>
@@ -259,6 +265,9 @@
         <FormRow label="기본 인증서"><Select label="기본 인증서" bind:value={certificate} options={certs} placeholder="인증서를 골라요" width="100%" /></FormRow>
         <FormRow label="HTTP/2"><Switch bind:checked={http2}>{http2 ? '켜짐' : '꺼짐'}</Switch></FormRow>
         <FormRow label="HTTP/3" help={H3_HELP}><Switch bind:checked={http3}>{http3 ? '켜짐' : '꺼짐'}</Switch></FormRow>
+        {#if h3Mates.length > 0}
+          <Banner tone="info">같은 소켓을 쓰는 리스너도 함께 {http3 ? '켜요' : '꺼요'}: {h3Mates.map((o) => o.key).join(', ')}</Banner>
+        {/if}
         <HttpRedirectField bind:on={redirectOn} bind:port={redirectPort} httpsPort={port} bare />
       {/if}
       {#if protocol === 'udp'}

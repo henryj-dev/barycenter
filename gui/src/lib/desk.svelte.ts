@@ -21,7 +21,7 @@ import { viewOfRendered, type RenderedView } from '@web/rendered-view';
 import { viewOfAudit, type AuditView } from '@web/audit-view';
 import { RECONNECT_GRACE_MS, backoffMs, hasStream, isTransientStatus } from '@web/reconnect';
 import { retryingFetch } from '@web/retry';
-import { deletePatch, renamePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput, type SourceRuleInput } from '@web/edit';
+import { deletePatch, renamePatch, putBackendPatch, putCertificatePatch, putHashPoolWithBackendPatch, putHttpListenerPatch, putHttpsListenerPatch, putHttpRedirectPatch, putHttpRejectPatch, putHttpRoutePatch, putPassthroughListenerPatch, putPassthroughRejectPatch, putPassthroughRoutePatch, putPoolWithBackendPatch, putSniBindingPatch, putSourceIpHashPoolWithBackendPatch, putTcpListenerPatch, putTlsPolicyPatch, putUdpListenerPatch, editListenerPatch, proxyFromUrlPatch, type ProxyFromUrlInput, type ListenerEdit, type EditKind, type KeylessAlgorithm, type ProtocolClass, type RedirectStatus, type RejectStatus, type TlsVersion, type UdpPreset, parseListenerOptions, parseSourceAllow, parseHeaderLines, type ListenerOptionFlags, type UpstreamTlsInput, type SourceRuleInput, type PutListenerOp } from '@web/edit';
 import { pullSse } from '@web/sse-parse';
 import { failureKind, keepsDraft, keptDraftMessage, parseDrafts, type DraftRow } from '@web/drafts-view';
 import { parseOperation, parseOperations, type OperationRow } from '@web/operations-view';
@@ -891,13 +891,14 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
   /**
    * **아무 리소스나 통째로 바꾼다** — 상세의 JSON 수정·만들기 (2026-10-30). body 는 key 를 뺀
    * 모델 모양 그대로다. 모양 검사는 저장소(해독기·검증기)가 한다 — 여기서 다시 하지 않는다.
+   * `also` 는 같은 commit 에 함께 싣는 put 이다 — 소켓 단위 값(HTTP/3)을 이웃 리스너와 함께 맞출 때 (2026-11-22).
    */
-  const putResource = async (kind: ResourceKind, key: string, body: Record<string, unknown>): Promise<boolean> => {
+  const putResource = async (kind: ResourceKind, key: string, body: Record<string, unknown>, also: readonly PutListenerOp[] = []): Promise<boolean> => {
     editing = true;
     error = undefined;
     try {
       if (key.trim() === '') throw new Error('키가 비어 있다');
-      return await commitPatch([{ op: 'put', kind, key: key.trim(), body }]);
+      return await commitPatch([{ op: 'put', kind, key: key.trim(), body }, ...also]);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       return false;

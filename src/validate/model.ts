@@ -150,6 +150,8 @@ function socketKeyOf(l: RawListener): string | undefined {
   return `${l.protocol}|${n.value.family}|${n.value.wildcard ? '*' : n.value.addr}|${l.port}`;
 }
 
+const H3_PER_SOCKET = 'http3 는 소켓 단위다 — 같은 소켓의 리스너는 모두 켜거나 모두 꺼야 한다';
+
 /**
  * 두 리스너가 소켓을 함께 쓸 수 있나 (ADR-VHOST). 못 쓰면 이유를 준다(같은 바인드인데 어긋난 것만 —
  * 그 밖의 겹침은 원래 충돌 문구로 충분하다).
@@ -172,7 +174,7 @@ function socketSharing(a: RawListener, b: RawListener): { ok: true } | { ok: fal
   // **QUIC 도 소켓 단위다** (2026-11-22). 같은 UDP 소켓에 `listen … quic` 이 있는 server 와 없는 server 가 섞이면,
   // h3 로 온 접속이 없는 쪽의 이름에서 기본 server 로 떨어진다 — TCP 로는 되는데 h3 로는 안 되는 이름이 생긴다.
   if ((a.http3 === true) !== (b.http3 === true)) {
-    return { ok: false, why: 'http3 는 소켓 단위다 — 같은 소켓의 리스너는 모두 켜거나 모두 꺼야 한다' };
+    return { ok: false, why: H3_PER_SOCKET };
   }
   return { ok: true };
 }
@@ -566,14 +568,31 @@ export function validateModel(
 
   // **호스트 리스너는 소켓을 함께 쓴다** (ADR-VHOST). 그 외의 겹침은 전처럼 충돌이다.
   const sockListener = new Map([...model.listeners, ...redirects].map((l) => [l.key, l]));
+  // http3 가 어긋난 것은 **소켓마다 한 건**으로 모은다 (2026-11-22) — 짝마다 내면 같은 문구가 리스너 수만큼 나오고,
+  // 주소만 적혀서(`0.0.0.0 와 0.0.0.0`) 어느 리스너를 고칠지 안 보였다.
+  const h3Mismatch = new Map<string, Set<string>>();
   for (const c of findSocketConflicts(reservations)) {
     const a = sockListener.get(c.a);
     const b = sockListener.get(c.b);
     const share = a === undefined || b === undefined ? { ok: false as const } : socketSharing(a, b);
     if (share.ok) continue;
+    if (share.why === H3_PER_SOCKET && a !== undefined) {
+      const at = `${a.bind}:${a.port}`;
+      h3Mismatch.set(at, new Set([...(h3Mismatch.get(at) ?? []), c.a, c.b]));
+      continue;
+    }
     issues.push({
       code: 'socket_conflict', subjects: [c.a, c.b],
       message: share.why === undefined ? c.reason : `${c.reason} — ${share.why}`,
+    });
+  }
+  for (const [at, keys] of h3Mismatch) {
+    const sorted = [...keys].sort();
+    const on = sorted.filter((k) => sockListener.get(k)?.http3 === true);
+    const off = sorted.filter((k) => sockListener.get(k)?.http3 !== true);
+    issues.push({
+      code: 'socket_conflict', subjects: sorted,
+      message: `${at} 을 나눠 쓰는 리스너의 http3 가 다르다 — 켬: ${on.join(', ')} · 끔: ${off.join(', ')}. ${H3_PER_SOCKET}`,
     });
   }
   issues.push(...vhostIssues(model, caps, redirects));
