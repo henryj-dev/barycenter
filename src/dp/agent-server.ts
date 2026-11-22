@@ -27,7 +27,7 @@ import type { TLSSocket } from 'node:tls';
 
 import { DpRejection } from './agent.js';
 import {
-  decodeApplyOperation, decodeEpoch, decodeLeaderToken, decodePlane, decodeSlots,
+  decodeAfter, decodeApplyOperation, decodeEpoch, decodeLeaderToken, decodePlane, decodeSlots,
 } from './wire.js';
 import type { DataplaneDriver } from './driver.js';
 
@@ -57,6 +57,8 @@ const METHODS = [
   'applyMembership', 'pushMembershipDirect', 'reconcileConfig', 'status',
   // 트래픽 카운터 (2026-11-20). 읽기만 한다.
   'readTraffic',
+  // 액세스 로그 고리 (2026-11-22). 읽기만 한다.
+  'readAccess',
 ] as const;
 type MethodName = (typeof METHODS)[number];
 
@@ -174,6 +176,8 @@ function invoke(
       return driver.status();
     case 'readTraffic':
       return driver.readTraffic === undefined ? Promise.resolve({}) : driver.readTraffic();
+    case 'readAccess':
+      return driver.readAccess === undefined ? Promise.resolve({}) : driver.readAccess(decodeAfter(a['after']));
   }
 }
 

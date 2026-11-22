@@ -267,6 +267,28 @@
         }
       }
     },
+    "/api/v1/access-log": {
+      "get": {
+        "operationId": "GET:/api/v1/access-log",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/access-log/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/access-log/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
     "/api/v1/notify": {
       "get": {
         "operationId": "GET:/api/v1/notify",
@@ -1641,6 +1663,28 @@
     "/api/v1/regions/{name}/traffic/{kind}/{id}": {
       "get": {
         "operationId": "GET:/api/v1/regions/:name/traffic/:kind/:id",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/access-log": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/access-log",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "implemented"
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{name}/access-log/{id}": {
+      "get": {
+        "operationId": "GET:/api/v1/regions/:name/access-log/:id",
         "x-scope": "read",
         "responses": {
           "200": {

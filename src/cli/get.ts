@@ -42,6 +42,10 @@ export function getPath(what: string): string | undefined {
   // 알림 설정 · 보낸 기록 (036, 2026-11-20). 읽기만 — 고치기는 화면에서 한다(비밀을 명령줄에 싣지 않게). admin 토큰.
   if (what === 'notify') return '/api/v1/notify';
   if (what === 'notify/deliveries') return '/api/v1/notify/deliveries';
+  // 액세스 로그 (2026-11-22). `access-log` 는 최근 줄, `access-log/<id>` 는 한 줄이다.
+  if (what === 'access-log') return '/api/v1/access-log';
+  const accessOne = /^access-log\/(.+)$/.exec(what);
+  if (accessOne?.[1] !== undefined) return `/api/v1/access-log/${encodeURIComponent(accessOne[1])}`;
   // 트래픽 통계 (2026-11-20). `traffic` · `traffic/<종류>` · `traffic/<종류>/<이름>`.
   if (what === 'traffic') return '/api/v1/traffic';
   const trafficKind = /^traffic\/([A-Za-z]+)$/.exec(what);

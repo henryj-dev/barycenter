@@ -14,6 +14,20 @@ release section lists every publicly known vulnerability it fixes.
 
 ## [Unreleased]
 
+- **Access log.** On OpenResty, the engine now writes one line per request (per connection for TCP/UDP)
+  into a fixed-size ring in a separate `lua_shared_dict` (`bary_http_access` · `bary_stream_access`, 8m each,
+  5000 lines per plane). Nothing is written to disk or the database. The daemon reads new lines every 2 s
+  (`BARY_ACCESS_LOG_INTERVAL_MS`) and keeps the last 10 000 in memory, per node (`BARY_ACCESS_LOG_KEEP`).
+  A line has the time, client, method, host, path, status, the backend's status, timings, bytes, listener,
+  route, pool, backend, TLS SNI/version, User-Agent, Referer and X-Forwarded-For. **Query strings, cookies,
+  bodies and the Authorization header are never recorded**, and the Referer loses its query too.
+  New read endpoints `GET /api/v1/access-log` (filters `status=4xx,5xx`, `listener` · `route` · `pool` ·
+  `backend`, `q`; pages with `before=` / `after=` cursors; `format=csv|ndjson` exports) and
+  `GET /api/v1/access-log/:id`, relayed in global mode; `bary get access-log[/<id>]`. The GUI has
+  **운영 › 액세스 로그** (`/ops/access-log`) with filters, row details, live follow and export, and the
+  traffic tab of listeners, routes, pools and backends links to it. Plain nginx answers `unsupported`.
+  **Upgrading changes the rendered config on OpenResty**, so run **다시 렌더** and apply once to start
+  recording.
 - The `bary` CLI now covers what only the GUI had (2026-11-21):
   `bary apply retry`, `bary history <kind> <name>`, `bary revisions`, `bary pending`,
   `bary engine set` (engine settings; unspecified fields keep their value, `--clear-*` resets),

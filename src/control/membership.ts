@@ -17,6 +17,7 @@ import {
 } from '../conf/render.js';
 
 import { applyDiscoveredEndpoints, type DiscoveryIntake } from './discovery.js';
+import { accessDumpLua } from '../conf/access-log.js';
 import { trafficDumpLua } from '../conf/traffic.js';
 import { log } from '../obs/log.js';
 import type { Model } from '../model/provisional.js';
@@ -596,6 +597,14 @@ server {
         }
     }
 
+    # **액세스 로그** (2026-11-22, src/conf/access-log.ts). \`?after=<순번>\` 뒤의 줄. 해석은 데몬이 한다.
+    location = /access-log {
+        content_by_lua_block {
+            local after = ngx.var.arg_after
+            ${accessDumpLua('http')}
+        }
+    }
+
     # peer 별 inflight. 밸런서가 올린 숫자만 준다. 없으면 빈 객체 — 숫자를 안 짓는다.
     location = /membership/inflight {
         content_by_lua_block {
@@ -651,6 +660,12 @@ server {
         if verb == "traffic" then
             ${trafficDumpLua('stream')}
             ngx.print("\\n")
+            return
+        end
+        -- 액세스 로그 (2026-11-22). 순번은 **다음 줄**로 받는다 — inflight 와 같은 이유다.
+        if verb == "access" then
+            local after = sock:receive("*l")
+            ${accessDumpLua('stream')}
             return
         end
         if verb == "read" then

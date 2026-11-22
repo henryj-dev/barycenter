@@ -102,10 +102,25 @@ export function bootEffects(opts: EffectsBootOptions): FsEffects {
     return out;
   };
 
+  /** 액세스 로그 고리 (2026-11-22). 카운터와 같은 규칙이다 — 못 물은 평면은 빠진다. */
+  const readAccess = async (after: { http?: number; stream?: number }): Promise<{ http?: string; stream?: string }> => {
+    const out: { http?: string; stream?: string } = {};
+    const seq = (n: number | undefined): string => String(Math.max(0, Math.trunc(n ?? 0)));
+    try {
+      const r = await adminFetch(adminSocket)(`http://admin/access-log?after=${seq(after.http)}`, { signal: AbortSignal.timeout(2000) });
+      if (r.ok) out.http = await r.text();
+    } catch { /* 못 물었다 */ }
+    try {
+      out.stream = await adminTalk(streamAdminSocket, 2000)(`0 access\n${seq(after.stream)}\n`);
+    } catch { /* 못 물었다 */ }
+    return out;
+  };
+
   return new FsEffects({
     prefix,
     pushMembership,
     readTraffic,
+    readAccess,
     reload: async () => {
       const cmd = env['BARY_RELOAD_CMD'];
       if (cmd !== undefined) {

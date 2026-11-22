@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 126 심볼 · sha256:e562037bcadf02a828fceda07fbc5336adce2fb9dfda1ab4c81e4d9f9dfac537
+# 127 심볼 · sha256:4ec74b56f21459578c771fc418615cf5d55fd7f1a9c84e35fee58043e4664f7c
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -10,6 +10,11 @@
 
 ── ALL_APPLY_PHASES
 ALL_APPLY_PHASES: readonly ApplyPhase[]
+── AccessAfter
+export type AccessAfter = {
+    http?: number;
+    stream?: number;
+};
 ── AcmeIntent
 export type AcmeIntent = {
     account: string;
@@ -118,6 +123,13 @@ export interface DataplaneDriver {
         http?: string;
         stream?: string;
     }>;
+    readAccess?(after: {
+        http?: number;
+        stream?: number;
+    }): Promise<{
+        http?: string;
+        stream?: string;
+    }>;
 }
 ── DecodeResult
 export type DecodeResult = {
@@ -213,6 +225,7 @@ export interface Effects {
         isBackup?: boolean;
     }>>): Promise<void>;
     readTraffic?(): Promise<TrafficDump>;
+    readAccess?(after: AccessAfter): Promise<TrafficDump>;
 }
 ── EngineSettings
 export type EngineSettings = {
@@ -237,6 +250,13 @@ export declare class FsEffects implements Effects {
         http?: string;
         stream?: string;
     }>;
+    readAccess: (after: {
+        http?: number;
+        stream?: number;
+    }) => Promise<{
+        http?: string;
+        stream?: string;
+    }>;
     constructor(opts: FsEffectsOptions);
     preflight(op: ApplyOperation): Promise<PreflightResult>;
     publish(record: PublishRecord, lease: ApplyLease): Promise<Checked>;
@@ -254,6 +274,13 @@ export type FsEffectsOptions = {
     configTest?: (generation: string) => Promise<boolean>;
     pushMembership?: (plane: 'http' | 'stream', epoch: string, slots: Record<string, string[]>) => Promise<void>;
     readTraffic?: () => Promise<{
+        http?: string;
+        stream?: string;
+    }>;
+    readAccess?: (after: {
+        http?: number;
+        stream?: number;
+    }) => Promise<{
         http?: string;
         stream?: string;
     }>;
@@ -397,6 +424,13 @@ export declare class LocalDataplaneDriver implements DataplaneDriver {
         effects: Effects;
     }): LocalDataplaneDriver;
     readTraffic(): Promise<{
+        http?: string;
+        stream?: string;
+    }>;
+    readAccess(after: {
+        http?: number;
+        stream?: number;
+    }): Promise<{
         http?: string;
         stream?: string;
     }>;

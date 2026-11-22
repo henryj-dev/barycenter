@@ -76,6 +76,9 @@ import {
 import { roleProfilesView } from '../accounts/idp-roles/registry.js';
 import { MAX_SET_BYTES, verifyRoleChange } from '../accounts/idp-roles/role-change.js';
 import { TRAFFIC_RESOURCE_KINDS, type TrafficResourceKind, type TrafficSampler } from '../control/traffic.js';
+import {
+  ACCESS_CSV_COLUMNS, accessCsvRow, isStatusClass, type AccessFilter, type AccessLogCollector,
+} from '../control/access-log.js';
 import { KNOB_RANGES } from '../notify/registry.js';
 import type { NotifyRuntime } from '../notify/runtime.js';
 import { CHANNEL_KINDS, decodeKnobs, NOTIFY_KINDS, NotifySettingsError, SEVERITIES, viewOf } from '../notify/settings.js';
@@ -108,6 +111,8 @@ export type ApiOptions = {
   secrets?: SecretStore;
   /** 트래픽 통계 (2026-11-20). 없으면 `unsupported` 로 답한다. */
   traffic?: TrafficSampler;
+  /** 액세스 로그 (2026-11-22). 없으면 `unsupported` 로 답한다. */
+  accessLog?: AccessLogCollector;
   /** 알림 설정 · 보낸 기록 (036, 2026-11-20). 없으면 알림 경로가 404 `notify_disabled` 다. */
   notify?: NotifyRuntime;
   /**
@@ -505,6 +510,50 @@ function trafficBody(
   return { state: 'ok', ...head, intervalS: s.intervalMs / 1000, window: s.window(), ...body(s) };
 }
 
+/** 액세스 로그 목록의 쪽 크기. 내보내기는 가진 것 전부까지다. */
+const ACCESS_PAGE_MAX = 500;
+
+/** 액세스 로그의 거르기 · 쪽 인자. 틀린 값은 문장으로 돌려준다 — 400 이다. */
+function accessQuery(q: URLSearchParams, exportAll: boolean, keep: number):
+  { filter: AccessFilter; page: { limit: number; before?: number; after?: number } } | string {
+  const filter: AccessFilter = {};
+  const status = q.get('status');
+  if (status !== null && status !== '') {
+    const classes = status.split(',').map((s) => s.trim()).filter(Boolean);
+    const bad = classes.find((s) => !isStatusClass(s));
+    if (bad !== undefined) return `status '${bad}' 는 1xx · 2xx · 3xx · 4xx · 5xx 중 하나가 아니다`;
+    filter.classes = classes;
+  }
+  for (const k of ['listener', 'route', 'pool', 'backend', 'q'] as const) {
+    const v = q.get(k);
+    if (v !== null && v !== '') filter[k] = v.slice(0, 512);
+  }
+  const cursor = (name: string): number | undefined | string => {
+    const v = q.get(name);
+    if (v === null || v === '') return undefined;
+    if (!/^[0-9]{1,15}$/.test(v)) return `${name} '${v}' 는 cursor(음이 아닌 정수)가 아니다`;
+    return Number(v);
+  };
+  const before = cursor('before');
+  const after = cursor('after');
+  if (typeof before === 'string') return before;
+  if (typeof after === 'string') return after;
+  const asked = Math.trunc(Number(q.get('limit') ?? (exportAll ? String(keep) : '100')) || 100);
+  const limit = Math.max(1, Math.min(exportAll ? keep : ACCESS_PAGE_MAX, asked));
+  return { filter, page: { limit, ...(before === undefined ? {} : { before }), ...(after === undefined ? {} : { after }) } };
+}
+
+/** 액세스 로그 응답의 공통 머리 — 트래픽과 같은 모양이다. `ok` 일 때만 몸을 붙인다. */
+function accessBody(api: ApiOptions, body: (a: AccessLogCollector) => Record<string, unknown>): Record<string, unknown> {
+  const a = api.accessLog;
+  const node = api.cluster?.node;
+  const head = node === undefined ? {} : { node };
+  if (a === undefined) return { state: 'unsupported', reason: '이 인스턴스는 액세스 로그를 적지 않는다', ...head };
+  const st = a.state();
+  if (st.state !== 'ok') return { ...st, ...head };
+  return { state: 'ok', ...head, window: a.window(), dropped: a.dropped(), ...body(a) };
+}
+
 /**
  * import · restore 본문을 읽는다 (2026-11-21). `{ manifest, mode?, preview?, base_revision? }` 로 감싼 것과
  * 매니페스트 그대로를 둘 다 받는다 — 감싸지 않은 본문은 옛 CLI 가 보내는 모양이다.
@@ -807,6 +856,58 @@ const ROUTES: Route[] = [
     json(c.res, 200, trafficBody(api, (s) => ({
       kind, key, points: s.series(kind as TrafficResourceKind, key),
     })));
+  }),
+
+  /**
+   * **액세스 로그** (2026-11-22). 이 노드의 엔진이 적은 최근 요청이다 — 클러스터면 노드마다 다르다.
+   *
+   * 새 것부터 낸다. `before=<cursor>` 는 더 오래된 쪽, `after=<cursor>` 는 그 뒤에 온 것(실시간)이다.
+   * `format=csv` · `format=ndjson` 은 내보내기다 — 같은 거르기로 가진 것 전부까지 파일로 준다.
+   * `state` 는 트래픽과 같다: `ok` · `unsupported`(Lua 가 없는 엔진) · `unavailable`(못 읽었다).
+   */
+  route('GET', '/api/v1/access-log', 'read', async (c, api) => {
+    const format = c.url.searchParams.get('format');
+    if (format !== null && format !== 'csv' && format !== 'ndjson') {
+      json(c.res, 400, { error: 'bad_format', message: 'format 은 csv · ndjson 중 하나다' });
+      return;
+    }
+    const keep = api.accessLog?.keep ?? ACCESS_PAGE_MAX;
+    const parsed = accessQuery(c.url.searchParams, format !== null, keep);
+    if (typeof parsed === 'string') {
+      json(c.res, 400, { error: 'bad_query', message: parsed });
+      return;
+    }
+    if (format === null) {
+      json(c.res, 200, accessBody(api, (a) => ({ ...a.list(parsed.filter, parsed.page) })));
+      return;
+    }
+    const a = api.accessLog;
+    if (a === undefined || a.state().state !== 'ok') {
+      json(c.res, 409, { error: 'access_log_unavailable', message: '액세스 로그를 읽을 수 없어 내보낼 것이 없다' });
+      return;
+    }
+    const rows = a.list(parsed.filter, parsed.page).entries;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const body = format === 'csv'
+      ? [ACCESS_CSV_COLUMNS.join(','), ...rows.map(accessCsvRow)].join('\r\n') + '\r\n'
+      : rows.map((e) => JSON.stringify(e)).join('\n') + (rows.length > 0 ? '\n' : '');
+    c.res.writeHead(200, {
+      'content-type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/x-ndjson; charset=utf-8',
+      'content-disposition': `attachment; filename="access-log-${stamp}.${format}"`,
+      ...SECURITY_HEADERS,
+    });
+    c.res.end(body);
+  }),
+
+  route('GET', '/api/v1/access-log/:id', 'read', async (c, api) => {
+    const id = c.params['id'] ?? '';
+    const a = api.accessLog;
+    const e = a?.state().state === 'ok' ? a.get(id) : undefined;
+    if (e === undefined) {
+      json(c.res, 404, { error: 'not_found', message: `액세스 로그 '${id}' 가 없다 — 이 노드가 아직 안 받았거나 이미 밀려났다` });
+      return;
+    }
+    json(c.res, 200, e);
   }),
 
   /**
@@ -1995,6 +2096,9 @@ const GLOBAL_ROUTES: Route<GlobalApiOptions>[] = [
   // 트래픽 통계 (2026-11-21). 허용 목록에는 있었지만 라우트가 없어 전역에서 그래프가 404 였다.
   route('GET', '/api/v1/regions/:name/traffic', 'read', relayTo('traffic')),
   route('GET', '/api/v1/regions/:name/traffic/:kind/:id', 'read', relayTo('traffic/:kind/:id')),
+  // 액세스 로그 (2026-11-22). 지역 노드가 적은 것을 그대로 읽는다. 내보내기도 같은 경로다.
+  route('GET', '/api/v1/regions/:name/access-log', 'read', relayTo('access-log')),
+  route('GET', '/api/v1/regions/:name/access-log/:id', 'read', relayTo('access-log/:id')),
   // 지표 (2026-11-21). 운영 › 지표가 지역의 Prometheus 텍스트를 그대로 읽는다.
   route('GET', '/api/v1/regions/:name/metrics', 'read', relayTo('metrics')),
   /**
