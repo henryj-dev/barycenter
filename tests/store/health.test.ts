@@ -270,6 +270,40 @@ describe('헬스 프로버', () => {
   }, 60_000);
 });
 
+/**
+ * **udp 풀은 안 찌른다** (2026-11-22). 전에는 TCP connect 로 찔렀다. UDP 서비스는 TCP 를 안 받으므로 정상
+ * 백엔드가 `unhealthy` 로 멤버십에서 빠졌다. 고친 뒤에도 그때 남은 판정이 계속 빼면 고친 것이 아니다.
+ */
+describe('안 찌르는 풀 (udp · mode none)', () => {
+  const asUdp = (m: Model): Model => ({ ...m, pools: [{ ...m.pools[0]!, protocolClass: 'udp' }] });
+
+  it('udp 풀은 안 찌른다 — 판정 행이 안 생긴다', async () => {
+    await new HealthProber(db, { failThreshold: 1, riseThreshold: 1, timeoutMs: 500 }).sweep(asUdp(model()));
+    expect((await currentHealth(db)).size).toBe(0);
+  }, 60_000);
+
+  it('**남은 `unhealthy` 를 `unknown` 으로 돌리고 멤버십에서 안 뺀다**', async () => {
+    const prober = new HealthProber(db, { failThreshold: 1, riseThreshold: 1, timeoutMs: 500 });
+    await prober.sweep(model());
+    expect((await currentHealth(db)).get('dead')).toBe('unhealthy');
+
+    const udp = asUdp(model());
+    // 행이 아직 `unhealthy` 여도 리듀서는 안 따른다 — 다시 안 찌르므로 영영 안 바뀌는 판정이다.
+    expect(reduceMembership(udp, await currentHealth(db)).backends.map((b) => b.key).sort()).toEqual(['dead', 'live']);
+
+    const { flipped } = await prober.sweep(udp);
+    expect(flipped.map((f) => [f.backendKey, f.state]).sort()).toEqual([['dead', 'unknown'], ['live', 'unknown']]);
+    const h = await currentHealth(db);
+    expect([h.get('dead'), h.get('live')]).toEqual(['unknown', 'unknown']);
+    // 바뀐 것은 이벤트로 남는다.
+    const ev = (await db.query(`SELECT state FROM health_events WHERE backend_key = 'dead' ORDER BY seq`)).rows;
+    expect(ev.map((r) => r['state'])).toEqual(['unhealthy', 'unknown']);
+
+    // 한 번 더 돌려도 새로 바뀌는 것이 없다.
+    expect((await prober.sweep(udp)).flipped).toEqual([]);
+  }, 60_000);
+});
+
 describe('리듀서 (§6.6)', () => {
   const base: Model = {
     listeners: [], httpRoutes: [], passthroughRoutes: [], certificates: [], tlsPolicies: [], sniBindings: [],

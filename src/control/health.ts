@@ -331,8 +331,14 @@ export function probePlanOf(model: Model, poolKey: string): ProbePlan {
     ...(spec?.hostHeader === undefined ? {} : { hostHeader: spec.hostHeader }),
     ...(tls === undefined ? {} : { tls }),
   } : undefined;
+  /**
+   * **udp 풀은 기본으로 안 찌른다** (2026-11-22). udp 프로브가 없다(§13-6). 전에는 나머지 풀처럼 TCP connect 로
+   * 찔렀다. UDP 서비스는 TCP 를 안 받으므로 정상 백엔드가 `unhealthy` 로 멤버십에서 빠졌다. 안 찌르면 `unknown`
+   * 이고, `unknown` 은 빼지 않는다(§6.6). udp 풀에는 헬스체크를 적을 수 없다(검증기) — 그래서 이 기본이 언제나 이긴다.
+   */
+  const mode = spec?.mode ?? (pool?.protocolClass === 'udp' ? 'none' : 'active');
   return {
-    mode: spec?.mode ?? 'active',
+    mode,
     protocol,
     ...(spec?.port === undefined ? {} : { port: spec.port }),
     ...(spec?.hostOverride === undefined ? {} : { hostOverride: spec.hostOverride }),
@@ -573,6 +579,30 @@ export class HealthProber {
       });
       if (flip !== undefined) flipped.push(flip);
     }
+
+    /**
+     * **안 찌르는 풀에 남은 판정을 `unknown` 으로 돌린다** (2026-11-22).
+     *
+     * 프로브를 끄기 전(또는 udp 를 TCP 로 잘못 찌르던 때)의 `healthy` · `unhealthy` 가 남으면 화면이 그 판정을 계속
+     * 보인다 — 다시 안 찌르므로 영영 안 바뀐다. 멤버십은 이미 그 판정을 안 따른다(`reduceMembership`). 화면도 맞춘다.
+     * **행을 지우지 않고 순번도 안 건드린다** — 위 `mode: none` 과 같은 이유다(ABA). 바뀐 것은 이벤트로 남긴다.
+     */
+    const unprobed = model.backends
+      .filter((b) => planOf.get(b.pool)?.mode === 'none').map((b) => b.key);
+    const why = '이 풀은 헬스체크를 안 한다 — 판정을 모른다';
+    for (const key of unprobed) {
+      const flip = await this.db.tx(async (c) => {
+        const row = (await c.query(
+          'SELECT state FROM backend_health WHERE backend_key = $1', [key])).rows[0];
+        if (row === undefined || row['state'] === 'unknown') return undefined;
+        await c.query(
+          `UPDATE backend_health SET state = 'unknown', consecutive = 0, observed_at = now(), detail = $2
+             WHERE backend_key = $1`, [key, why]);
+        await emit(c, key, 'unknown', why);
+        return { backendKey: key, state: 'unknown' as HealthState };
+      });
+      if (flip !== undefined) flipped.push(flip);
+    }
     return { flipped };
   }
 
@@ -725,10 +755,17 @@ export async function healthHistory(
 export function reduceMembership(
   model: Model, health: Map<string, HealthState>, draining: ReadonlySet<string> = new Set(),
 ): Model {
+  /**
+   * **안 찌르는 풀의 판정은 안 따른다** (2026-11-22). 프로브를 끄기 전(또는 udp 를 TCP 로 잘못 찌르던 때)의
+   * `unhealthy` 가 `backend_health` 에 남는다. 다시 안 찌르므로 그 판정은 영영 안 바뀐다 — 따르면 백엔드가
+   * 계속 빠진다. `mode: none` 은 「모른다」이고, 모르면 빼지 않는다(§6.6).
+   */
+  const unprobed = new Set(model.pools
+    .filter((p) => probePlanOf(model, p.key).mode === 'none').map((p) => p.key));
   return {
     ...model,
     backends: model.backends.filter((b) =>
-      health.get(b.key) !== 'unhealthy' && !draining.has(b.key)),
+      (unprobed.has(b.pool) || health.get(b.key) !== 'unhealthy') && !draining.has(b.key)),
   };
 }
 
