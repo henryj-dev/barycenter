@@ -109,7 +109,13 @@ export class TrafficSampler {
 
   start(): void {
     if (this.timer !== undefined || this.opts.read === undefined) return;
-    const run = (): void => { void this.tick(); };
+    // **주기 안의 실패로 데몬이 죽지 않게 한다** (2026-11-22, web-01). `tick` 의 모델 읽기는 DB 를 탄다 — PG 연결이
+    // 끊기자 처리되지 않은 rejection 이 되어 데몬이 세 번 죽었다. 표본 하나를 잃을 뿐이다. 다음 주기가 다시 읽는다.
+    const run = (): void => {
+      this.tick().catch((e: unknown) => {
+        this.lastError = `표본을 못 만들었다: ${e instanceof Error ? e.message : String(e)}`;
+      });
+    };
     run();
     this.timer = setInterval(run, this.intervalMs);
     this.timer.unref();
