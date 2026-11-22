@@ -275,6 +275,7 @@
   "header_rules": "json null",
   "hosts": "array null",
   "http2": "bool null",
+  "http3": "bool null",
   "http_default_pool_cls": "enum null",
   "http_default_pool_id": "uuid null",
   "http_default_reject": "bool null",
