@@ -219,7 +219,12 @@ describe('프로버가 계획대로 찌른다', () => {
   it('안 적으면 옛 규칙 그대로 — http 풀은 http, 나머지는 tcp connect', () => {
     expect(probePlanOf(poolModel(undefined, 'http'), 'app').protocol).toBe('http');
     expect(probePlanOf(poolModel(undefined, 'tcp'), 'app').protocol).toBe('tcp_connect');
-    expect(probePlanOf(poolModel(undefined, 'udp'), 'app').protocol).toBe('tcp_connect');
+  });
+
+  it('**udp 풀은 기본으로 안 찌른다** — udp 프로브가 없고, TCP connect 는 UDP 서비스를 죽었다고 본다', () => {
+    expect(probePlanOf(poolModel(undefined, 'udp'), 'app').mode).toBe('none');
+    expect(probePlanOf(poolModel(undefined, 'tcp'), 'app').mode).toBe('active');
+    expect(probePlanOf(poolModel(undefined, 'http'), 'app').mode).toBe('active');
   });
 
   it('풀별 주기·임계값이 계획에 실린다', () => {
