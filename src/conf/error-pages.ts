@@ -13,6 +13,13 @@
  *   · **named location 이어야 한다.** URI(`/__x.html`)로 넘기면 내부 리다이렉트가 server rewrite 단계부터 다시 돌아
  *     server 레벨 `if` 가드(421 · 출발지 444)가 또 걸리고, 두 번째 오류는 nginx 기본 페이지로 떨어진다.
  *     named location 은 location rewrite 단계로 바로 간다.
+ *   · **예외 — URI 를 못 읽은 요청** (2026-11-22, 운영 web-01). 스캐너가 HTTP 가 아닌 것을 보내면 nginx 는 요청 줄을
+ *     읽다가 400 · 414 를 만든다. 그 요청에는 URI 가 없고, nginx 는 URI 가 빈 요청을 named location 으로 못 보낸다
+ *     (`empty URI in redirect to named location`) — 오류 로그에 `[error]` 를 남기고 **500 기본 페이지**를 낸다. 출발지
+ *     제한으로 거부해야 할 클라이언트도 그 500 을 받았다. 그래서 URI 가 빌 때만 대상을 내부 URI(`ERR_INTERNAL_URI`)로
+ *     바꾼다. 그 길은 server rewrite 를 다시 돈다 — 출발지 가드(444)는 그대로 걸려 거부한 출발지는 여전히 아무것도
+ *     못 받고, SNI 가드(421)만 이 URI 를 건너뛴다(`ERR_SKIP_VAR`, render.ts `sniMismatchMap`). 실측:
+ *     tests/golden/error-pages-unparsed.test.ts.
  *   · 본문은 http 블록의 `map` 값이다 — 변수(`$status` · `$request_id`)를 넣을 수 있고, server 마다 되풀이하지 않는다.
  *     **값 하나는 4 KB 보다 작아야 한다**(nginx 설정 파서의 토큰 버퍼). 그래서 머리 · 본문 · 꼬리 셋으로 나눈다.
  *
@@ -111,6 +118,19 @@ const LOC_HTML = '@bary_err_html';
 const LOC_JSON = '@bary_err_json';
 
 /**
+ * URI 를 못 읽은 요청의 오류 페이지 자리 (위 「예외」). `internal` 이라 밖에서 부르면 404 다 — 라우트보다 먼저 맞는
+ * 정확 일치라 프록시되지도 않는다.
+ */
+export const ERR_INTERNAL_URI = '/__bary_err';
+
+/**
+ * 그 자리로 온 요청이면 `!`, 아니면 빈 값. SNI 가드의 map 이 앞에 붙여 읽는다(render.ts `sniMismatchMap`).
+ * 그 요청은 Host 를 못 읽었으므로 `$host` 가 server 이름이다 — SNI 와 비교하면 421 로 오인한다.
+ */
+export const ERR_SKIP_VAR = 'bary_err_skip';
+const NOURI_VAR = 'bary_err_nouri';
+
+/**
  * 모양 — 운영 GUI 토큰(`gui/src/lib/ui/tokens.css`)의 색 · 글자 크기 · 간격에서 왔다. 다만 GUI 는 다크가 기본이고
  * 이 페이지는 **방문자 기기의 테마를 따른다**(라이트가 기본, `prefers-color-scheme: dark` 면 다크).
  * 외부 글꼴 · 이미지 · 스크립트 0 — 시스템 글꼴과 인라인 SVG 뿐이다. `$` 를 쓰지 않는다(nginx 변수 문자다).
@@ -181,9 +201,19 @@ export function errorPageHttpNodes(): ConfNode[] {
     // 백엔드에 간 요청이면 그 상태 — 안 갔으면 빈 값이라 자리가 남지 않는다.
     upstreamWhenSet(V.up, ' · Upstream <code>$upstream_status</code>'),
     upstreamWhenSet(V.jup, ',"upstream_status":"$upstream_status"'),
-    // `Accept` 에 json 이 있으면 JSON 이다. 브라우저의 `Accept` 에는 없다.
-    block('map', [variable('http_accept'), variable(V.loc)], [
+    // URI 를 못 읽은 요청인가 (위 「예외」).
+    block('map', [variable('uri'), variable(NOURI_VAR)], [
+      entry(lit('default'), lit('0')),
+      entry(lit(''), lit('1')),
+    ]),
+    block('map', [variable('uri'), variable(ERR_SKIP_VAR)], [
+      entry(lit('default'), lit('')),
+      entry(lit(ERR_INTERNAL_URI), lit('!')),
+    ]),
+    // URI 가 없으면 내부 URI 다. 아니면 `Accept` 에 json 이 있으면 JSON 이다. 브라우저의 `Accept` 에는 없다.
+    block('map', [lit(`$${NOURI_VAR}$http_accept`), variable(V.loc)], [
       entry(lit('default'), lit(LOC_HTML)),
+      entry(regex('~*^1'), lit(ERR_INTERNAL_URI)),
       entry(regex('~*json'), lit(LOC_JSON)),
     ]),
     block('map', [variable('status'), variable(V.title)], statusEntries((c) => c.title)),
@@ -229,6 +259,13 @@ export function errorPageServerNodes(): ConfNode[] {
       block('types', [], []),
       directive('default_type', [lit('application/json')]),
       directive('return', [num(200), variable(V.json)]),
+    ]),
+    // URI 를 못 읽은 요청의 자리. 본문은 HTML 과 같다 — 그 요청의 `Accept` 는 읽지 못했다.
+    block('location', [lit('='), lit(ERR_INTERNAL_URI)], [
+      directive('internal', []),
+      block('types', [], []),
+      directive('default_type', [lit('text/html; charset=utf-8')]),
+      directive('return', [num(200), lit(`$${V.head}$${V.main}$${V.foot}`)]),
     ]),
   ];
 }
