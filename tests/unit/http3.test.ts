@@ -13,6 +13,7 @@ import { decodeModel } from '../../src/model/decode.js';
 import type { HttpsListener, Listener, Model } from '../../src/model/provisional.js';
 import { validateModel } from '../../src/validate/model.js';
 import { socketRows } from '../../src/web/sockets-view.js';
+import { http3MatePatch } from '../../src/web/edit.js';
 
 const V = 'd'.repeat(32);
 const https = (key: string, extra: Partial<HttpsListener> = {}): HttpsListener => ({
@@ -68,6 +69,17 @@ describe('검증', () => {
     expect(issues(m)).toMatch(/socket_conflict: .*http3 는 소켓 단위다/);
     const same = modelOf([https('a', { hosts: ['a.test'], http3: true }), https('b', { hosts: ['b.test'], http3: true })]);
     expect(issues(same)).toBe('');
+  });
+
+  it('**어긋나면 소켓마다 한 건이고, 리스너 이름을 적는다** — 운영에서 주소만 세 번 나와 무엇을 고칠지 안 보였다', () => {
+    const m = modelOf([
+      https('a', { hosts: ['a.test'], http3: true }), https('b', { hosts: ['b.test'] }),
+      https('c', { hosts: ['c.test'] }), https('d'),
+    ]);
+    const found = validateModel(m, caps).filter((i) => i.code === 'socket_conflict');
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toBe('0.0.0.0:443 을 나눠 쓰는 리스너의 http3 가 다르다 — 켬: a · 끔: b, c, d. http3 는 소켓 단위다 — 같은 소켓의 리스너는 모두 켜거나 모두 꺼야 한다');
+    expect(found[0]!.subjects).toEqual(['a', 'b', 'c', 'd']);
   });
 
   it('**같은 포트의 udp 리스너와 다툰다** (S20.udp_conflict) — 엔진은 아무 말 없이 한쪽을 버린다', () => {
@@ -135,6 +147,46 @@ describe('소켓 목록', () => {
     const rows = socketRows(modelOf([https('web', { http3: true })]));
     expect(rows.filter((r) => r.listener === 'web').map((r) => r.transport)).toEqual(['tcp', 'udp']);
     expect(socketRows(modelOf([https('web')])).map((r) => r.transport)).toEqual(['tcp']);
+  });
+});
+
+describe('설정 폼 — 같은 소켓의 이웃을 함께 맞춘다', () => {
+  const ls = [
+    https('a', { hosts: ['a.test'] }),
+    https('b', { hosts: ['b.test'] }),
+    https('c', { hosts: ['c.test'], http3: true }),
+    https('spec', { bind: '10.0.0.5', hosts: ['s.test'] }),
+    https('other', { port: 8443 }),
+  ] as unknown as Record<string, unknown>[];
+
+  it('켜면 같은 소켓에서 꺼진 이웃만 put 한다 — 특정 주소 · 다른 포트는 다른 소켓이다', () => {
+    const ops = http3MatePatch(ls, 'a', '0.0.0.0', 443, true);
+    expect(ops.map((o) => o.key)).toEqual(['b']);
+    expect(ops[0]!.body['http3']).toBe(true);
+    expect(ops[0]!.body).not.toHaveProperty('key');
+  });
+
+  it('끄면 켜진 이웃의 키를 지운다', () => {
+    const ops = http3MatePatch(ls, 'a', '0.0.0.0', 443, false);
+    expect(ops.map((o) => o.key)).toEqual(['c']);
+    expect(ops[0]!.body).not.toHaveProperty('http3');
+  });
+
+  it('**함께 올린 모델은 검증을 지난다** — 이 저장이 막히던 것이다', () => {
+    const self = { op: 'put', kind: 'listener', key: 'a', body: { ...https('a', { hosts: ['a.test'] }), http3: true } };
+    const all = [self, ...http3MatePatch(ls, 'a', '0.0.0.0', 443, true)];
+    const byKey = new Map(ls.map((l) => [String(l['key']), l]));
+    for (const o of all) byKey.set(o.key, { ...o.body, key: o.key });
+    const m = modelOf([...byKey.values()] as unknown as Listener[]);
+    expect(issues(m)).toBe('');
+  });
+
+  it('설정 폼이 이웃 put 을 같은 commit 에 싣고 알린다', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const edit = readFileSync(join(import.meta.dirname, '../../gui/src/lib/listener/ListenerForm.svelte'), 'utf8');
+    expect(edit).toContain("desk.putResource('listener', key, body, h3Mates)");
+    expect(edit).toContain('같은 소켓을 쓰는 리스너도 함께');
   });
 });
 
