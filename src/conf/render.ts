@@ -24,6 +24,7 @@ import {
 import {
   LISTENER_VAR, PEERS_VAR, POOL_VAR, ROUTE_MAP_VAR, ROUTE_VAR, TRAFFIC_DICT, TRAFFIC_DICT_SIZE, trafficLogLua,
 } from './traffic.js';
+import { ACCESS_DICT, ACCESS_DICT_SIZE, accessLogLua } from './access-log.js';
 import {
   compileHostRoutes, hostPatternKey, planStrictPriority, type RouteInput,
 } from '../route/compile.js';
@@ -2149,7 +2150,7 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
     ];
     // **멤버십 평면의 zone.** 평면마다 다른 이름이어야 한다 (E14).
     if (caps.httpLua === true) {
-      children.unshift(lua('log_by_lua_block', `${trafficLogLua('http')}
+      children.unshift(lua('log_by_lua_block', `${trafficLogLua('http')}${accessLogLua('http')}
             -- **고른 것을 전부 내린다** (검수 D3). 전에는 \`ngx.ctx.bary_peer\` 하나였고,
             -- 그건 **마지막** peer 다 — 재시도한 요청에서 먼저 고른 peer 의 \`in:\` 이
             -- 영영 안 내려갔다. 그 누수는 N5(페일오버 없음)를 고치는 순간 살아난다.
@@ -2172,6 +2173,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
         [lit(ACME_DICT), lit(dictSize(model.engine?.acmeDictKb, DEFAULT_ACME_KB))]));
       // 트래픽 카운터 dict. 멤버십 dict 와 따로다 — 카운터가 `slot:` 을 밀어내면 안 된다.
       children.unshift(directive('lua_shared_dict', [lit(TRAFFIC_DICT.http), lit(TRAFFIC_DICT_SIZE)]));
+      // 액세스 로그 고리 (access-log.ts). 카운터와도 따로다 — 줄이 카운터를 밀어내면 안 된다.
+      children.unshift(directive('lua_shared_dict', [lit(ACCESS_DICT.http), lit(ACCESS_DICT_SIZE)]));
     }
     // E7 — 내장 변수가 아니므로 반드시 함께 렌더한다. 그리고 정확히 한 번만.
     if (anyWebsocket) {
@@ -2293,7 +2296,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
       children.push(directive('lua_shared_dict',
         [lit(MEMBERSHIP_DICT.stream), lit(dictSize(model.engine?.membershipDictKb, DEFAULT_MEMBERSHIP_KB))]));
       children.push(directive('lua_shared_dict', [lit(TRAFFIC_DICT.stream), lit(TRAFFIC_DICT_SIZE)]));
-      children.push(lua('log_by_lua_block', `${trafficLogLua('stream')}
+      children.push(directive('lua_shared_dict', [lit(ACCESS_DICT.stream), lit(ACCESS_DICT_SIZE)]));
+      children.push(lua('log_by_lua_block', `${trafficLogLua('stream')}${accessLogLua('stream')}
             -- 검수 D3 — http 평면과 같은 규칙이다. **고른 것을 전부 내린다.**
             local chosen = ngx.ctx.bary_peers
             if not chosen then return end

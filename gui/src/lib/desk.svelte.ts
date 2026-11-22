@@ -31,6 +31,7 @@ import { needsStepUp, stepUp } from '#lib/account/step-up.svelte';
 import { noteCommit } from '#lib/commit-note';
 import { EMPTY_PENDING, viewOfPendingResources, type PendingResourcesView } from '#lib/pending';
 import type { TrafficKind, TrafficSeriesBody, TrafficSummaryBody } from '@web/traffic-view';
+import type { AccessEntry, AccessLogBody } from '@web/access-log-view';
 
 export type StatusSnap = {
   head?: string;
@@ -1003,6 +1004,29 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     if (r === undefined || !r.ok) return undefined;
     return (await r.json().catch(() => undefined)) as TrafficSeriesBody | undefined;
   };
+  /**
+   * 액세스 로그 (2026-11-22) — 이 화면이 붙은 노드가 적은 최근 요청. `search` 는 `accessSearch` 가 만든다.
+   * 못 읽으면 undefined — 「적지 않는다」(`unsupported`)와 다르다.
+   */
+  const accessLog = async (search: string): Promise<AccessLogBody | undefined> => {
+    const r = await fetch(api(`/api/v1/access-log${search}`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    return (await r.json().catch(() => undefined)) as AccessLogBody | undefined;
+  };
+  /** 줄 하나. 이미 밀려났으면(404) `null`, 못 읽으면 undefined. */
+  const accessEntry = async (id: string): Promise<AccessEntry | null | undefined> => {
+    const r = await fetch(api(`/api/v1/access-log/${encodeURIComponent(id)}`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined) return undefined;
+    if (r.status === 404) return null;
+    if (!r.ok) return undefined;
+    return (await r.json().catch(() => undefined)) as AccessEntry | undefined;
+  };
+  /** 내보내기 — 같은 거르기로 가진 것 전부. 못 받으면 undefined. */
+  const accessExport = async (search: string): Promise<Blob | undefined> => {
+    const r = await fetch(api(`/api/v1/access-log${search}`), { headers: auth() }).catch(() => undefined);
+    if (r === undefined || !r.ok) return undefined;
+    return r.blob().catch(() => undefined);
+  };
   /** 리소스별 트래픽 요약. 종류로 거를 수 있다. */
   const trafficSummary = async (kind?: TrafficKind): Promise<TrafficSummaryBody | undefined> => {
     const q = kind === undefined ? '' : `?kind=${kind}`;
@@ -1644,6 +1668,9 @@ export function createDesk(scope?: { api(path: string): string; mode: string; re
     poolDiscovery,
     healthHistory,
     trafficSeries,
+    accessLog,
+    accessEntry,
+    accessExport,
     metricsText,
     trafficSummary,
     drainStatus,

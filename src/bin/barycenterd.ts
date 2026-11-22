@@ -79,6 +79,7 @@ import { probeEngine } from '../engine/probe.js';
 import { hostAddresses } from '../engine/host-addresses.js';
 import { renderCapsOf } from '../engine/render-caps.js';
 import { TrafficSampler } from '../control/traffic.js';
+import { AccessLogCollector } from '../control/access-log.js';
 import { servedByFromEnv } from '../conf/served-by.js';
 import { createDataSources, dataSourcesConfigFromEnv, startDataSources } from '../control/data-sources-boot.js';
 import { DEFAULT_HEALTH_EVENT_DAYS, DEFAULT_NOTIFY_DELIVERY_DAYS, sweepDatabase } from '../store/db-retention.js';
@@ -1034,6 +1035,19 @@ export async function main(): Promise<void> {
   });
   if (traffic.state().state !== 'unsupported') traffic.start();
 
+  /**
+   * 액세스 로그 (2026-11-22). 트래픽과 같이 **노드마다 자기 엔진을 읽고** 메모리에만 둔다.
+   */
+  const accessLog = new AccessLogCollector({
+    ...(driver.readAccess === undefined ? {} : { read: (after) => driver.readAccess!(after) }),
+    model: () => control.headModel(),
+    lua: () => ({ http: renderCaps.httpLua === true, stream: renderCaps.streamLua === true }),
+    node: nodeName,
+    intervalMs: Number(env('BARY_ACCESS_LOG_INTERVAL_MS', '2000')),
+    keep: Number(env('BARY_ACCESS_LOG_KEEP', '10000')),
+  });
+  if (accessLog.state().state !== 'unsupported') accessLog.start();
+
   // **기동 시 멤버십을 되돌려 놓는다** (§6.4). shared dict 는 프로세스 수명이라 엔진이
   // 재시작하면 슬롯이 통째로 빈다 — 설정은 멀쩡한데 트래픽이 전부 죽는다.
   if (election.state.isLeader) {
@@ -1417,6 +1431,7 @@ export async function main(): Promise<void> {
     db, store, control, auth, election, secrets, events, hostAddresses,
     discovery: dataSources.api,
     traffic,
+    accessLog,
     notify,
     storage: storageStatus,
     ...dispatch,
@@ -1483,6 +1498,7 @@ export async function main(): Promise<void> {
       // 것과 죽은 것을 나중에 구분할 수 있어야 한다.
       const proberDone = prober.stop();
       traffic.stop();
+      accessLog.stop();
       const acmeDone = acmeRunner.stop();
       stopPublish();
       stopSecretGc();

@@ -222,6 +222,18 @@ export class RemoteDataplaneDriver implements DataplaneDriver {
     return out;
   }
 
+  /** 액세스 로그 고리 (2026-11-22). readTraffic 과 같이 모양을 거른다. */
+  async readAccess(after: { http?: number; stream?: number }): Promise<{ http?: string; stream?: string }> {
+    const raw = await this.#call<unknown>('readAccess', { after });
+    const out: { http?: string; stream?: string } = {};
+    if (raw !== null && typeof raw === 'object') {
+      const o = raw as Record<string, unknown>;
+      if (typeof o['http'] === 'string') out.http = o['http'];
+      if (typeof o['stream'] === 'string') out.stream = o['stream'];
+    }
+    return out;
+  }
+
   /** keep-alive 소켓을 놓는다. 안 부르면 프로세스가 안 끝난다. */
   close(): void {
     this.#agent.destroy();

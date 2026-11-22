@@ -151,6 +151,9 @@ export interface DataplaneDriver {
    * 없는 드라이버(테스트의 가짜 등)는 세지 않는 배포다.
    */
   readTraffic?(): Promise<{ http?: string; stream?: string }>;
+
+  /** 엔진의 액세스 로그 고리 (2026-11-22). **읽기만 한다.** 없는 드라이버는 적지 않는 배포다. */
+  readAccess?(after: { http?: number; stream?: number }): Promise<{ http?: string; stream?: string }>;
 }
 
 /**
@@ -296,6 +299,11 @@ export class LocalDataplaneDriver implements DataplaneDriver {
   /** 트래픽 카운터 덤프. 부작용이 못 읽으면 빈 덤프다. */
   async readTraffic(): Promise<{ http?: string; stream?: string }> {
     return this.effects.readTraffic === undefined ? {} : this.effects.readTraffic();
+  }
+
+  /** 액세스 로그 고리. 부작용이 못 읽으면 빈 덤프다. */
+  async readAccess(after: { http?: number; stream?: number }): Promise<{ http?: string; stream?: string }> {
+    return this.effects.readAccess === undefined ? {} : this.effects.readAccess(after);
   }
 
   #runner(): ApplyRunner {

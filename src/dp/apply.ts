@@ -135,10 +135,19 @@ export interface Effects {
    * 못 읽은 평면은 키가 없다 — 0 을 짓지 않는다. 메서드가 없으면 이 배포는 세지 않는다.
    */
   readTraffic?(): Promise<TrafficDump>;
+
+  /**
+   * 엔진의 액세스 로그 고리 (2026-11-22, src/conf/access-log.ts). 평면마다 `after` 뒤의 줄을 admin 이 낸 글 그대로.
+   * 못 읽은 평면은 키가 없다. 메서드가 없으면 이 배포는 적지 않는다.
+   */
+  readAccess?(after: AccessAfter): Promise<TrafficDump>;
 }
 
 /** 평면별 카운터 덤프. 값은 `parseTrafficDump` 가 읽는다. */
 export type TrafficDump = { http?: string; stream?: string };
+
+/** 평면별로 마지막에 읽은 순번. 없으면 0 — 고리에 남은 것부터 준다. */
+export type AccessAfter = { http?: number; stream?: number };
 
 
 // ── 러너 ─────────────────────────────────────────────────────────────────

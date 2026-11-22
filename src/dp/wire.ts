@@ -87,6 +87,23 @@ export function decodeEpoch(v: unknown): string {
   return decimal(v, 'epoch');
 }
 
+/**
+ * 액세스 로그의 `after` (2026-11-22). 평면마다 음이 아닌 정수 순번이다. 없으면 0 이다.
+ */
+export function decodeAfter(v: unknown): { http?: number; stream?: number } {
+  if (v === undefined) return {};
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) reject('after', '객체여야 한다');
+  const o = v as Record<string, unknown>;
+  const out: { http?: number; stream?: number } = {};
+  for (const k of Object.keys(o)) {
+    if (!PLANES.includes(k as Plane)) reject('after', `모르는 평면: ${JSON.stringify(k)}`);
+    const n = o[k];
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) reject(`after.${k}`, '음이 아닌 정수여야 한다');
+    out[k as Plane] = n as number;
+  }
+  return out;
+}
+
 export function decodePlane(v: unknown, what = 'plane'): Plane {
   const s = str(v, what);
   if (!PLANES.includes(s as Plane)) {
