@@ -94,14 +94,17 @@ export function decodeAfter(v: unknown): { http?: number; stream?: number } {
   if (v === undefined) return {};
   if (v === null || typeof v !== 'object' || Array.isArray(v)) reject('after', '객체여야 한다');
   const o = v as Record<string, unknown>;
-  const out: { http?: number; stream?: number } = {};
-  for (const k of Object.keys(o)) {
-    if (!PLANES.includes(k as Plane)) reject('after', `모르는 평면: ${JSON.stringify(k)}`);
-    const n = o[k];
-    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) reject(`after.${k}`, '음이 아닌 정수여야 한다');
-    out[k as Plane] = n as number;
-  }
-  return out;
+  const unknownKey = Object.keys(o).find((k) => !PLANES.includes(k as Plane));
+  if (unknownKey !== undefined) reject('after', `모르는 평면: ${JSON.stringify(unknownKey)}`);
+  // 키를 고정해서 읽고 쓴다 — 받은 이름으로 속성을 만들지 않는다.
+  const seq = (n: unknown, what: string): number => {
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) reject(what, '음이 아닌 정수여야 한다');
+    return n as number;
+  };
+  return {
+    ...(o['http'] === undefined ? {} : { http: seq(o['http'], 'after.http') }),
+    ...(o['stream'] === undefined ? {} : { stream: seq(o['stream'], 'after.stream') }),
+  };
 }
 
 export function decodePlane(v: unknown, what = 'plane'): Plane {
