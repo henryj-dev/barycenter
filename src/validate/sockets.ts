@@ -76,6 +76,8 @@ export type SocketReservation = {
   protocol: ListenerProtocol;
   bind: string;
   port: number;
+  /** https 의 HTTP/3 — 같은 포트를 UDP 로도 점유한다(S20). */
+  http3?: boolean;
 };
 
 export type SocketConflict = { a: string; b: string; reason: string };
@@ -101,15 +103,17 @@ export type SocketConflict = { a: string; b: string; reason: string };
  * 겹치면** 성립한다. h3 를 여는 날 이 함수에 `udp` 를 더하는 것 하나로 그 겹침이 잡힌다 —
  * 검증기·렌더·모델 어디도 다시 안 만진다.
  *
- * 지금은 어느 프로토콜도 둘을 안 낸다. **그게 맞다** — 없는 것을 있는 척하지 않는다.
- * 바뀐 것은 *"표현할 수 있는가"* 이고, 그것이 §12.0 이 막아 둔 바로 그 문이다.
+ * **h3 가 들어왔다** (2026-11-22). `http3` 를 켠 https 는 TCP 와 UDP 를 함께 낸다. 프로토콜만으로는 모른다 —
+ * 리스너의 성질이라 두 번째 인자로 받는다. 안 주면 옛 답(전송 하나)이다.
  */
-export function transportsOf(protocol: ListenerProtocol): readonly Transport[] {
+export function transportsOf(protocol: ListenerProtocol, http3 = false): readonly Transport[] {
+  if (protocol === 'https' && http3) return TCP_UDP;
   return protocol === 'udp' ? UDP_ONLY : TCP_ONLY;
 }
 
 const TCP_ONLY: readonly Transport[] = Object.freeze(['tcp']);
 const UDP_ONLY: readonly Transport[] = Object.freeze(['udp']);
+const TCP_UDP: readonly Transport[] = Object.freeze(['tcp', 'udp']);
 
 /**
  * 옛 이름. **집합의 첫 원소**를 준다.
@@ -134,10 +138,6 @@ export function transportSetsOverlap(
   return b.some((t) => a.includes(t));
 }
 
-/** 두 프로토콜이 전송을 **하나라도** 공유하는가. */
-export function sharesTransport(a: ListenerProtocol, b: ListenerProtocol): boolean {
-  return transportSetsOverlap(transportsOf(a), transportsOf(b));
-}
 
 const V4_MAPPED = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i;
 
@@ -199,7 +199,7 @@ export function socketsOverlap(a: SocketReservation, b: SocketReservation): bool
   // **전송이 하나라도 겹치면 다툰다** (S20). 한 프로토콜이 둘을 점유할 수 있으므로
   // 등호 비교로는 못 잡는다 — `listen 443 quic` 의 UDP 와 `stream udp:443` 이 정확히
   // 그 경우이고, 엔진은 그때 조용히 한쪽을 버린다.
-  if (!sharesTransport(a.protocol, b.protocol)) return false;
+  if (!transportSetsOverlap(transportsOf(a.protocol, a.http3), transportsOf(b.protocol, b.http3))) return false;
 
   const na = normalizeBind(a.bind);
   const nb = normalizeBind(b.bind);
@@ -225,6 +225,11 @@ function sharesWildcardSocket(a: ListenerProtocol, b: ListenerProtocol): boolean
   return ca !== undefined && ca === context(b);
 }
 
+function sharedTransport(a: SocketReservation, b: SocketReservation): Transport {
+  const tb = transportsOf(b.protocol, b.http3);
+  return transportsOf(a.protocol, a.http3).find((t) => tb.includes(t)) ?? transportOf(a.protocol);
+}
+
 /** 결과는 입력 순서와 무관하게 결정적이다 — plan diff 가 흔들리면 안 된다. */
 export function findSocketConflicts(reservations: SocketReservation[]): SocketConflict[] {
   const sorted = [...reservations].sort((p, q) => (p.key < q.key ? -1 : p.key > q.key ? 1 : 0));
@@ -238,7 +243,8 @@ export function findSocketConflicts(reservations: SocketReservation[]): SocketCo
         out.push({
           a: a.key,
           b: b.key,
-          reason: `${transportOf(a.protocol)}/${a.port} 에서 ${a.bind} 와 ${b.bind} 가 겹친다`,
+          // 겹친 전송을 말한다 — h3 리스너와 udp 리스너는 UDP 에서 겹치지만 `transportOf` 는 tcp 를 낸다.
+          reason: `${sharedTransport(a, b)}/${a.port} 에서 ${a.bind} 와 ${b.bind} 가 겹친다`,
         });
       }
     }

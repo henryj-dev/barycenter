@@ -19,7 +19,7 @@
   import HttpRedirectField from './HttpRedirectField.svelte';
   import RealIpSection, { type RealIpHeader, type RealIpSource } from '#lib/listener/RealIpSection.svelte';
   import { filled, hostLine, keyError, portError } from './checks';
-  import { plainSwitches, switchedBody } from './listener-create';
+  import { H3_HELP, plainSwitches, switchedBody } from './listener-create';
 
   let { tls = false }: { tls?: boolean } = $props();
   const desk = getContext<ReturnType<typeof createDesk>>('desk');
@@ -45,6 +45,7 @@
   let policy = $state<string | undefined>();
   let certificate = $state<string | undefined>();
   let http2 = $state(true);
+  let http3 = $state(false);
   let opts = $state<ListenerOptionFlags>({});
   let optsOk = $state(true);
   let allow = $state('');
@@ -69,7 +70,7 @@
     const k = key.trim();
     const b = bind.trim();
     const n = Number(port);
-    const sw = { enabled, http2: tls ? http2 : undefined, realIp: { source: ipSource, header: ipHeader, trusted: ipTrusted } };
+    const sw = { enabled, http2: tls ? http2 : undefined, http3: tls ? http3 : undefined, realIp: { source: ipSource, header: ipHeader, trusted: ipTrusted } };
     const done = after(resourcePath('listener', k));
     if (tls) {
       if (policy === undefined || certificate === undefined) return;
@@ -110,6 +111,7 @@
         <Select label="기본 인증서" bind:value={certificate} options={certs} placeholder="인증서를 골라요" width="100%" disabled={certs.length === 0} />
       </FormRow>
       <FormRow label="HTTP/2"><Switch bind:checked={http2}>{http2 ? '켜짐' : '꺼짐'}</Switch></FormRow>
+      <FormRow label="HTTP/3" help={H3_HELP}><Switch bind:checked={http3}>{http3 ? '켜짐' : '꺼짐'}</Switch></FormRow>
       <HttpRedirectField bind:on={redirectOn} bind:port={redirectPort} httpsPort={port} bare />
     {/if}
   </FormSection>

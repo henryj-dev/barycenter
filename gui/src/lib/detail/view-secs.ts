@@ -135,6 +135,7 @@ function listenerSecs(model: ModelLike, key: string, m: Obj): ViewSection[] {
       d.push({ l: 'TLS 정책', v: pol === '' ? DASH : min === '' ? pol : `${pol} (TLS ${min}+)`, mono: true });
       d.push(text('기본 인증서', tls?.['defaultCertificate']));
       d.push(toggle('HTTP/2', m['http2'] !== false));
+      d.push(toggle('HTTP/3', m['http3'] === true));
       const rd = obj(m['httpRedirect']);
       d.push(toggle('HTTP로 온 요청을 HTTPS로 보내기', rd !== undefined));
       if (rd !== undefined) d.push(text('HTTP 포트', rd['port'] ?? 80));

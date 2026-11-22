@@ -34,6 +34,8 @@ export type EngineCapabilities = {
     streamRealip: boolean;
     sniPassthrough: boolean;
     http2: boolean;
+    /** `listen … quic` · HTTP/3 — `ngx_http_v3_module` 과 1.25.0+ (그 전 것은 별도 quic 브랜치다). */
+    http3: boolean;
     /** `ssl_conf_command` — TLS1.3 ciphersuite 를 정하는 유일한 길 (§4.6). */
     sslConfCommand: boolean;
     /** `ssl_reject_handshake` — 모르는 SNI 를 인증서 없이 끊는다(ADR-VHOST). 1.19.4+. */
@@ -104,6 +106,7 @@ export function parseEngineCapabilities(nginxV: string): EngineCapabilities {
       streamRealip: has('stream_realip_module'),
       sniPassthrough: has('stream_ssl_preread_module'),
       http2: has('http_v2_module') && atLeast(version, '1.25.1'),
+      http3: has('http_v3_module') && atLeast(version, '1.25.0'),
       // 1.19.4+ 이고 OpenSSL 1.1.1+ 여야 한다. TLS1.3 을 쓸 수 있는 빌드면 후자는 참이다.
       sslConfCommand: atLeast(version, '1.19.4'),
       sslRejectHandshake: atLeast(version, '1.19.4'),

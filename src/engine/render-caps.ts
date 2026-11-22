@@ -33,6 +33,8 @@ export function renderCapsOf(probe: EngineProbe): RenderCapabilities {
     // §4.9 — 모듈과 버전을 함께 본다. 그 전 문법(`listen ... http2`)은 리스너 단위라
     // 지금 규칙(server 별)이 성립하지 않는다.
     http2: s.http2,
+    // HTTP/3 — 켠 리스너에만 낸다. 못 하는 엔진에 켜면 검증기가 막는다.
+    http3: s.http3,
     // §4.6 — TLS1.3 ciphersuite 를 정하는 유일한 길이다.
     sslConfCommand: s.sslConfCommand,
     // ADR-VHOST — 호스트 리스너만 있는 HTTPS 소켓의 기본 server 가 인증서 없이 끊는다.

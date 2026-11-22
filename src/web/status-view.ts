@@ -39,6 +39,7 @@ const featuresOf = (sup: Record<string, unknown>): string[] => [
   '무중단 reload',
   ...(sup['stream'] === true ? ['TCP·UDP stream'] : []),
   ...(sup['http2'] === true ? ['HTTP/2'] : []),
+  ...(sup['http3'] === true ? ['HTTP/3'] : []),
   ...(sup['sniPassthrough'] === true ? ['SNI 패스스루'] : []),
 ];
 

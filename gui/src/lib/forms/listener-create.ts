@@ -1,5 +1,5 @@
 /**
- * 리스너 만들기 드로어의 「활성화」 · 「HTTP/2」 · 「원본 IP」 · 「preread 타임아웃」(시안 `fieldsFor('listeners', v, true, 'drawer')`).
+ * 리스너 만들기 드로어의 「활성화」 · 「HTTP/2」 · 「HTTP/3」 · 「원본 IP」 · 「preread 타임아웃」(시안 `fieldsFor('listeners', v, true, 'drawer')`).
  *
  * 만들기 patch 빌더(`put*ListenerPatch`)는 이것들을 받지 않는다 — 기본값이면 그대로 `desk.insert*Listener` 를 쓰고,
  * 기본값이 아닐 때만 같은 빌더가 만든 put 본문에 칸을 얹어 `desk.putResource` 로 올린다(같은 commit 이다).
@@ -7,12 +7,17 @@
  */
 import { parseSourceAllow } from '../../../../src/web/edit.js';
 
+/** HTTP/3 스위치의 도움말 — 만들기 · 설정 두 화면이 같은 문장을 쓴다. */
+export const H3_HELP = '같은 포트를 UDP 로도 열어요. 방화벽이 그 UDP 포트를 받아야 해요. PROXY 수신과 함께 쓸 수 없어요.';
+
 /** 원본 IP — 설정 탭의 「원본 IP」 구획과 같은 값이다(`RealIpSection`). */
 export type RealIpInput = { source: 'none' | 'proxy' | 'header'; header: string; trusted: string };
 
 export type ListenerSwitches = {
   enabled: boolean;
   http2?: boolean;
+  /** https 만. 기본은 끔이다 — 켜면 같은 포트를 UDP 로도 연다. */
+  http3?: boolean;
   realIp?: RealIpInput;
   /** 패스스루만. 비우면 nginx 기본값이다. */
   preread?: string;
@@ -29,7 +34,7 @@ export function realIpFields(r: RealIpInput | undefined): Record<string, unknown
 
 /** 기본값과 같은가 — 그러면 원래 만들기 길을 쓴다. */
 export const plainSwitches = (s: ListenerSwitches): boolean =>
-  s.enabled && s.http2 !== false && (s.realIp === undefined || s.realIp.source === 'none') && (s.preread ?? '').trim() === '';
+  s.enabled && s.http2 !== false && s.http3 !== true && (s.realIp === undefined || s.realIp.source === 'none') && (s.preread ?? '').trim() === '';
 
 /** patch 의 첫 put 에 스위치를 얹은 본문. */
 export function switchedBody(ops: readonly { key: string; body: object }[], s: ListenerSwitches): { key: string; body: Record<string, unknown> } {
@@ -38,6 +43,7 @@ export function switchedBody(ops: readonly { key: string; body: object }[], s: L
   const body: Record<string, unknown> = { ...(op.body as Record<string, unknown>), ...realIpFields(s.realIp) };
   if (!s.enabled) body['enabled'] = false;
   if (s.http2 === false) body['http2'] = false;
+  if (s.http3 === true) body['http3'] = true;
   const preread = (s.preread ?? '').trim();
   if (preread !== '') body['prereadTimeoutS'] = Number(preread);
   return { key: op.key, body };
