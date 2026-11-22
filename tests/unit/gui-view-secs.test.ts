@@ -67,7 +67,7 @@ describe('viewSecsOf — 시안 viewSecs 9종', () => {
     const v = flat(secs);
     expect(v['기본']).toEqual({ 이름: 'web', '바인드 주소': '0.0.0.0', 포트: '443', 활성화: '켜짐', 호스트: 'a.example.com\nb.example.com' });
     expect(v['동작']).toEqual({
-      '기본 동작': '풀로 보내기', '기본 풀': 'api', 'TLS 정책': 'modern (TLS 1.2+)', '기본 인증서': 'web-cert', 'HTTP/2': '켜짐',
+      '기본 동작': '풀로 보내기', '기본 풀': 'api', 'TLS 정책': 'modern (TLS 1.2+)', '기본 인증서': 'web-cert', 'HTTP/2': '켜짐', 'HTTP/3': '꺼짐',
       'HTTP로 온 요청을 HTTPS로 보내기': '켜짐', 'HTTP 포트': '80',
     });
     expect(v['접근 제한']!['출발지 제한']).toBe('Cloudflare + 대역 1개 · @cf\n집합 cf\n10.0.0.0/8');

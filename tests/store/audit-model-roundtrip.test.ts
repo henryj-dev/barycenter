@@ -31,7 +31,7 @@ beforeAll(async () => {
   // **capability 를 열어 둔다.** 닫아 두면 http2 를 켠 모델이 검증기에 막혀
   // 왕복을 재기도 전에 끝난다.
   store = new ConfigStore(db, {
-    streamRealip: true, httpLua: true, streamLua: true, http2: true, sslConfCommand: true,
+    streamRealip: true, httpLua: true, streamLua: true, http2: true, http3: true, sslConfCommand: true,
   });
 }, 180_000);
 
@@ -80,6 +80,13 @@ const rich = (): Model => ({
       key: 'secure', protocol: 'https', bind: '0.0.0.0', port: 443, enabled: true,
       http2: false,
       acceptProxyProtocol: { trustedCidrs: ['10.0.0.0/8'] },
+      tls: { policy: 'strict', defaultCertificate: 'leaf' },
+      http: { defaultAction: 'reject' },
+    },
+    {
+      // HTTP/3 (038) — `true` 가 그대로 돌아와야 한다. 안 적은 리스너(`secure`)는 키가 없다.
+      key: 'quic', protocol: 'https', bind: '0.0.0.0', port: 9444, enabled: true,
+      http2: false, http3: true,
       tls: { policy: 'strict', defaultCertificate: 'leaf' },
       http: { defaultAction: 'reject' },
     },
@@ -190,6 +197,9 @@ describe('모델 왕복 (검수 제안#1)', () => {
 
     const secure = out.listeners.find((l) => l.key === 'secure');
     expect(secure?.protocol === 'https' ? secure.http2 : undefined).toBe(false);
+    expect(secure).not.toHaveProperty('http3');
+    const quic = out.listeners.find((l) => l.key === 'quic');
+    expect(quic?.protocol === 'https' ? quic.http3 : undefined).toBe(true);
 
     expect(out.engine).toEqual({ workerShutdownTimeoutS: 45 });
   });
@@ -205,6 +215,9 @@ describe('모델 왕복 (검수 제안#1)', () => {
     expect(conf).toContain('worker_shutdown_timeout 45s;');
     // `http2: false` 를 명시했으니 나오면 안 된다 — 기본값(켬)이 이기면 안 된다.
     expect(conf).not.toContain('http2 on;');
+    // `http3: true` 는 QUIC 소켓과 Alt-Svc 로 나온다.
+    expect(conf).toContain('listen 9444 quic default_server;');
+    expect(conf).toContain('add_header Alt-Svc');
   });
 
   it('두 번째 export/import 는 리비전을 안 올린다', async () => {

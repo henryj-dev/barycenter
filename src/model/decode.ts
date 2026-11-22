@@ -603,7 +603,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
       };
     }
     case 'https': {
-      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http', 'tls', 'http2', 'hosts', 'httpRedirect']);
+      noExtraKeys(iss, v, path, [...LISTENER_BASE, 'acceptProxyProtocol', 'realIpFromHeader', 'http', 'tls', 'http2', 'http3', 'hosts', 'httpRedirect']);
       const redirect = optional(v['httpRedirect'], () => decodeHttpRedirect(iss, v['httpRedirect'], `${path}.httpRedirect`));
       const hosts = optional(v['hosts'], () => decodeListenerHosts(iss, v['hosts'], `${path}.hosts`));
       const accept = optional(v['acceptProxyProtocol'], () => decodeInboundProxyProtocol(iss, v['acceptProxyProtocol'], `${path}.acceptProxyProtocol`));
@@ -613,6 +613,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
       // v3 이 정확히 그렇게 깨졌다. 여기서 막는다.
       const tls = required(iss, v, 'tls', path, () => decodeTlsBinding(iss, v['tls'], `${path}.tls`));
       const http2 = optional(v['http2'], () => bool(iss, v['http2'], `${path}.http2`));
+      const http3 = optional(v['http3'], () => bool(iss, v['http3'], `${path}.http3`));
       if (tls === undefined) return undefined;
       return {
         ...head, protocol, tls,
@@ -620,6 +621,7 @@ function decodeListener(iss: Issues, v: unknown, path: string): Listener | undef
         ...(realIp === undefined ? {} : { realIpFromHeader: realIp }),
         ...(http === undefined ? {} : { http }),
         ...(http2 === undefined ? {} : { http2 }),
+        ...(http3 === undefined ? {} : { http3 }),
         ...(hosts === undefined ? {} : { hosts }),
         ...(redirect === undefined ? {} : { httpRedirect: redirect }),
       };

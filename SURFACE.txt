@@ -1,5 +1,5 @@
 # barycenter v0.1 공개 표면
-# 126 심볼 · sha256:960d5adb7017fcc01c7e238bbda55716dc8a21bb6d9afe919a0a112e9032efbd
+# 126 심볼 · sha256:e562037bcadf02a828fceda07fbc5336adce2fb9dfda1ab4c81e4d9f9dfac537
 # 동결 카운터: 0 회차 (표면이 안 움직인 검수 회차 수)
 # A 동결: 미선언 (선언 기준 3 회차)
 # 해제 근거: W3 표면 회차 — Pool.healthCheck · EngineSettings dict 크기 · GenerationError('path_escape'). 동결 뒤에 갇혀 있던 설정 셋을 들이기로 사람이 결정했다 (2026-08-23)
@@ -364,6 +364,7 @@ export type HttpsListener = ListenerBase & {
         defaultCertificate: string;
     };
     http2?: boolean;
+    http3?: boolean;
     httpRedirect?: {
         port: number;
     };
@@ -598,6 +599,7 @@ export type RawListener = ListenerBase & {
     prereadTimeoutS?: number;
     tls?: RawTlsBinding;
     http2?: boolean;
+    http3?: boolean;
     hosts?: string[];
     httpRedirect?: {
         port: number;
@@ -652,6 +654,7 @@ export type RenderCapabilities = {
     streamLua?: boolean;
     sslConfCommand?: boolean;
     http2?: boolean;
+    http3?: boolean;
     sslRejectHandshake?: boolean;
     headersMore?: boolean;
     serverVersion?: string;
@@ -744,6 +747,7 @@ export type UpstreamTls = {
 export type ValidationCapabilities = {
     streamRealip: boolean;
     http2?: boolean;
+    http3?: boolean;
     sslRejectHandshake?: boolean;
 };
 ── assertDriverPins

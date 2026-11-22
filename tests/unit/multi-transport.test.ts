@@ -25,7 +25,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  findSocketConflicts, sharesTransport, socketsOverlap, transportOf, transportsOf,
+  findSocketConflicts, socketsOverlap, transportOf, transportsOf,
   transportSetsOverlap, type SocketReservation,
 } from '../../src/validate/sockets.js';
 import type { ListenerProtocol } from '../../src/model/provisional.js';
@@ -48,10 +48,17 @@ describe('전송 집합', () => {
   });
 
   it('공유 판정은 교집합이다', () => {
-    expect(sharesTransport('http', 'tcp')).toBe(true);
-    expect(sharesTransport('https', 'tls_passthrough')).toBe(true);
-    expect(sharesTransport('http', 'udp')).toBe(false);
-    expect(sharesTransport('udp', 'udp')).toBe(true);
+    const shares = (a: ListenerProtocol, b: ListenerProtocol): boolean => transportSetsOverlap(transportsOf(a), transportsOf(b));
+    expect(shares('http', 'tcp')).toBe(true);
+    expect(shares('https', 'tls_passthrough')).toBe(true);
+    expect(shares('http', 'udp')).toBe(false);
+    expect(shares('udp', 'udp')).toBe(true);
+  });
+
+  it('**h3 를 켠 https 는 TCP 와 UDP 를 함께 낸다** (2026-11-22) — 다른 프로토콜은 두 번째 인자를 안 본다', () => {
+    expect(transportsOf('https', true)).toEqual(['tcp', 'udp']);
+    expect(transportsOf('https', false)).toEqual(['tcp']);
+    expect(transportsOf('http', true)).toEqual(['tcp']);
   });
 });
 
@@ -111,8 +118,18 @@ describe('다중 전송이 실제로 잡힌다 (h3 가 들어오는 날의 모�
       R('dns', 'udp', 443),
       R('raw', 'tcp', 443),
     ]);
-    // 지금은 https↔tcp 하나만 나온다. udp 는 전송이 안 겹친다.
+    // h3 를 안 켰으면 https↔tcp 하나만 나온다. udp 는 전송이 안 겹친다.
     expect(conflicts.map((c) => [c.a, c.b].sort().join('~'))).toEqual(['raw~web']);
+  });
+
+  it('**h3 를 켠 https 는 같은 포트의 udp 리스너와 다툰다** — S20.udp_conflict 를 검증기가 막는다', () => {
+    const conflicts = findSocketConflicts([
+      { ...R('web', 'https', 443), http3: true },
+      R('dns', 'udp', 443),
+    ]);
+    expect(conflicts.map((c) => [c.a, c.b].sort().join('~'))).toEqual(['dns~web']);
+    // 겹친 전송을 말한다 — tcp 가 아니다.
+    expect(conflicts[0]!.reason).toMatch(/^udp\/443 /);
   });
 
   it('결과는 입력 순서와 무관하다 — plan diff 가 흔들리면 안 된다', () => {

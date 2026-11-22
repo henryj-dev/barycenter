@@ -291,6 +291,7 @@ export type RawListener = ListenerBase & {
   prereadTimeoutS?: number;
   tls?: RawTlsBinding;
   http2?: boolean;
+  http3?: boolean;
   /** ADR-VHOST — http · https 에만 있다(해독기가 막는다). */
   hosts?: string[];  /** https 에만 있다(해독기가 막는다). */
   httpRedirect?: { port: number };
@@ -343,6 +344,15 @@ export type HttpsListener = ListenerBase & {
    * 조용히 넘어가지만, 그건 `/api/v1/status` 의 capability 로 보인다.
    */
   http2?: boolean;
+  /**
+   * HTTP/3 (QUIC, 2026-11-22). 안 적으면 **끈다** — http2 와 반대다. 같은 포트를 **UDP 로도** 열고, 방화벽이
+   * UDP 를 받아야 쓸모가 있다. 켜면 그 UDP 소켓에 `listen … quic` 을 내고, TCP 응답에 `Alt-Svc` 를 실어
+   * 브라우저가 h3 로 옮겨 오게 한다.
+   *
+   * **소켓의 성질이다.** 한 소켓을 나눠 쓰는 https 리스너(호스트 리스너)는 모두 같은 값이어야 한다(검증기).
+   * PROXY protocol 수신과 함께 못 쓴다 — QUIC 에는 그 헤더가 없다. TLS 1.3 이 필요하다.
+   */
+  http3?: boolean;
   /**
    * **평문으로 오면 HTTPS 로 보낸다** (2026-10-31). 있으면 같은 바인드의 이 포트(보통 80)에 평문 server 를
    * 세우고 `301 https://$host$request_uri` 로 돌려보낸다. 호스트 · 출발지 제한은 이 리스너의 것을 따른다.

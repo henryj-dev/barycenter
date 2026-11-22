@@ -29,7 +29,7 @@
   import { LISTENER_ERR, filled, hostLine, portError } from '#lib/forms/checks';
   import BindField from '#lib/forms/BindField.svelte';
   import SettingsFrame, { sameBody } from '#lib/detail/SettingsFrame.svelte';
-  import { prereadError } from '#lib/forms/listener-create';
+  import { H3_HELP, prereadError } from '#lib/forms/listener-create';
   import RealIpSection, { realIpOf, type RealIpHeader, type RealIpSource } from './RealIpSection.svelte';
   import type { createDesk } from '#lib/desk.svelte.ts';
 
@@ -76,6 +76,7 @@
   let policy = $state('');
   let certificate = $state('');
   let http2 = $state(true);
+  let http3 = $state(false);
   let sniPool = $state('');
   let noSniPool = $state('');
   let preread = $state('');
@@ -120,6 +121,8 @@
     certificate = typeof tls?.['defaultCertificate'] === 'string' ? tls['defaultCertificate'] : '';
     // 안 적으면 켠다(§4.9).
     http2 = model['http2'] !== false;
+    // 안 적으면 끈다 — http2 와 반대다.
+    http3 = model['http3'] === true;
     sniPool = poolOf(model['onUnmatchedSni']);
     noSniPool = poolOf(model['onNoSni']);
     preread = typeof model['prereadTimeoutS'] === 'number' ? String(model['prereadTimeoutS']) : '';
@@ -188,6 +191,11 @@
           if (http2) delete body['http2'];
           else body['http2'] = false;
         }
+        // 바꾼 때만 손댄다. 켜면 `true` 를 적고, 끄면 키를 지운다(기본이 끈다).
+        if (http3 !== (model['http3'] === true)) {
+          if (http3) body['http3'] = true;
+          else delete body['http3'];
+        }
       }
       if (isPass) {
         // 빈 값 = 끊는다. 원래 'reject' 를 적어 뒀으면 그대로 두고, 없었으면 없는 채로 둔다 — 렌더 바이트를 안 바꾼다.
@@ -250,6 +258,7 @@
         <FormRow label="TLS 정책"><Select label="TLS 정책" bind:value={policy} options={policies} placeholder="정책을 골라요" width="100%" /></FormRow>
         <FormRow label="기본 인증서"><Select label="기본 인증서" bind:value={certificate} options={certs} placeholder="인증서를 골라요" width="100%" /></FormRow>
         <FormRow label="HTTP/2"><Switch bind:checked={http2}>{http2 ? '켜짐' : '꺼짐'}</Switch></FormRow>
+        <FormRow label="HTTP/3" help={H3_HELP}><Switch bind:checked={http3}>{http3 ? '켜짐' : '꺼짐'}</Switch></FormRow>
         <HttpRedirectField bind:on={redirectOn} bind:port={redirectPort} httpsPort={port} bare />
       {/if}
       {#if protocol === 'udp'}

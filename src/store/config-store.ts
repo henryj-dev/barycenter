@@ -443,7 +443,7 @@ async function readModel(c: Queryable): Promise<Model> {
   }));
 
   const listeners = (await c.query(
-    `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2,
+    `SELECT l.key, l.protocol, l.bind, l.port, l.enabled, l.accept_proxy_cidrs, l.http2, l.http3,
             l.real_ip_header, l.real_ip_header_cidrs, l.source_allow, l.hosts, l.http_redirect_port,
             l.proxy_limits, l.header_rules, l.rate_limit, l.http_strict_priority,
             l.udp_preset, l.preread_timeout_s, l.http_default_reject, l.on_unmatched_sni_reject,
@@ -529,6 +529,8 @@ async function readModel(c: Queryable): Promise<Model> {
         // 011 이 더했다. `undefined` 와 `false` 는 다르다 — 전자는 "안 정했다"(기본값
         // 켬), 후자는 "끄라고 했다" 다. 전에는 둘을 구분할 자리가 아예 없었다 (B-01).
         ...(r['http2'] === null || r['http2'] === undefined ? {} : { http2: bool(r, 'http2') }),
+        // 038. http2 와 같은 규칙 — `undefined`(안 정함, 기본 끔)와 `false` 를 구분한다.
+        ...(r['http3'] === null || r['http3'] === undefined ? {} : { http3: bool(r, 'http3') }),
       };
     }
     if (protocol === 'tls_passthrough') {
@@ -913,10 +915,10 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
                                 tls_policy_id,tls_default_cert_id,http2,proxy_limits,header_rules,
                                 rate_limit,on_no_sni_pool,on_no_sni_cls,on_no_sni_reject,
                                 http_strict_priority,real_ip_header,real_ip_header_cidrs,
-                                source_allow,hosts,http_redirect_port,
+                                source_allow,hosts,http_redirect_port,http3,
                                 created_by,updated_by,revision)
          VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$20,$20,$21)
+                 $18,$19,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$20,$20,$21)
          ON CONFLICT (key) DO UPDATE SET
            name=EXCLUDED.name, protocol=EXCLUDED.protocol, bind=EXCLUDED.bind,
            port=EXCLUDED.port, enabled=EXCLUDED.enabled,
@@ -945,6 +947,7 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
            source_allow=EXCLUDED.source_allow,
            hosts=EXCLUDED.hosts,
            http_redirect_port=EXCLUDED.http_redirect_port,
+           http3=EXCLUDED.http3,
            version=listeners.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by,
            revision=EXCLUDED.revision`),
         [op.key, b['name'] ?? op.key, protocol, b['bind'], b['port'], b['enabled'] ?? true,
@@ -985,7 +988,9 @@ async function applyOp(c: Queryable, op: PatchOp, revision: string, by: string):
           // $33 — 호스트 (029, ADR-VHOST). **http 계열에만** (DB 도 같은 CHECK).
           (protocol === 'http' || protocol === 'https') && Array.isArray(b['hosts']) ? b['hosts'] : null,
           // $34 — 평문 리다이렉트 (030). **https 에만** (DB 도 같은 CHECK).
-          protocol === 'https' ? (obj(b['httpRedirect'])['port'] ?? null) : null],
+          protocol === 'https' ? (obj(b['httpRedirect'])['port'] ?? null) : null,
+          // $35 — HTTP/3 (038). **https 에만** (DB 도 같은 CHECK). http2 처럼 boolean|null.
+          protocol === 'https' ? b['http3'] ?? null : null],
       );
       return;
     }

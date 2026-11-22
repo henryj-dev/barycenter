@@ -55,6 +55,7 @@ describe('렌더 capability 매핑 (검수 B-02)', () => {
       httpLua: s?.runtimeMembership.http,
       streamLua: s?.runtimeMembership.stream,
       http2: s?.http2,
+      http3: s?.http3,
       sslRejectHandshake: s?.sslRejectHandshake,
       sslConfCommand: s?.sslConfCommand,
       headersMore: s?.headersMore,

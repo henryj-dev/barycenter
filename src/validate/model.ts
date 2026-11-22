@@ -141,7 +141,7 @@ const routesTraffic = (protocol: RawListener['protocol']): boolean =>
   protocol === 'http' || protocol === 'https' || protocol === 'tls_passthrough';
 
 /** 렌더 결과에 영향을 주는 엔진 capability 중, 검증이 알아야 하는 것. */
-export type ValidationCapabilities = { streamRealip: boolean; http2?: boolean; sslRejectHandshake?: boolean };
+export type ValidationCapabilities = { streamRealip: boolean; http2?: boolean; http3?: boolean; sslRejectHandshake?: boolean };
 
 /** 소켓을 가리키는 열쇠 — 프로토콜 · 정규형 주소 · 포트. 같으면 같은 `listen` 이다. */
 function socketKeyOf(l: RawListener): string | undefined {
@@ -168,6 +168,11 @@ function socketSharing(a: RawListener, b: RawListener): { ok: true } | { ok: fal
   }
   if ((a.acceptProxyProtocol === undefined) !== (b.acceptProxyProtocol === undefined)) {
     return { ok: false, why: 'PROXY protocol 수신은 소켓 단위다 — 같은 소켓의 리스너는 모두 켜거나 모두 꺼야 한다' };
+  }
+  // **QUIC 도 소켓 단위다** (2026-11-22). 같은 UDP 소켓에 `listen … quic` 이 있는 server 와 없는 server 가 섞이면,
+  // h3 로 온 접속이 없는 쪽의 이름에서 기본 server 로 떨어진다 — TCP 로는 되는데 h3 로는 안 되는 이름이 생긴다.
+  if ((a.http3 === true) !== (b.http3 === true)) {
+    return { ok: false, why: 'http3 는 소켓 단위다 — 같은 소켓의 리스너는 모두 켜거나 모두 꺼야 한다' };
   }
   return { ok: true };
 }
@@ -408,7 +413,10 @@ export function validateModel(
         message: `리스너 '${l.key}' 의 bind 가 IP 주소가 아니다: ${JSON.stringify(l.bind)}`,
       });
     } else if (l.enabled) {
-      reservations.push({ key: l.key, protocol: l.protocol, bind: l.bind, port: l.port });
+      reservations.push({
+        key: l.key, protocol: l.protocol, bind: l.bind, port: l.port,
+        ...(l.http3 === true ? { http3: true } : {}),
+      });
     }
 
     const cls = classOfListener(l.protocol);
@@ -496,6 +504,35 @@ export function validateModel(
           `리스너 '${l.key}' 가 http2 를 요구하는데 엔진이 못 낸다 — ` +
           `ngx_http_v2_module 과 nginx 1.25.1+ 가 함께 필요하다 (§4.9 · §7.6)`,
       });
+    }
+    notHere('http3', l.protocol !== 'https' && l.http3 !== undefined);
+    if (l.protocol === 'https' && l.http3 === true) {
+      // http2 와 같은 이유다 — 켜 달라고 했는데 못 내면 「켰는데 h3 가 안 나온다」 가 된다.
+      if (caps.http3 !== true) {
+        issues.push({
+          code: 'option_not_supported',
+          subjects: [l.key],
+          message: `리스너 '${l.key}' 가 http3 를 요구하는데 엔진이 못 낸다 — ngx_http_v3_module 과 nginx 1.25.0+ 가 필요하다`,
+        });
+      }
+      // **QUIC 에는 PROXY 헤더가 없다.** `listen … quic proxy_protocol` 은 없는 조합이고, PROXY 없이 따로 열면
+      // 앞단(LB)을 건너 직접 오는 길이 생긴다 — 신뢰 경계(§4.7)가 TCP 에만 걸린다.
+      if (l.acceptProxyProtocol !== undefined) {
+        issues.push({
+          code: 'option_not_supported',
+          subjects: [l.key],
+          message: `리스너 '${l.key}' 는 PROXY protocol 을 받는다 — http3(QUIC) 와 함께 못 쓴다. QUIC 에는 PROXY 헤더가 없다`,
+        });
+      }
+      // **QUIC 은 TLS 1.3 만 쓴다** (RFC 9001). 정책이 1.2 까지면 h3 핸드셰이크가 언제나 실패한다.
+      const pol = model.tlsPolicies.find((t) => t.key === l.tls?.policy);
+      if (pol?.maxVersion === '1.2') {
+        issues.push({
+          code: 'option_not_supported',
+          subjects: [l.key, pol.key],
+          message: `리스너 '${l.key}' 의 TLS 정책 '${pol.key}' 가 1.2 까지다 — http3(QUIC) 는 TLS 1.3 이 필요하다`,
+        });
+      }
     }
     notHere('udp', l.protocol !== 'udp' && l.udp !== undefined);
     notHere('onUnmatchedSni', l.protocol !== 'tls_passthrough' && l.onUnmatchedSni !== undefined);

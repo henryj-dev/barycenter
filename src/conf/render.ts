@@ -113,6 +113,8 @@ export type RenderCapabilities = {
    * 잡아온 모양이다.
    */
   http2?: boolean;
+  /** `listen … quic` 을 낼 수 있는가 — `ngx_http_v3_module` (2026-11-22). */
+  http3?: boolean;
   /**
    * `ssl_reject_handshake on;` (nginx 1.19.4+, ADR-VHOST).
    *
@@ -491,20 +493,44 @@ const UDP_PRESETS: Record<UdpPreset, { responses?: number; timeoutS: number; reu
  *     `duplicate listen options` 로 기동이 실패한다.
  *   · 특정 주소에 붙이면 nginx 가 그 주소를 따로 bind() 해서 같은 포트의 `[::]` 와 `Address in use` 로 부딪힌다.
  */
-function listenArgs(l: Listener): ConfValue[] {
+function listenAddr(l: Listener): ConfValue {
   const bind = normalizeBind(l.bind);
   if (!bind.ok) {
     throw new Error(`검증되지 않은 bind 가 렌더에 도달했다: ${l.key} → ${JSON.stringify(l.bind)}`);
   }
-  const base: ConfValue[] = bind.value.wildcard && bind.value.family === 'v4'
-    ? [num(l.port)]
+  return bind.value.wildcard && bind.value.family === 'v4'
+    ? num(l.port)
     : bind.value.family === 'v6'
-      ? [lit(`[${bind.value.addr}]:${l.port}`)]
-      : [lit(`${bind.value.addr}:${l.port}`)];
+      ? lit(`[${bind.value.addr}]:${l.port}`)
+      : lit(`${bind.value.addr}:${l.port}`);
+}
+
+function listenArgs(l: Listener): ConfValue[] {
+  const base: ConfValue[] = [listenAddr(l)];
   // udp 는 PROXY 수신을 지원하지 않는다 (§4.7). **타입에 그 필드가 없다** — 먼저 좁힌다.
   if (l.protocol !== 'udp' && l.acceptProxyProtocol !== undefined) base.push(lit('proxy_protocol'));
   if (l.protocol === 'https') base.push(lit('ssl'));
   return base;
+}
+
+/**
+ * HTTP/3 의 `listen` 인자 (2026-11-22) — 같은 주소:포트의 **UDP** 다. TCP `listen` 과 나란히 낸다.
+ *
+ * `proxy_protocol` 은 없다 — QUIC 에는 그 헤더가 없고, 검증기가 그 조합을 막는다. `reuseport` 도 안 낸다 —
+ * 렌더된 conf 는 `worker_processes` 를 안 적어 worker 가 하나다. worker 가 여럿이면 QUIC 패킷이 다른 worker 로
+ * 갈 수 있어 `reuseport` 가 필요하다 — 그때 이 함수 하나를 고친다.
+ */
+function quicListenArgs(l: Listener): ConfValue[] {
+  return [listenAddr(l), lit('quic')];
+}
+
+/**
+ * `Alt-Svc` — 브라우저는 처음에 TCP 로 오고, 이 헤더를 보고 다음 요청부터 h3 로 옮긴다. 없으면 UDP 를 열어도
+ * 아무도 안 온다. **server 레벨 `add_header`** 다 — HSTS 와 같은 자리, 같은 이유다(`hstsNode` 머리말).
+ * `ma` 는 하루다. 끈 뒤 브라우저가 h3 를 시도하다 TCP 로 돌아오는 기간이 그만큼이다.
+ */
+function altSvcNode(port: number): ConfNode {
+  return directive('add_header', [lit('Alt-Svc'), lit(`h3=":${port}"; ma=86400`), lit('always')]);
 }
 
 /**
@@ -526,6 +552,8 @@ export type AlsoOn = {
   /** 함께 붙는 소켓의 주소 (정규형). */
   addr: string;
   args: ConfValue[];
+  /** 그 주소 소켓이 HTTP/3 이면 그 `listen … quic` 인자. 아니면 없다 — 거기에는 QUIC 소켓이 없다. */
+  quic?: ConfValue[];
   /** 그 주소 리스너가 이미 맡은 호스트 — 여기는 안 붙인다. */
   hosts: Set<string>;
 };
@@ -547,7 +575,11 @@ export function alsoOnSockets(
       skipped.set(n.value.addr, 'proxy_protocol');
       continue;
     }
-    const at = byAddr.get(n.value.addr) ?? { addr: n.value.addr, args: listenArgs(s), hosts: new Set<string>() };
+    const at = byAddr.get(n.value.addr) ?? {
+      addr: n.value.addr, args: listenArgs(s),
+      ...(s.protocol === 'https' && s.http3 === true ? { quic: quicListenArgs(s) } : {}),
+      hosts: new Set<string>(),
+    };
     for (const h of s.hosts ?? (routesByListener.get(s.key) ?? []).flatMap((r) => r.hosts)) at.hosts.add(h);
     byAddr.set(n.value.addr, at);
   }
@@ -949,6 +981,7 @@ function httpServerBlocks(
         ...cipherNodes(tls.cipher, tls.confCommand),
         ...(tls.hsts === undefined ? [] : [hstsNode(tls.hsts)]),
         ...(tls.http2 ? [http2Node()] : []),
+        ...(tls.http3 ? [altSvcNode(tls.listener.port)] : []),
         // ⚠️ **`if` 는 rewrite 단계다** — location 선택보다 **앞**이다(§7.x 에서
         // `return 444` 로 한 번 물렸다). 그래서 이 가드가 걸리면 같은 server 의 어떤
         // location 도 안 돈다. ACME 예약 라우트를 포함해서.
@@ -962,8 +995,13 @@ function httpServerBlocks(
 
     const node = block('server', [], [
       directive('listen', listenArgs(listener)),
+      ...(tls?.http3 ? [directive('listen', quicListenArgs(listener))] : []),
       // 같은 포트의 특정 주소에서도 이 호스트에 답한다 — 그 주소 리스너가 이 호스트를 안 맡을 때만.
-      ...alsoOn.filter((a) => !a.hosts.has(host)).map((a) => directive('listen', a.args)),
+      ...alsoOn.filter((a) => !a.hosts.has(host)).flatMap((a) => [
+        directive('listen', a.args),
+        // QUIC 은 **양쪽이 다 h3 일 때만** 붙인다. 그 주소 소켓에 QUIC 이 없으면 붙일 UDP 소켓이 없다.
+        ...(tls?.http3 && a.quic !== undefined ? [directive('listen', a.quic)] : []),
+      ]),
       directive('server_name', [nameArg]),
       // 이름을 먼저 적는다 — 아래 가드의 `return` 은 rewrite 단계라 그 뒤의 `set` 은 안 돈다.
       ...(count ? httpRequestVars(listener.key) : []),
@@ -1571,6 +1609,8 @@ type TlsContext = {
   certs: Map<string, Certificate>;
   /** 이 리스너에 `http2 on;` 을 낼 것인가 (모델의 의도 × 엔진 capability). */
   http2: boolean;
+  /** `listen … quic` 과 `Alt-Svc` 를 낼 것인가. 켰는데 엔진이 못 하면 검증기가 이미 막았다. */
+  http3: boolean;
   /** SNI↔Host 불일치를 421 로 막을 것인가 (§4.6). */
   rejectMismatch: boolean;
   /** 암호군 정책과 엔진이 `ssl_conf_command` 를 낼 수 있는가. */
@@ -1585,6 +1625,7 @@ const withHttp2 = (tls: TlsContext, body: ConfNode[]): ConfNode[] => [
   ...cipherNodes(tls.cipher, tls.confCommand),
   ...(tls.hsts === undefined ? [] : [hstsNode(tls.hsts)]),
   ...(tls.http2 ? [http2Node()] : []),
+  ...(tls.http3 ? [altSvcNode(tls.listener.port)] : []),
   ...(tls.rejectMismatch ? [sniMismatchGuard()] : []),
 ];
 
@@ -1682,11 +1723,13 @@ function vhostSocketKey(l: HttpListener | HttpsListener): string {
  *   · HTTPS — `ssl_reject_handshake on`. **어느 서비스의 인증서도 내주지 않는다**(S17). 엔진이 못 하면
  *             검증기가 이미 막았다.
  */
-function syntheticDefaultServer(l: HttpListener | HttpsListener, acme: boolean): ConfNode {
+function syntheticDefaultServer(l: HttpListener | HttpsListener, acme: boolean, quic = false): ConfNode {
   const listen = directive('listen', [...listenArgs(l), lit('default_server')]);
   if (l.protocol === 'https') {
     return block('server', [], [
       listen,
+      // 소켓이 h3 면 QUIC 의 모르는 이름도 여기서 끊는다. 같은 소켓의 리스너는 모두 같은 값이다(검증기).
+      ...(quic ? [directive('listen', [...quicListenArgs(l), lit('default_server')])] : []),
       directive('server_name', [lit('_')]),
       directive('ssl_reject_handshake', [lit('on')]),
       // 핸드셰이크는 끊지만 **평문 요청은 받는다** — nginx 가 497(HTTPS 포트에 평문)을 400 으로 낸다. 그 본문도 바꾼다.
@@ -1732,6 +1775,8 @@ function defaultServerBlock(
   // "설정을 먼저 넣어야 인증서를 받고, 인증서가 있어야 설정이 선다" 가 된다.
   return block('server', [], [
     directive('listen', [...listenArgs(listener), lit('default_server')]),
+    // QUIC 소켓의 기본 server 도 여기다 — 모르는 SNI 가 h3 로 와도 TCP 와 같은 곳에 닿는다(S17).
+    ...(tls?.http3 ? [directive('listen', [...quicListenArgs(listener), lit('default_server')])] : []),
     directive('server_name', [lit('_')]),
     ...(count ? httpRequestVars(listener.key) : []),
     ...tlsBody,
@@ -1944,6 +1989,7 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
   const issues = validateModel(model, {
     streamRealip: caps.streamRealip,
     ...(caps.http2 === undefined ? {} : { http2: caps.http2 }),
+    ...(caps.http3 === undefined ? {} : { http3: caps.http3 }),
     ...(caps.sslRejectHandshake === undefined ? {} : { sslRejectHandshake: caps.sslRejectHandshake }),
   });
   if (issues.length > 0) throw new ModelValidationError(issues);
@@ -2168,6 +2214,8 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
             // 결함이다. 다만 엔진이 못 하면 안 낸다 — 명시적으로 켜 달라고 한 경우는
             // 검증기가 미리 막으므로, 여기서 조용히 꺼지는 것은 "기본값" 뿐이다.
             http2: (l.http2 ?? true) && caps.http2 === true,
+            // **기본은 끈다** — http2 와 반대다. UDP 를 새로 열고 방화벽이 받아야 쓸모가 있다.
+            http3: l.http3 === true && caps.http3 === true,
             rejectMismatch:
               (policies.get(l.tls.policy)?.sniHostMismatch ?? 'allow') === 'reject_421',
             cipher: policies.get(l.tls.policy)?.cipherPolicy ?? DEFAULT_CIPHER_POLICY,
@@ -2191,7 +2239,7 @@ export function render(input: Model, caps: RenderCapabilities = CONSERVATIVE): R
         const sk = vhostSocketKey(l);
         if (!hostlessSockets.has(sk) && !madeDefault.has(sk)) {
           madeDefault.add(sk);
-          children.push(syntheticDefaultServer(l, acme));
+          children.push(syntheticDefaultServer(l, acme, tls?.http3 === true));
         }
       }
       children.push(
