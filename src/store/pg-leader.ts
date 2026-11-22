@@ -32,9 +32,17 @@ export class PgLeaderLock implements LeaderLock {
    * 그동안 이 프로세스는 살아 있지도 죽지도 않은 상태가 된다.
    */
   async tryAcquire(holder: string): Promise<LeaderAttempt> {
-    const client = new pg.Client({ connectionString: this.dsn });
+    const client = new pg.Client({ connectionString: this.dsn, keepAlive: true, keepAliveInitialDelayMillis: 10_000 });
+    // 세션이 리더 세션이 되기 전에도 처리기가 있어야 한다 — 없으면 그 사이의 끊김이 데몬을 죽인다.
+    const early = (): void => undefined;
+    client.on('error', early);
     try {
       await client.connect();
+      // **죽은 리더의 락이 몇 시간 남지 않게 한다** (2026-11-22, web-01). 망에서 끊기면 PG 는 클라이언트가 죽은 것을
+      // OS keepalive(기본 2시간)가 알릴 때까지 모른다 — 그동안 락이 그 세션에 남아 새 프로세스가 리더가 못 됐다.
+      // 서버 쪽 keepalive 를 이 세션에만 짧게 건다: 15초 조용하면 5초마다 묻고, 3번 답이 없으면 끊는다(약 30초).
+      // 누구나 바꿀 수 있는 설정이다. 유닉스 소켓 연결에서는 무시된다(그때는 끊김을 바로 안다).
+      await client.query('SET tcp_keepalives_idle = 15; SET tcp_keepalives_interval = 5; SET tcp_keepalives_count = 3');
       const r = await client.query(
         'SELECT pg_try_advisory_lock($1::int, $2::int) AS got', [LOCK_KEY_HI, LOCK_KEY_LO],
       );
@@ -52,7 +60,9 @@ export class PgLeaderLock implements LeaderLock {
         [token, holder],
       );
       const since = new Date(String(ins.rows[0]?.acquired_at)).toISOString();
-      return { ok: true, session: new PgLeaderSession(client, token, since) };
+      const session = new PgLeaderSession(client, token, since);
+      client.off('error', early);
+      return { ok: true, session };
     } catch (e) {
       await client.end().catch(() => undefined);
       return { ok: false, reason: `선출 시도가 실패했다: ${String(e)}` };

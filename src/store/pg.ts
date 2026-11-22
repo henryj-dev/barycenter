@@ -32,7 +32,8 @@ export class Db implements Database {
   readonly #pool: pg.Pool;
 
   constructor(connectionString: string) {
-    this.#pool = new pg.Pool({ connectionString, max: 8 });
+    // keepAlive — 말없이 끊긴 연결(망 · NAT)을 OS 가 알아채게 한다. 안 걸면 다음 쿼리가 오래 매달린다.
+    this.#pool = new pg.Pool({ connectionString, max: 8, keepAlive: true, keepAliveInitialDelayMillis: 10_000 });
     /**
      * **쉬던 연결이 끊긴 것으로 프로세스가 죽지 않게 한다.** PG 가 재시작되거나 연결을 끊으면(`57P01` 등) 풀에서
      * 쉬던 연결이 `error` 를 낸다. 처리기가 없으면 Node 는 그것을 처리되지 않은 오류로 던져 **데몬이 죽는다** —
@@ -58,7 +59,7 @@ export class Db implements Database {
    * 대고 검증하면 **DB 가 거는 제약을 통과하지 못한다** — 그게 §4.0 이 층을 나눈 이유다.
    */
   async tx<T>(fn: (c: Queryable) => Promise<T>): Promise<T> {
-    const client = await this.#pool.connect();
+    const { client, done } = await this.#checkout();
     try {
       await client.query('BEGIN');
       const out = await fn({
@@ -74,13 +75,13 @@ export class Db implements Database {
       await client.query('ROLLBACK').catch(() => undefined);
       throw e;
     } finally {
-      client.release();
+      done();
     }
   }
 
   /** 콜백 결과와 무관하게 **항상 롤백**한다. plan 의 시뮬레이션 전용. */
   async dryRun<T>(fn: (c: Queryable) => Promise<T>): Promise<T> {
-    const client = await this.#pool.connect();
+    const { client, done } = await this.#checkout();
     try {
       await client.query('BEGIN');
       return await fn({
@@ -92,8 +93,27 @@ export class Db implements Database {
       });
     } finally {
       await client.query('ROLLBACK').catch(() => undefined);
-      client.release();
+      done();
     }
+  }
+
+  /**
+   * **빌린 연결에도 `error` 처리기를 단다** (2026-11-22, web-01). 풀은 쉬는 연결의 `error` 만 받는다. 빌려 간 동안
+   * 쿼리 사이에 연결이 끊기면 `Client` 가 낸 `error` 를 아무도 안 들어 Node 가 던졌고, 데몬이 죽었다.
+   * 진행 중인 쿼리는 그 쿼리가 실패로 받는다. 끊긴 연결은 풀에 돌려주지 않고 버린다(`release(err)`).
+   */
+  async #checkout(): Promise<{ client: pg.PoolClient; done: () => void }> {
+    const client = await this.#pool.connect();
+    let broken: Error | undefined;
+    const onError = (e: Error): void => {
+      broken = e;
+      log.warn('pg.client_error', { error: e.message, code: (e as { code?: string }).code });
+    };
+    client.on('error', onError);
+    return {
+      client,
+      done: () => { client.off('error', onError); client.release(broken); },
+    };
   }
 
   /**
@@ -132,7 +152,7 @@ export class Db implements Database {
     return {
       dialect: this.dialect,
       withMigrationLock: async (lock, fn) => {
-        const client = await this.#pool.connect();
+        const { client, done } = await this.#checkout();
         try {
           const [hi, lo] = lock;
           // **기다린다.** `try_` 로 두고 물러나면 진 쪽이 낡은 스키마로 서비스를 시작한다.
@@ -146,7 +166,7 @@ export class Db implements Database {
               .catch(() => undefined);
           }
         } finally {
-          client.release();
+          done();
         }
       },
       ensureTable: async (table) => {
